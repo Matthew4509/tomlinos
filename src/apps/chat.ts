@@ -9,7 +9,7 @@ import { icon } from '../shell/icons.ts';
 import type { AppDef } from '../shell/types.ts';
 import { APPS } from './catalog.ts';
 import { ChatSession, MAX_TEXT, dmId, type Message } from './chat/session.ts';
-import { agentPane } from './chat/agentpane.ts';
+import { agentPane, type CloudAgent } from './chat/agentpane.ts';
 
 type View = 'general' | 'people' | 'agents' | string;
 
@@ -38,8 +38,13 @@ export const chatApp: AppDef = {
       return;
     }
     const chat = ChatSession.for(shell);
-    // Opened with "agents" (Settings › AI, the Panel's AI link) it starts on the Agents tab.
-    let view: View = arg === 'agents' ? 'agents' : 'general';
+    // Opened with "agents" (Settings › AI, the Panel's AI link) it starts on the Agents tab; "agents:claude" or
+    // "agents:openrouter" (Settings › AI's "Use Claude", "Use OpenRouter") also picks that AI when it is ready to use.
+    const agentsArg = (a: string | undefined): { want?: CloudAgent } | null => {
+      const m = /^agents(?::(claude|openrouter))?$/.exec(a ?? '');
+      return m ? { want: m[1] as CloudAgent | undefined } : null;
+    };
+    let view: View = agentsArg(arg) ? 'agents' : 'general';
     // Who is in Chat is who has an account here: the owner adds people in My account, so Chat says so and has the
     // button, where the question comes up (General with nobody else, and the Direct list).
     const owner = !!shell.account.user().admin;
@@ -233,12 +238,12 @@ export const chatApp: AppDef = {
       }
     }
 
-    async function show(next: View): Promise<void> {
+    async function show(next: View, want?: CloudAgent): Promise<void> {
       view = next;
       shownConv = '';
       if (next === 'agents') {
         render();
-        await agents.shown();
+        await agents.shown(want);
         return;
       }
       if (next !== 'people') {
@@ -290,9 +295,15 @@ export const chatApp: AppDef = {
     }, signal);
     on(document, 'visibilitychange', () => !document.hidden && view !== 'agents' && void chat.markRead(conv()), signal);
 
+    // Opened again while open (Settings › AI's "Open Chat › Agents"): go where that asks.
+    app.onReopen(next => {
+      const to = agentsArg(next);
+      if (to) void show('agents', to.want);
+    });
+
     render();
     chat.use(signal);
     await chat.refresh();
-    await show(view);
+    await show(view, agentsArg(arg)?.want);
   },
 };

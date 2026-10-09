@@ -171,6 +171,8 @@ class DesktopShell implements Shell {
     const existing = this.windows.find(key);
     if (existing) {
       this.windows.focus(existing);
+      // Focusing alone would drop where the caller asked to go ("Chat › Agents", "Settings › AI", a book).
+      if (app.single && arg !== undefined) existing.reopen?.(arg);
       return;
     }
     const win = this.windows.create({ key, appId: id, title: app.title, icon: app.icon, size: app.size, minSize: app.minSize });
@@ -195,6 +197,9 @@ class DesktopShell implements Shell {
       },
       onClose: guard => {
         win.guard = guard;
+      },
+      onReopen: listener => {
+        win.reopen = listener;
       },
     };
     try {

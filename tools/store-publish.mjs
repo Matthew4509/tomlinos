@@ -14,7 +14,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { writeZip } from './zip.mjs';
 
-const REPO = 'Matthew4509/Tomlinos';
+const REPO = 'Matthew4509/tomlinos';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
 const flag = name => {
@@ -23,7 +23,7 @@ const flag = name => {
   const [, value] = args.splice(i, 2);
   return value ?? '';
 };
-const out = flag('--out');
+const out = flag('--out') || null;
 const github = args.includes('--github');
 if (github) args.splice(args.indexOf('--github'), 1);
 const [id, ...words] = args;
@@ -72,7 +72,7 @@ console.log(`Signed ${details.title} ${details.version}: ${zipPath} and ${catalo
 if (out) process.exit(0);
 
 const steps = [
-  ['gh', ['release', 'create', tag, zipPath, '--repo', REPO, '--title', `${details.title} ${details.version}`, '--notes', notes]],
+  ['gh', ['release', 'create', tag, zipPath, '--repo', REPO, '--title', `${details.title} ${details.version}`, '--notes', notes, '--latest=false']],
   ['git', ['-C', root, 'add', 'appstore/catalogue.json', `appstore-src/${id}`, `appstore-src/${id}.app.json`]],
   ['git', ['-C', root, 'commit', '-m', `App store: ${details.title} ${details.version}`]],
   ['git', ['-C', root, 'push']],
@@ -82,5 +82,5 @@ if (github) {
   console.log(`Sent. Every TOMLIN OS now offers ${details.title} ${details.version} (GitHub may take a few minutes to show the new list).`);
 } else {
   console.log('\nTo send it (or run this again with --github):');
-  for (const [cmd, a] of steps) console.log(`  ${cmd} ${a.map(x => (/\s/.test(x) ? `"${x}"` : x)).join(' ')}`);
+  for (const [cmd, a] of steps) console.log(`  ${cmd} ${a.map(x => (/[\s"]/.test(x) ? `"${x.replaceAll('"', '\\"')}"` : x)).join(' ')}`);
 }

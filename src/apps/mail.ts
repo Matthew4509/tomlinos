@@ -554,6 +554,7 @@ async function run(app: AppHandle, acct: MailAccount): Promise<void> {
         app.setDirty(d);
       },
       onClose: () => undefined,
+      onReopen: () => undefined,
     };
     await composeApp.launch(handle, stageDraft(acct, draft, folders.find(f => f.use === 'sent')?.raw ?? ''));
   }

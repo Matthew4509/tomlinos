@@ -49,10 +49,17 @@ export const readerApp: AppDef = {
     const fs = shell.fs;
     app.root.classList.add('reader-app');
     // "library" opens the Gutenberg library; "work:<author>:<work>" one book (a store app asks for that, storeapp.ts).
-    const book = /^work:([a-z0-9-]{1,80}):([a-z0-9-]{0,80})$/.exec(arg ?? '');
-    const query = arg === 'library' ? '?author=gutenberg' : book ? `?${new URLSearchParams(book[2] ? { author: book[1], work: book[2] } : { author: book[1] })}` : '';
-    const frame = h('iframe', { class: 'reader-app-frame', src: `reader/index.html${query}`, title: 'Reader' });
+    const queryFor = (a: string | undefined): string => {
+      const book = /^work:([a-z0-9-]{1,80}):([a-z0-9-]{0,80})$/.exec(a ?? '');
+      return a === 'library' ? '?author=gutenberg' : book ? `?${new URLSearchParams(book[2] ? { author: book[1], work: book[2] } : { author: book[1] })}` : '';
+    };
+    const frame = h('iframe', { class: 'reader-app-frame', src: `reader/index.html${queryFor(arg)}`, title: 'Reader' }) as HTMLIFrameElement;
     app.root.append(frame);
+    // Opened again while open (a store app asking for another book): the Reader loads that one instead.
+    app.onReopen(next => {
+      const query = queryFor(next);
+      if (query) frame.src = `reader/index.html${query}`;
+    });
 
     async function readShelf(): Promise<SavedBook[]> {
       try {

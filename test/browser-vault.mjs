@@ -168,7 +168,9 @@ await step('signing out forgets the kept key; signing in again opens the files w
 
 await step('"Forgot your password?" with the recovery key sets a new password; the files still open', async () => {
   await signOut();
-  eq(await page.locator('.gate input').count(), 2, 'the sign-in screen still has two fields');
+  // The picture check's answer box is in the form from the start, in a hidden row, until the server asks for it.
+  eq(await page.locator('.gate input:visible').count(), 2, 'the sign-in screen still shows two fields');
+  ok(await page.locator('.gate-captcha-row').isHidden(), 'no picture check before a wrong try');
   await page.getByRole('button', { name: 'Forgot your password?' }).click();
   await page.locator('.gate h1', { hasText: 'Forgot your password?' }).waitFor();
   await page.getByLabel('User name').fill('alex');
@@ -198,9 +200,17 @@ await step('reset by the server tool: the new password signs in, and the recover
   await desktop();
   eq(await readSecret(), SECRET, 'the file');
   pass = newPass;
-  await signOut();
-  await signIn(pass);
+  // Once: from now on the password alone opens the files. As another device would (nothing kept in this browser), a
+  // reload asks for the password only, with no recovery key box. (Not by signing out and in: the wrong recovery key
+  // above counts as a wrong try, so the next password sign-in asks for the picture check, which a test cannot read.)
+  await page.evaluate(() => new Promise(r => { const d = indexedDB.deleteDatabase('tomlinos-keys'); d.onsuccess = d.onerror = () => r(0); }));
+  await page.reload();
+  await page.locator('.gate h1', { hasText: 'Open your files' }).waitFor({ timeout: 20000 });
+  eq(await page.locator('.gate-rkey').count(), 0, 'no recovery key asked for any more');
+  await page.locator('.gate input[type=password]').fill(pass);
+  await page.getByRole('button', { name: 'Open my files' }).click();
   await desktop();
+  eq(await readSecret(), SECRET, 'the file, opened with the new password alone');
 });
 
 await step('My account turns encryption off; afterwards the files are stored readable again', async () => {

@@ -123,6 +123,8 @@ export class LockScreen {
     this.o.shell.lockChanged.emit(true);
     this.drawSaver(saver ?? settings.saver, locking);
     if (locking) {
+      // A setting changed just before (the screensaver itself, often) is written first: once locked, the server refuses it.
+      await this.o.shell.session.flushWaiting().catch(() => undefined);
       try {
         await this.o.api!.lock();
         this.serverLocked = true;

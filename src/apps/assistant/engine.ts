@@ -216,7 +216,7 @@ export function startProblem(words: string, button: string, fromServer: boolean,
   if (words === IN_ANOTHER_TAB) return words;
   if (words === LIB_MISMATCH || words === NO_CHECKSUM) return `It could not start: ${words}.`;
   if (isDownloadProblem(words)) {
-    return `It could not start: a file of the model did not download from ${fromServer ? 'this TOMLIN OS' : 'Hugging Face'} (${detail || words}), even after ${DOWNLOAD_TRIES} tries. The parts already downloaded are kept: ${fromServer ? `the owner can remove the model from this TOMLIN OS (the browser then fetches it from Hugging Face), or check the connection and press ${button} again.` : `check the internet connection, then press ${button} again. If it keeps failing, Hugging Face may no longer have this version: the owner can press "Save to this TOMLIN OS" for a built-in model (it then comes from the TOMLIN OS mirror).`}`;
+    return `It could not start: a file of the model did not download from ${fromServer ? 'this TOMLIN OS' : 'Hugging Face'} (${detail || words}), even after ${DOWNLOAD_TRIES} tries. The parts already downloaded are kept: ${fromServer ? `the owner can remove the model from this TOMLIN OS (the browser then fetches it from Hugging Face), or check the connection and press ${button} again.` : `check the internet connection, then press ${button} again. If it keeps failing, Hugging Face may no longer have this version: the owner can name a model mirror in config.php ('model_mirror'), then press "Save to this TOMLIN OS" for a built-in model.`}`;
   }
   return `It could not start: ${words}. This device may not have enough graphics memory for it: close other tabs and programs, then try again.`;
 }

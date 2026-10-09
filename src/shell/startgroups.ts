@@ -19,7 +19,7 @@ export const START_GROUPS: StartGroup[] = [
   { id: 'media', name: 'Graphics & media', apps: ['photoedit'] },
   { id: 'games', name: 'Games', apps: ['planetziods', 'printer'] },
   { id: 'development', name: 'Development', apps: ['riscv', 'terminal'] },
-  { id: 'system', name: 'System', apps: ['taskmanager', 'panel', 'trash'] },
+  { id: 'system', name: 'System', apps: ['taskmanager', 'panel', 'appmanager', 'trash'] },
   { id: 'settings', name: 'Settings', apps: ['settings', 'account', 'shortcuts'] },
 ];
 

@@ -215,6 +215,7 @@ export class Session {
   data: SessionData = defaultSession();
   private fs: FileSystem;
   private timer = 0;
+  private waiting = false;
   private loaded = false;
   private saving: Promise<void> = Promise.resolve();
   /** Called with the reason when saving fails, so the person is told once instead of every attempt. */
@@ -238,11 +239,18 @@ export class Session {
   touch(): void {
     if (!this.loaded) return;
     clearTimeout(this.timer);
+    this.waiting = true;
     this.timer = window.setTimeout(() => void this.flush(), 800);
+  }
+
+  /** Writes a change that is still waiting for its moment (before the screen locks, when the server refuses writes). */
+  flushWaiting(): Promise<void> {
+    return this.waiting ? this.flush() : this.saving;
   }
 
   flush(): Promise<void> {
     clearTimeout(this.timer);
+    this.waiting = false;
     if (!this.loaded) return this.saving;
     const text = JSON.stringify(this.data);
     this.saving = this.saving

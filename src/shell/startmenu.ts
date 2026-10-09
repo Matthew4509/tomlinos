@@ -184,8 +184,10 @@ export class StartMenu {
       const q = filter.value.trim().toLowerCase();
       let nodes: Node[];
       if (q) {
-        // Search: every app and folder whose name matches, each once.
-        const apps = listed.filter(a => a.title.toLowerCase().includes(q)).sort((a, b) => a.title.localeCompare(b.title)).map(appEntry);
+        // Search: every app and folder whose name matches, each once; the foot's apps (About) too, though without the pin
+        // menu, as they cannot be pinned.
+        const apps = all.filter(a => a.title.toLowerCase().includes(q)).sort((a, b) => a.title.localeCompare(b.title))
+          .map(a => (FOOT_APPS.includes(a.id) ? entry(a.title, a.icon, () => void shell.openApp(a.id)) : appEntry(a)));
         const places = PLACES.filter(p => p.toLowerCase().includes(q)).map(placeEntry);
         nodes = apps.length || places.length ? [...apps, ...places] : [note(`Nothing called “${filter.value.trim()}”.`)];
       } else if (inPlace) {

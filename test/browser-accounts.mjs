@@ -148,7 +148,11 @@ await step('a PIN is set (password and two-step code asked first)', async () => 
   await w.getByText('Set. The locked screen opens with your 4-digit PIN.').waitFor();
   // The lock steps below are about the spreadsheet disguise (the Reader is the default screensaver).
   await w.locator('.acct-tab', { hasText: 'Screensaver and lock' }).click();
+  // The choice is written a moment later; wait for that write, so the lock below (and the reload while locked) keep it.
+  const written = page.waitForResponse(r => r.url().includes('store.php') && r.request().method() === 'POST', { timeout: 15000 });
   await w.locator('select:has(option[value="sheet"])').selectOption('sheet');
+  eq((await written).status(), 200, 'the screensaver choice is saved');
+  await settle(300);
 });
 
 await step('Lock now hides the desktop, changes the tab title, and the server refuses files until the PIN', async () => {
@@ -212,7 +216,9 @@ await step('five wrong PINs sign out; signing in again needs the password and a 
   }
   await page.locator('.gate h1', { hasText: 'Sign in' }).waitFor({ timeout: 10000 });
   ok((await page.locator('.gate-note').innerText()).includes('signed out'), 'says why');
-  eq(await page.locator('.gate input').count(), 2, 'the sign-in screen has two fields and nothing else');
+  // The picture check's answer box is in the form from the start, in a hidden row, until the server asks for it.
+  eq(await page.locator('.gate input:visible').count(), 2, 'the sign-in screen shows two fields and nothing else');
+  ok(await page.locator('.gate-captcha-row').isHidden(), 'no picture check before a wrong try');
   await page.getByLabel('User name').fill('alex');
   await page.locator('.gate input[type=password]').fill(PASS);
   await page.locator('.gate-go').click();

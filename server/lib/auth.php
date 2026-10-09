@@ -86,7 +86,11 @@ function auth_read_json(string $path, mixed $default): mixed
 
 function auth_write_json(string $path, mixed $value): void
 {
-    $text = json_encode($value, JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
+    // A browser's name (User-Agent) is stored as sent: bytes that are not UTF-8 become U+FFFD instead of failing the write.
+    $text = json_encode($value, JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT | JSON_INVALID_UTF8_SUBSTITUTE);
+    if ($text === false) {
+        throw new RuntimeException('an accounts file could not be written (' . basename($path) . ')');
+    }
     $tmp = $path . '.' . bin2hex(random_bytes(4)) . '.tmp';
     if (file_put_contents($tmp, $text, LOCK_EX) !== strlen($text)) {
         @unlink($tmp);

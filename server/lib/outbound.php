@@ -35,6 +35,9 @@ function outbound_get_json(string $url, int $timeout = 10): array
         }
     }
     $data = json_decode($body, true);
+    if (!is_array($data) && $status >= 400) {
+        return ['_status' => $status];
+    }
     if (!is_array($data)) {
         throw new RuntimeException('The other site\'s answer could not be read.');
     }

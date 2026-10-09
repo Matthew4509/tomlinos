@@ -75,11 +75,11 @@ function mirror_take(array $config, int $bytes): void
     $gb = 1024 * 1024 * 1024;
     if ($mine + $bytes > (float) $config['per_address_gb'] * $gb) {
         flock($fh, LOCK_UN);
-        mirror_refuse(429, 'This server has taken its share from the TOMLIN OS mirror today (' . $config['per_address_gb'] . ' GB). Press Save again tomorrow.');
+        mirror_refuse(429, 'This server has taken its share from this model mirror today (' . $config['per_address_gb'] . ' GB). Press Save again tomorrow.');
     }
     if ((int) $use['total'] + $bytes > (float) $config['total_gb'] * $gb) {
         flock($fh, LOCK_UN);
-        mirror_refuse(429, 'The TOMLIN OS mirror has sent all it can today. Press Save again tomorrow.');
+        mirror_refuse(429, 'This model mirror has sent all it can today. Press Save again tomorrow.');
     }
     $use['by'][$who] = $mine + $bytes;
     $use['total'] = (int) $use['total'] + $bytes;
@@ -133,7 +133,7 @@ function mirror_serve(array $config): never
             mirror_refuse(403, 'This folder holds AI model copies for TOMLIN OS servers. Browsers get models from Hugging Face or from their own TOMLIN OS.');
         }
     }
-    if (!str_starts_with((string) ($_SERVER['HTTP_USER_AGENT'] ?? ''), 'TOMLIN OS')) {
+    if (!str_starts_with((string) ($_SERVER['HTTP_USER_AGENT'] ?? ''), 'TomlinOS')) {
         mirror_refuse(403, 'This folder holds AI model copies for TOMLIN OS servers only.');
     }
     [$id, $want] = mirror_wanted();

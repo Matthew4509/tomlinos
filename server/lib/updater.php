@@ -1,14 +1,14 @@
 <?php
-// System update: a newer TOMLIN OS from the release site, installed by the owner with one press.
-// The release site serves latest.json = {"release": base64 of a JSON payload, "sig": base64 Ed25519 signature of those
+// System update: a newer TOMLIN OS from this project's GitHub repository, installed by the owner with one press.
+// The repository holds releases/latest.json = {"release": base64 of a JSON payload, "sig": base64 Ed25519 signature of those
 // payload bytes}. The payload: {version, date, notes, zip (https address), sha256, bytes}. Only a payload signed with
-// the TOMLIN OS release key (its public half is lib/release-key.txt) is believed, so a hacked release site cannot hand out
+// the TOMLIN OS release key (its public half is lib/release-key.txt) is believed, so a changed copy anywhere cannot hand out
 // a zip that installs. The zip is the same one cPanel unzips: public_html/... and tomlinos/...; people's things
 // (tomlinos/config.php, data/, models/, apps/) are never written. Every file it replaces is copied to a backup first;
 // Go back (or tools/rollback-update.php from the cPanel Terminal) puts the backup back.
 declare(strict_types=1);
 
-const UPDATE_DEFAULT_SOURCE = 'https://raw.githubusercontent.com/Matthew4509/Tomlinos/main/releases/latest.json';
+const UPDATE_DEFAULT_SOURCE = 'https://raw.githubusercontent.com/Matthew4509/tomlinos/main/releases/latest.json';
 const UPDATE_MAX_ZIP = 96 * 1024 * 1024;
 
 /** The private folder (tomlinos/ on a live host, server/ here). */
@@ -53,7 +53,7 @@ function update_fetch_release(array $config): array
     $source = (string) ($config['update_source'] ?? UPDATE_DEFAULT_SOURCE);
     $signed = outbound_get_json($source);
     if (isset($signed['_status'])) {
-        throw new RuntimeException('The release site has no update note (it answered ' . (int) $signed['_status'] . ').');
+        throw new RuntimeException('The update address has no update note yet (it answered ' . (int) $signed['_status'] . '). Nothing was changed.');
     }
     $payload = base64_decode((string) ($signed['release'] ?? ''), true);
     $sig = base64_decode((string) ($signed['sig'] ?? ''), true);
@@ -87,10 +87,10 @@ function update_target(string $name, string $webRoot): ?string
         return null;
     }
     if (str_starts_with($name, 'public_html/')) {
-        return $webRoot . '/' . substr($name, 12);
+        return $webRoot . '/' . substr($name, strlen('public_html/'));
     }
     if (str_starts_with($name, 'tomlinos/')) {
-        $rest = substr($name, 7);
+        $rest = substr($name, strlen('tomlinos/'));
         if ($rest === 'config.php' || preg_match('#^(data|models|apps|update)/#', $rest)) {
             return null;
         }

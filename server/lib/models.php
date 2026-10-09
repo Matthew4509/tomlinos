@@ -9,9 +9,9 @@
 // upstream is never used. The files land in the private models folder (models/ here; tomlinos/models live, beside data/,
 // outside the web root), and reach browsers only through api/modelfile.php, for signed-in people.
 //
-// When Hugging Face or GitHub no longer has a pinned file (removed, or refused), the save fetches it from the TOMLIN OS
-// model mirror instead (config 'model_mirror'; the mirror's own door is mirror/index.php). Browsers never fetch from the
-// mirror: only a TOMLIN OS server does, and the mirror limits how much each server takes a day.
+// When Hugging Face or GitHub no longer has a pinned file (removed, or refused), the save can fetch it from a model
+// mirror the owner names (config 'model_mirror'; none by default; a mirror's own door is mirror/index.php). Browsers never
+// fetch from a mirror: only a TOMLIN OS server does, and the mirror limits how much each server takes a day.
 //
 // Only the models in MODEL_CATALOG can be saved (never an address from a request), and only from https addresses on
 // Hugging Face, GitHub and the mirror, checked at every redirect.
@@ -20,7 +20,7 @@ declare(strict_types=1);
 const MODEL_PIECE_BYTES = 16 * 1024 * 1024;
 /** Where a TOMLIN OS server fetches a pinned file that Hugging Face or GitHub no longer has. */
 const MODEL_MIRROR_DEFAULT = '';
-/** After the owner removes a model, it can be saved again only after this long (the mirror's bandwidth is shared). */
+/** After the owner removes a model, it can be saved again only after this long (a mirror's bandwidth is shared). */
 const MODEL_RESAVE_WAIT = 86400;
 const MODEL_LIBS_REPO = 'mlc-ai/binary-mlc-llm-libs';
 
@@ -317,7 +317,7 @@ function models_fetch_piece(string $modelsDir, string $id, array $file, string $
     if ($have < $size) {
         return ['have' => $have, 'done' => false];
     }
-    $where = $fromMirror ? 'the TOMLIN OS mirror' : ($file['kind'] === 'lib' ? 'GitHub' : 'Hugging Face');
+    $where = $fromMirror ? 'the model mirror' : ($file['kind'] === 'lib' ? 'GitHub' : 'Hugging Face');
     if ($have !== $size || !hash_equals((string) $file['sha256'], (string) hash_file('sha256', $part))) {
         // Not the pinned bytes: never kept. From upstream, the mirror is tried next (the caller decides).
         @unlink($part);
@@ -349,7 +349,7 @@ function models_save_step(string $modelsDir, string $id, array &$plan, string $m
             $f['misses'] = (int) ($f['misses'] ?? 0) + 1;
             $toMirror = $gone->refused || $f['misses'] >= 2;
             if ($toMirror && $mirror === '') {
-                throw new RuntimeException($gone->getMessage() . ' That version is no longer where it was published, and no TOMLIN OS mirror is set (config.php, model_mirror), so it cannot be saved.');
+                throw new RuntimeException($gone->getMessage() . ' That version is no longer where it was published, and no model mirror is set (config.php, model_mirror), so it cannot be saved.');
             }
             if ($toMirror) {
                 $f['from'] = 'mirror';
@@ -379,7 +379,7 @@ function models_download(string $url, string $part, ?int $from, int $length, str
 {
     $cafile = (string) (ini_get('curl.cainfo') ?: ini_get('openssl.cafile'));
     $test = models_test_base() !== null || str_starts_with($mirror, 'http://127.0.0.1:');
-    $who = $mirror !== '' ? 'The TOMLIN OS mirror' : 'Hugging Face';
+    $who = $mirror !== '' ? 'The model mirror' : 'Hugging Face';
     for ($hop = 0; $hop <= 5; $hop++) {
         if (!models_host_allowed($url, $mirror)) {
             throw new RuntimeException($who . ' sent the download somewhere this server will not fetch from, so it stopped.');
@@ -397,7 +397,7 @@ function models_download(string $url, string $part, ?int $from, int $length, str
             CURLOPT_CONNECTTIMEOUT => 15,
             CURLOPT_TIMEOUT => 120,
             // The mirror serves only TOMLIN OS servers, which it tells from browsers by this name.
-            CURLOPT_USERAGENT => 'TOMLIN OS',
+            CURLOPT_USERAGENT => 'TomlinOS',
             CURLOPT_SSL_VERIFYPEER => true,
             CURLOPT_SSL_VERIFYHOST => 2,
             CURLOPT_HEADERFUNCTION => static function ($ch, string $line) use (&$status): int {
@@ -447,7 +447,7 @@ function models_download(string $url, string $part, ?int $from, int $length, str
         }
         if ($mirror !== '' && $status > 0) {
             // The mirror explains itself (its daily share used, a version it does not hold): its own words, cut short.
-            throw new RuntimeException('The TOMLIN OS mirror answered ' . $status . ' for a model file' . ($status === 429 ? ': this server has used its share for today. Press Save again tomorrow.' : '. Try again later.'));
+            throw new RuntimeException('The model mirror answered ' . $status . ' for a model file' . ($status === 429 ? ': this server has used its share for today. Press Save again tomorrow.' : '. Try again later.'));
         }
         if ($mirror === '' && in_array($status, [401, 403, 404, 410, 451], true)) {
             // Gone or refused upstream (Hugging Face answers 401 for a repository that no longer exists).

@@ -43,13 +43,19 @@ function auth_link_use(string $dataDir, string $name, string $token): bool
     if (!$user || !is_array($link) || ($link['until'] ?? 0) <= time() || ($link['tries'] ?? 0) < 1 || !hash_equals((string) $link['hash'], hash('sha256', $token))) {
         return false;
     }
-    update_user($dataDir, $user['id'], static function (array $u): array {
-        $u['unlock']['tries'] = max(0, (int) ($u['unlock']['tries'] ?? 0) - 1);
+    // Checked again and used under the lock, so sign-ins sent at the same moment cannot share the last try.
+    $taken = false;
+    update_user($dataDir, $user['id'], static function (array $u) use ($token, &$taken): array {
+        $link = $u['unlock'] ?? null;
+        if (is_array($link) && ($link['until'] ?? 0) > time() && ($link['tries'] ?? 0) >= 1 && hash_equals((string) ($link['hash'] ?? ''), hash('sha256', $token))) {
+            $u['unlock']['tries'] = (int) $link['tries'] - 1;
+            $taken = true;
+        }
 
         return $u;
     });
 
-    return true;
+    return $taken;
 }
 
 /** After a sign-in that got all the way in: the unlock email may be sent again, and an old link stops working. */
@@ -241,6 +247,12 @@ try {
                 api_fail(401, 'The sign-in ran out before the code arrived. Sign in again.', ['auth' => 'signin']);
             }
             [$token, $session, $user] = $current;
+            // Two-step was turned off (on another device) while this sign-in waited for its code: start again.
+            if (empty($user['totp']['enabled']) || !isset($user['totp']['secret'])) {
+                auth_session_end($dataDir, $token);
+                set_session_cookie('', $days);
+                api_fail(401, 'Two-step sign-in was turned off for this account while you were signing in. Sign in again with your password.', ['auth' => 'signin']);
+            }
             // One try is used up BEFORE the code is checked, under the lock, so parallel guesses each take one.
             $used = auth_session_take_try($dataDir, $token);
             if ($used === null || $used > AUTH_CODE_TRIES) {
@@ -539,9 +551,13 @@ try {
             }
             $proof = body_str($body, 'rkAuth');
             if (empty($user['rkey']) || !preg_match('/^[0-9a-f]{64}$/', $proof) || !hash_equals($user['rkey'], auth_rkey_hash($dataDir, $proof))) {
-                auth_throttle_fail($dataDir, $ip, $user['name']);
+                // Already charged by auth_throttle_take above: counting it again would double every wrong key.
                 api_fail(403, 'That recovery key does not match. Check it letter by letter (dashes and capitals do not matter).');
             }
+            // The right key proves the person, as a right password does: the try is given back and the name's count cleared,
+            // so their next sign-in is not asked for the picture.
+            auth_throttle_refund($dataDir, $ip);
+            auth_throttle_clear($dataDir, $user['name']);
             $keys = auth_vault_keys($body);
             $user = update_user($dataDir, $user['id'], static function (array $u) use ($keys): array {
                 $u['vault'] = array_merge($u['vault'], $keys, ['stale' => false]);
@@ -573,7 +589,9 @@ try {
             if (is_dir($store . '/objects') && !@rename($store . '/objects', $aside)) {
                 api_fail(500, 'The encrypted files could not be moved aside, so nothing was changed. Try again.');
             }
+            // Both totals describe the files just set aside: the empty store starts from nothing (worked out again).
             @unlink($store . '/.usage');
+            @unlink($store . '/.count');
             $user = update_user($dataDir, $user['id'], static function (array $u): array {
                 $u['vault'] = null;
 

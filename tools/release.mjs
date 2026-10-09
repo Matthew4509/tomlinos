@@ -4,13 +4,14 @@
 // Writes releases/latest.json (signed with the private release key, which never leaves this PC). The zip goes up as a
 // GitHub release of this repository; latest.json is committed, so every TOMLIN OS with the updater reads it from GitHub and
 // offers the new version in the Application manager, under Updates. The zip must be on GitHub before latest.json is.
+// If a step fails after the release was made, put the zip up again with: gh release upload <tag> <zip> --clobber
 import { createHash, createPrivateKey, sign } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const REPO = 'Matthew4509/Tomlinos';
+const REPO = 'Matthew4509/tomlinos';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 // The private key's file, kept outside every repository: set TOMLINOS_RELEASE_KEY to its full path before running this.
 const keyPath = process.env.TOMLINOS_RELEASE_KEY;
@@ -37,8 +38,11 @@ mkdirSync(dirname(latest), { recursive: true });
 writeFileSync(latest, JSON.stringify({ release: payload.toString('base64'), sig: sig.toString('base64') }) + '\n');
 console.log(`Signed ${name}: ${latest}.`);
 
+// The source goes up first, so the release's tag points at the commit the zip was built from.
+const head = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
 const steps = [
-  ['gh', ['release', 'create', tag, zip, '--repo', REPO, '--title', `TOMLIN OS ${version}`, '--notes', notes]],
+  ['git', ['-C', root, 'push']],
+  ['gh', ['release', 'create', tag, zip, '--repo', REPO, '--target', head, '--latest', '--title', `TOMLIN OS ${version}`, '--notes', notes]],
   ['git', ['-C', root, 'add', 'releases/latest.json']],
   ['git', ['-C', root, 'commit', '-m', `Release ${version}`]],
   ['git', ['-C', root, 'push']],
@@ -48,5 +52,5 @@ if (github) {
   console.log(`Sent. Every TOMLIN OS now offers ${version} (GitHub may take a few minutes to show the new note).`);
 } else {
   console.log('\nTo send it (or run this again with --github):');
-  for (const [cmd, a] of steps) console.log(`  ${cmd} ${a.map(x => (/\s/.test(x) ? `"${x}"` : x)).join(' ')}`);
+  for (const [cmd, a] of steps) console.log(`  ${cmd} ${a.map(x => (/[\s"]/.test(x) ? `"${x.replaceAll('"', '\\"')}"` : x)).join(' ')}`);
 }

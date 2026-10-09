@@ -402,7 +402,9 @@ await step('Pictures > Edit opens Photo Editor; rotate right makes it 200 × 300
 });
 
 await step('About TOMLIN OS shows the version and credits every bundled package, with its licence text', async () => {
-  await openApp('about tomlinos');
+  // About sits in the Start menu's bottom row, not in a group.
+  await page.locator('.start-btn').click();
+  await page.locator('.start-foot .start-foot-app', { hasText: 'About TOMLIN OS' }).click();
   const w = page.locator('.win', { has: page.locator('.about') });
   await w.locator('.about-pkgs li', { hasText: '@codemirror/view' }).waitFor({ timeout: 10000 });
   ok((await w.locator('.about-head').innerText()).includes('Version 0.'), 'version shown');
@@ -633,49 +635,60 @@ await step('Task Manager lists open windows, ends one, and shows smoothness and 
   await w.getByRole('button', { name: 'Close' }).click();
 });
 
-await step('Assistant: two halves, the built-in AI left and Claude right; says what this device can do, offers its three models, and promises nothing leaves the device', async () => {
+// The AI is set up in Settings › AI (src/apps/assistant/aisettings.ts) and talked to in Chat › Agents.
+const settingsWin = () => page.locator('.win', { has: page.locator('.set-ai') });
+// Claude's section comes before OpenRouter's, which has boxes and buttons of the same names: scope to Claude's.
+const claudeBox = s => s.locator('.set-ai section.ai-cloud', { has: page.locator('h2', { hasText: 'Claude, with your own API key' }) });
+const chatWin = () => page.locator('.win', { has: page.locator('.chat-app') });
+
+await step('Settings › AI: says what this device can do, offers the three built-in models named with their makers, promises free and private, with Claude in its own section', async () => {
   await closeAll();
-  await openApp('assistant');
-  const w = page.locator('.win', { has: page.locator('.ai') });
-  const left = w.locator('.ai-left');
-  const deviceLine = left.locator('.ai-device');
+  await openApp('settings');
+  const s = settingsWin();
+  const ai = s.locator('.set-ai');
+  await ai.scrollIntoViewIfNeeded();
+  const deviceLine = ai.locator('p.hint').first();
   await deviceLine.filter({ hasNotText: 'Checking' }).waitFor({ timeout: 15000 });
   const device = await deviceLine.innerText();
   ok(/can run the built-in AI|the built-in AI runs|cannot use the graphics chip/.test(device), device);
-  ok((await left.locator('.ai-setup').innerText()).includes('This is designed to be 100% free and private.'), 'privacy promise shown');
-  await w.locator('.ai-right h2', { hasText: 'Claude, with your own API key' }).waitFor();
-  const [lb, rb] = [await left.boundingBox(), await w.locator('.ai-right').boundingBox()];
-  ok(rb.x >= lb.x + lb.width - 2 && Math.abs(rb.y - lb.y) < 2, 'side by side: Claude on the right');
+  ok(await ai.getByText('runs on this device: free and private').isVisible(), 'privacy promise shown');
+  const claude = claudeBox(s);
+  await claude.locator('h2').waitFor();
   // All three built-in models are offered, smallest first, saved here or not (this run's models folder starts empty).
-  const pick = left.getByLabel('Built-in model');
+  const pick = ai.getByLabel('Built-in model');
+  await pick.locator('option').first().waitFor({ state: 'attached', timeout: 15000 });
+  ok((await claude.boundingBox()).y > (await pick.boundingBox()).y, 'Claude\'s section follows the built-in AI');
   const options = await pick.locator('option').allInnerTexts();
   // Each is named with its maker (his: "in the listing, it should identify the model").
   ok(options.length === 3 && /^Qwen 3\.5 0\.8B by Qwen team, Alibaba Cloud \(/.test(options[0]) && /^Gemma 2 2B by Google \(/.test(options[1]) && /^Qwen 3\.5 4B by Qwen team, Alibaba Cloud \(/.test(options[2]), options.join(' | '));
+  const note = ai.locator('p.hint', { hasText: ', made by ' });
   await pick.selectOption({ index: 1 });
-  ok(/^Gemma 2 2B, made by Google \(Gemma Terms of Use\): the middle size/.test(await left.locator('.ai-note').innerText()), 'the choice says who made it and what it trades');
+  ok(/^Gemma 2 2B, made by Google \(Gemma Terms of Use\): the middle size/.test(await note.innerText()), 'the choice says who made it and what it trades');
   await pick.selectOption({ index: 2 });
-  ok(/^Qwen 3\.5 4B, made by Qwen team, Alibaba Cloud \(Apache-2\.0\): the best answers/.test(await left.locator('.ai-note').innerText()), 'the 4B says what it trades');
+  ok(/^Qwen 3\.5 4B, made by Qwen team, Alibaba Cloud \(Apache-2\.0\): the best answers/.test(await note.innerText()), 'the 4B says what it trades');
   await pick.selectOption({ index: 0 });
-  await shot('assistant');
-  await w.getByRole('button', { name: 'Close', exact: true }).click();
+  await shot('settings-ai');
+  await closeAll();
 });
 
 // The owner saves a model to this TOMLIN OS; browsers then get it from here, not from Hugging Face. The server fetches from a stand-in (test/fake-huggingface.mjs), into this
 // run's own models folder: tools/run-browser-tests.sh sets DESKTOP_MODELS_TEST_URL and DESKTOP_MODELS_DIR.
 const hf = await startFakeHuggingFace(3191);
-await step('Assistant: the owner saves a model to this TOMLIN OS in pieces, browsers then get it from here; Remove frees the space', async () => {
+await step('Settings › AI: the owner saves a model to this TOMLIN OS in pieces, browsers then get it from here; Remove frees the space', async () => {
   await closeAll();
   const listed = await page.evaluate(async () => (await fetch('/api/models.php?op=list', { headers: { 'X-Desktop-Store': '1' } })).json());
   ok(listed.owner === true && listed.models.every(m => !m.saved), 'needs an empty models folder of its own (run it with tools/run-browser-tests.sh): ' + JSON.stringify(listed).slice(0, 200));
-  await openApp('assistant');
-  const w = page.locator('.win', { has: page.locator('.ai') });
-  const left = w.locator('.ai-left');
-  await left.getByLabel('Built-in model').selectOption('Qwen3.5-0.8B-q4f32_1-MLC');
-  const source = left.locator('.ai-source');
+  await openApp('settings');
+  const ai = settingsWin().locator('.set-ai');
+  const pick = ai.getByLabel('Built-in model');
+  await pick.locator('option').first().waitFor({ state: 'attached', timeout: 15000 });
+  await pick.selectOption('Qwen3.5-0.8B-q4f32_1-MLC');
+  const source = ai.locator('p.hint', { hasText: /^(Not saved|Saved) on this TOMLIN OS/ });
   ok((await source.innerText()).startsWith('Not saved on this TOMLIN OS: this browser fetches it from Hugging Face'), await source.innerText());
-  await left.getByRole('button', { name: 'Save to this TOMLIN OS' }).click();
-  const said = left.locator('.ai-owner .ai-progress-text');
-  await said.filter({ hasNotText: /^(Asking|Saving)/ }).waitFor({ timeout: 60000 });
+  await ai.getByRole('button', { name: 'Save to this TOMLIN OS' }).click();
+  // The save line: "Starting the save...", "Saving ... of ...", then how it ended.
+  const said = ai.locator('p.hint[role=status]').first();
+  await said.filter({ hasText: /^(?!Starting|Saving)\S/ }).waitFor({ timeout: 60000 });
   ok((await said.innerText()).startsWith('Qwen 3.5 0.8B is saved on this TOMLIN OS'), await said.innerText());
   await source.filter({ hasText: /^Saved on this TOMLIN OS/ }).waitFor({ timeout: 10000 });
   const pieces = hf.requests.filter(r => r.startsWith('/cdn/params_shard_0.bin'));
@@ -686,121 +699,150 @@ await step('Assistant: the owner saves a model to this TOMLIN OS in pieces, brow
     shard: (await (await fetch('/models/Qwen3.5-0.8B-q4f32_1-MLC/resolve/main/params_shard_0.bin')).arrayBuffer()).byteLength,
   }));
   eq(served, { index: ['Qwen3.5-0.8B-q4f32_1-MLC'], shard: SHARD_BYTES });
-  await left.getByRole('button', { name: 'Remove from this TOMLIN OS' }).click();
+  await ai.getByRole('button', { name: 'Remove from this TOMLIN OS' }).click();
   await page.locator('.dialog').getByRole('button', { name: 'Remove', exact: true }).click();
-  await source.filter({ hasText: 'Not saved on this TOMLIN OS' }).waitFor({ timeout: 10000 });
+  await source.filter({ hasText: /^Not saved on this TOMLIN OS/ }).waitFor({ timeout: 10000 });
   eq(await page.evaluate(async () => (await fetch('/models/Qwen3.5-0.8B-q4f32_1-MLC/resolve/main/params_shard_0.bin')).status), 404, 'the files are gone');
-  await w.getByRole('button', { name: 'Close', exact: true }).click();
+  await closeAll();
 });
 await hf.close();
 
 // Claude with the person's own key, against a stand-in for Anthropic (test/fake-anthropic.mjs). The PHP server must be
 // started with DESKTOP_AI_TEST_URL=http://127.0.0.1:3190 (tools/run-browser-tests.sh does); no request leaves this computer.
 const anthropic = await startFakeAnthropic(3190);
-await step('Assistant with your own Claude key: checked before it is kept, never shown again, answers stream, the cap and the cost log hold', async () => {
+/** The Chat window that Use Claude opened, on the Agents tab, with Claude connected (its key saved in Settings › AI). */
+const claudeInChat = async () => {
+  const w = chatWin();
+  await w.getByRole('tab', { name: 'Agents', selected: true }).waitFor({ timeout: 10000 });
+  await w.locator('.agent-pick[aria-label="Agent"] option[value="claude"]:not([disabled])').waitFor({ state: 'attached', timeout: 10000 });
+  await w.getByLabel('Agent', { exact: true }).selectOption('claude');
+  await w.locator('.agent-note', { hasText: 'Connected: Claude Sonnet 5' }).waitFor({ timeout: 10000 });
+  return w;
+};
+await step('your own Claude key in Settings › AI: checked before it is kept, never shown again; Use Claude opens Chat › Agents, answers stream there; the cap and the cost log hold', async () => {
   await closeAll();
   const problemsBefore = problems.length;
-  await openApp('assistant');
-  const w = page.locator('.win', { has: page.locator('.ai') });
-  const state = w.locator('.ai-cloud > .ai-device');
-  await state.filter({ hasText: 'No key saved yet' }).waitFor({ timeout: 10000 });
-  ok(await w.getByRole('button', { name: 'Use Claude' }).isDisabled(), 'no key: Use Claude is off');
-  await w.getByRole('button', { name: 'Claude settings...' }).click();
-  const keyBox = w.getByLabel('Anthropic API key');
+  await openApp('settings');
+  let c = claudeBox(settingsWin());
+  const state = () => c.locator('.ai-device');
+  await state().filter({ hasText: 'No key saved yet' }).waitFor({ timeout: 10000 });
+  ok(await c.getByRole('button', { name: 'Use Claude' }).isDisabled(), 'no key: Use Claude is off');
+  await c.getByRole('button', { name: 'Claude settings...' }).click();
+  const keyBox = c.getByLabel('Anthropic API key');
   eq(await keyBox.getAttribute('type'), 'password', 'the key is typed hidden');
-  const msg = w.locator('.ai-cloud-msg');
+  const msg = c.locator('.ai-cloud-msg');
 
   await keyBox.fill('hello');
-  await w.getByRole('button', { name: 'Save', exact: true }).click();
+  await c.getByRole('button', { name: 'Save', exact: true }).click();
   await msg.filter({ hasText: 'does not look like an Anthropic API key' }).waitFor();
   eq(anthropic.requests.length, 0, 'a key of the wrong shape is never sent anywhere');
 
   await keyBox.fill('sk-ant-api03-' + 'x'.repeat(40));
-  await w.getByRole('button', { name: 'Save', exact: true }).click();
+  await c.getByRole('button', { name: 'Save', exact: true }).click();
   await msg.filter({ hasText: 'Anthropic refused the API key' }).waitFor({ timeout: 15000 });
   eq(anthropic.requests.length, 1, 'a wrong key is tried once, and not kept');
 
   await keyBox.fill(AI_KEY);
-  await w.getByLabel('Claude model').selectOption('claude-sonnet-5');
-  await w.getByLabel('Monthly limit in US dollars').fill('1');
-  await w.getByRole('button', { name: 'Save', exact: true }).click();
-  await state.filter({ hasText: 'ending wxyz' }).waitFor({ timeout: 15000 });
-  ok((await state.innerText()).includes('Claude Sonnet 5') && (await state.innerText()).includes('$1.00'), await state.innerText());
+  await c.getByLabel('Claude model').selectOption('claude-sonnet-5');
+  await c.getByLabel('Monthly limit in US dollars').fill('1');
+  await c.getByRole('button', { name: 'Save', exact: true }).click();
+  await state().filter({ hasText: 'ending wxyz' }).waitFor({ timeout: 15000 });
+  ok((await state().innerText()).includes('Claude Sonnet 5') && (await state().innerText()).includes('$1.00'), await state().innerText());
   eq(anthropic.requests[1].path.startsWith('/v1/models'), true, 'the key is proved with the free model list');
   // The page never gets the key back: the settings answer carries only its last four characters.
   const back = await page.evaluate(async () => (await fetch('/api/ai.php?op=settings', { headers: { 'X-Desktop-Store': '1' } })).text());
   ok(!back.includes('sk-ant-') && back.includes('"hint":"wxyz"'), 'settings answer: ' + back.slice(0, 200));
 
-  await w.getByRole('button', { name: 'Use Claude' }).click();
-  await w.locator('.ai-who', { hasText: 'Claude Sonnet 5' }).waitFor();
+  // Use Claude goes to where the talking is: Chat › Agents.
+  await c.getByRole('button', { name: 'Use Claude' }).click();
+  let w = await claudeInChat();
+  ok((await w.locator('.agent-note').innerText()).includes('of your $1.00 limit'), 'the chat says the limit: ' + await w.locator('.agent-note').innerText());
   // Enter sends; Shift+Enter is a new line and sends nothing.
-  const box = w.locator('.ai-right .ai-input');
-  const asked = await w.locator('.ai-right .ai-msg.user').count();
+  const box = w.getByLabel('Message to the agent');
+  const asked = await w.locator('.agent-pane .chat-msg.mine').count();
   await box.fill('first line');
   await box.press('Shift+Enter');
   eq(await box.inputValue(), 'first line\n', 'Shift+Enter makes a new line');
-  eq(await w.locator('.ai-right .ai-msg.user').count(), asked, 'and sends nothing');
+  eq(await w.locator('.agent-pane .chat-msg.mine').count(), asked, 'and sends nothing');
   await box.fill('Please prune the magnolia');
   await box.press('Enter');
-  const answer = w.locator('.ai-right .ai-msg.assistant').last();
-  await answer.locator('.ai-foot', { hasText: 'sent to Anthropic' }).waitFor({ timeout: 20000 });
-  ok((await answer.locator('.ai-text').innerText()).includes('Stand-in Claude heard: Please prune the magnolia'), 'the answer streamed in');
-  const foot = await answer.locator('.ai-foot').innerText();
-  ok(foot.includes('Claude Sonnet 5 with your API key') && foot.includes('may be wrong') && /120 tokens in, 42 out/.test(foot), foot);
-  // 120 in at $2/M + 42 out at $10/M = $0.00066
-  ok(foot.includes('$0.0007'), 'cost at list price: ' + foot);
+  const answer = w.locator('.agent-pane .chat-msg.agent').last();
+  await answer.locator('.chat-text', { hasText: 'Stand-in Claude heard: Please prune the magnolia' }).waitFor({ timeout: 20000 });
+  ok((await answer.locator('.chat-who').innerText()).startsWith('Claude Sonnet 5'), 'the answer names the AI that wrote it');
+  const foot = await answer.locator('.agent-foot').innerText();
+  ok(/^Answered in \d+ s$/.test(foot), 'foot: ' + foot);
   const sent = anthropic.requests.at(-1);
   eq(sent.key, AI_KEY, 'the saved key was used');
   eq(sent.auth, null, 'no other credential rode along');
   eq(sent.body.model, 'claude-sonnet-5', 'the chosen model');
   eq(sent.body.stream, true, 'streamed');
   eq(sent.body.messages, [{ role: 'user', content: 'Please prune the magnolia' }], 'exactly what was typed, nothing else');
+  await shot('chat-claude');
+  await closeAll();
 
   // A $0 limit stops the next question before anything is sent.
   const before = anthropic.requests.length;
-  await w.locator('.ai-right').getByRole('button', { name: 'Dashboard' }).click();
-  await w.getByRole('button', { name: 'Claude settings...' }).click();
-  await w.getByLabel('Monthly limit in US dollars').fill('0');
-  await w.getByRole('button', { name: 'Save', exact: true }).click();
-  await state.filter({ hasText: '$0.00 limit' }).waitFor({ timeout: 10000 });
-  await w.getByRole('button', { name: 'Use Claude' }).click();
-  await w.locator('.ai-right .ai-input').fill('One more question');
-  await w.locator('.ai-right').getByRole('button', { name: 'Send' }).click();
-  await w.locator('.ai-right .ai-msg.assistant.error', { hasText: 'monthly limit' }).waitFor({ timeout: 10000 });
+  await openApp('settings');
+  c = claudeBox(settingsWin());
+  await c.getByRole('button', { name: 'Claude settings...' }).click();
+  await c.getByLabel('Monthly limit in US dollars').fill('0');
+  await c.getByRole('button', { name: 'Save', exact: true }).click();
+  await state().filter({ hasText: '$0.00 limit' }).waitFor({ timeout: 10000 });
+  await c.getByRole('button', { name: 'Use Claude' }).click();
+  w = await claudeInChat();
+  await w.getByLabel('Message to the agent').fill('One more question');
+  await w.locator('.agent-pane').getByRole('button', { name: 'Send' }).click();
+  await w.locator('.agent-pane .agent-error', { hasText: 'monthly limit' }).waitFor({ timeout: 10000 });
   eq(anthropic.requests.length, before, 'over the limit: Anthropic is not asked');
+  eq(await w.getByLabel('Message to the agent').inputValue(), 'One more question', 'the unanswered question is back in the box');
+  await closeAll();
 
-  await w.locator('.ai-right').getByRole('button', { name: 'Dashboard' }).click();
-  await w.getByRole('button', { name: 'Cost log...' }).click();
-  await w.locator('.ai-log-table tbody tr', { hasText: 'Claude Sonnet 5' }).first().waitFor();
-  const rows = await w.locator('.ai-log-table tbody tr').allInnerTexts();
-  ok(rows.some(r => r.includes('120') && r.includes('42')), rows.join(' | '));
+  // The cost log, in Settings › AI: the answer above at list price, numbers only.
+  await openApp('settings');
+  c = claudeBox(settingsWin());
+  await c.getByRole('button', { name: 'Cost log...' }).click();
+  await c.locator('.ai-log-table tbody tr', { hasText: 'Claude Sonnet 5' }).first().waitFor({ timeout: 10000 });
+  const rows = await c.locator('.ai-log-table tbody tr').allInnerTexts();
+  // 120 in at $2/M + 42 out at $10/M = $0.00066
+  ok(rows.some(r => r.includes('120') && r.includes('42') && r.includes('$0.0007')), 'tokens and cost at list price: ' + rows.join(' | '));
   ok(!rows.join(' ').includes('magnolia'), 'the cost log keeps numbers, never what was asked');
-  await shot('assistant-claude');
+  await shot('settings-ai-claude-log');
 
-  await w.getByRole('button', { name: 'Claude settings...' }).click();
-  await w.getByRole('button', { name: 'Remove my key' }).click();
-  await state.filter({ hasText: 'No key saved yet' }).waitFor({ timeout: 10000 });
-  ok(await w.getByRole('button', { name: 'Use Claude' }).isDisabled(), 'removed: Use Claude is off');
+  await c.getByRole('button', { name: 'Claude settings...' }).click();
+  await c.getByRole('button', { name: 'Remove my key' }).click();
+  await state().filter({ hasText: 'No key saved yet' }).waitFor({ timeout: 10000 });
+  ok(await c.getByRole('button', { name: 'Use Claude' }).isDisabled(), 'removed: Use Claude is off');
   // The three refusals asked for above (a key of the wrong shape, a refused key, the $0 limit) show in the browser's
-  // console as failed requests; exactly those are expected, and anything else still fails the last step.
-  const mine = problems.splice(problemsBefore);
+  // console as failed requests; exactly those are expected (a 404 is a key not made yet, as in the last step), and
+  // anything else still fails the last step.
+  const mine = problems.splice(problemsBefore).filter(p => !p.includes('404'));
   eq(mine.map(p => (/status of (\d+)/.exec(p) ?? [])[1]), ['400', '400', '402'], 'only the refusals asked for');
-  await w.getByRole('button', { name: 'Close', exact: true }).click();
+  await closeAll();
 });
+
+/** Saves the Claude key in Settings › AI, with a $1 limit; `null` removes it. */
+const setClaudeKey = async key => {
+  await openApp('settings');
+  const c = claudeBox(settingsWin());
+  await c.getByRole('button', { name: 'Claude settings...' }).click();
+  if (key) {
+    await c.getByLabel('Anthropic API key').fill(key);
+    await c.getByLabel('Monthly limit in US dollars').fill('1');
+    await c.getByRole('button', { name: 'Save', exact: true }).click();
+    await c.locator('.ai-device').filter({ hasText: 'ending wxyz' }).waitFor({ timeout: 15000 });
+  } else {
+    await c.getByRole('button', { name: 'Remove my key' }).click();
+    await c.locator('.ai-device').filter({ hasText: 'No key saved yet' }).waitFor({ timeout: 10000 });
+  }
+  await closeAll();
+};
 
 // Chat Agents: connect, then save, new thread, delete and recent threads; closing the browser or reloading loses
 // nothing, as threads are kept in Documents/AI chats as they go. Claude is the stand-in; the built-in models need a graphics chip the run may not have.
 await step('Chat Agents: Claude connects, the thread is kept as it goes, comes back when Chat opens again and carries on, then goes to the Recycle Bin', async () => {
   await closeAll();
   // The key again (the step above removed it), with a limit above $0.
-  await openApp('assistant');
-  const a = page.locator('.win', { has: page.locator('.ai') });
-  await a.getByRole('button', { name: 'Claude settings...' }).click();
-  await a.getByLabel('Anthropic API key').fill(AI_KEY);
-  await a.getByLabel('Monthly limit in US dollars').fill('1');
-  await a.getByRole('button', { name: 'Save', exact: true }).click();
-  await a.locator('.ai-cloud > .ai-device').filter({ hasText: 'ending wxyz' }).waitFor({ timeout: 15000 });
-  await a.getByRole('button', { name: 'Close', exact: true }).click();
+  await setClaudeKey(AI_KEY);
 
   const openAgents = async () => {
     await openApp('chat');
@@ -811,7 +853,7 @@ await step('Chat Agents: Claude connects, the thread is kept as it goes, comes b
   };
   let w = await openAgents();
   const recent = w.getByLabel('Recent threads');
-  // The Assistant's Claude chat (the step above) was kept too, so it is here, and opened as the newest.
+  // The thread asked in the step above (Chat › Agents, Claude) was kept, so it is here, and opened as the newest.
   await recent.locator('option', { hasText: 'Please prune the magnolia' }).waitFor({ state: 'attached' });
   await w.locator('.agent-pane .chat-msg.agent .chat-text', { hasText: 'Stand-in Claude heard: Please prune the magnolia' }).waitFor({ timeout: 10000 });
   ok(await w.getByLabel('Message to the agent').isDisabled(), 'no agent connected: nothing to type into');
@@ -848,11 +890,7 @@ await step('Chat Agents: Claude connects, the thread is kept as it goes, comes b
   await w.getByRole('button', { name: 'Close', exact: true }).click();
 
   // The key off again, so the Panel step below finds the built-in AI named on the rail.
-  await openApp('assistant');
-  await a.getByRole('button', { name: 'Claude settings...' }).click();
-  await a.getByRole('button', { name: 'Remove my key' }).click();
-  await a.locator('.ai-cloud > .ai-device').filter({ hasText: 'No key saved yet' }).waitFor({ timeout: 10000 });
-  await a.getByRole('button', { name: 'Close', exact: true }).click();
+  await setClaudeKey(null);
 });
 
 await step('Panel: control-panel layout; Chat in the Overview sends and shows a message; the Terminal runs inside and keeps its history', async () => {

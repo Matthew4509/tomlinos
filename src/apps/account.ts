@@ -29,6 +29,11 @@ export const accountApp: AppDef = {
     // Opened on a page when asked (Chat's "Add people..." opens People on this desktop).
     const view = new AccountView(app, arg === 'people' ? 'people' : 'signin');
     view.draw();
+    // Opened again while open, with a page asked for: that page (a redraw keeps nothing typed on the old one, so only
+    // when the page changes).
+    app.onReopen(next => {
+      if (next === 'people') view.goTo('people');
+    });
   },
 };
 
@@ -40,6 +45,13 @@ class AccountView {
   constructor(app: AppHandle, page: AccountPage) {
     this.app = app;
     this.page = page;
+  }
+
+  /** Shows `page`, if it is not the one shown already. */
+  goTo(page: AccountPage): void {
+    if (page === this.page) return;
+    this.page = page;
+    this.draw();
   }
 
   private get account() {

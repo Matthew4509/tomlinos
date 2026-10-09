@@ -21,6 +21,10 @@ async function step(name, fn) {
     failures.push(name);
     await shot('fail-' + failures.length).catch(() => {});
     console.log('  FAIL ' + name + '\n       ' + String(error.message).slice(0, 1200));
+    // A step that stopped part-way must not fail the next ones: back to the usual screen size, menus closed.
+    await page.mouse.up().catch(() => {});
+    await page.setViewportSize({ width: 1280, height: 800 }).catch(() => {});
+    for (let i = 0; i < 3 && await page.locator('.start-menu, .menu').count().catch(() => 0); i++) await page.keyboard.press('Escape').catch(() => {});
   }
 }
 const eq = (a, b, what) => {
@@ -71,8 +75,9 @@ await step('the Start menu keeps its size while the filter narrows the list', as
   await page.keyboard.press('Escape');
 });
 
-// The Start menu files the apps (not a wall of tiles): 8 pinned (Panel among them), then the groups, each opening a column.
-const PINNED = ['Panel', 'File Explorer', 'Mail', 'Calendar', 'Spreadsheet', 'Notepad', 'Assistant', 'Chat'];
+// The Start menu files the apps (not a wall of tiles): two pinned to start with (the Panel and File Explorer,
+// src/shell/startgroups.ts DEFAULT_PINNED), then the groups, each opening a column.
+const PINNED = ['Panel', 'File Explorer'];
 // Games holds only Planetziods and Office Printer: with both hidden (src/release.ts) the group is not shown.
 const GAMES = !(HIDDEN_APPS.includes('planetziods') && HIDDEN_APPS.includes('printer'));
 const GROUPS = ['Accessories', 'Office', 'Internet', 'Graphics & media', ...(GAMES ? ['Games'] : []), 'Development', 'System', 'Settings'];
@@ -88,13 +93,14 @@ const settingsWritten = async () => {
     }
   }
 };
+// The sign-in form also holds the picture check's answer box (hidden until asked for): fill the password field itself.
 const signInAgain = async () => {
-  await page.locator('.gate input.gate-input').last().fill(PASS).catch(() => {});
+  await page.locator('.gate input[type=password]').first().fill(PASS, { timeout: 5000 }).catch(() => {});
   if (await page.locator('.gate-go').isVisible().catch(() => false)) await page.locator('.gate-go').click();
   await page.locator('#desktop .item').first().waitFor({ timeout: 20000 });
 };
 
-await step('Start menu (Xfce by default): 8 pinned apps, then the groups and Places; a group opens its apps in a column to the right, level with it; About sits in the bottom row', async () => {
+await step('Start menu (Xfce by default): 2 pinned apps, then the groups and Places; a group opens its apps in a column to the right, level with it; About sits in the bottom row', async () => {
   eq(await page.evaluate(() => document.documentElement.dataset.theme), 'xfce', 'a new desktop starts in the Xfce colours');
   await page.locator('.start-btn').click();
   eq((await pinnedNames()).map(t => t.trim()), PINNED, 'pinned');
@@ -177,7 +183,7 @@ await step('Start menu: right-click pins an app and unpins it; pins are kept aft
   eq((await pinnedNames()).map(t => t.trim()).at(-1), 'Calculator', 'still pinned after a reload');
   await page.locator('.start-list > .start-item', { hasText: 'Calculator' }).click({ button: 'right' });
   await page.locator('.menu-item', { hasText: 'Move up' }).click();
-  eq((await pinnedNames()).map(t => t.trim()).slice(-2), ['Calculator', 'Chat'], 'moved up');
+  eq((await pinnedNames()).map(t => t.trim()).slice(-2), ['Calculator', 'File Explorer'], 'moved up');
   await page.locator('.start-list > .start-item', { hasText: 'Calculator' }).click({ button: 'right' });
   await page.locator('.menu-item', { hasText: 'Remove from Favourites' }).click();
   eq((await pinnedNames()).map(t => t.trim()), PINNED, 'unpinned');
@@ -369,7 +375,7 @@ for (const theme of ['olive', 'silver', 'blue', 'dark']) {
     if (theme === 'dark') {
       await settingsWritten();
       await page.reload();
-      await page.locator('.gate input.gate-input').last().fill(PASS).catch(() => {});
+      await page.locator('.gate input[type=password]').first().fill(PASS, { timeout: 5000 }).catch(() => {});
       if (await page.locator('.gate-go').isVisible().catch(() => false)) await page.locator('.gate-go').click();
       await page.locator('#desktop .item').first().waitFor({ timeout: 20000 });
       eq(await page.evaluate(() => document.documentElement.dataset.theme), 'dark', 'after reload');
@@ -384,7 +390,7 @@ await step('Classic blue colours: the same Start menu (groups, a column to the r
   eq((await page.locator('.start-list > .start-group .start-group-name').allInnerTexts()).map(t => t.trim()), [...GROUPS, 'Places'], 'the same groups');
   await page.locator('.start-list > .start-group', { hasText: 'Development' }).click();
   ok(await page.locator('.start-fly .start-item', { hasText: 'Terminal' }).isVisible(), 'a column to the right');
-  await page.locator('.start-list > .start-item', { hasText: 'Mail' }).click({ button: 'right' });
+  await page.locator('.start-list > .start-item', { hasText: 'Panel' }).click({ button: 'right' });
   ok(await page.locator('.menu-item', { hasText: 'Unpin from Start' }).isVisible(), 'Windows words for pinning');
   await page.keyboard.press('Escape');
   await shot('12-start-blue');

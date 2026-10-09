@@ -31,6 +31,8 @@ export interface AppHandle {
   setDirty(dirty: boolean): void;
   /** Runs before the window closes; return false to keep it open (after asking the person, for instance). */
   onClose(guard: () => boolean | Promise<boolean>): void;
+  /** A single-window app opened again with an argument while open: `listener` gets it (to go to a page, a book...). */
+  onReopen(listener: (arg: string) => void): void;
 }
 
 export interface AppDef {

@@ -85,6 +85,11 @@ export class LiveChat {
     signal.addEventListener('abort', () => this.watchers.delete(fn), { once: true });
   }
 
+  /** Some view is still showing the conversation. */
+  get watched(): boolean {
+    return this.watchers.size > 0;
+  }
+
   tell(change: LiveChange): void {
     for (const fn of [...this.watchers]) fn(change);
   }

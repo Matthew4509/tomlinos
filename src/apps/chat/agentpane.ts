@@ -36,6 +36,9 @@ const GEMMA = 'gemma-2-2b-it-q4f32_1-MLC';
 /** "Try a shorter version": the longest answer asked for, in word-pieces (about 150 words). */
 const SHORT_ANSWER = 200;
 
+/** An AI reached with the person's own key, which Chat can be opened on ("agents:claude"). */
+export type CloudAgent = 'claude' | 'openrouter';
+
 /** How a question is sent: a new one; the last one again (Regenerate); or the last one cut short after the chip stopped. */
 type SendMode = 'new' | 'again' | 'short';
 
@@ -47,7 +50,7 @@ interface Trouble {
   agent: string | null;
 }
 
-export function agentPane(app: AppHandle): { el: HTMLElement; shown: () => Promise<void> } {
+export function agentPane(app: AppHandle): { el: HTMLElement; shown: (want?: CloudAgent) => Promise<void> } {
   const { shell, signal } = app;
   const api = shell.account ? new ServiceApi(shell.account.api.base, 'ai') : null;
   const orApi = shell.account ? new ServiceApi(shell.account.api.base, 'openrouter') : null;
@@ -728,12 +731,25 @@ ${text}`;
     renderThread();
     renderControls();
   }, signal);
+  // A paid answer nobody can see any more is stopped when the window closes. Added after live.watch, so this pane
+  // has already left the watchers when it runs; another view still watching shows the answer, so it carries on.
+  signal.addEventListener('abort', () => {
+    if (!live.watched) claudeStop?.abort();
+  }, { once: true });
 
-  /** Called each time the tab is shown: the agents and threads are read again (a key may have been added meanwhile). */
-  async function shown(): Promise<void> {
+  /**
+   * Called each time the tab is shown: the agents and threads are read again (a key may have been added meanwhile).
+   * `want`: "Use Claude" or "Use OpenRouter" in Settings › AI; that AI is chosen when its key is ready and nothing is
+   * being answered, otherwise the usual choice stands.
+   */
+  async function shown(want?: CloudAgent): Promise<void> {
     await Promise.all([fillAgents(), fillRecent()]);
     // The newest kept thread opens again (once per desktop), so closing the Panel or reloading carries on.
     await live.start(shell.fs);
+    if (want && !busy && !live.busy && connected !== want && [...pick.options].some(o => o.value === want && !o.disabled)) {
+      pick.value = want;
+      await connect();
+    }
     joinRunning();
     renderThread();
     renderControls();

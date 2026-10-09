@@ -33,6 +33,8 @@ export class Win {
   state: State = 'normal';
   dirty = false;
   guard: (() => boolean | Promise<boolean>) | null = null;
+  /** Hears the argument when a single-window app is opened again while this window is open. */
+  reopen: ((arg: string) => void) | null = null;
   rect: WindowPrefs = { x: 0, y: 0, w: 400, h: 300 };
   /** The size and place before it was snapped to a half, so dragging it away or Ctrl+Alt+Down puts it back. */
   unsnapped: WindowPrefs | null = null;

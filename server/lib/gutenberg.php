@@ -106,7 +106,8 @@ function gutenberg_fetch(string $url): ?string
     $headers = "User-Agent: TomlinOS Reader (one book, opened by a reader)\r\n";
     $context = stream_context_create(['http' => ['timeout' => 40, 'header' => $headers, 'ignore_errors' => true]]);
     $body = @file_get_contents($url, false, $context, 0, GUTENBERG_MAX_BYTES);
-    $got = function_exists('http_get_last_response_headers') ? (http_get_last_response_headers() ?? []) : [];
+    // PHP 8.4+ has the function; 8.2 and 8.3 only fill $http_response_header (deprecated from 8.5, so not read there).
+    $got = function_exists('http_get_last_response_headers') ? (http_get_last_response_headers() ?? []) : ($http_response_header ?? []);
     // After redirects the last status line is the one that counts.
     $lines = array_values(array_filter($got, fn ($l) => str_starts_with($l, 'HTTP/')));
     $last = end($lines) ?: '';

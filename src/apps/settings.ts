@@ -57,7 +57,7 @@ export const settingsApp: AppDef = {
       pictures.replaceChildren(...rows);
       note.textContent = rows.length
         ? 'Pictures in your Pictures folder. Choosing a colour above puts the plain background back.'
-        : 'To use your own picture, put a PNG, JPG, GIF, WebP or AVIF file in your Pictures folder, then open Settings again.';
+        : 'To use your own picture, put a PNG, JPG, GIF, WebP, AVIF or BMP file in your Pictures folder, then open Settings again.';
     }
 
     on(custom, 'change', () => void shell.setWallpaper({ kind: 'colour', value: custom.value.toLowerCase() }).then(drawSwatches), app.signal);
@@ -222,7 +222,7 @@ export const settingsApp: AppDef = {
       h('label', { class: 'custom-row' }, 'Your own colour ', custom),
       h('h2', { class: 'set-h' }, 'Colour scheme'),
       themes,
-      h('p', { class: 'hint' }, 'Title bars, the taskbar and the Start menu. Standard is the look of Debian with Xfce; Glass has a see-through taskbar and glassy title bars; Flat is flat and square with one blue accent; Dark also darkens the inside of windows.'),
+      h('p', { class: 'hint' }, 'Title bars, the taskbar and the Start menu. Standard is the look of Debian with Xfce; Glass has a see-through taskbar and glassy title bars; Flat is flat and square with one blue accent; Classic blue, Olive green and Silver have shaded title bars in those colours; Dark also darkens the inside of windows.'),
       h('h2', { class: 'set-h' }, 'Screensaver and lock'),
       ...saverControls(shell, app.signal),
       ...(frontBox ? [frontBox] : []),
@@ -242,10 +242,14 @@ export const settingsApp: AppDef = {
       binNote,
       h('h2', { class: 'set-h' }, 'Storage'),
       h('p', {}, `Your files are kept in ${shell.storeLabel}.`),
-      h('p', { class: 'hint' }, 'Deleting a file moves it to the Recycle Bin. The only automatic deleting is the Recycle Bin clearing above, which you control; restarting only reloads the page.'),
+      h('p', { class: 'hint' }, `Deleting a file moves it to the Recycle Bin. The only automatic deleting is what is set above: the Recycle Bin clearing, AI chats cleared after the days you chose${chatApi ? ', and Chat messages when they are set to vanish (by the owner, for everyone)' : ''}. Restarting only reloads the page.`),
     );
     drawSwatches();
     if (arg === 'ai') requestAnimationFrame(() => aiHead.scrollIntoView({ block: 'start' }));
+    // Opened again while open (Chat's "AI keys..."): to the AI section, as on a first opening.
+    app.onReopen(next => {
+      if (next === 'ai') aiHead.scrollIntoView({ block: 'start' });
+    });
     await drawPictures();
   },
 };

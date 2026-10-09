@@ -175,6 +175,7 @@ export const panelApp: AppDef = {
         onClose: guard => {
           entry.guard = guard;
         },
+        onReopen: () => undefined,
       };
       const def = shell.apps().find(a => a.id === appId);
       if (!def) area.append(h('p', { class: 'app-message' }, 'That app is not installed on this desktop.'));

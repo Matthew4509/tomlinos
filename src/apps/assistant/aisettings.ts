@@ -53,7 +53,7 @@ export function aiSettings(shell: Shell, signal: AbortSignal): HTMLElement {
     // Saving on the server is for the built-in models; one a person added always comes from Hugging Face.
     ownerBox.hidden = !owner || !m || !!m.mine;
     const saving = savingId !== null;
-    // Removed less than a day ago: it can be saved again only then (the mirror's bandwidth is shared).
+    // Removed less than a day ago: it can be saved again only then (a mirror's bandwidth is shared).
     const wait = !saving && m && !m.saved && !m.saving ? (m.resaveWait ?? 0) : 0;
     saveBtn.hidden = !m || m.saved || saving || wait > 0;
     saveBtn.textContent = m?.saving ? 'Carry on saving' : 'Save to this TOMLIN OS';
@@ -168,9 +168,9 @@ export function aiSettings(shell: Shell, signal: AbortSignal): HTMLElement {
   }, signal);
   on(chatBtn, 'click', () => void shell.openApp('chat', 'agents'), signal);
 
-  // Claude: "Use Claude" goes to where the talking is.
-  const cloud = claudeSection(service, signal, () => void shell.openApp('chat', 'agents'));
-  const router = openRouterSection(shell.account ? new ServiceApi(shell.account.api.base, 'openrouter') : null, signal, () => void shell.openApp('chat', 'agents'));
+  // Claude: "Use Claude" goes to where the talking is, with that AI chosen there.
+  const cloud = claudeSection(service, signal, () => void shell.openApp('chat', 'agents:claude'));
+  const router = openRouterSection(shell.account ? new ServiceApi(shell.account.api.base, 'openrouter') : null, signal, () => void shell.openApp('chat', 'agents:openrouter'));
 
   const el = h('div', { class: 'set-ai' },
     h('h3', { class: 'set-sub' }, 'Built-in AI'),

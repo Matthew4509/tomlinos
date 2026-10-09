@@ -116,8 +116,10 @@ export class FileActions {
       if (!toBin.length) return;
       const { slots, failures } = await this.shell.bin.put(toBin);
       if (slots.length) {
+        // The one that went: not allowed[0], which may have been too big for the Bin, nor one that failed to move.
+        const moved = slots.length === 1 ? (toBin.find(p => !failures.some(f => f.name === baseName(p))) ?? toBin[0]) : '';
         this.shell.toast(
-          slots.length === 1 ? `Moved “${baseName(allowed[0])}” to the Recycle Bin.` : `Moved ${plural(slots.length, 'item')} to the Recycle Bin.`,
+          slots.length === 1 ? `Moved “${baseName(moved)}” to the Recycle Bin.` : `Moved ${plural(slots.length, 'item')} to the Recycle Bin.`,
           { label: 'Undo', run: () => void this.restoreFromBin(slots) },
         );
       }

@@ -16,7 +16,7 @@
 declare(strict_types=1);
 
 const APPSTORE_SOURCES = [
-    'https://raw.githubusercontent.com/Matthew4509/Tomlinos/main/appstore/catalogue.json',
+    'https://raw.githubusercontent.com/Matthew4509/tomlinos/main/appstore/catalogue.json',
 ];
 const APPSTORE_MAX_ZIP = 48 * 1024 * 1024;
 const APPSTORE_MAX_UNPACKED = 96 * 1024 * 1024;
@@ -24,6 +24,14 @@ const APPSTORE_MAX_FILES = 3000;
 const APPSTORE_TYPES = ['html', 'js', 'mjs', 'css', 'json', 'txt', 'md', 'svg', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'ico',
     'woff', 'woff2', 'ttf', 'otf', 'mp3', 'ogg', 'oga', 'wav', 'm4a', 'mp4', 'webm', 'wasm', 'csv', 'xml', 'pdf'];
 const APPSTORE_KINDS = ['games', 'office', 'system'];
+
+/** The first $n characters of a text, without needing the mbstring extension (it is optional on a host). */
+function appstore_cut(string $text, int $n): string
+{
+    $chars = preg_split('//u', $text, -1, PREG_SPLIT_NO_EMPTY);
+
+    return $chars === false ? '' : implode('', array_slice($chars, 0, $n));
+}
 
 /** A store app's id: lower-case letters and digits, as it appears in the address (apps/<id>/). */
 function appstore_valid_id(string $id): bool
@@ -55,12 +63,12 @@ function appstore_clean_app(mixed $a): ?array
 
     return [
         'id' => (string) $a['id'],
-        'title' => mb_substr(trim((string) ($a['title'] ?? $a['id'])), 0, 60),
+        'title' => appstore_cut(trim((string) ($a['title'] ?? $a['id'])), 60),
         'icon' => preg_match('/^[a-z][a-z0-9-]{0,30}$/', (string) ($a['icon'] ?? '')) ? (string) $a['icon'] : 'app',
         'kind' => in_array($a['kind'] ?? '', APPSTORE_KINDS, true) ? (string) $a['kind'] : 'office',
         'version' => (string) $a['version'],
-        'date' => mb_substr((string) ($a['date'] ?? ''), 0, 20),
-        'notes' => mb_substr((string) ($a['notes'] ?? ''), 0, 2000),
+        'date' => appstore_cut((string) ($a['date'] ?? ''), 20),
+        'notes' => appstore_cut((string) ($a['notes'] ?? ''), 2000),
         'bytes' => max(0, (int) ($a['bytes'] ?? 0)),
         'sha256' => (string) $a['sha256'],
         'zips' => $zips,
@@ -217,7 +225,7 @@ function appstore_download(array $app, string $dataDir, string $webRoot): array
         if (!appstore_allowed_name($name)) {
             $zip->close();
             @unlink($zipPath);
-            throw new RuntimeException('"' . $app['title'] . '" holds a file that is not allowed in an app (' . mb_substr($name, 0, 80) . '). Nothing was changed.');
+            throw new RuntimeException('"' . $app['title'] . '" holds a file that is not allowed in an app (' . appstore_cut($name, 80) . '). Nothing was changed.');
         }
         $bytes = $zip->getFromIndex($i);
         $total += $bytes === false ? 0 : strlen($bytes);

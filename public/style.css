@@ -1279,7 +1279,7 @@ textarea.field { resize: vertical; font: inherit; }
 .tm-graph { width: 100%; height: 90px; border: 1px solid var(--line); border-radius: 4px; }
 .tm-files { font-size: 13px; }
 
-/* ---- Assistant (src/apps/assistant.ts) ---- */
+/* ---- AI parts (src/apps/assistant/: Settings › AI, Chat › Agents) ---- */
 .ai { display: flex; flex-direction: column; height: 100%; background: #fff; }
 .ai-setup { padding: 18px 22px; overflow: auto; max-width: 620px; }
 .ai-setup h2 { margin: 0 0 6px; }
@@ -1300,10 +1300,7 @@ textarea.field { resize: vertical; font: inherit; }
 .ai-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .ai-foot { margin-top: 6px; font-size: 11px; color: var(--ink-soft); }
 .ai-foot:empty { display: none; }
-.ai-compose { display: flex; gap: 8px; padding: 8px; border-top: 1px solid var(--line); }
 .ai-input { flex: 1; min-height: 60px; max-height: 180px; resize: vertical; padding: 8px; font: 14px/1.4 system-ui, sans-serif; border: 1px solid var(--line); border-radius: 6px; }
-.ai-send { display: flex; flex-direction: column; gap: 6px; }
-.ai-send .btn[hidden] { display: none; }
 .ai-cloud { margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--line); }
 .ai-cloud h2 { margin: 0 0 6px; }
 .ai-cloud-form { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: #fafaf7; }
@@ -1315,25 +1312,10 @@ textarea.field { resize: vertical; font: inherit; }
 .ai-cloud-log { margin-top: 10px; max-height: 260px; overflow: auto; }
 .ai-log-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .ai-log-table th, .ai-log-table td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
-.ai-who-bar { padding: 3px 10px; font-size: 12px; color: var(--ink-soft); background: var(--face); border-bottom: 1px solid var(--line); }
 .ai { container-type: inline-size; }
-/* Two halves: the built-in AI on the left, Claude on the right; each becomes its chat. Narrower
-   than 720px of its own width, they stack and the dashboard scrolls. */
-.ai-dash { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-.ai-half { min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
-.ai-half + .ai-half { border-left: 1px solid var(--line); }
-.ai-half > .ai-setup, .ai-cloud-setup { flex: 1; min-height: 0; overflow: auto; padding: 18px 22px; }
-.ai-cloud-setup[hidden] { display: none; }
-.ai-cloud-setup .ai-cloud { margin-top: 0; padding-top: 0; border-top: 0; }
 .ai-source { font-size: 13px; margin: 4px 0 8px; }
-.ai-half .toolbar { flex-wrap: wrap; row-gap: 4px; }
-.ai-half .toolbar .tool { white-space: nowrap; }
 .ai-owner { margin: 8px 0 12px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: #fafaf7; }
 .ai-owner .hint { margin: 0 0 6px; }
-@container (max-width: 720px) {
-  .ai-dash { grid-template-columns: minmax(0, 1fr); grid-auto-rows: minmax(440px, auto); overflow-y: auto; }
-  .ai-half + .ai-half { border-left: 0; border-top: 1px solid var(--line); }
-}
 
 /* ---- Panel (a control-panel layout; src/apps/panel.ts) ---------------------------------------------------------------
    Its own navy and grey whatever the desktop theme, green for fine, amber for soon, red only for faults, nothing

@@ -65,7 +65,11 @@ async function boot(root: HTMLElement): Promise<void> {
   let status: AuthStatus = await api.status();
   document.getElementById('boot')?.remove();
   if (!status.signedIn) await forgetKeys();
-  if (status.signedIn && status.locked) status = await unlockFirst(root, api, status);
+  if (status.signedIn && status.locked) {
+    status = await unlockFirst(root, api, status);
+    // Signed out from the lock (Sign out, or too many wrong tries): the last person's kept file key goes too.
+    if (!status.signedIn) await forgetKeys();
+  }
   if (!status.signedIn) status = await signIn(root, api, status);
   let user = status.user as PublicUser;
   const files = new FilesVault(api, store, () => user, next => (user = next));
@@ -124,13 +128,15 @@ async function boot(root: HTMLElement): Promise<void> {
     // were (unsaved work included); anyone else gets a fresh page, so no one sees another person's windows.
     signOut: message => {
       asking ??= (async () => {
-        if (!message) {
-          await api.logout().catch(() => undefined);
+        if (!message) await api.logout().catch(() => undefined);
+        shell?.lock.cover();
+        const now = await api.status().catch((): AuthStatus => ({ signedIn: false }));
+        // However the session ended (Sign out here or on the lock screen, wrong PINs, signed out elsewhere), the file
+        // key this browser kept and the mail passwords in memory go with it, so the next person cannot use them.
+        if (!message || !now.signedIn) {
           await forgetKeys();
           forgetMemoryPasswords();
         }
-        shell?.lock.cover();
-        const now = await api.status().catch((): AuthStatus => ({ signedIn: false }));
         const next = now.signedIn ? now : await signIn(root, api, now, message ?? 'You have signed out.');
         if (next.user?.id === user.id) {
           user = next.user;

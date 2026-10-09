@@ -2,8 +2,8 @@
 
 A private desktop in your browser that you host yourself. Put it on your own web hosting and you get a desktop with
 windows, a file explorer, notes, documents, mail, a calendar, chat between the accounts on your server, a book reader, and an AI
-that can run entirely on your own device. Your files live on your server, not someone else's cloud. To upload files, drag onto the
-desktop, and its uploaded and saved to the cloud.
+that can run entirely on your own device. Your files live on your server, not someone else's cloud. To upload files, drag them onto the
+desktop: they are saved on your server.
 
 **No git needed:** download the release zip, upload it to your web hosting and follow four short steps. See
 [Install](#install-download-the-zip-upload-done).
@@ -17,7 +17,7 @@ desktop, and its uploaded and saved to the cloud.
 - **Chat:** encrypted end to end between the accounts on your own server, with safety codes to check keys. You can
   delete your own messages (for everyone); the owner can clear General and choose, in Settings, whether messages vanish
   after 3, 7 or 30 days. Each person can also have their AI chats cleared after 3, 7 or 30 days.
-- **AI:** Gemma 2 2B (the default), Qwen 3.5 0.8B or Qwen 3.5 4B run in the browser
+- **AI:** Qwen 3.5 0.8B (the default), Gemma 2 2B or Qwen 3.5 4B run in the browser
   on your own graphics chip (WebGPU): nothing you type leaves your device. Chat › Agents also does Summarise, Rewrite and
   Ask about a file. Optionally, each person can add their own Claude or OpenRouter key (Settings › AI), each with a
   monthly spending cap. The built-in models are pinned to fixed versions and checked (SHA-256) before use; the model's
@@ -56,7 +56,7 @@ use their inbuilt tool to password protect that root folder for additional secur
 **You do not need git, Node.js or a command line.** The release zip is the complete, ready-to-run desktop: nothing
 to build, no database to create.
 
-**[Download the latest release zip](https://github.com/Matthew4509/Tomlinos/releases/latest)** (the file named
+**[Download the latest release zip](https://github.com/Matthew4509/tomlinos/releases/latest)** (the file named
 `tomlinos-<version>.zip`). Do not use the green **Code > Download ZIP** button: that is the source code, which has to
 be built first (see Build from source, below).
 

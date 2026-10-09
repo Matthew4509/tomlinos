@@ -252,7 +252,7 @@ test('the mirror: filled from Hugging Face and checked, it serves a TOMLIN OS se
 
     door = await mirrorDoor(good.base, files);
     const ask = `${door.url}?id=${ID}&rev=${REV}&file=params_shard_0.bin`;
-    const server = { 'User-Agent': 'TOMLIN OS', Range: 'bytes=0-99' };
+    const server = { 'User-Agent': 'TomlinOS', Range: 'bytes=0-99' };
     const piece = await fetchRaw(ask, server);
     assert.equal(piece.status, 206);
     assert.ok(piece.body.equals(shard.subarray(0, 100)));
@@ -307,7 +307,7 @@ for ($i = 0; $i < 6; $i++) {
 }
 echo json_encode(['steps' => $steps, 'from' => array_column($plan['files'], 'from')]);`);
     const stopped = await run(gone.base, '');
-    assert.match(stopped.steps.at(-1).error, /answered 404 .* no TOMLIN OS mirror is set/);
+    assert.match(stopped.steps.at(-1).error, /answered 404 .* no model mirror is set/);
     const twice = await run(wrong.base, 'http://127.0.0.1:9/');
     assert.deepEqual(twice.steps.filter((s: { changed: boolean }) => s.changed).map((s: { mirror: string | null }) => !!s.mirror), [false, true], 'the first miss retries upstream, the second goes to the mirror');
     assert.deepEqual(twice.from, ['upstream', 'mirror', 'upstream']);

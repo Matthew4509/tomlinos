@@ -2,9 +2,9 @@
   "name": "tomlinos",
   "private": true,
   "license": "PolyForm-Noncommercial-1.0.0",
-  "version": "0.1.05",
+  "version": "0.1.06",
   "type": "module",
-  "description": "A private desktop in the browser. All program code is this project's own except the MIT-licensed libraries bundled in public/vendor (built from vendor-src/, listed on About > Credits).",
+  "description": "A private desktop in the browser. All program code is this project's own except the libraries bundled in public/vendor (built from vendor-src/) and server/vendor, each under its own licence (listed on About > Credits).",
   "scripts": {
     "build": "node tools/build.mjs",
     "package": "node tools/package.mjs",
