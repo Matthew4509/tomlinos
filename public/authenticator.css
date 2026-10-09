@@ -1,0 +1,25 @@
+/* The 2FA emulator page: looks like a small authenticator app on a phone. */
+:root { color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; display: flex; justify-content: center; align-items: flex-start; padding: 24px 12px; background: #20242c; font: 15px/1.4 "Segoe UI", system-ui, sans-serif; color: #1c2230; }
+.em-phone { width: min(400px, 100%); background: #f6f7fb; border-radius: 28px; padding: 22px 18px 18px; border: 8px solid #0c0e12; box-shadow: 0 20px 60px rgba(0, 0, 0, .5); }
+h1 { margin: 0 0 8px; font-size: 20px; }
+.em-warn { margin: 0 0 12px; font-size: 12px; color: #6a5200; background: #fff4cc; border: 1px solid #e8cf73; border-radius: 8px; padding: 8px 10px; }
+.em-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.em-item { background: #fff; border-radius: 14px; padding: 12px 14px; box-shadow: 0 1px 3px rgba(0, 0, 0, .12); }
+.em-label { font-size: 13px; color: #5a6275; }
+.em-code { font: 600 34px/1.2 Consolas, "Lucida Console", monospace; letter-spacing: .06em; color: #1f5fd1; user-select: all; }
+.em-track { height: 4px; background: #e2e6ef; border-radius: 2px; overflow: hidden; margin: 6px 0 8px; }
+.em-bar { height: 100%; background: #1f5fd1; transition: width 1s linear; }
+.em-bar.low { background: #d1402f; }
+.em-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.em-empty { color: #5a6275; font-size: 13px; }
+.em-empty[hidden] { display: none; }
+.em-add { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; padding-top: 12px; border-top: 1px solid #dfe3ec; }
+.em-add label { display: flex; flex-direction: column; gap: 3px; font-size: 13px; font-weight: 600; }
+.em-field { font: inherit; padding: 8px 10px; border: 1px solid #b9c1d3; border-radius: 8px; background: #fff; }
+.em-problem { margin: 0; color: #b3261e; font-size: 13px; }
+.em-problem:empty { display: none; }
+.em-btn { font: inherit; padding: 6px 14px; border-radius: 999px; border: 1px solid #b9c1d3; background: #fff; cursor: pointer; }
+.em-btn.primary { align-self: flex-end; background: #1f5fd1; border-color: #1f5fd1; color: #fff; font-weight: 600; }
+.em-btn:focus-visible, .em-field:focus-visible { outline: 3px solid #ffb000; outline-offset: 1px; }

@@ -1,0 +1,23 @@
+{
+  "name": "tomlinos",
+  "private": true,
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "version": "0.1.05",
+  "type": "module",
+  "description": "A private desktop in the browser. All program code is this project's own except the MIT-licensed libraries bundled in public/vendor (built from vendor-src/, listed on About > Credits).",
+  "scripts": {
+    "build": "node tools/build.mjs",
+    "package": "node tools/package.mjs",
+    "check": "tsc --noEmit -p .",
+    "test": "node --test test/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.0",
+    "playwright-core": "1.63.0",
+    "typescript": "7.0.2"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "//engines": "tools/build.mjs uses node:module stripTypeScriptTypes (experimental; added in Node 22.13). The warning it prints is expected."
+}

@@ -1,0 +1,68 @@
+{
+  "//": "The ONE list of the page's security headers. tools/build.mjs writes the policy into out/index.html (as a meta tag, without frame-ancestors, which a meta tag cannot carry); server/dev-router.php sends them from this file; tools/package.mjs writes them into the live .htaccess. test/headers.test.ts checks all three agree. Each outside address has its reason in 'why'.",
+  "csp": {
+    "default-src": [
+      "'self'"
+    ],
+    "script-src": [
+      "'self'",
+      "'wasm-unsafe-eval'"
+    ],
+    "style-src": [
+      "'self'"
+    ],
+    "img-src": [
+      "'self'",
+      "blob:"
+    ],
+    "media-src": [
+      "'self'",
+      "blob:"
+    ],
+    "connect-src": [
+      "'self'",
+      "https://huggingface.co",
+      "https://*.hf.co",
+      "https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/"
+    ],
+    "font-src": [
+      "'self'"
+    ],
+    "object-src": [
+      "'none'"
+    ],
+    "base-uri": [
+      "'none'"
+    ],
+    "form-action": [
+      "'none'"
+    ],
+    "frame-src": [
+      "'self'"
+    ],
+    "frame-ancestors": [
+      "'self'"
+    ],
+    "require-trusted-types-for": [
+      "'script'"
+    ],
+    "trusted-types": [
+      "tomlinos-inert"
+    ]
+  },
+  "why": {
+    "'wasm-unsafe-eval'": "The built-in AI (Chat Agents): lets the page run WebAssembly, the compiled program WebLLM uses on the graphics chip. It does not allow JavaScript eval or scripts from text.",
+    "https://huggingface.co": "Chat Agents: a built-in AI model that is NOT saved on this TOMLIN OS, or one a person added, is fetched from Hugging Face, where its makers publish it; Find AI models searches it. Only model files and the search; nothing typed to an AI is sent.",
+    "https://*.hf.co": "Chat Agents: Hugging Face hands its model files out from its file servers (us.aws.cdn.hf.co and the like), to which huggingface.co redirects.",
+    "https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/": "Chat Agents: the model's small WebGPU program, published by the WebLLM project (the MLC team) on GitHub, for a model not saved on this TOMLIN OS. Only that project's folder, not all of GitHub.",
+    "'script'": "Trusted Types: the browser refuses any string put into the page as HTML or script (the usual way injected code gets in). The one exception is src/core/inert.ts, which reads an email's HTML into a document that is never shown.",
+    "tomlinos-inert": "Trusted Types: the only policy allowed, the one in src/core/inert.ts; no other code can create one."
+  },
+  "headers": {
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "X-Frame-Options": "SAMEORIGIN",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=()",
+    "X-Robots-Tag": "noindex, nofollow"
+  }
+}

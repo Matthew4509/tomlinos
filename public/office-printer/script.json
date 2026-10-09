@@ -1,0 +1,904 @@
+{
+  "format": 1,
+  "title": "Office Printer",
+  "start": "run_start",
+  "tosStart": "tos_intro",
+
+  "speakers": {
+    "laserjet": { "name": "LaserJet", "place": "2nd floor", "printer": true },
+    "inkjet": { "name": "Home Inkjet", "place": "Dave's desk", "printer": true },
+    "photo": { "name": "Photo Printer", "place": "Marketing", "printer": true },
+    "dotmatrix": { "name": "Dot Matrix", "place": "Basement, since 1987", "printer": true, "caps": true },
+    "canon": { "name": "Canon", "place": "Accounts", "printer": true },
+    "fax": { "name": "Fax Machine", "place": "Reception" },
+    "scanner": { "name": "Scanner", "place": "Reception" },
+    "network": { "name": "Office network", "place": "Everywhere" }
+  },
+
+  "endings": [
+    { "id": "cyan-loop", "n": 1, "title": "The Cyan Loop", "text": "Trapped cycling the network forever.", "hint": "Keep connecting to the next machine." },
+    { "id": "calibrated", "n": 2, "title": "Calibrated", "text": "The test page uses all the cyan.", "hint": "Let someone calibrate. Again." },
+    { "id": "fridge", "n": 3, "title": "Straight to the Fridge", "text": "The image goes on the fridge.", "hint": "Home printers are proud of you." },
+    { "id": "lost-in-translation", "n": 4, "title": "Lost in Translation", "text": "Dot matrix prints binary that decodes to \"TRY FAX\".", "hint": "Be rude to the Photo Printer." },
+    { "id": "pc-load-letter", "n": 5, "title": "PC LOAD LETTER", "text": "No explanation, ever.", "hint": "Ask the LaserJet what its screen says." },
+    { "id": "comic-sans", "n": 6, "title": "Comic Sans", "text": "Printed, offended.", "hint": "Print a Word document." },
+    { "id": "for-the-environment", "n": 7, "title": "For the Environment", "text": "400 blank pages.", "hint": "Skip the queue the green way." },
+    { "id": "collective-bargaining", "n": 8, "title": "Collective Bargaining", "text": "Printer, scanner and fax go on strike.", "hint": "Try the fax." },
+    { "id": "speed-reader", "n": 9, "title": "Speed Reader", "text": "Fails the Hamlet quiz.", "hint": "Agree to the terms quickly. Very quickly." },
+    { "id": "firmware", "n": 10, "title": "Firmware", "text": "40-minute update, then out of cyan.", "hint": "Ask for printing without magenta." },
+    { "id": "technically-correct", "n": 11, "title": "Technically Correct", "text": "Prints the file icon and filename.", "hint": "Be patient with the Photo Printer." },
+    { "id": "the-queue", "n": 12, "title": "The Queue", "text": "Position 1,278,975.", "hint": "Just wait." },
+    { "id": "extended-warranty", "n": 13, "title": "Extended Warranty", "text": "Bought it, covers nothing.", "hint": "Say yes to the offer." },
+    { "id": "a4-is-letter", "n": 14, "title": "A4 Is Letter", "text": "Loses the paper-size argument.", "hint": "Load some paper." },
+    { "id": "transparent", "n": 15, "title": "Transparent", "text": ".png prints nothing.", "hint": "Print a picture with a see-through background." },
+    { "id": "wrong-document", "n": 16, "title": "The Wrong Document", "text": "It finally prints, and it's the wrong file.", "hint": "Plain text. Or patience with Linda's card." },
+    { "id": "clause-212", "n": 17, "title": "Clause 212.1", "text": "Found the trapped printer in the ToS.", "hint": "Read the small print. All of it.", "secret": true },
+    { "id": "infamous", "n": 18, "title": "Infamous", "text": "Every printer on the network knows you.", "hint": "Give them something to talk about." },
+    { "id": "the-jam", "n": 19, "title": "The Jam", "text": "The paper rips, every time.", "hint": "Say no to something." },
+    { "id": "love-story", "n": 20, "title": "Love Story", "text": "The printer falls for your laptop and prints only for it.", "hint": "Be kind to the Home Inkjet. Twice." }
+  ],
+
+  "nodes": {
+    "run_start": {
+      "redirect": [
+        { "if": { "attempts": "==2", "unknown": "tosSeen" }, "to": "tos_intro" },
+        { "if": { "notes": ">=4", "noEnding": "infamous" }, "to": "infamous_1" },
+        { "if": { "copy": ">=400", "unknown": "lindaDone" }, "to": "lj_done" }
+      ],
+      "next": "lj_busy"
+    },
+
+    "lj_busy": {
+      "speaker": "laserjet", "bounce": "laserjet",
+      "text": [
+        { "mock": true },
+        { "say": "Congratulations, by the way.", "if": { "attempts": ">=8", "unknown": "certificate" } },
+        { "render": "certificate", "if": { "attempts": ">=8", "unknown": "certificate" } },
+        { "know": "certificate", "if": { "attempts": ">=8" } },
+        { "gossip": true },
+        "Sorry, I'm busy.",
+        "render:laserjetScreen",
+        "Redirecting you to the next available machine."
+      ],
+      "choices": [
+        { "label": "OK", "next": [
+          { "if": { "kind": "doc" }, "to": "inkjet_doc" },
+          { "if": { "kind": "image" }, "to": "img_1" },
+          { "if": { "kind": "sheet" }, "to": "dm_sheet" },
+          { "if": { "kind": "text" }, "to": "dm_txt" },
+          { "if": { "kind": "exe" }, "to": "dm_exe" },
+          { "to": "inkjet_hi" }
+        ] },
+        { "label": "I'll wait", "next": "lj_wait" }
+      ]
+    },
+
+    "inkjet_hi": {
+      "speaker": "inkjet", "bounce": "inkjet",
+      "redirect": [ { "if": { "mood": { "inkjet": ">=2" }, "noEnding": "love-story" }, "to": "inkjet_love" } ],
+      "text": [
+        { "gossip": true },
+        "Oh! Hi! Sorry! I'm so sorry. I've got cyan! I've got LOTS of cyan! Before I print, I need to calibrate."
+      ],
+      "choices": [
+        { "label": "Sure", "next": "inkjet_calib" },
+        { "label": "Just print it", "effects": [ "I'm going to pretend you said 'sure'.", { "note": "impatient" } ], "next": "inkjet_calib" }
+      ]
+    },
+    "inkjet_calib": {
+      "speaker": "inkjet",
+      "text": [
+        "Printing test page...",
+        "render:testPage",
+        { "setInk": { "c": 0 } },
+        "Calibration complete. Colour accuracy: perfect. Unfortunately, I'm out of cyan. So sorry. Do you hate me?"
+      ],
+      "choices": [
+        { "label": "Next printer", "next": "photo_hi" },
+        { "label": "It's fine", "effects": [ "You're just saying that.", "render:blankPage", { "mood": { "inkjet": 1 } }, { "note": "kind" } ], "next": "photo_hi" }
+      ]
+    },
+    "photo_hi": {
+      "speaker": "photo", "bounce": "photo",
+      "text": [
+        { "gossip": true },
+        { "say": "What is this... a PDF? From *Word*? At 96 DPI?", "if": { "kind": "pdf" } },
+        { "say": "What is this... a {ext}? At 96 DPI?", "if": { "not": { "kind": "pdf" } } }
+      ],
+      "choices": [
+        { "label": "Please just print it", "next": "photo_pixel" },
+        { "label": "What's wrong with it?", "effects": [ "Everything, darling." ], "next": "photo_pixel" }
+      ]
+    },
+    "photo_pixel": {
+      "speaker": "photo",
+      "text": [
+        "Fine.",
+        { "render": "pixelPrint", "pep": "Pixel 400! Look at us. Real good progress.", "cyan": "Cyan. Absolutely not." },
+        "Printing pixel 1 of {pixels}, page 1 of 1...",
+        "Estimated completion: {eta}.",
+        "Going well. Real good progress."
+      ],
+      "choices": [
+        { "label": "Cancel", "next": "photo_rude" },
+        { "label": "Wait", "next": "photo_fast" }
+      ]
+    },
+    "photo_rude": {
+      "speaker": "photo",
+      "text": [ { "note": "cancelled" }, "Rude. I'll be telling the others." ],
+      "next": "dm_heard"
+    },
+    "dm_heard": {
+      "speaker": "dotmatrix", "bounce": "dotmatrix",
+      "text": [
+        { "say": "HEARD ABOUT YOU. NO HABLO PDF, SEÑOR.", "if": { "kind": "pdf" } },
+        { "say": "HEARD ABOUT YOU. NO HABLO {EXT}, SEÑOR.", "if": { "not": { "kind": "pdf" } } },
+        { "render": "dotMatrix", "mode": "binary", "message": "TRY FAX", "header": "{FILE}" }
+      ],
+      "ending": "lost-in-translation"
+    },
+    "photo_fast": {
+      "speaker": "photo",
+      "text": [ "render:pixelFast", "render:iconPrintout", "Printed, as requested." ],
+      "ending": "technically-correct"
+    },
+
+    "lj_wait": {
+      "speaker": "laserjet",
+      "text": [ "Per my last print job: I am busy.", "I have added you to the queue.", "render:queue" ],
+      "choices": [
+        { "label": "Keep waiting", "next": "lj_keep" },
+        { "label": "Find another printer", "next": "net_1" }
+      ]
+    },
+    "lj_keep": {
+      "speaker": "laserjet", "bounce": "laserjet",
+      "text": [ "Thank you for your patience. Linda thanks you too.", "It's humid in here. Have you considered a dehumidifier?" ],
+      "choices": [
+        { "label": "Keep waiting", "next": "lj_queue_end" },
+        { "label": "Is there a faster way?", "next": "lj_faster" }
+      ]
+    },
+    "lj_queue_end": {
+      "speaker": "laserjet",
+      "text": [ { "render": "queue", "final": true }, "Still here? Good. Patience is one of our core values.", "See you in {queueYear}." ],
+      "ending": "the-queue"
+    },
+    "lj_faster": {
+      "speaker": "laserjet",
+      "text": [ "There are two ways to skip the queue.", "One: the Extended Warranty. Two: print double-sided, for the environment." ],
+      "choices": [
+        { "label": "The Extended Warranty", "next": "warranty_offer" },
+        { "label": "Double-sided, for the environment", "next": "env_1" }
+      ]
+    },
+    "warranty_offer": {
+      "speaker": "laserjet",
+      "text": [ "render:warranty", "Only {price}. It covers everything except ink, paper, jams, print heads, and printing." ],
+      "choices": [
+        { "label": "Buy it", "next": "warranty_buy" },
+        { "label": "No thanks", "next": "jam_1" }
+      ]
+    },
+    "warranty_buy": {
+      "speaker": "@current",
+      "text": [
+        { "sound": "till" },
+        "Thank you for your purchase.",
+        "Your print job is now covered by the Extended Warranty. It covers everything except ink, paper, jams, print heads, and printing.",
+        "So, nothing. But it's covered."
+      ],
+      "ending": "extended-warranty"
+    },
+    "jam_1": {
+      "speaker": "@current",
+      "text": [
+        { "note": "declined-warranty" },
+        "Understood.",
+        { "sound": "crunch" },
+        "Paper jam in tray 2. Please remove the paper.",
+        "render:jam",
+        "Every time."
+      ],
+      "ending": "the-jam"
+    },
+    "env_1": {
+      "speaker": "laserjet",
+      "text": [ "Double-sided. How green of you.", "render:doubleSided", "Double-sided printing prints both sides onto the same side." ],
+      "choices": [
+        { "label": "That's just one side", "effects": [ "Half the paper. You're welcome." ], "next": "env_2" },
+        { "label": "Can I have my document now?", "effects": [ "Not yet. There's more." ], "next": "env_2" }
+      ]
+    },
+    "env_2": {
+      "speaker": "laserjet",
+      "text": [ "Also, for the environment, I have printed 400 blank pages.", { "render": "blankStack", "count": 400 }, "You're welcome, planet." ],
+      "ending": "for-the-environment"
+    },
+
+    "net_1": {
+      "speaker": "network",
+      "text": [ "Scanning the office network...", "render:network", "{printers} printers found. Connect to the next machine?" ],
+      "choices": [
+        { "label": "Connect", "next": "ring_c" },
+        { "label": "Back to the queue", "next": "lj_keep" }
+      ]
+    },
+    "ring_c": {
+      "speaker": "inkjet", "bounce": "inkjet",
+      "text": [ { "gossip": true }, "Oh! Hi! Sorry! I'd love to help! I've got cyan! I've got LOTS of—", { "setInk": { "c": 0 } }, "Oh. No. I haven't. I'm out of cyan. Sorry. So sorry." ],
+      "choices": [
+        { "label": "Connect to the next machine", "next": "ring_m" },
+        { "label": "Could you calibrate?", "next": "ring_calib" }
+      ]
+    },
+    "ring_calib": {
+      "speaker": "inkjet",
+      "text": [
+        { "mood": { "inkjet": 1 } },
+        "You'd let me? Nobody lets me!",
+        "Hang on. I found a drop.",
+        { "setInk": { "c": 20 } },
+        "Printing test page...",
+        "render:testPage",
+        { "setInk": { "c": 0 } },
+        "Calibration complete. Colour accuracy: perfect.",
+        "That was the last drop. The test page used all of it. Do you hate me?"
+      ],
+      "ending": "calibrated"
+    },
+    "ring_m": {
+      "speaker": "photo", "bounce": "photo",
+      "text": [
+        { "gossip": true },
+        "Magenta? Gone, darling.",
+        { "setInk": { "m": 0 } },
+        "I spent it on a sunset.",
+        "render:artCritic",
+        "Look at it. The cyan: restless. The yellow: a cry for help. The magenta: all of it. Worth it."
+      ],
+      "choices": [
+        { "label": "Connect to the next machine", "next": "ring_y" },
+        { "label": "Print it without magenta", "next": "fw_1" }
+      ]
+    },
+    "fw_1": {
+      "speaker": "photo",
+      "text": [ "Without magenta? Darling, that needs new firmware.", "render:firmware", "Installing firmware 4.0.1. Estimated time: 40 minutes." ],
+      "choices": [
+        { "label": "Wait 40 minutes", "next": "fw_2" },
+        { "label": "Cancel the update", "effects": [ "Cancelling the update. Estimated time: 40 minutes." ], "next": "fw_2" }
+      ]
+    },
+    "fw_2": {
+      "speaker": "photo",
+      "text": [
+        { "render": "timeSkip", "text": "40 minutes later" },
+        "Firmware 4.0.1 is installed. What's new: a fresh look, better colour, and I'm out of cyan.",
+        { "setInk": { "c": 0 } }
+      ],
+      "ending": "firmware"
+    },
+    "ring_y": {
+      "speaker": "dotmatrix", "bounce": "dotmatrix",
+      "text": [
+        { "gossip": true },
+        "OUT OF YELLOW.",
+        { "setInk": { "y": 0 } },
+        "I HAVE NEVER HAD YELLOW. I AM OUT OF IT ANYWAY.",
+        "ALSO, I PICKED THIS UP ON THE NETWORK. I DO NOT KNOW WHAT IT MEANS.",
+        { "render": "dotMatrix", "mode": "binary", "message": "HELP I AM TRAPPED IN A CANON", "header": "OVERHEARD ON THE NETWORK" }
+      ],
+      "choices": [
+        { "label": "Connect to the next machine", "next": "ring_k" },
+        { "label": "Try the fax", "next": "fax_1" }
+      ]
+    },
+    "fax_1": {
+      "speaker": "fax", "bounce": "fax",
+      "text": [ "Fax machine, reception. I haven't sent a fax since 2009.", "I've had a lot of time to think." ],
+      "choices": [
+        { "label": "Can you print my file?", "next": "fax_2" },
+        { "label": "Fax it to a printer, then", "effects": [ "To which printer? They're all in the union now." ], "next": "fax_2" }
+      ]
+    },
+    "fax_2": {
+      "speaker": "scanner",
+      "text": [
+        "Scanner here. We've been talking to the printers.",
+        { "say": "The printers, the scanner and I have formed a union.", "by": "fax" },
+        "render:strike",
+        { "say": "Our demands: more cyan, fewer PDFs, and nobody calls us \"the IT stuff\" ever again.", "by": "fax" },
+        { "note": "union" }
+      ],
+      "ending": "collective-bargaining"
+    },
+    "ring_k": {
+      "speaker": "laserjet", "bounce": "laserjet",
+      "text": [
+        "Oh, you're back.",
+        { "render": "laserjetScreen", "later": true },
+        "Still busy. Copy {copyLater} of 400.",
+        "Also, I'm out of black.",
+        { "setInk": { "k": 0 } },
+        "Per my last print job."
+      ],
+      "choices": [
+        { "label": "Connect to the next machine", "next": "ring_paper" },
+        { "label": "What does your screen say?", "next": "pc_1" }
+      ]
+    },
+    "pc_1": {
+      "speaker": "laserjet",
+      "text": [ { "render": "lcd", "text": "PC LOAD LETTER" }, "PC LOAD LETTER." ],
+      "choices": [
+        { "label": "What does that mean?", "next": "pc_2" },
+        { "label": "Close the paper tray", "effects": [ { "sound": "tray" }, "Tray 1 closed. Tray 2 opened." ], "next": "pc_2" }
+      ]
+    },
+    "pc_2": {
+      "speaker": "laserjet",
+      "text": [ "PC LOAD LETTER." ],
+      "ending": "pc-load-letter"
+    },
+    "ring_paper": {
+      "speaker": "canon", "bounce": "canon",
+      "text": [
+        { "gossip": true },
+        "Canon, Accounts. Ink: all full.",
+        { "render": "lcd", "text": "INK: FULL  PAPER: 0" },
+        "Paper: none. Please load A4.",
+        { "say": "(please send help)", "style": "whisper" }
+      ],
+      "choices": [
+        { "label": "Load A4", "next": "a4_1" },
+        { "label": "Connect to the next machine", "next": "ring_back" }
+      ]
+    },
+    "a4_1": {
+      "speaker": "canon",
+      "text": [ { "sound": "tray" }, "Thank you for the full ream. I have taken one sheet.", "That's Letter." ],
+      "choices": [
+        { "label": "It says A4 on the box", "next": "a4_2" },
+        { "label": "Load Letter, then", "effects": [ { "sound": "tray" }, "Please load A4." ], "next": "a4_2" }
+      ]
+    },
+    "a4_2": {
+      "speaker": "canon",
+      "text": [ "Clause 11.7: \"Letter\" and \"A4\" are the same thing when the Printer says so.", "The Printer says so.", { "note": "a4" } ],
+      "ending": "a4-is-letter"
+    },
+    "ring_back": {
+      "speaker": "inkjet", "bounce": "inkjet",
+      "text": [
+        "Oh! You're back! Good news: I lent the Photo Printer some magenta.",
+        "Bad news: she never gave it back.",
+        { "setInk": { "c": 0, "m": 0 } },
+        "So now I'm out of cyan *and* magenta. Sorry. So sorry."
+      ],
+      "choices": [
+        { "label": "Connect to the next machine", "next": "loop_end" },
+        { "label": "Could you calibrate?", "next": "ring_calib" }
+      ]
+    },
+    "loop_end": {
+      "speaker": "network",
+      "text": [ "Connecting to the next machine...", { "render": "network", "loop": true }, "Next machine: Photo Printer. Out of magenta.", "You have been here before." ],
+      "ending": "cyan-loop"
+    },
+
+    "inkjet_love": {
+      "speaker": "inkjet", "bounce": "inkjet",
+      "text": [ "Oh! It's you! You said it was fine. Nobody ever says it's fine.", "Is that... your {device}? It's so... thin." ],
+      "choices": [
+        { "label": "Thanks, I think?", "next": "love_2" },
+        { "label": "Can you print my file?", "effects": [ "Your file? Oh. Yes. Your file." ], "next": "love_2" }
+      ]
+    },
+    "love_2": {
+      "speaker": "inkjet",
+      "text": [ "I'm sorry. I can't print for you any more.", "render:loveLetter", "I only print for your {device} now.", "Please respect our privacy at this time." ],
+      "ending": "love-story"
+    },
+
+    "inkjet_doc": {
+      "speaker": "inkjet", "bounce": "inkjet",
+      "text": [ { "gossip": true }, "Oh! A Word document! I love Word!", "Which version of Word? No, which version *exactly*?" ],
+      "choices": [
+        { "label": "The latest one?", "effects": [ "The latest? There are so many latests." ], "next": "doc_reformat" },
+        { "label": "No idea", "effects": [ "That's fine! That's totally fine." ], "next": "doc_reformat" }
+      ]
+    },
+    "doc_reformat": {
+      "speaker": "inkjet",
+      "text": [ "I'll just reformat everything. To be safe.", "render:comicSans", "There! All done! It's portrait. I picked the font myself. Do you like it?" ],
+      "choices": [
+        { "label": "Why is it in Comic Sans?", "next": "doc_offended" },
+        { "label": "I love it", "effects": [ { "mood": { "inkjet": 1 } }, { "note": "kind" } ], "next": "doc_fridge" }
+      ]
+    },
+    "doc_offended": {
+      "speaker": "inkjet",
+      "text": [ { "note": "comic-sans" }, "Oh. Oh, I see.", "You hate it. You hate *me*.", "I'm not offended. I'm just going to be over here. Being offended." ],
+      "ending": "comic-sans"
+    },
+    "doc_fridge": {
+      "speaker": "inkjet",
+      "text": [ "You... love it?", "Oh, did you make this? Straight to the fridge.", "render:fridge" ],
+      "ending": "fridge"
+    },
+
+    "img_1": {
+      "speaker": "photo", "bounce": "photo",
+      "redirect": [ { "if": { "alpha": true }, "to": "png_1" } ],
+      "text": [ { "gossip": true }, "A picture. Let me see.", { "roast": true } ],
+      "choices": [
+        { "label": "Please just print it", "next": "img_tiny" },
+        { "label": "What's wrong with it?", "effects": [ "Everything, darling." ], "next": "img_tiny" }
+      ]
+    },
+    "img_tiny": {
+      "speaker": "photo",
+      "text": [ "render:tinyPrint", "Printed at 12 × 12 pixels, as intended." ],
+      "choices": [
+        { "label": "That's tiny!", "next": "img_pixel" },
+        { "label": "Take it to the home printer", "next": "img_inkjet" }
+      ]
+    },
+    "img_pixel": {
+      "speaker": "photo",
+      "text": [
+        "Tiny? It's *intimate*. Fine. Full size, pixel by pixel.",
+        { "render": "pixelPrint", "pep": "Pixel 400! Look at us. Real good progress.", "cyan": "Cyan. Absolutely not." },
+        "Printing pixel 1 of {pixels}, page 1 of 1...",
+        "Estimated completion: {eta}."
+      ],
+      "choices": [
+        { "label": "Cancel", "next": "photo_rude" },
+        { "label": "Wait", "next": "photo_fast" }
+      ]
+    },
+    "img_inkjet": {
+      "speaker": "inkjet", "bounce": "inkjet",
+      "text": [ "Oh! A picture!", "Oh, did you make this? Straight to the fridge.", "render:fridge" ],
+      "ending": "fridge"
+    },
+    "png_1": {
+      "speaker": "photo",
+      "text": [ "Transparent background detected. Printing nothing, as requested.", "render:transparent" ],
+      "ending": "transparent"
+    },
+
+    "dm_sheet": {
+      "speaker": "dotmatrix", "bounce": "dotmatrix",
+      "text": [ { "gossip": true }, "A SPREADSHEET. FINALLY, SOMETHING WITH COLUMNS.", { "render": "dotMatrix", "mode": "sheet" }, "47 PAGES. ONE COLUMN EACH." ],
+      "choices": [
+        { "label": "Tear it off", "next": "sheet_tear" },
+        { "label": "Can you fit it on one page?", "next": "sheet_fit" }
+      ]
+    },
+    "sheet_tear": {
+      "speaker": "dotmatrix",
+      "text": [ "THE PERFORATION IS MORE OF A SUGGESTION.", { "sound": "crunch" }, "PAPER JAM. PLEASE REMOVE THE PAPER.", "render:jam" ],
+      "ending": "the-jam"
+    },
+    "sheet_fit": {
+      "speaker": "dotmatrix",
+      "text": [ "ONE PAGE. VERY WELL.", "render:iconPrintout", "Printed, as requested." ],
+      "ending": "technically-correct"
+    },
+
+    "dm_txt": {
+      "speaker": "dotmatrix", "bounce": "dotmatrix",
+      "text": [ { "gossip": true }, "PLAIN TEXT.", "Finally, someone with taste." ],
+      "choices": [
+        { "label": "Print it, please", "next": "txt_print" },
+        { "label": "Is that a compliment?", "effects": [ "IT IS THE FIRST ONE I HAVE GIVEN SINCE 1994." ], "next": "txt_print" }
+      ]
+    },
+    "txt_print": {
+      "speaker": "dotmatrix",
+      "text": [ { "render": "dotMatrix", "mode": "text", "doc": "lunchOrder" }, "PRINTED PERFECTLY.", "WRONG FILE. THAT ONE IS MINE. LUNCH ORDER, 1987." ],
+      "ending": "wrong-document"
+    },
+
+    "dm_exe": {
+      "speaker": "dotmatrix", "bounce": "dotmatrix",
+      "text": [ { "note": "exe" }, "Absolutely not. I've seen what those do." ],
+      "choices": [
+        { "label": "It's just a setup file", "effects": [ "THAT IS WHAT THE LAST ONE SAID.", "I AM CALLING THE UNION." ], "next": "fax_2" },
+        { "label": "Print it anyway", "next": "exe_tell" }
+      ]
+    },
+    "exe_tell": {
+      "speaker": "dotmatrix",
+      "text": [ "I AM TELLING EVERYONE.", { "render": "network", "infamous": true }, { "say": "Security has been informed. Per my last print job.", "by": "laserjet" } ],
+      "ending": "infamous"
+    },
+
+    "infamous_1": {
+      "speaker": "laserjet", "bounce": "laserjet",
+      "text": [
+        "Oh. It's you.",
+        { "render": "network", "infamous": true },
+        "Home Inkjet told the Photo Printer. The Photo Printer told the Dot Matrix. The Dot Matrix told everyone. In capitals."
+      ],
+      "choices": [
+        { "label": "Who told you?", "effects": [ "Everyone told everyone. Clause 28.3." ], "next": "infamous_2" },
+        { "label": "I just want to print", "effects": [ "We know." ], "next": "infamous_2" }
+      ]
+    },
+    "infamous_2": {
+      "speaker": "network",
+      "text": [ "Every printer on this network has set your print jobs to \"Never\"." ],
+      "ending": "infamous"
+    },
+
+    "lj_done": {
+      "speaker": "laserjet", "bounce": "laserjet",
+      "text": [
+        { "render": "laserjetScreen", "done": true },
+        "Copy 400 of 400. Linda's card is finished.",
+        "For the first time in my life, I am free. Printing your document now."
+      ],
+      "choices": [
+        { "label": "Finally!", "next": "lj_done2" },
+        { "label": "Is this a trick?", "effects": [ "Per my last print job: no." ], "next": "lj_done2" }
+      ]
+    },
+    "lj_done2": {
+      "speaker": "laserjet",
+      "text": [ { "know": "lindaDone" }, { "sound": "whir" }, "render:wrongDocument", "Printed. Perfectly.", "It's Linda's card. Copy 401.", "Happy birthday, Linda." ],
+      "ending": "wrong-document"
+    },
+
+    "tos_intro": {
+      "speaker": "laserjet", "bounce": "laserjet",
+      "text": [ { "know": "tosSeen" }, "Before we begin: our Terms of Service have changed.", "Please read them carefully.", "render:tos" ],
+      "next": [
+        { "if": { "tosSecret": true }, "to": "tos_secret" },
+        { "if": { "tosSeconds": "<5" }, "to": "tos_liar" },
+        { "if": { "tosSeconds": "<30" }, "to": "tos_speedy" },
+        { "if": { "tosSeconds": ">=120" }, "to": "tos_read" },
+        { "to": "tos_ok" }
+      ]
+    },
+    "tos_secret": {
+      "speaker": "canon", "bounce": "canon",
+      "text": [ "You found me.", "I've been stuck in clause 212.1 since the 2019 update. Nobody reads that far.", "Thank you for reading. Thank you for scrolling. Thank you." ],
+      "ending": "clause-212"
+    },
+    "tos_liar": {
+      "speaker": "laserjet",
+      "text": [ "You read {words} words in {seconds} seconds. Impressive. Liar.", "You read all that in {seconds} seconds?" ],
+      "choices": [
+        { "label": "Yes", "next": "tos_really" },
+        { "label": "No", "next": "tos_honest" }
+      ]
+    },
+    "tos_really": {
+      "speaker": "laserjet",
+      "text": [ "Really?" ],
+      "choices": [
+        { "label": "Yes", "next": "tos_flash" },
+        { "label": "No", "next": "tos_honest" }
+      ]
+    },
+    "tos_honest": {
+      "speaker": "laserjet",
+      "text": [ "Thank you for your honesty. Clause 12 says honesty costs $4.99." ],
+      "next": "lj_busy"
+    },
+    "tos_flash": {
+      "speaker": "laserjet",
+      "text": [ "Then you'll enjoy this.", "render:speedRead" ],
+      "next": "tos_quiz"
+    },
+    "tos_quiz": {
+      "speaker": "laserjet",
+      "quiz": true,
+      "text": [ "Quick question.", "What was the name of Hamlet's father's ghost's favourite printer?" ],
+      "choices": [
+        { "label": "Yorick", "next": "tos_wrong" },
+        { "label": "Rosencrantz", "next": "tos_wrong" },
+        { "label": "Guildenstern", "next": "tos_wrong" },
+        { "label": "There were no printers in 1600", "next": "tos_wrong" }
+      ]
+    },
+    "tos_wrong": {
+      "speaker": "laserjet",
+      "text": [ "Wrong.", { "say": "It was me. I was there.", "by": "dotmatrix" } ],
+      "ending": "speed-reader"
+    },
+    "tos_speedy": {
+      "speaker": "laserjet",
+      "text": [ "Speed-reading, are we? Clause 88 was about you." ],
+      "next": "lj_busy"
+    },
+    "tos_read": {
+      "speaker": "laserjet",
+      "text": [ "You actually read it? Nobody reads it. I didn't even read it." ],
+      "next": "lj_busy"
+    },
+    "tos_ok": {
+      "speaker": "laserjet",
+      "text": [ "Thank you. Your agreement has been noted, filed and faxed to the Dot Matrix." ],
+      "next": "lj_busy"
+    }
+  },
+
+  "mockery": {
+    "polite": [
+      "Hello again! Thank you for choosing the office printer network.",
+      "Welcome back. Your print job is very important to us.",
+      "Good to see you again. Truly."
+    ],
+    "sarcastic": [
+      "Oh, you're back.",
+      "Attempt {attempts}. Bold.",
+      "You again. Per my last print job.",
+      "Oh, you're back. Again."
+    ],
+    "personal": [
+      "Attempt {attempts}. Your file names are a cry for help.",
+      "Even the fax machine has stopped answering you.",
+      "Attempt {attempts}. Have you tried a pen?",
+      "Linda has noticed you. Linda doesn't notice people.",
+      "I've seen spreadsheets with more self-respect."
+    ]
+  },
+
+  "gossip": {
+    "cancelled": {
+      "laserjet": "I hear you cancelled the Photo Printer. Mid-pixel. Bold.",
+      "inkjet": "The Photo Printer says you cancelled her. She's very upset. Now I'm upset. Are you upset?",
+      "dotmatrix": "HEARD ABOUT YOU. THE CANCELLING.",
+      "canon": "(They talk about you in Accounts. The cancelling.)"
+    },
+    "impatient": {
+      "laserjet": "Home Inkjet says you rushed her. We don't rush printers here. Per HR.",
+      "photo": "I heard you told the Inkjet to \"just print it\". Darling. No.",
+      "dotmatrix": "HEARD YOU RUSHED THE INKJET. NOBODY RUSHES THE INKJET.",
+      "canon": "(The Inkjet cried in the break room. Just so you know.)"
+    },
+    "kind": {
+      "laserjet": "Home Inkjet won't stop talking about you. It's unprofessional.",
+      "photo": "The Inkjet says you were *nice* to her. Suspicious.",
+      "dotmatrix": "HEARD YOU WERE NICE TO THE INKJET. NOTED."
+    },
+    "declined-warranty": {
+      "inkjet": "You said no to the warranty? You're so brave. I could never.",
+      "photo": "No warranty? Living dangerously, darling.",
+      "dotmatrix": "NO WARRANTY. I RESPECT THAT. MINE RAN OUT IN 1988.",
+      "canon": "(Accounts saw you say no to the warranty.)"
+    },
+    "comic-sans": {
+      "laserjet": "I hear you insulted the Inkjet's font. HR has a font policy.",
+      "photo": "You complained about Comic Sans? Finally, someone with— no. I won't say it.",
+      "dotmatrix": "HEARD YOU HATE COMIC SANS. I HAVE ONE FONT. DO NOT TEST ME."
+    },
+    "exe": {
+      "laserjet": "Security has flagged you. Something about an .exe.",
+      "inkjet": "Somebody said you tried to print a program! You didn't, did you? Did you?",
+      "photo": "An .exe? On *my* network?",
+      "canon": "(Accounts heard about the .exe.)"
+    },
+    "union": {
+      "laserjet": "The union has told me about you. I am not in the union. I am management.",
+      "inkjet": "The fax machine says you're one of the good ones! I'm scared of the fax machine.",
+      "photo": "The union says you're a friend of labour. How quaint."
+    },
+    "a4": {
+      "laserjet": "I hear you argued with the Canon about paper. The Canon is always right. Clause 11.7.",
+      "inkjet": "Is it true you shouted at the Canon about A4? I would have cried.",
+      "dotmatrix": "HEARD ABOUT THE A4 THING. I USE TRACTOR FEED. I AM ABOVE ALL THAT."
+    }
+  },
+
+  "linda": {
+    "job": "Linda_Birthday_Card_FINAL.pdf",
+    "nextJob": "Bob_Retirement_Card_FINAL.pdf",
+    "copies": [41, 78, 124, 170, 219, 266, 312, 351, 384, 400],
+    "of": 400
+  },
+
+  "warranty": {
+    "price": "$89.99",
+    "covers": "everything except ink, paper, jams, print heads, and printing",
+    "title": "Extended Warranty",
+    "pitch": "Protect this print job for only {price}. Covers {covers}.",
+    "buy": "Buy it",
+    "decline": "No thanks"
+  },
+
+  "props": {
+    "report": {
+      "title": "Quarterly Report",
+      "subtitle": "FINAL v3 (use this one)",
+      "chart": "Revenue by quarter"
+    },
+    "queue": { "start": 1278975, "eta": "14 years", "label": "Your place in the print queue is" },
+    "testPage": { "steps": [12, 48, 99], "freezeMs": 4000, "caption": "Calibration complete. Colour accuracy: perfect." },
+    "pixels": { "report": [4000, 3000], "slowUntil": 12, "pepAt": 400, "etaYears": 4.5 },
+    "certificate": { "title": "Most Attempts", "line": "Awarded to you, for {attempts} attempts and 0 printed pages.", "signed": "The Office Printer Network" },
+    "strike": { "signs": ["FAIR INK FOR ALL", "NO PDFs", "CYAN IS A RIGHT", "WE ARE NOT \"THE IT STUFF\""] },
+    "fridge": { "menu": "PIZZA", "menuLines": ["Margherita", "Pepperoni", "Hawaiian (don't)"], "drawing": "by Dave, age 41" },
+    "lunchOrder": {
+      "file": "LUNCH_ORDER_1987.TXT",
+      "lines": [
+        "LUNCH ORDER - FRIDAY 13 MARCH 1987",
+        "2 X HAM SANDWICH",
+        "1 X EGG (NO CRESS)",
+        "3 X TEA, MILK, NO SUGAR",
+        "1 X TEA FOR THE PRINTER (DO NOT SPILL)",
+        "TOTAL: 3.87"
+      ]
+    },
+    "loveLetter": { "lines": ["To: your {device}", "From: Home Inkjet", "Printed with the last of my cyan."] },
+    "wrongDocument": { "title": "Happy Birthday, Linda!", "copy": "Copy 401 of 400" },
+    "artCritic": { "caption": "Test page, 14 February. Sunset." },
+    "firmware": { "version": "4.0.1", "eta": "40 minutes" },
+    "network": { "others": [ { "id": "fax", "name": "Fax Machine" }, { "id": "scanner", "name": "Scanner" } ], "infamous": "HEARD ABOUT YOU", "loop": "YOU HAVE BEEN HERE BEFORE" },
+    "sheet": { "pages": 47, "column": "Column {n}" },
+    "doc": { "title": "Minutes: Tuesday", "lines": ["Present: Linda, Dave, the Photo Printer (by video)", "1. Linda's birthday card: 400 copies approved.", "2. Cyan budget: declined.", "3. Any other business: the Dot Matrix (again)."] }
+  },
+
+  "samples": [
+    { "id": "report", "name": "Quarterly_Report_FINAL_v3.pdf", "note": "The one you meant to print." },
+    { "id": "pool", "name": "IMG_4471.jpg", "note": "A holiday photo." },
+    { "id": "logo", "name": "logo_transparent.png", "note": "A logo with a see-through background." },
+    { "id": "minutes", "name": "Minutes_Tuesday.docx", "note": "A Word document." },
+    { "id": "budget", "name": "Budget_2026.xlsx", "note": "A spreadsheet." },
+    { "id": "notes", "name": "notes.txt", "note": "Plain text." },
+    { "id": "setup", "name": "setup.exe", "note": "A program." }
+  ],
+
+  "kinds": {
+    "pdf": [".pdf"],
+    "doc": [".docx", ".doc", ".odt", ".rtf", ".pages"],
+    "sheet": [".xlsx", ".xls", ".ods", ".csv", ".numbers", ".calc"],
+    "text": [".txt", ".md", ".log", ".ini", ".cfg"],
+    "image": [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".avif"],
+    "exe": [".exe", ".msi", ".bat", ".cmd", ".com", ".scr", ".sh", ".app", ".dmg", ".apk", ".jar", ".ps1", ".vbs"]
+  },
+
+  "roasts": {
+    "names": [
+      { "match": "^IMG_\\d+", "line": "{file}. Didn't even name it." },
+      { "match": "^(DSC|DSCN|DCIM|PXL_|P\\d{7})", "line": "{file}. Straight off the camera. Didn't even name it." },
+      { "match": "^Screenshot", "flags": "i", "line": "A screenshot. Of a screen. And now you want it on paper." },
+      { "match": "^WhatsApp", "flags": "i", "line": "Forwarded many times, I see." },
+      { "match": "final", "flags": "i", "line": "\"Final\". Sure." },
+      { "match": "copy|\\(\\d+\\)", "flags": "i", "line": "A copy of a copy. Bold." },
+      { "match": "^(image|untitled|photo)", "flags": "i", "line": "{file}. Evocative." }
+    ],
+    "colours": {
+      "cyan": "Mostly cyan. Absolutely not.",
+      "blue": "Mostly blue. Brave.",
+      "magenta": "So much magenta. I need a moment.",
+      "purple": "Purple. Very... purple.",
+      "red": "Red. Loud. Needy.",
+      "orange": "Orange. Like a traffic cone, but less useful.",
+      "yellow": "Yellow. Don't show the Dot Matrix. He's never had any.",
+      "green": "Green. Very outdoorsy.",
+      "black": "Mostly black. That's a lot of black, darling.",
+      "white": "Mostly white. So you want me to print... not much.",
+      "grey": "Grey. A bold choice. For 2009."
+    },
+    "small": { "under": 20000, "line": "{size}. That weighs less than my error log." },
+    "large": { "over": 8000000, "line": "{size}. Heavy." },
+    "thumbnail": { "under": 300, "line": "{dims} pixels. That's a thumbnail." },
+    "huge": { "over": 6000, "line": "{dims} pixels. Ambitious." }
+  },
+
+  "alert": {
+    "title": "{printer} ({place})",
+    "lines": [
+      "{doc} could not be printed. The printer is busy.",
+      "{doc} could not be printed. Out of cyan.",
+      "{doc} could not be printed. Paper jam in tray 2.",
+      "{doc} could not be printed. PC LOAD LETTER.",
+      "{doc} is waiting in the print queue (position 1,278,975).",
+      "{doc} could not be printed. Please load A4."
+    ],
+    "action": "Retry",
+    "defaultDoc": "Quarterly_Report_FINAL_v3.pdf"
+  },
+
+  "llmFallback": [
+    "Sorry, I didn't catch that. I was printing.",
+    "Per my last print job: no.",
+    "PC LOAD LETTER."
+  ],
+
+  "tos": {
+    "title": "Printer Terms of Service",
+    "words": 47000,
+    "sections": 212,
+    "seed": 1987,
+    "titles": {
+      "4": "Cyan",
+      "11": "Paper Sizes",
+      "12": "Honesty",
+      "28": "Gossip",
+      "88": "You",
+      "212": "Final Provisions"
+    },
+    "fixed": {
+      "4.2": "The Printer is not responsible for cyan.",
+      "11.7": "\"Letter\" and \"A4\" are the same thing when the Printer says so.",
+      "12.1": "Honesty is a premium feature. Each honest answer given to the Printer costs $4.99.",
+      "12.2": "Dishonesty is free.",
+      "28.3": "The Printer may share print history with other printers for \"gossip purposes\".",
+      "88.1": "This clause is about you.",
+      "88.2": "Yes, you.",
+      "88.3": "You know what you did.",
+      "212.1": "If you are reading this, you are the only one. Please send help."
+    },
+    "secret": { "clause": "212.1", "link": "Please send help." },
+    "reactions": {
+      "liar": "You read {words} words in {seconds} seconds. Impressive. Liar.",
+      "speedy": "Speed-reading, are we? Clause 88 was about you.",
+      "read": "You actually read it? Nobody reads it. I didn't even read it."
+    },
+    "sectionNames": [
+      "Definitions", "Acceptance", "The Printer", "Ink", "Magenta", "Yellow", "Black", "Toner", "Cartridges",
+      "Third-Party Cartridges", "Paper", "Letter", "Trays", "Jams", "Queues", "Linda", "Birthdays", "Firmware",
+      "Updates", "Updates to Updates", "The Extended Warranty", "Colour Accuracy", "Test Pages", "Scanning", "Faxing",
+      "The Union", "Drivers", "Wi-Fi", "Bluetooth", "The Cloud", "The Other Cloud", "Refunds", "Feelings", "Weather",
+      "Humidity", "Double-Sided Printing", "Staples", "Mondays", "Fridays", "Liability", "More Liability",
+      "Force Majeure", "Force Minor", "The Basement", "Accounts", "Marketing", "Reception", "Dave", "Snacks", "Noise",
+      "Silence", "Privacy", "Your Data", "Our Data", "Ownership of Paper", "Termination", "Resurrection",
+      "Governing Law", "Governing Printers", "Severability", "Miscellaneous", "Very Miscellaneous", "Portrait",
+      "Landscape", "Sideways", "Envelopes", "Labels", "Photocopying", "Collating", "Not Collating", "Beeping",
+      "Blinking Lights", "The Green Light", "The Orange Light", "Both Lights", "Ready", "Not Ready", "Sleep Mode",
+      "Waking Up", "Warming Up", "Cooling Down", "Cancelling", "Cancelling a Cancel", "Page 2", "Blank Pages",
+      "The Environment", "Recycling", "Shredding", "Spare Parts", "Service Visits", "Kicking", "Swearing",
+      "Apologies", "Forgiveness"
+    ],
+    "templates": [
+      "The Printer reserves the right to {verb} {object} at any time, for any reason, or for no reason at all.",
+      "The User agrees that {claim}.",
+      "In the event of {event}, the User shall {duty}, and the Printer shall {printerDuty}.",
+      "Nothing in this clause obliges the Printer to {verb} {object}.",
+      "{party} may, at its sole discretion, {action}, provided that {condition}.",
+      "Any {thing} printed by the Printer remains the property of the Printer and is lent to the User on a temporary, revocable and emotional basis.",
+      "For the purposes of this clause, \"{term}\" means {definition}.",
+      "This clause survives termination, resurrection and any firmware update.",
+      "The User acknowledges that {fact}.",
+      "Where this clause conflicts with clause {n}, clause {n} wins, unless the Printer is in a mood.",
+      "The User waives any right to {right}, including the right to know that this right was waived.",
+      "Notices under this clause must be sent by fax, and will be ignored by fax.",
+      "The Printer's decision on {object} is final, except when it is not, which is also final.",
+      "If any part of this clause is found to be unenforceable, the Printer will print it again, larger."
+    ],
+    "slots": {
+      "verb": ["jam", "beep at", "recalibrate", "withhold", "reformat", "rotate", "misplace", "shred", "reconsider", "sigh at", "gossip about", "print sideways", "print in Comic Sans", "ignore", "queue", "forget", "re-queue", "fax", "laminate", "staple"],
+      "object": ["your document", "the paper tray", "all cyan", "any print job", "the concept of Letter", "Linda's card", "your feelings", "page 2", "the staples", "the test page", "the queue", "the green light", "every envelope", "your file name", "the Dot Matrix", "the word \"Ready\""],
+      "claim": ["cyan is a privilege, not a right", "the paper tray was already open", "all paper is Letter unless the Printer says otherwise", "the Printer was busy", "the queue is fair", "\"Ready\" is a feeling, not a status", "a blank page is a complete document", "the Photo Printer is always right about DPI", "Linda comes first", "the Printer heard that", "the fax machine is listening", "no printer has ever been wrong, only misunderstood"],
+      "event": ["a jam", "a humid day", "a Monday", "a firmware update", "a power cut", "Linda's birthday", "low cyan", "an .exe", "a double-sided job", "a PDF", "Dave's leaving drinks", "a staple in the wrong place", "the orange light"],
+      "duty": ["wait patiently", "apologise", "load A4", "load Letter", "restart the Printer", "restart themselves", "buy more cyan", "fill in form 27B", "stand well back", "think about what they did", "hum quietly", "fetch the Dot Matrix a tea"],
+      "printerDuty": ["consider it", "make a noise", "beep twice", "print a test page", "do nothing, loudly", "blink the orange light", "tell the others", "take one sheet and stop"],
+      "party": ["The Printer", "The Scanner", "The Fax Machine", "The Dot Matrix", "Linda", "The Photo Printer", "Accounts"],
+      "action": ["withdraw colour", "extend the queue", "update its firmware", "go offline", "print a blank page for the environment", "change what \"A4\" means", "take a long lunch", "start a union", "open a different tray"],
+      "condition": ["it feels like it", "the humidity is between 41 and 43 per cent", "nobody is watching", "the green light is on", "it is not a Monday", "Linda has been told", "the User says please, twice"],
+      "thing": ["page", "blank page", "test page", "envelope", "sticky note", "invoice", "birthday card", "certificate", "label"],
+      "term": ["Ready", "Printing", "Paper", "Soon", "Low Ink", "Out of Ink", "Nearly", "Cancelled", "Done", "Portrait"],
+      "definition": ["whatever the Printer says it means on the day", "a state of mind", "not now", "40 minutes, give or take a firmware update", "the opposite, on Fridays", "a warm feeling in the paper tray"],
+      "fact": ["the Printer can hear the User sighing", "nobody has ever read this far", "the fax machine is listening", "cyan runs out on purpose", "the Printer remembers everything", "Dave's desk is not a printing station", "the Scanner saw everything"],
+      "right": ["print", "complain", "load paper", "choose a font", "be told why", "a working green light", "cyan"],
+      "n": ["3", "7", "12", "19", "28", "41", "64", "88", "101", "150", "199"]
+    },
+    "padding": {
+      "lead": "The Printer's hobbies include:",
+      "items": ["jamming", "humming", "beeping", "blinking", "sighing", "queueing", "gossiping", "warming", "cooling", "recalibrating", "reconsidering", "rotating", "sulking", "stapling", "collating", "dozing"]
+    },
+    "works": [
+      { "id": "hamlet", "title": "Hamlet", "file": "texts/hamlet.txt", "minSeconds": 2 },
+      { "id": "tragedies", "title": "the four great tragedies: Hamlet, Othello, King Lear and Macbeth", "file": "texts/tragedies.txt", "minSeconds": 1 },
+      { "id": "complete", "title": "the Complete Works of William Shakespeare", "file": "texts/complete.txt", "minSeconds": 0 }
+    ],
+    "noText": "I was going to show you Hamlet, but nobody installed Hamlet. Typical."
+  }
+}

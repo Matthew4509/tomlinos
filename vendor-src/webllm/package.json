@@ -1,0 +1,10 @@
+{
+  "name": "tomlinos-vendor-webllm",
+  "private": true,
+  "description": "Builds public/vendor/webllm.js (one ES module) for the Assistant's on-device AI. Run: npm install && node build.mjs",
+  "type": "module",
+  "devDependencies": {
+    "@mlc-ai/web-llm": "0.2.85",
+    "esbuild": "^0.28"
+  }
+}

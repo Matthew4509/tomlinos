@@ -1,0 +1,59 @@
+<?php
+// Checks a host can run TOMLIN OS, before or after uploading. Run it from a terminal on the server (cPanel Terminal or SSH):
+//   php tomlinos/tools/server-check.php
+// A blank "500" page on cPanel usually means a PHP extension is switched off (the PHP Selector resets ticks after a PHP
+// version change); this names the one. Each line says OK, or what is wrong and what to do.
+declare(strict_types=1);
+
+if (PHP_SAPI !== 'cli') {
+    http_response_code(404);
+    exit;
+}
+
+$ok = true;
+function line(bool $good, string $what, string $fix = ''): void
+{
+    global $ok;
+    $ok = $ok && $good;
+    echo ($good ? '  OK    ' : '  FIX   ') . $what . ($good || $fix === '' ? '' : "\n        -> $fix") . "\n";
+}
+function bytes(string $v): int
+{
+    $n = (int) $v;
+    return match (strtolower(substr(trim($v), -1))) { 'g' => $n << 30, 'm' => $n << 20, 'k' => $n << 10, default => $n };
+}
+
+echo "TOMLIN OS server check (PHP " . PHP_VERSION . ")\n";
+line(PHP_VERSION_ID >= 80200, 'PHP 8.2 or newer', 'In cPanel > Select PHP Version, choose 8.2 or newer.');
+foreach (['json', 'hash'] as $ext) {
+    line(extension_loaded($ext), "PHP extension: $ext", "Tick \"$ext\" in cPanel > Select PHP Version > Extensions.");
+}
+line(defined('PASSWORD_ARGON2ID'), 'Argon2id password hashing', 'Passwords still work (bcrypt is used instead), but ask the host for PHP built with Argon2 for stronger hashing.');
+line(function_exists('random_bytes'), 'Secure random numbers');
+// Mail and the Reader's library connect to other servers; both need secure connections, and Mail folder names need mbstring.
+line(extension_loaded('openssl'), 'PHP extension: openssl (Mail, Reader books, Claude)', 'Tick "openssl" in cPanel > Select PHP Version > Extensions. Without it Mail and Reader books cannot connect; the rest of the desktop works.');
+line(extension_loaded('curl'), 'PHP extension: curl (your own Claude or OpenRouter key; saving AI models to this TOMLIN OS)', 'Tick "curl" in cPanel > Select PHP Version > Extensions. Without it Claude answers can arrive all at once at the end instead of as they are written, and the owner cannot save AI models here (browsers then fetch them from Hugging Face).');
+line(is_file(dirname(__DIR__) . '/vendor/autoload.php'), 'Claude library present (tomlinos/vendor)', 'Extract the whole TOMLIN OS zip again: tomlinos/vendor/ is missing.');
+line(extension_loaded('mbstring'), 'PHP extension: mbstring (Mail folder names in other languages)', 'Tick "mbstring" in cPanel > Select PHP Version > Extensions. Without it, folder names with accents may look odd in Mail.');
+
+$post = bytes((string) ini_get('post_max_size'));
+$upload = bytes((string) ini_get('upload_max_filesize'));
+line($post >= 64 << 20, 'post_max_size is ' . ini_get('post_max_size') . ' (64M or more recommended)', 'Raise post_max_size in cPanel > Select PHP Version > Options (uploads bigger than this fail).');
+line($upload >= 64 << 20, 'upload_max_filesize is ' . ini_get('upload_max_filesize'), 'Raise upload_max_filesize to match post_max_size.');
+
+$root = dirname(__DIR__);
+$config = require (is_file("$root/config.php") ? "$root/config.php" : "$root/config.example.php");
+$data = rtrim((string) $config['data_dir'], '/\\');
+line(is_dir($data) || @mkdir($data, 0700, true), "Data folder exists: $data", 'Create it, or fix data_dir in tomlinos/config.php.');
+line(is_writable($data), 'Data folder is writable', 'Give the folder write permission for your cPanel user (755 or 700).');
+$web = realpath("$root/../public_html");
+$real = realpath($data);
+line($web === false || $real === false || !str_starts_with($real . DIRECTORY_SEPARATOR, $web . DIRECTORY_SEPARATOR), 'Data folder is outside public_html', 'Move data_dir outside public_html: files there could be downloaded directly.');
+// The AI models: in tomlinos/models unless config says otherwise; anywhere inside public_html they would be open to all.
+$models = realpath(rtrim((string) ($config['models_dir'] ?? ''), '/\\') ?: "$root/models");
+line($web === false || $models === false || !str_starts_with($models . DIRECTORY_SEPARATOR, $web . DIRECTORY_SEPARATOR), 'AI models folder is outside public_html', 'Set models_dir in tomlinos/config.php to a folder outside public_html (or leave it empty for tomlinos/models).');
+line($web === false || !is_dir("$web/models"), 'No AI model files left in public_html/models', 'Move public_html/models into tomlinos/ (or delete it): anyone can download files there without signing in.');
+line(!empty($config['allow_remote']), 'allow_remote is on (the desktop answers visitors)', 'Leave it off until the security pass is done; then set it in tomlinos/config.php, HTTPS only.');
+
+echo $ok ? "\nAll good.\n" : "\nFix the lines marked FIX, then run this again.\n";
+exit($ok ? 0 : 1);

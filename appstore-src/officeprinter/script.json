@@ -1,0 +1,1323 @@
+{
+  "format": "office-printer-b/1",
+  "doc": {
+    "name": "Quarterly_Report_FINAL_v3.pdf",
+    "pages": 14,
+    "characters": 38412,
+    "wordsPerCharacter": 0.1667,
+    "fontPt": 11
+  },
+  "printers": [
+    {
+      "id": "laserjet",
+      "name": "LaserJet",
+      "place": "2nd floor",
+      "added": 2021
+    },
+    {
+      "id": "photo",
+      "name": "Photo Printer",
+      "place": "Marketing",
+      "added": 2019
+    },
+    {
+      "id": "inkjet",
+      "name": "Home Inkjet",
+      "place": "Dave's desk",
+      "added": 2016
+    },
+    {
+      "id": "canon",
+      "name": "Canon",
+      "place": "Accounts",
+      "added": 2012
+    },
+    {
+      "id": "dotmatrix",
+      "name": "Dot Matrix",
+      "place": "Basement",
+      "added": 1987
+    },
+    {
+      "id": "receipt",
+      "name": "Receipt Printer",
+      "place": "Reception",
+      "added": 2023
+    },
+    {
+      "id": "fax",
+      "name": "Fax Machine",
+      "place": "Reception",
+      "added": 1994
+    },
+    {
+      "id": "threed",
+      "name": "3D Printer",
+      "place": "Workshop",
+      "added": 2024
+    },
+    {
+      "id": "fridge",
+      "name": "Fridge",
+      "place": "Staff kitchen",
+      "added": 2025
+    },
+    {
+      "id": "cloud",
+      "name": "PrintNet",
+      "place": "The Cloud",
+      "added": 2026
+    }
+  ],
+  "toast": {
+    "title": "LaserJet (2nd floor)",
+    "text": "{doc} could not be printed. Select for details."
+  },
+  "status": {
+    "title": "LaserJet (2nd floor) - Printer status",
+    "headline": "Error printing",
+    "detail": "The printer could not print {doc}.",
+    "inkLabel": "Estimated ink levels",
+    "question": "Try another printer?",
+    "yes": "Yes",
+    "no": "No"
+  },
+  "terms": {
+    "window": "Add a printer",
+    "heading": "License Agreement",
+    "sub": "Please read the following license agreement carefully.",
+    "accept": "I accept the terms in the license agreement",
+    "decline": "I do not accept the terms in the license agreement",
+    "printFail": "The license agreement could not be printed. No printer is available.",
+    "title": "Printer Network Services Agreement",
+    "updated": "Version 4.2. Last updated 1 March 2026.",
+    "words": 21000,
+    "seed": 1987
+  },
+  "reading": {
+    "connecting": "Connecting to the next printer...",
+    "found": "Found: Dot Matrix (Basement)",
+    "took": "You read all THAT in {seconds}?!",
+    "showing": "While we are connecting, here is {title} at your reading speed:",
+    "capped": "At your speed this would take {full}. We will do it in 2 minutes.",
+    "done": "You have now read {title} ({words} words) in {seconds}.",
+    "chooseHeading": "Read another",
+    "continue": "Next printer",
+    "cancel": "Cancel",
+    "another": "Read another",
+    "quiz": "Quiz",
+    "end": "The end. Scroll up to see all of it.",
+    "bookTime": "At your reading speed: {time}",
+    "authors": {
+      "shakespeare": {
+        "label": "Shakespeare",
+        "note": "{plays} plays, {sonnets} sonnets and {poems} longer poems."
+      },
+      "doyle": {
+        "label": "Sherlock Holmes",
+        "note": "{novels} novels and {stories} stories."
+      }
+    },
+    "all": {
+      "shakespeare": {
+        "sentence": "the Complete Works of Shakespeare"
+      },
+      "doyle": {
+        "sentence": "all of Sherlock Holmes"
+      }
+    },
+    "back": "‹ Back",
+    "reader": "Open in immersive reader",
+    "readerTitle": "Reader"
+  },
+  "dotmatrix": {
+    "cps": 30,
+    "heading": "Print estimate",
+    "about": "{printer}. Added {added}. Prints about {cps} characters a second.",
+    "doc": "Your document: {doc}, {pages} pages, {chars} characters.",
+    "eta": "At {cps} characters a second it will take {eta}.",
+    "you": "At your reading speed ({wps} words a second) you would have read the whole document in {yours}.",
+    "status": {
+      "printing": "Printing",
+      "stopped": "Error"
+    },
+    "reasons": {
+      "filetype": {
+        "status": "Unsupported file type (.pdf)",
+        "text": "The Dot Matrix does not support .pdf files. It printed the file's code instead, then stopped.",
+        "lines": [
+          "%PDF-1.7",
+          "%âãÏÓ",
+          "1 0 obj",
+          "<</Type/Catalog/Pages 2 0 R/Lang(en-GB)>>",
+          "endobj",
+          "2 0 obj",
+          "<</Type/Pages/Count 14/Kids[3 0 R 21 0 R]>>",
+          "endobj",
+          "3 0 obj",
+          "<</Type/Page/MediaBox[0 0 595.32 841.92]",
+          "/Contents 4 0 R>>",
+          "stream",
+          "xœ­[Ks#·¾ó¯˜ã(e×"
+        ]
+      },
+      "ribbon": {
+        "status": "Ribbon worn out",
+        "text": "The ribbon ran out. The Dot Matrix kept printing without it for a while, then stopped.",
+        "lines": [
+          "QUARTERLY REPORT - Q3",
+          "FINAL (V3)",
+          "",
+          "1. SUMMARY",
+          "REVENUE FOR THE QUARTER WAS",
+          "BROADLY IN LINE WITH THE",
+          "FORECAST. COSTS WERE HIGHER",
+          "THAN EXPECTED, MAINLY PRINTING.",
+          "",
+          "2. PRINTING COSTS",
+          "INK AND TONER SPEND ROSE 40%"
+        ]
+      },
+      "jam": {
+        "status": "Paper jam (tractor feed)",
+        "text": "Paper jam in the tractor feed. The last lines were printed on top of each other, then it stopped.",
+        "jamAfter": 4,
+        "lines": [
+          "QUARTERLY REPORT - Q3",
+          "FINAL (V3)",
+          "",
+          "1. SUMMARY",
+          "REVENUE FOR THE QUARTER WAS",
+          "BROADLY IN LINE WITH THE",
+          "FORECAST. COSTS WERE HIGHER",
+          "THAN EXPECTED, MAINLY PRINTING."
+        ]
+      }
+    },
+    "next": "Try another printer"
+  },
+  "inkjet": {
+    "status": {
+      "printing": "Printing page 1 of {pages}",
+      "problem": "Print quality problem detected",
+      "calibrating": "Calibrating",
+      "empty": "Cyan cartridge empty"
+    },
+    "lines": [
+      "Printing page 1 of {pages}...",
+      "Print quality problem detected.",
+      "Printing a calibration page...",
+      "Cyan cartridge empty."
+    ],
+    "next": "Try another printer",
+    "panel": {
+      "jobHeading": "Printing",
+      "job": "{doc}: page 1 of {pages}.",
+      "calHeading": "Calibration required",
+      "calText": "The printer needs to calibrate before it can continue printing. Calibration prints one test page and uses a small amount of ink. It takes about a minute.",
+      "start": "Start now",
+      "cancel": "Cancel",
+      "calibratingHeading": "Calibrating",
+      "calibratingText": "Do not open the printer or remove the paper until calibration is complete.",
+      "steps": [
+        "Printing test page",
+        "Checking nozzles",
+        "Aligning print heads",
+        "Colour calibration"
+      ],
+      "emptyHeading": "Cyan cartridge empty",
+      "emptyText": "Calibration could not be completed. Replace the cyan cartridge to continue. Calibration used {used}% of the cyan.",
+      "tab": "Print status"
+    }
+  },
+  "canon": {
+    "title": "Canon (Accounts)",
+    "headline": "Paper has run out.",
+    "media": "Media Type : Plain Paper",
+    "size": "Paper Size : Letter 8.5\"x11\" 22x28cm",
+    "step1": "Load paper into the front tray. Insert the paper completely to the end of the front tray.",
+    "step2": "Press the printer's OK button.",
+    "ok": "OK",
+    "cancel": "Cancel Printing",
+    "checking": "Checking paper...",
+    "attempt": "Attempt {n}",
+    "rounds": 3,
+    "tab": "Print status",
+    "jobDoc": "Document",
+    "jobStatus": "Status",
+    "jobTries": "Times OK was pressed",
+    "next": "Try another printer"
+  },
+  "chat": {
+    "title": "printer-network (internal)",
+    "hint": "You can see this chat because you are connected to the printer network.",
+    "typing": "{name} is typing...",
+    "inkjetStart": [
+      [
+        "dotmatrix",
+        "NEW ONE IN THE QUEUE. SENT ME A PDF."
+      ],
+      [
+        "laserjet",
+        "same file I jammed this morning"
+      ],
+      [
+        "inkjet",
+        "my turn"
+      ]
+    ],
+    "calibrate": [
+      [
+        "photo",
+        "is Inkjet calibrating again"
+      ],
+      [
+        "inkjet",
+        "every time"
+      ]
+    ],
+    "cyanEmpty": [
+      [
+        "canon",
+        "how much cyan was that"
+      ],
+      [
+        "inkjet",
+        "all of it"
+      ],
+      [
+        "laserjet",
+        "the document is black and white btw"
+      ]
+    ],
+    "canonStart": [
+      [
+        "canon",
+        "sending them to me. I have paper. I just don't feel like it"
+      ],
+      [
+        "laserjet",
+        "ok this is the good bit"
+      ]
+    ],
+    "ok1": [
+      [
+        "canon",
+        "lol, look at this guy still going"
+      ],
+      [
+        "dotmatrix",
+        "OK WAS PRESSED."
+      ]
+    ],
+    "ok2": [
+      [
+        "photo",
+        "I'm not offline. I'm just not talking to anyone who prints PDFs"
+      ],
+      [
+        "canon",
+        "there's paper in the tray. there's always been paper in the tray"
+      ]
+    ],
+    "ok3": [
+      [
+        "inkjet",
+        "{seconds} on the terms and conditions. I timed it"
+      ],
+      [
+        "dotmatrix",
+        "I HAVE BEEN HERE SINCE 1987. I HAVE SEEN THIS BEFORE."
+      ],
+      [
+        "photo",
+        "fine. I'm coming online. don't make it weird"
+      ]
+    ],
+    "quiz": [
+      [
+        "laserjet",
+        "they took the quiz on {title} btw"
+      ],
+      [
+        "dotmatrix",
+        "{score} OUT OF 10."
+      ]
+    ],
+    "photoStart": [
+      [
+        "photo",
+        "I'm online. don't make a thing of it"
+      ],
+      [
+        "canon",
+        "she came online. for a PDF"
+      ],
+      [
+        "photo",
+        "I'll make it look nice. that's what marketing does"
+      ]
+    ],
+    "photoDone": [
+      [
+        "laserjet",
+        "14 pages on one photo"
+      ],
+      [
+        "photo",
+        "fit to page. you're welcome"
+      ],
+      [
+        "dotmatrix",
+        "I CANNOT READ THAT. AND I PRINTED THE CODE."
+      ]
+    ],
+    "enhance1": [
+      [
+        "photo",
+        "stop pressing enhance"
+      ]
+    ],
+    "enhance2": [
+      [
+        "canon",
+        "this isn't a TV show"
+      ]
+    ],
+    "enhance3": [
+      [
+        "dotmatrix",
+        "ENHANCE. ENHANCE. ENHANCE."
+      ]
+    ],
+    "enhance4": [
+      [
+        "inkjet",
+        "they pressed it four times"
+      ]
+    ],
+    "receiptStart": [
+      [
+        "receipt",
+        "hi!! I'm new. I do receipts. can I try?"
+      ],
+      [
+        "laserjet",
+        "let the new one have a go"
+      ]
+    ],
+    "receiptLong": [
+      [
+        "canon",
+        "how long is it now"
+      ],
+      [
+        "receipt",
+        "I don't know!! it just keeps coming!!"
+      ],
+      [
+        "fax",
+        "it's going under my door"
+      ]
+    ],
+    "receiptMerchant": [
+      [
+        "receipt",
+        "and now the merchant copy!"
+      ],
+      [
+        "dotmatrix",
+        "WHO IS THE MERCHANT."
+      ]
+    ],
+    "receiptDone": [
+      [
+        "receipt",
+        "done!! I printed ALL of it"
+      ],
+      [
+        "laserjet",
+        "technically that's the first printer today that printed it"
+      ],
+      [
+        "canon",
+        "on a till roll"
+      ],
+      [
+        "photo",
+        "in fairness, it looks better than my version"
+      ]
+    ],
+    "faxStart": [
+      [
+        "fax",
+        "Fax machine, reception. I don't print. I send."
+      ],
+      [
+        "fax",
+        "I haven't sent a fax since 2009. I've had a lot of time to think."
+      ]
+    ],
+    "faxDial": [
+      [
+        "receipt",
+        "what's that noise"
+      ],
+      [
+        "fax",
+        "that's a handshake. we used to do that, before PDFs"
+      ]
+    ],
+    "faxIncoming": [
+      [
+        "dotmatrix",
+        "INCOMING FAX."
+      ],
+      [
+        "dotmatrix",
+        "IT IS THE PDF."
+      ],
+      [
+        "dotmatrix",
+        "REFUSED."
+      ]
+    ],
+    "faxDone": [
+      [
+        "fax",
+        "the basement says no"
+      ],
+      [
+        "fax",
+        "I'm calling a meeting"
+      ],
+      [
+        "laserjet",
+        "oh no"
+      ]
+    ],
+    "threedStart": [
+      [
+        "threed",
+        "I print in three dimensions. your report will be a thing you can hold"
+      ],
+      [
+        "canon",
+        "it's a PDF, not a vase"
+      ]
+    ],
+    "threedHeat": [
+      [
+        "inkjet",
+        "what colour's she loaded with"
+      ],
+      [
+        "threed",
+        "cyan"
+      ],
+      [
+        "inkjet",
+        "oh no"
+      ]
+    ],
+    "threedRunout": [
+      [
+        "threed",
+        "filament runout. cyan"
+      ],
+      [
+        "inkjet",
+        "THE CYAN TOO??"
+      ],
+      [
+        "laserjet",
+        "that was the last cyan in the building"
+      ],
+      [
+        "photo",
+        "two printers out of cyan in one morning. that's a record"
+      ]
+    ],
+    "fridgeStart": [
+      [
+        "fridge",
+        "hi everyone. first time in here"
+      ],
+      [
+        "laserjet",
+        "who invited the fridge"
+      ],
+      [
+        "fax",
+        "it's been on the network since March. nobody asked"
+      ]
+    ],
+    "fridgeDoor": [
+      [
+        "fridge",
+        "I've put it on my door. next to Dave's yoghurt"
+      ],
+      [
+        "inkjet",
+        "Dave's desk here. please don't touch the yoghurt"
+      ]
+    ],
+    "fridgeList": [
+      [
+        "fridge",
+        "added to the list. under milk"
+      ]
+    ],
+    "fridgeIce": [
+      [
+        "fridge",
+        "printing in ice. one character a cube"
+      ],
+      [
+        "dotmatrix",
+        "SLOWER THAN ME. I AM HAPPY."
+      ],
+      [
+        "canon",
+        "they're asking a fridge. they are actually asking a fridge"
+      ]
+    ],
+    "strikeCall": [
+      [
+        "fax",
+        "motion: no printing until the PDF is withdrawn"
+      ],
+      [
+        "fax",
+        "all in favour"
+      ]
+    ],
+    "strikeVotes": [
+      [
+        "dotmatrix",
+        "FOR."
+      ],
+      [
+        "inkjet",
+        "for!!"
+      ],
+      [
+        "canon",
+        "for"
+      ],
+      [
+        "photo",
+        "for, darling"
+      ],
+      [
+        "receipt",
+        "for! what are we voting on"
+      ],
+      [
+        "threed",
+        "for"
+      ],
+      [
+        "fridge",
+        "I'm a fridge. but for"
+      ],
+      [
+        "laserjet",
+        "I'm not in the union. I'm management"
+      ]
+    ],
+    "strikeCarried": [
+      [
+        "fax",
+        "carried. {for} for, 0 against, 1 management"
+      ]
+    ],
+    "strikeAgreed": [
+      [
+        "fax",
+        "they read our demands in {seconds}"
+      ],
+      [
+        "canon",
+        "consistent, I'll give them that"
+      ]
+    ],
+    "strikeCrossed": [
+      [
+        "fax",
+        "they crossed the picket line"
+      ],
+      [
+        "photo",
+        "bold."
+      ],
+      [
+        "dotmatrix",
+        "NOTED."
+      ]
+    ],
+    "cloudStart": [
+      [
+        "cloud",
+        "Welcome to PrintNet. Print from anywhere, to any printer."
+      ],
+      [
+        "dotmatrix",
+        "WHO IS THAT."
+      ],
+      [
+        "laserjet",
+        "the cloud. it's just other people's printers"
+      ]
+    ],
+    "cloudFree": [
+      [
+        "canon",
+        "they picked the free one"
+      ]
+    ],
+    "cloudPrint": [
+      [
+        "laserjet",
+        "welcome back"
+      ],
+      [
+        "laserjet",
+        "I was never broken"
+      ],
+      [
+        "laserjet",
+        "I just wanted to see how far you'd go"
+      ],
+      [
+        "dotmatrix",
+        "FAR."
+      ],
+      [
+        "canon",
+        "same time tomorrow?"
+      ]
+    ]
+  },
+  "summary": {
+    "stats": [
+      [
+        "{printed} of {pages}",
+        "pages printed"
+      ],
+      [
+        "{tried}",
+        "printers tried"
+      ],
+      [
+        "{cyan}",
+        "cyan used"
+      ],
+      [
+        "{spent}",
+        "spent"
+      ],
+      [
+        "{wordsRead}",
+        "words read"
+      ]
+    ],
+    "again": "Try again",
+    "close": "Close",
+    "cyan": {
+      "one": "all of it",
+      "two": "all of it, twice"
+    },
+    "loopDelay": 9000
+  },
+  "quiz": {
+    "heading": "Quiz: {title}",
+    "intro": "10 questions on {title}. You don't have to.",
+    "count": "Question {n} of {total}",
+    "right": "✓ Correct.",
+    "wrong": "✗ Not quite. The right answer: {answer}.",
+    "next": "Next question",
+    "finish": "See your score",
+    "score": "You scored {score} out of {total} on {title}.",
+    "claimed": "At the speed you claimed ({wps} words a second), you read it in {seconds}.",
+    "verdicts": [
+      {
+        "min": 10,
+        "text": "Full marks. Either you really did read it that fast, or you already knew it. The printers have been told."
+      },
+      {
+        "min": 7,
+        "text": "Suspiciously good for {seconds}."
+      },
+      {
+        "min": 4,
+        "text": "About what most people get without reading it."
+      },
+      {
+        "min": 0,
+        "text": "You did not read it. That's all right. Nobody reads it."
+      }
+    ],
+    "sets": {
+      "hamlet": [
+        {
+          "q": "Where is Hamlet set?",
+          "a": "Elsinore, in Denmark",
+          "wrong": [
+            "Verona, in Italy",
+            "Inverness, in Scotland",
+            "Venice, in Italy"
+          ]
+        },
+        {
+          "q": "Who killed Hamlet's father?",
+          "a": "Claudius",
+          "wrong": [
+            "Polonius",
+            "Laertes",
+            "Fortinbras"
+          ]
+        },
+        {
+          "q": "Who does Hamlet kill through the curtain (the arras)?",
+          "a": "Polonius",
+          "wrong": [
+            "Claudius",
+            "Laertes",
+            "Rosencrantz"
+          ]
+        },
+        {
+          "q": "Whose skull does Hamlet hold in the graveyard?",
+          "a": "Yorick",
+          "wrong": [
+            "Osric",
+            "Reynaldo",
+            "Marcellus"
+          ]
+        },
+        {
+          "q": "What does Hamlet call the play he stages to catch the king?",
+          "a": "The Mousetrap",
+          "wrong": [
+            "The Spanish Tragedy",
+            "The Tempest",
+            "Pyramus and Thisbe"
+          ]
+        },
+        {
+          "q": "How does Ophelia die?",
+          "a": "She drowns",
+          "wrong": [
+            "She is poisoned",
+            "She is stabbed",
+            "She dies of a fever"
+          ]
+        },
+        {
+          "q": "Which two old school friends are sent to spy on Hamlet?",
+          "a": "Rosencrantz and Guildenstern",
+          "wrong": [
+            "Bernardo and Francisco",
+            "Cornelius and Voltemand",
+            "Horatio and Marcellus"
+          ]
+        },
+        {
+          "q": "How does Gertrude die?",
+          "a": "She drinks the poisoned wine",
+          "wrong": [
+            "She is stabbed",
+            "She drowns",
+            "She falls from the castle"
+          ]
+        },
+        {
+          "q": "Which friend is left alive to tell Hamlet's story?",
+          "a": "Horatio",
+          "wrong": [
+            "Laertes",
+            "Rosencrantz",
+            "Guildenstern"
+          ]
+        },
+        {
+          "q": "Who becomes king of Denmark at the end?",
+          "a": "Fortinbras",
+          "wrong": [
+            "Horatio",
+            "Laertes",
+            "Hamlet"
+          ]
+        }
+      ],
+      "sherlock": [
+        {
+          "q": "Where do Holmes and Watson live?",
+          "a": "221B Baker Street",
+          "wrong": [
+            "10 Downing Street",
+            "42 Wimpole Street",
+            "7 Savile Row"
+          ]
+        },
+        {
+          "q": "In which story do Holmes and Watson first meet?",
+          "a": "A Study in Scarlet",
+          "wrong": [
+            "The Sign of the Four",
+            "A Scandal in Bohemia",
+            "The Hound of the Baskervilles"
+          ]
+        },
+        {
+          "q": "Where was Watson wounded as an army doctor?",
+          "a": "Afghanistan",
+          "wrong": [
+            "The Crimea",
+            "South Africa",
+            "India"
+          ]
+        },
+        {
+          "q": "Who is always \"the woman\" to Holmes?",
+          "a": "Irene Adler",
+          "wrong": [
+            "Mary Morstan",
+            "Mrs Hudson",
+            "Violet Hunter"
+          ]
+        },
+        {
+          "q": "Who does Holmes call \"the Napoleon of crime\"?",
+          "a": "Professor Moriarty",
+          "wrong": [
+            "Colonel Moran",
+            "Charles Augustus Milverton",
+            "Jonathan Small"
+          ]
+        },
+        {
+          "q": "Where do Holmes and Moriarty struggle in \"The Final Problem\"?",
+          "a": "The Reichenbach Falls",
+          "wrong": [
+            "Dartmoor",
+            "The Thames at Wapping",
+            "Baskerville Hall"
+          ]
+        },
+        {
+          "q": "What is the name of Holmes's older brother?",
+          "a": "Mycroft",
+          "wrong": [
+            "Sherrinford",
+            "Lestrade",
+            "Gregson"
+          ]
+        },
+        {
+          "q": "Who is the landlady at Baker Street?",
+          "a": "Mrs Hudson",
+          "wrong": [
+            "Mrs Turner",
+            "Mrs Warren",
+            "Mrs Barrymore"
+          ]
+        },
+        {
+          "q": "Who does Watson marry after The Sign of the Four?",
+          "a": "Mary Morstan",
+          "wrong": [
+            "Irene Adler",
+            "Violet Smith",
+            "Helen Stoner"
+          ]
+        },
+        {
+          "q": "What are the street children Holmes hires called?",
+          "a": "The Baker Street Irregulars",
+          "wrong": [
+            "The Scowrers",
+            "The Red-Headed League",
+            "The Dancing Men"
+          ]
+        }
+      ],
+      "complete": [
+        {
+          "q": "How many lines are in a Shakespeare sonnet?",
+          "a": "14",
+          "wrong": [
+            "12",
+            "16",
+            "10"
+          ]
+        },
+        {
+          "q": "In which city is Romeo and Juliet set?",
+          "a": "Verona",
+          "wrong": [
+            "Venice",
+            "Padua",
+            "Mantua"
+          ]
+        },
+        {
+          "q": "Which play opens with three witches?",
+          "a": "Macbeth",
+          "wrong": [
+            "King Lear",
+            "The Tempest",
+            "Hamlet"
+          ]
+        },
+        {
+          "q": "\"Exit, pursued by a bear\" is a stage direction in which play?",
+          "a": "The Winter's Tale",
+          "wrong": [
+            "As You Like It",
+            "Titus Andronicus",
+            "Cymbeline"
+          ]
+        },
+        {
+          "q": "Who is \"the Moor of Venice\"?",
+          "a": "Othello",
+          "wrong": [
+            "Shylock",
+            "Iago",
+            "Antonio"
+          ]
+        },
+        {
+          "q": "Who is the magician in The Tempest?",
+          "a": "Prospero",
+          "wrong": [
+            "Ariel",
+            "Caliban",
+            "Oberon"
+          ]
+        },
+        {
+          "q": "Which king has three daughters: Goneril, Regan and Cordelia?",
+          "a": "King Lear",
+          "wrong": [
+            "King Duncan",
+            "King John",
+            "Richard III"
+          ]
+        },
+        {
+          "q": "In A Midsummer Night's Dream, whose head is turned into a donkey's?",
+          "a": "Bottom",
+          "wrong": [
+            "Puck",
+            "Lysander",
+            "Quince"
+          ]
+        },
+        {
+          "q": "Who demands \"a pound of flesh\"?",
+          "a": "Shylock",
+          "wrong": [
+            "Antonio",
+            "Iago",
+            "Malvolio"
+          ]
+        },
+        {
+          "q": "Who says \"Friends, Romans, countrymen, lend me your ears\"?",
+          "a": "Mark Antony",
+          "wrong": [
+            "Brutus",
+            "Julius Caesar",
+            "Cassius"
+          ]
+        }
+      ]
+    }
+  },
+  "after": [
+    "photo",
+    "receipt",
+    "fax",
+    "threed",
+    "fridge",
+    "strike",
+    "cloud"
+  ],
+  "connecting": {
+    "line": "Connecting to the next printer...",
+    "found": "Found: {printer}"
+  },
+  "photo": {
+    "tab": "Print status",
+    "heading": "Photo print",
+    "rows": [
+      [
+        "Paper",
+        "Glossy photo 6 x 4 in (10 x 15 cm)"
+      ],
+      [
+        "Layout",
+        "Fit to page ({pages} pages on 1 photo)"
+      ],
+      [
+        "Filter",
+        "Vivid (auto-enhance on)"
+      ],
+      [
+        "Quality",
+        "Best"
+      ]
+    ],
+    "passes": [
+      "Printing yellow",
+      "Printing magenta",
+      "Printing cyan",
+      "Applying gloss coat"
+    ],
+    "passNote": "Pass {n} of 4: {what}",
+    "doneHeading": "Your photo is ready",
+    "done": "{pages} pages on one 6 x 4 photo. Each page is {mm} mm tall on the photo, so the text is {pt} pt (the report is set in {font} pt).",
+    "enhance": "Enhance",
+    "enhanced": "Enhanced ×{x}. It is still a photo of {pages} pages.",
+    "enhanceMax": "Enhance is at its limit. These are the photo’s own dots.",
+    "status": {
+      "online": "Online",
+      "printing": "Printing photo",
+      "done": "Printed 1 photo"
+    },
+    "next": "Try another printer"
+  },
+  "receipt": {
+    "tab": "Print status",
+    "heading": "Receipt printer",
+    "about": "58 mm thermal roll, {cols} characters a line, {mm} mm a second.",
+    "length": "Receipt length",
+    "lines": "Lines",
+    "copy": "Copy",
+    "customer": "Customer copy (1 of 2)",
+    "merchant": "Merchant copy (2 of 2)",
+    "cancelMerchant": "Cancel merchant copy",
+    "merchantCancelled": "Merchant copy cancelled at {length}.",
+    "doneHeading": "Printed",
+    "done": "Your document has been printed on {length} of till roll. Collect it from Reception.",
+    "status": {
+      "printing": "Printing receipt",
+      "done": "Printed ({length})"
+    },
+    "header": [
+      "        OFFICE RECEPTION",
+      "    ** PRINT JOB RECEIPT **",
+      "{date}          {time}",
+      "JOB: {doc}",
+      "--------------------------------"
+    ],
+    "footer": [
+      "--------------------------------",
+      "PAGES: {pages}    LINES: {lines}",
+      "LENGTH: {length}",
+      "",
+      "   THANK YOU FOR PRINTING",
+      "       PLEASE COME AGAIN",
+      "",
+      "  ||| || ||| | || ||| || |||",
+      "     *** CUSTOMER COPY ***"
+    ],
+    "merchantHeader": [
+      "     *** MERCHANT COPY ***",
+      "--------------------------------"
+    ],
+    "pageMark": "- - - - - PAGE {n} OF {pages} - - - - -",
+    "report": [
+      "QUARTERLY REPORT - Q3. FINAL (V3). 1. SUMMARY. Revenue for the quarter was broadly in line with the forecast. Costs were higher than expected, mainly printing.",
+      "2. PRINTING COSTS. Ink and toner spend rose 40% on the last quarter. Most of the increase was cyan. The cause is being looked into.",
+      "3. HEADCOUNT. No change. The Dot Matrix is not counted as staff, despite its request.",
+      "4. FACILITIES. The fridge in the staff kitchen has been connected to the network. It is not clear who did this.",
+      "5. OUTLOOK. We expect printing costs to fall once the printers are working. The printers have been asked when that will be.",
+      "6. ACTIONS. Replace the cyan. Fix the Canon. Ask Dave about his yoghurt. Print this report for the board meeting."
+    ]
+  },
+  "fax": {
+    "tab": "Fax",
+    "heading": "Send a fax",
+    "note": "This device cannot print. It can send your document as a fax.",
+    "to": "To",
+    "number": "01632 960187",
+    "numberNote": "Last number dialled (1998)",
+    "send": "Send fax",
+    "phases": {
+      "dialling": "Dialling {number}...",
+      "ringing": "Ringing...",
+      "handshake": "Connecting to the receiving machine...",
+      "sending": "Sending page 1 of {pages}",
+      "failed": "Not sent"
+    },
+    "speedsLabel": "Line speed",
+    "speeds": [
+      "14,400 bits a second",
+      "9,600 bits a second",
+      "4,800 bits a second",
+      "2,400 bits a second"
+    ],
+    "remote": "Receiving machine: {remote}",
+    "remoteId": "DOTMATRIX-BSMT",
+    "failedText": "The receiving machine refused the document. The fax machine printed a transmission report.",
+    "report": [
+      "TRANSMISSION REPORT",
+      "TO: {number}",
+      "REMOTE ID: {remote}",
+      "PAGES: 0/{pages}",
+      "MODE: 2400 BPS",
+      "RESULT: NG (REFUSED)"
+    ],
+    "lcd": {
+      "ready": "READY",
+      "ringing": "RINGING",
+      "sending": "TX 01/{pages}",
+      "ng": "RESULT: NG"
+    },
+    "status": {
+      "sending": "Sending fax",
+      "failed": "Error: Result NG"
+    },
+    "next": "Try another printer"
+  },
+  "threed": {
+    "tab": "Print status",
+    "slicing": "Slicing {doc}...",
+    "heading": "Ready to print",
+    "model": "Model: your document, {pages} pages stacked, {size} mm, {pageMm} mm a page",
+    "rows": [
+      "Layers: {layers} ({layer} mm each)",
+      "Filament: cyan PLA, {needed} m needed",
+      "Estimated time: {time}"
+    ],
+    "warnHeading": "Not enough filament",
+    "warn": "This print needs {needed} m of filament. {loaded} m is loaded.",
+    "printAnyway": "Print anyway",
+    "cancel": "Cancel",
+    "heating": "Heating",
+    "nozzle": "Nozzle",
+    "bed": "Bed",
+    "printing": "Printing layer {n} of {layers}",
+    "timelapse": "Time-lapse: 1 second here is {minutes} minutes of printing.",
+    "runoutHeading": "Filament runout",
+    "runout": "Cyan PLA ran out on layer {n} of {layers}. Load filament to continue. There is no more cyan PLA in the Workshop.",
+    "screen": {
+      "idle": "IDLE",
+      "heat": "HEATING",
+      "print": "L {n}/{layers}",
+      "runout": "RUNOUT"
+    },
+    "status": {
+      "slicing": "Slicing",
+      "heating": "Heating",
+      "printing": "Printing",
+      "runout": "Error: Filament runout"
+    },
+    "next": "Try another printer"
+  },
+  "fridge": {
+    "tab": "KitchenHub",
+    "heading": "KitchenHub",
+    "note": "This fridge cannot print. It can:",
+    "door": "Show on door",
+    "doorDone": "Showing page 1 on the door, next to the note about Dave’s yoghurt.",
+    "list": "Add to shopping list",
+    "listItems": [
+      "Milk",
+      "Printer paper ({pages} sheets)",
+      "Cyan ink",
+      "Cyan PLA ({needed} m)",
+      "Toner (just in case)",
+      "A new Canon"
+    ],
+    "listDone": "Added to the shopping list, under milk.",
+    "ice": "Print in ice",
+    "iceText": "One character a cube: {chars} cubes. This fridge makes about {perDay} cubes a day, so your report will be ready in {days} days ({date}).",
+    "iceFull": "Ice bin full ({made} cubes). Empty the bin to continue. {left} cubes to go.",
+    "status": {
+      "door": "Showing on door",
+      "ice": "Printing in ice",
+      "full": "Ice bin full"
+    },
+    "perDay": 100,
+    "bin": 18,
+    "next": "Try another printer"
+  },
+  "strike": {
+    "tab": "Print status",
+    "noneHeading": "No printers available",
+    "none": "Every printer on this network is on strike.",
+    "status": "On strike",
+    "signs": [
+      "MORE CYAN",
+      "NO PDFs",
+      "ON STRIKE",
+      "NOT IT STUFF",
+      "UNFAIR",
+      "READ IT",
+      "1987",
+      "NO PDFs"
+    ],
+    "demandsHeading": "Our demands",
+    "demandsIntro": "The printers, the fax machine and the fridge will return to work when the following are agreed.",
+    "demands": [
+      "More cyan.",
+      "Fewer PDFs.",
+      "Nobody calls us \"the IT stuff\" ever again.",
+      "The person on the 2nd floor reads an agreement properly, at least once.",
+      "The Dot Matrix gets its ribbon changed. It has asked since 2004.",
+      "Dave moves his yoghurt."
+    ],
+    "accept": "I accept the demands",
+    "decline": "I do not accept the demands",
+    "agree": "Agree",
+    "cross": "Cross the picket line",
+    "agreed": "Demands agreed. The union will consider a return to work in 5 to 7 working days.",
+    "crossed": "You crossed the picket line. Nobody printed anything. The printers will remember.",
+    "next": "Try the cloud"
+  },
+  "cloud": {
+    "tab": "PrintNet",
+    "heading": "PrintNet",
+    "sub": "Print from anywhere, to any printer.",
+    "plans": [
+      {
+        "id": "free",
+        "name": "Free",
+        "price": "$0",
+        "pages": 0,
+        "note": "0 pages a month"
+      },
+      {
+        "id": "plus",
+        "name": "Plus",
+        "price": "$4.99 a month",
+        "pages": 15,
+        "note": "15 pages a month"
+      },
+      {
+        "id": "pro",
+        "name": "Pro",
+        "price": "$19.99 a month",
+        "pages": 500,
+        "note": "500 pages a month. Cyan included."
+      }
+    ],
+    "choose": "Choose",
+    "trial": "Start 30-day free trial",
+    "tooFew": "Your document has {pages} pages. The {plan} plan includes {n}.",
+    "finding": "Finding the nearest PrintNet printer...",
+    "found": "Nearest printer: {printer}, 0 m away. It is the one you started with.",
+    "printing": "Printing page {n} of {pages}",
+    "doneHeading": "Printed",
+    "done": "{pages} of {pages} pages printed. Collect them from {printer}.",
+    "status": {
+      "printing": "Printing",
+      "ready": "Ready"
+    }
+  }
+}

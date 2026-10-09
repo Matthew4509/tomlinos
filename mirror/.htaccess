@@ -1,0 +1,6 @@
+# The TOMLIN OS model mirror's folder: only index.php answers (see its first lines).
+Options -Indexes
+DirectoryIndex index.php
+<FilesMatch "^(?!index\.php$)">
+  Require all denied
+</FilesMatch>

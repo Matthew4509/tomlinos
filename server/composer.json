@@ -1,0 +1,17 @@
+{
+    "name": "tomlinos/server",
+    "description": "TOMLIN OS server libraries. Only Anthropic's official Claude SDK and the HTTP client it recommends (Guzzle).",
+    "type": "project",
+    "license": "PolyForm-Noncommercial-1.0.0",
+    "require": {
+        "php": ">=8.2",
+        "anthropic-ai/sdk": "^0.51",
+        "guzzlehttp/guzzle": "^7.9"
+    },
+    "config": {
+        "vendor-dir": "vendor",
+        "platform": { "php": "8.2.0" },
+        "optimize-autoloader": true,
+        "allow-plugins": { "php-http/discovery": false }
+    }
+}

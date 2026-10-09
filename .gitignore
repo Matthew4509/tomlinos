@@ -1,0 +1,14 @@
+node_modules/
+/out/
+/dist/
+/models/
+/test-results/
+/server/config.php
+desktop-data/
+.claude/
+.env
+.env.*
+*.log
+*.zip
+HANDOFF*
+TOKEN-LOG*
