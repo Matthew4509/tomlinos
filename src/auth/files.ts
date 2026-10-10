@@ -124,9 +124,19 @@ export class FilesVault {
     const parts = await recoveryParts(recovery);
     const fileKey = await newFileKey();
     const wrap = await wrapWithPassword(fileKey, password);
-    const r = await this.api.vault('migrating-on', { password, code, ...wrap, wrapRk: await wrapWithRecovery(fileKey, parts.kek), rkAuth: parts.auth });
-    this.setUser(r.user);
+    const wrapRk = await wrapWithRecovery(fileKey, parts.kek);
+    // The key is kept in this browser BEFORE the server is told: another tab that hears of the switch the moment after
+    // finds it there (told first, that tab could catch up to "encrypted" with no key to seal with).
     await this.use(fileKey);
+    let r: { user: PublicUser; vaultKeys: VaultKeys | null };
+    try {
+      r = await this.api.vault('migrating-on', { password, code, ...wrap, wrapRk, rkAuth: parts.auth });
+    } catch (error) {
+      this.store.fileKey = null;
+      await forgetKeys();
+      throw error;
+    }
+    this.setUser(r.user);
     this.apply(r.vaultKeys);
     return recovery;
   }

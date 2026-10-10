@@ -39,6 +39,7 @@ for suite in desktop accounts vault features apps printer privacy aichat safety;
   case $suite in
     desktop) script=test/browser.mjs; extra=() ;;
     vault) script=test/browser-vault.mjs; extra=("$DATA") ;;
+    safety) script=test/browser-safety.mjs; extra=("$DATA") ;;
     privacy) script=test/browser-privacy.mjs; extra=("$DATA" "$DATA-models") ;;
     apps) script=test/browser-apps.mjs; extra=() ;;
     *) script=test/browser-$suite.mjs; extra=() ;;

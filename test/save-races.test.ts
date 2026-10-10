@@ -8,6 +8,9 @@ import { MemoryStore } from '../src/store/memory-store.ts';
 import { saveOver } from '../src/shell/savefile.ts';
 import type { Store, StoreOp } from '../src/store/store.ts';
 import type { Shell } from '../src/shell/types.ts';
+import { EncryptedStore } from '../src/store/encrypted-store.ts';
+import type { ServerStore } from '../src/store/server-store.ts';
+import { isSealed, newFileKey, seal } from '../src/auth/vault.ts';
 
 const bytes = (s: string) => new TextEncoder().encode(s);
 
@@ -95,4 +98,58 @@ test('a failure reading the file is reported, never taken as leave to overwrite'
   const { shell } = shellWith(new FileSystem(broken), [true]);
   await assert.rejects(saveOver(shell, '/Documents/a.txt', bytes('mine'), opened.id), /offline/);
   assert.equal(await fs.readText('/Documents/a.txt'), 'first');
+});
+
+// ---- A page that missed an encryption switch made elsewhere catches up instead of crying tampering -------------------
+
+
+/** An encrypting store over a fixed record, for reading only. */
+function over(data: Uint8Array): EncryptedStore {
+  const inner = { label: 'test', get: async () => ({ version: 'v', data }), commit: async () => ({}) } as unknown as ServerStore;
+  return new EncryptedStore(inner);
+}
+
+test('a plain record on a page that thinks encryption is on: accepted once the server says it was turned off; refused as tampering if it still is on', async () => {
+  const s = over(bytes('plain folder'));
+  s.state = 'on';
+  let asked = 0;
+  s.recheck = async () => {
+    asked++;
+    s.state = 'off';
+  };
+  assert.equal(new TextDecoder().decode((await s.get('/'))!.data), 'plain folder');
+  assert.equal(asked, 1);
+  const t = over(bytes('planted'));
+  t.state = 'on';
+  t.recheck = async () => undefined; // the server still says on
+  await assert.rejects(t.get('/'), /arrived from the server unencrypted/);
+});
+
+test('a sealed record on a page with no key (encryption turned on elsewhere): the page catches up, takes the kept key and opens it', async () => {
+  const key = await newFileKey();
+  const s = over(await seal(key, '/', bytes('secret folder')));
+  s.state = 'off';
+  s.recheck = async () => {
+    s.state = 'on';
+    s.fileKey = key;
+  };
+  assert.equal(new TextDecoder().decode((await s.get('/'))!.data), 'secret folder');
+});
+
+test('a save on a page that caught up to "encrypted" before its key arrived: it catches up once more and seals with the key', async () => {
+  const key = await newFileKey();
+  let sent: { sealed?: boolean; data?: Uint8Array } = {};
+  const inner = {
+    label: 'test',
+    get: async () => null,
+    commit: async (ops: Array<{ data?: Uint8Array }>, sealed?: boolean) => ((sent = { sealed, data: ops[0].data }), {}),
+  } as unknown as ServerStore;
+  const s = new EncryptedStore(inner);
+  s.state = 'migrating-on'; // heard of the switch, but the key was not kept yet when it looked
+  s.recheck = async () => {
+    s.fileKey = key; // now it is
+  };
+  await s.commit([{ op: 'put', key: '/', expect: '*', data: bytes('folder') }]);
+  assert.equal(sent.sealed, true);
+  assert.ok(sent.data && isSealed(sent.data), 'what went to the server was sealed');
 });

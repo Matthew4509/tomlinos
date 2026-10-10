@@ -173,7 +173,7 @@ async function boot(root: HTMLElement): Promise<void> {
   // the server's word on the state and open the files with the key this browser kept (the other window keeps it), so
   // the next save goes through. Without that key, the next save says to sign in again.
   let catchingUp: Promise<void> | null = null;
-  server.onVaultChanged = () => {
+  const catchUp = (): Promise<void> => {
     catchingUp ??= (async () => {
       const now = await api.status();
       if (!now.signedIn || now.user?.id !== user.id) return;
@@ -181,7 +181,11 @@ async function boot(root: HTMLElement): Promise<void> {
       files.apply(await keysOf(now));
       await files.openQuietly();
     })().catch(() => undefined).finally(() => (catchingUp = null));
+    return catchingUp;
   };
+  server.onVaultChanged = () => void catchUp();
+  // A record that does not fit this page's idea of the encryption is checked against the server's word first.
+  store.recheck = catchUp;
   shell = await startDesktop(root, store, account);
   if (status.adopted) shell.toast('Welcome. The files that were already on this desktop are now yours.');
   if (firstRunNote) shell.toast(firstRunNote);

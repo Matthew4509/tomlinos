@@ -127,6 +127,29 @@ test('an install cut off part-way is undone by the next Go back (or update reque
   }
 });
 
+test('a cut-off install leaves no half-copied file behind, nor its unpacked files or download', { skip: noPhp }, () => {
+  const f = folders();
+  try {
+    // As a kill between copying and renaming leaves it: page.html.new beside page.html, the stage and the download.
+    const upd = join(f.priv, 'update');
+    mkdirSync(join(upd, 'backup.next'), { recursive: true });
+    mkdirSync(join(upd, 'stage-dead'), { recursive: true });
+    writeFileSync(join(upd, 'stage-dead', 'f0'), 'x');
+    writeFileSync(join(upd, 'download-dead.zip'), 'x');
+    writeFileSync(join(upd, 'backup.next', 'f0'), 'old page');
+    writeFileSync(join(upd, 'backup.next', 'manifest.json'), JSON.stringify({ version: '0.1.0', files: [{ path: join(f.web, 'index.html'), saved: 'f0' }, { path: join(f.web, 'api.php'), saved: null }] }));
+    writeFileSync(join(upd, 'operation.json'), JSON.stringify({ op: 'install', started: 1 }));
+    writeFileSync(join(f.web, 'index.html.new'), 'half a new pa');
+    writeFileSync(join(f.web, 'api.php.new'), '<?php half');
+    assert.equal(run('echo update_rollback($priv);', f.priv, f.web).out, '0.1.0');
+    assert.ok(!existsSync(join(f.web, 'index.html.new')) && !existsSync(join(f.web, 'api.php.new')), 'no .new copies left in the web root');
+    assert.deepEqual(readdirSync(upd).filter(n => n.startsWith('stage-') || n.startsWith('download-')), [], 'no stage or download left');
+    assert.equal(readFileSync(join(f.web, 'index.html'), 'utf8'), 'old page');
+  } finally {
+    rmSync(f.base, { recursive: true, force: true });
+  }
+});
+
 test('a Go back that cannot put a file back says so and keeps the backup to try again', { skip: noPhp }, () => {
   const f = folders();
   try {

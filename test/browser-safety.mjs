@@ -3,9 +3,9 @@
 // be reached) lets no PIN through and survives a reload; and a storage.json that cannot be read stops the start
 // instead of opening an empty desktop kept in the browser. Needs the dev server on a FRESH, EMPTY data folder and
 // `npm run build` done.
-//   node test/browser-safety.mjs [http://127.0.0.1:3043]
+//   node test/browser-safety.mjs [http://127.0.0.1:3043] [data folder, for the encryption-switch steps]
 import { chromium } from 'playwright-core';
-import { writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
 
@@ -245,6 +245,108 @@ await step('a storage.json that cannot be read stops the start; it never opens a
   }
   await p.close();
 });
+
+// ---- Encryption switched in one tab while another keeps saving (needs the data folder: the third argument) ----------
+
+const DATA = process.argv[3] ?? '';
+const MAGIC = Buffer.from([0x00, 0x4d, 0x59, 0x49, 0x45, 0x4e, 0x43, 0x01]); // "\0MYIENC\x01", src/auth/vault.ts
+/** Every record of every person on the server's disk: how many sealed, how many plain. */
+function onDisk() {
+  const out = { sealed: 0, plain: 0 };
+  for (const user of readdirSync(join(DATA, 'users'))) {
+    const objects = join(DATA, 'users', user, 'objects');
+    if (!existsSync(objects)) continue;
+    for (const sub of readdirSync(objects)) {
+      for (const f of readdirSync(join(objects, sub))) {
+        if (f.endsWith('.tmp')) continue;
+        if (readFileSync(join(objects, sub, f)).subarray(32, 40).equals(MAGIC)) out.sealed++;
+        else out.plain++;
+      }
+    }
+  }
+  return out;
+}
+/**
+ * Tab p saves note.txt over and over until `stop` says so; a save refused because encryption moved on shows an error
+ * box, which is closed, and saving carries on (the page catches up by itself). Returns the last text saved and the
+ * refusals seen.
+ */
+async function keepSaving(p, n, stop) {
+  const area = n.locator('textarea');
+  let last = '';
+  const refused = [];
+  for (let i = 0; !stop(); i++) {
+    const text = `tab two ${i}`;
+    await area.fill(text);
+    await area.press('Control+s');
+    const outcome = await Promise.race([
+      p.locator('.toast', { hasText: 'Saved “note.txt”' }).last().waitFor({ timeout: 15000 }).then(() => 'saved'),
+      p.locator('.dialog').waitFor({ timeout: 15000 }).then(() => 'dialog'),
+    ]);
+    if (outcome === 'dialog') {
+      refused.push((await p.locator('.dialog').innerText()).replace(/\s+/g, ' ').slice(0, 160));
+      await p.locator('.dialog button').first().click();
+    } else last = text;
+    await p.locator('.toast').evaluateAll(ts => ts.forEach(t => t.remove())).catch(() => undefined);
+    await p.waitForTimeout(250);
+  }
+  return { last, refused };
+}
+
+for (const [direction, words] of [['off', 'no longer encrypted'], ['on', 'All your files are encrypted']]) {
+  await step(`turning encryption ${direction} in one tab while another keeps saving: its saves carry on, and the server ends with ${direction === 'off' ? 'nothing sealed' : 'nothing readable'}`, async () => {
+    ok(DATA && existsSync(DATA), 'the data folder is the third argument');
+    await closeAll(page);
+    const other = await context.newPage();
+    await other.goto(BASE);
+    await other.locator('#desktop .item').first().waitFor({ timeout: 20000 });
+    const n = await openNote(other);
+    let stopped = false;
+    const saving = keepSaving(other, n, () => stopped);
+
+    await openApp(page, 'my account');
+    const w = page.locator('.win', { has: page.locator('.account') });
+    await w.locator('.acct-tab', { hasText: 'Your files' }).click();
+    if (direction === 'off') {
+      await w.getByRole('button', { name: 'Turn off encryption...' }).click();
+      await w.locator('.acct-form input[type=password]').fill(PASS);
+      await w.getByRole('button', { name: 'Turn off encryption', exact: true }).click();
+    } else {
+      await w.getByRole('button', { name: 'Encrypt my files...' }).click();
+      await w.locator('.acct-form input[type=password]').fill(PASS);
+      await w.locator('.acct-form .check-row input').check();
+      await w.getByRole('button', { name: 'Encrypt my files', exact: true }).click();
+      await w.getByRole('button', { name: 'I have kept it somewhere safe' }).click({ timeout: 30000 });
+    }
+    await page.locator('.toast', { hasText: words }).waitFor({ timeout: 60000 });
+    await page.waitForTimeout(2000);
+    stopped = true;
+    const { last, refused } = await saving;
+    // One more save once all is settled. If this tab had not saved since the switch, this is the save that hears of
+    // it: refused once ("save again in a moment"), then it goes through.
+    await n.locator('textarea').fill(`tab two final ${direction}`);
+    for (let attempt = 1; ; attempt++) {
+      await n.locator('textarea').press('Control+s');
+      const outcome = await Promise.race([
+        other.locator('.toast', { hasText: 'Saved “note.txt”' }).last().waitFor({ timeout: 15000 }).then(() => 'saved'),
+        other.locator('.dialog').waitFor({ timeout: 15000 }).then(() => 'dialog'),
+      ]);
+      if (outcome === 'saved') break;
+      refused.push((await other.locator('.dialog').innerText()).replace(/\s+/g, ' ').slice(0, 160));
+      await other.locator('.dialog button').first().click();
+      ok(attempt < 3, 'the final save kept being refused: ' + refused.at(-1));
+      await other.waitForTimeout(500);
+    }
+    await other.close();
+    await w.getByRole('button', { name: 'Close' }).click();
+    const disk = onDisk();
+    eq(direction === 'off' ? disk.sealed : disk.plain, 0, `records left ${direction === 'off' ? 'sealed' : 'readable'} (${JSON.stringify(disk)})`);
+    eq(await noteNow(), `tab two final ${direction}`, 'the last save is what the file holds');
+    ok(last !== '', 'the other tab saved while the switch ran');
+    for (const r of refused) ok(/switched on or off|encrypted, and this page does not have their key/.test(r), 'only an encryption-switch refusal was seen: ' + r);
+    console.log(`       (${direction}: other tab saved up to "${last}", ${refused.length} save(s) refused for the switch and caught up; disk ${JSON.stringify(disk)})`);
+  });
+}
 
 await step('no page errors', async () => {
   eq(problems, [], 'page errors');

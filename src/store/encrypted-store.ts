@@ -18,6 +18,11 @@ export class EncryptedStore implements Store {
   /** The file key, or null while encryption is off (or before it is opened). */
   fileKey: CryptoKey | null = null;
   state: VaultState = 'off';
+  /**
+   * Asks the server for the account's encryption now (and opens the key this browser kept). Called before a record that
+   * does not fit this page's idea of it is refused: encryption may have been switched in another tab or on another device.
+   */
+  recheck: (() => Promise<void>) | null = null;
 
   constructor(inner: ServerStore) {
     this.inner = inner;
@@ -37,6 +42,8 @@ export class EncryptedStore implements Store {
     const record = await this.inner.get(key);
     if (!record) return null;
     if (isSealed(record.data)) {
+      // Sealed, and this page has no key: encryption may have been turned on elsewhere. Catch up once before refusing.
+      if (!this.fileKey && this.recheck) await this.recheck();
       try {
         return { version: record.version, data: await unseal(this.needKey(), key, record.data) };
       } catch (error) {
@@ -45,12 +52,18 @@ export class EncryptedStore implements Store {
       }
     }
     if (this.state === 'on') {
+      // Encryption may have been turned off elsewhere since this page heard: catch up once before calling it tampering.
+      if (this.recheck) await this.recheck();
+      if (this.state !== 'on') return record;
       throw new StoreError('A file arrived from the server unencrypted although all your files are encrypted, so it was not opened: it may have been put there by someone else. Tell the owner of this desktop.');
     }
     return record;
   }
 
   async commit(ops: StoreOp[]): Promise<Record<string, string>> {
+    if (!this.sealing) return this.inner.commit(ops, false);
+    // Sealing with no key: this page caught up to an encryption switch before the key reached it. Catch up once more.
+    if (!this.fileKey && this.recheck) await this.recheck();
     if (!this.sealing) return this.inner.commit(ops, false);
     const fileKey = this.needKey();
     const sealed: StoreOp[] = [];

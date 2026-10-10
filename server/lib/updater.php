@@ -210,6 +210,10 @@ function update_restore(string $backup, ?string $priv = null): string
         if ($path === '') {
             continue;
         }
+        // A copy cut off between written and renamed (update_place) is removed: in public_html it would be served as it is.
+        if (is_file($path . '.new')) {
+            @unlink($path . '.new');
+        }
         if (($f['saved'] ?? null) === null) {
             // A file the update added: removed again (only a file: a folder standing there was never the update's).
             @unlink($path);
@@ -260,6 +264,13 @@ function update_recover(string $dir, ?string $priv = null): ?string
         }
     }
     @unlink($dir . '/operation.json');
+    // What a cut-off run left in the update folder: its unpacked files and its download.
+    foreach (glob($dir . '/stage-*', GLOB_ONLYDIR) ?: [] as $stage) {
+        update_rmdir($stage);
+    }
+    foreach (glob($dir . '/download-*.zip') ?: [] as $zip) {
+        @unlink($zip);
+    }
     update_reset_cache();
 
     return $put;
