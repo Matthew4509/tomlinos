@@ -57,9 +57,20 @@ function api_is_local(): bool
 }
 
 /** Refuses anything that is not the desktop's own page asking. */
-function api_guard(): void
+function api_guard(bool $updating = false): void
 {
     $config = api_config();
+    // While System update replaces the site's files (update/operation.json, with its lock held), every other request waits:
+    // answered now, it could run half old and half new code. update.php itself passes $updating to keep answering.
+    $op = dirname(__DIR__) . '/update/operation.json';
+    if (!$updating && is_file($op) && ($lock = @fopen(dirname($op) . '/.lock', 'c'))) {
+        $busy = !flock($lock, LOCK_SH | LOCK_NB);
+        fclose($lock);
+        if ($busy) {
+            header('Retry-After: 30');
+            api_fail(503, 'TOMLIN OS is installing an update. Try again in a minute; nothing you had open was lost.');
+        }
+    }
     if (!api_is_local() && empty($config['allow_remote'])) {
         api_fail(403, 'This desktop only answers the computer it runs on. To reach it from elsewhere, the owner turns on allow_remote in tomlinos/config.php.');
     }

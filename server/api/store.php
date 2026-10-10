@@ -21,14 +21,14 @@ $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 
 try {
     if ($method === 'GET' && ($_GET['op'] ?? '') === 'keys') {
-        api_json(['keys' => store_list_keys($dataDir)]);
+        api_json(['keys' => store_reading($dataDir, static fn (): array => store_list_keys($dataDir))]);
     }
     if ($method === 'GET') {
         $key = (string) ($_GET['key'] ?? '');
         if (!store_valid_key($key)) {
             api_fail(400, 'That is not a file-store key.');
         }
-        $record = store_get($dataDir, $key);
+        $record = store_reading($dataDir, static fn (): ?array => store_get($dataDir, $key));
         if ($record === null) {
             http_response_code(404);
             exit;
@@ -56,13 +56,34 @@ try {
         }
         $ops = store_parse_commit($raw);
         unset($raw); // the body and its parsed copy must not both be held while writing (a 50 MB file would need 150 MB)
-        $versions = store_commit($dataDir, $ops, $quota, (int) ($config['max_files'] ?? 50000));
+        // The page says whether it sealed what it sends (X-Store-Sealed). Checked under the store lock against the account's
+        // encryption as it is now: a page left behind by a switch made elsewhere is refused, and while encryption is on (or
+        // turning on) nothing plain is taken at all, so no file can be left readable on the server.
+        $claim = $_SERVER['HTTP_X_STORE_SEALED'] ?? null;
+        $userId = $user['id'];
+        $check = static function (array $final) use ($root, $userId, $claim): void {
+            $state = (string) (auth_users($root)[$userId]['vault']['state'] ?? 'off');
+            $sealing = store_sealing($state);
+            if ($claim !== null && ($claim === '1') !== $sealing) {
+                throw new StoreVaultChanged();
+            }
+            if ($sealing) {
+                foreach ($final as $o) {
+                    if ($o['op'] === STORE_OP_PUT && !store_is_sealed($o['data'])) {
+                        throw new StoreVaultChanged();
+                    }
+                }
+            }
+        };
+        $versions = store_commit($dataDir, $ops, $quota, (int) ($config['max_files'] ?? 50000), $check);
         api_json(['versions' => (object) $versions]);
     }
 
     api_fail(405, 'The file store only reads records and commits changes.');
 } catch (StoreConflict $conflict) {
     api_fail(409, 'Another window or device changed these files first.', ['keys' => $conflict->keys]);
+} catch (StoreVaultChanged) {
+    api_fail(409, 'Encryption of your files was switched on or off in another window or on another device, so this was not saved. This page is catching up now: save again in a moment.', ['vault' => true]);
 } catch (StoreFileLimit $many) {
     api_fail(507, sprintf('You have %s files and folders, the most this desktop keeps for one person (%s). Empty the Recycle Bin or delete files you no longer need, then try again.', number_format($many->count), number_format($many->max)), ['quota' => true]);
 } catch (StoreQuota $full) {

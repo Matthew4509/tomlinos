@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FileSystem } from '../src/fs/fs.ts';
 import { ServerStore } from '../src/store/server-store.ts';
-import { PHP } from './php-bin.ts';
+import { PHP, portFree } from './php-bin.ts';
 
 const PORT = 3099;
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -24,6 +24,7 @@ function objectCount(): number {
 }
 
 before(async () => {
+  await portFree(PORT);
   php = spawn(PHP, ['-S', `127.0.0.1:${PORT}`, '-t', 'public', 'server/dev-router.php'], {
     env: { ...process.env, DESKTOP_DATA_DIR: root },
     stdio: 'ignore',
@@ -94,7 +95,7 @@ test('deleting leaves no records behind on the server', async () => {
   assert.equal(objectCount(), start);
 });
 
-test('a commit cut off half-way is finished by the next one', async () => {
+test('a commit cut off half-way is finished before anything reads (or writes) again', async () => {
   const { mkdirSync, writeFileSync } = await import('node:fs');
   const key = 'abcdef12-3456-4789-8abc-def012345678';
   const dir = join(data, 'objects', 'ab');
@@ -103,8 +104,8 @@ test('a commit cut off half-way is finished by the next one', async () => {
   writeFileSync(tmp, 'f'.repeat(32) + 'recovered');
   writeFileSync(join(data, '.journal'), JSON.stringify([[tmp, join(dir, key)]]));
   const store = new ServerStore(API);
-  assert.equal(await store.get(key), null, 'not visible until the journal is replayed');
+  assert.equal(new TextDecoder().decode((await store.get(key))!.data), 'recovered', 'the read finished the cut-off commit first');
+  assert.equal(existsSync(join(data, '.journal')), false);
   await new FileSystem(store).writeText('/Documents/trigger.txt', 'x');
   assert.equal(new TextDecoder().decode((await store.get(key))!.data), 'recovered');
-  assert.equal(existsSync(join(data, '.journal')), false);
 });

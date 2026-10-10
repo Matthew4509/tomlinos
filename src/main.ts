@@ -7,7 +7,7 @@ import { AuthApi, type AuthStatus, type PublicUser } from './auth/api.ts';
 import { forgetMemoryPasswords } from './apps/mail/account.ts';
 import { FilesVault } from './auth/files.ts';
 import { chooseEncryption, openFilesScreen, showRecoveryKey, signIn, unlockFirst } from './auth/gate.ts';
-import { forgetKeys } from './auth/vault.ts';
+import { forgetKeys, lockPending, markLockPending } from './auth/vault.ts';
 import { h } from './core/dom.ts';
 import { fitAboveKeyboard } from './core/keyboard.ts';
 import { startDesktop } from './shell/shell.ts';
@@ -20,19 +20,28 @@ import type { Store } from './store/store.ts';
 /** Only a path on this same site is accepted, so a config file cannot point the desktop at another host. */
 const samePath = (value: unknown): value is string => typeof value === 'string' && /^\/[A-Za-z0-9._\/-]*$/.test(value) && !value.includes('//') && !value.includes('..');
 
+/**
+ * Where the files are kept, as storage.json says (every build writes one: "server" on a server, "browser" for a copy kept
+ * in this browser). A file that cannot be read or says neither stops the start with the reason: guessing "browser" would
+ * open an empty desktop on a server whose files are only out of reach, and new work would stay in this browser.
+ */
 async function chooseStore(): Promise<{ store: Store; auth: string | null }> {
-  let config: unknown = null;
+  const unread = (why: string) => new Error(`The desktop could not find out where your files are kept: ${why}. No desktop was opened, so nothing was saved in the wrong place.`);
+  let config: any;
   try {
     const res = await fetch('storage.json', { cache: 'no-store', credentials: 'same-origin' });
-    if (res.ok) config = await res.json();
-  } catch {
-    // No config file: a plain copy of the desktop, kept in this browser.
+    if (!res.ok) throw unread(`its settings file (storage.json) answered ${res.status}`);
+    config = await res.json().catch(() => {
+      throw unread('its settings file (storage.json) is damaged');
+    });
+  } catch (error) {
+    throw error instanceof Error && error.message.startsWith('The desktop could not') ? error : unread("the desktop's server could not be reached");
   }
-  if (config && typeof config === 'object' && (config as any).backend === 'server' && samePath((config as any).api)) {
-    const auth = (config as any).auth;
-    return { store: new ServerStore((config as any).api), auth: samePath(auth) ? auth : null };
+  if (config?.backend === 'server' && samePath(config.api)) {
+    return { store: new ServerStore(config.api), auth: samePath(config.auth) ? config.auth : null };
   }
-  return { store: await BrowserStore.open(), auth: null };
+  if (config?.backend === 'browser') return { store: await BrowserStore.open(), auth: null };
+  throw unread('its settings file (storage.json) names no place this desktop knows');
 }
 
 function fatal(root: HTMLElement, error: unknown): void {
@@ -65,6 +74,12 @@ async function boot(root: HTMLElement): Promise<void> {
   let status: AuthStatus = await api.status();
   document.getElementById('boot')?.remove();
   if (!status.signedIn) await forgetKeys();
+  // The screen was locked while the server could not be reached, and the page reloaded before the lock got through:
+  // the server locks the session now, before anything is shown.
+  if (status.signedIn && !status.locked && status.user && (await lockPending(status.user.id))) {
+    status = await api.lock();
+    await markLockPending(status.user!.id, false);
+  }
   if (status.signedIn && status.locked) {
     status = await unlockFirst(root, api, status);
     // Signed out from the lock (Sign out, or too many wrong tries): the last person's kept file key goes too.
@@ -153,6 +168,19 @@ async function boot(root: HTMLElement): Promise<void> {
   server.onAuthLost = (kind, message) => {
     if (kind === 'locked') shell?.lock.lockedByServer();
     else void account.signOut(message);
+  };
+  // Encryption was switched on or off in another window or on another device, and a save here was refused for it: take
+  // the server's word on the state and open the files with the key this browser kept (the other window keeps it), so
+  // the next save goes through. Without that key, the next save says to sign in again.
+  let catchingUp: Promise<void> | null = null;
+  server.onVaultChanged = () => {
+    catchingUp ??= (async () => {
+      const now = await api.status();
+      if (!now.signedIn || now.user?.id !== user.id) return;
+      user = now.user;
+      files.apply(await keysOf(now));
+      await files.openQuietly();
+    })().catch(() => undefined).finally(() => (catchingUp = null));
   };
   shell = await startDesktop(root, store, account);
   if (status.adopted) shell.toast('Welcome. The files that were already on this desktop are now yours.');

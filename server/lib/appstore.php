@@ -152,8 +152,29 @@ function appstore_here(string $dataDir, string $webRoot): array
 function appstore_save_here(string $dataDir, array $here): void
 {
     $file = $dataDir . '/appstore.json';
-    if (file_put_contents($file . '.new', json_encode($here, JSON_PRETTY_PRINT)) === false || !rename($file . '.new', $file)) {
+    $tmp = $file . '.' . bin2hex(random_bytes(4)) . '.tmp';
+    $text = (string) json_encode($here, JSON_PRETTY_PRINT);
+    if (@file_put_contents($tmp, $text) !== strlen($text) || !@rename($tmp, $file)) {
+        @unlink($tmp);
         throw new RuntimeException('The list of apps on this server could not be saved.');
+    }
+}
+
+/**
+ * Runs $fn holding the app store's lock: one download or delete at a time (a second waits its turn), so two never share a
+ * folder or lose each other's line in the list of apps on this server.
+ */
+function appstore_locked(string $dataDir, callable $fn): mixed
+{
+    $lock = @fopen($dataDir . '/appstore.lock', 'c');
+    if ($lock === false || !flock($lock, LOCK_EX)) {
+        throw new RuntimeException('The app store could not start (its lock file cannot be written in the data folder).');
+    }
+    try {
+        return $fn();
+    } finally {
+        flock($lock, LOCK_UN);
+        fclose($lock);
     }
 }
 
@@ -196,6 +217,11 @@ function appstore_fetch_zip(array $app, string $to): void
 /** Downloads, checks and unpacks one app onto this server (new, or a newer version). Returns its record. */
 function appstore_download(array $app, string $dataDir, string $webRoot): array
 {
+    return appstore_locked($dataDir, static fn (): array => appstore_download_locked($app, $dataDir, $webRoot));
+}
+
+function appstore_download_locked(array $app, string $dataDir, string $webRoot): array
+{
     foreach (['zip' => 'zip (opens the app)', 'openssl' => 'openssl (secure downloads)'] as $ext => $why) {
         if (!extension_loaded($ext)) {
             throw new RuntimeException("The PHP extension $why is off on this server. The owner can switch it on in the host's PHP settings.");
@@ -207,77 +233,122 @@ function appstore_download(array $app, string $dataDir, string $webRoot): array
     }
     // Belt and braces: whatever is in apps/, no script runs there and nothing hidden is served.
     @file_put_contents($apps . '/.htaccess', "Options -Indexes -ExecCGI\nRemoveHandler .php .phtml .phar .cgi .pl .py\n<FilesMatch \"(?i)(\\.(php\\d*|phtml|phar|cgi|pl|py|sh)$|^\\.)\">\n  Require all denied\n</FilesMatch>\n");
-    $zipPath = $dataDir . '/appstore-download.zip';
-    appstore_fetch_zip($app, $zipPath);
-    $zip = new ZipArchive();
-    if ($zip->open($zipPath) !== true) {
-        @unlink($zipPath);
-        throw new RuntimeException('"' . $app['title'] . '" could not be opened. Nothing was changed.');
-    }
-    // Read and check everything first: a zip that fails part way changes nothing.
-    $files = [];
-    $total = 0;
-    for ($i = 0; $i < $zip->numFiles; $i++) {
-        $name = (string) $zip->getNameIndex($i);
-        if (str_ends_with($name, '/')) {
-            continue;
-        }
-        if (!appstore_allowed_name($name)) {
-            $zip->close();
-            @unlink($zipPath);
-            throw new RuntimeException('"' . $app['title'] . '" holds a file that is not allowed in an app (' . appstore_cut($name, 80) . '). Nothing was changed.');
-        }
-        $bytes = $zip->getFromIndex($i);
-        $total += $bytes === false ? 0 : strlen($bytes);
-        if ($bytes === false || count($files) >= APPSTORE_MAX_FILES || $total > APPSTORE_MAX_UNPACKED) {
-            $zip->close();
-            @unlink($zipPath);
-            throw new RuntimeException('"' . $app['title'] . '" could not be read, or is far bigger than an app may be. Nothing was changed.');
-        }
-        $files[$name] = $bytes;
-    }
-    $zip->close();
-    @unlink($zipPath);
-    if (!isset($files['index.html'])) {
-        throw new RuntimeException('"' . $app['title'] . '" has no index.html, so it cannot open. Nothing was changed.');
-    }
+    $zipPath = $dataDir . '/appstore-download-' . bin2hex(random_bytes(4)) . '.zip';
     $final = "$apps/{$app['id']}";
     $fresh = "$final.new";
     $old = "$final.old";
-    appstore_rmdir($fresh);
-    foreach ($files as $name => $bytes) {
-        $target = "$fresh/$name";
-        if ((!is_dir(dirname($target)) && !@mkdir(dirname($target), 0755, true)) || file_put_contents($target, $bytes) === false) {
-            appstore_rmdir($fresh);
-            throw new RuntimeException('"' . $app['title'] . '" could not be written on this server. Nothing was changed.');
-        }
+    try {
+        appstore_fetch_zip($app, $zipPath);
+        appstore_unpack($app, $zipPath, $fresh);
+    } finally {
+        @unlink($zipPath);
     }
+    // Into place: the old copy is moved aside, not deleted, until the list of apps on this server is saved too.
     appstore_rmdir($old);
-    if (is_dir($final) && !rename($final, $old)) {
+    if (is_dir($final) && !@rename($final, $old)) {
         appstore_rmdir($fresh);
         throw new RuntimeException('The old copy of "' . $app['title'] . '" could not be moved aside. Nothing was changed.');
     }
-    if (!rename($fresh, $final)) {
+    if (!@rename($fresh, $final)) {
+        appstore_rmdir($fresh);
         if (is_dir($old)) {
-            rename($old, $final);
+            @rename($old, $final);
         }
         throw new RuntimeException('"' . $app['title'] . '" could not be put in place. Nothing was changed.');
     }
-    appstore_rmdir($old);
     $here = appstore_here($dataDir, $webRoot);
     $here[$app['id']] = ['id' => $app['id'], 'title' => $app['title'], 'icon' => $app['icon'], 'kind' => $app['kind'], 'version' => $app['version'], 'size' => $app['size']];
-    appstore_save_here($dataDir, $here);
+    try {
+        appstore_save_here($dataDir, $here);
+    } catch (RuntimeException $e) {
+        // The list still names the old copy (or none): the folders go back to match it.
+        @rename($final, $fresh);
+        if (is_dir($old)) {
+            @rename($old, $final);
+        }
+        appstore_rmdir($fresh);
+        throw new RuntimeException('"' . $app['title'] . '" could not be added to the list of apps on this server, so the copy that was there before was kept. Nothing was changed.');
+    }
+    appstore_rmdir($old);
 
     return $here[$app['id']];
+}
+
+/**
+ * Checks an app's zip from its own list of files (names, how many, how big), then unpacks it into $to a piece at a time,
+ * each file checked against the size the zip states, so a zip that claims little and holds a lot cannot fill memory or
+ * disk. A zip that fails part way leaves nothing behind.
+ */
+function appstore_unpack(array $app, string $zipPath, string $to): void
+{
+    $zip = new ZipArchive();
+    if ($zip->open($zipPath) !== true) {
+        throw new RuntimeException('"' . $app['title'] . '" could not be opened. Nothing was changed.');
+    }
+    try {
+        $plan = [];
+        $total = 0;
+        for ($i = 0; $i < $zip->numFiles; $i++) {
+            $stat = $zip->statIndex($i);
+            $name = $stat === false ? '' : (string) $stat['name'];
+            if ($stat !== false && str_ends_with($name, '/')) {
+                continue;
+            }
+            if (!appstore_allowed_name($name)) {
+                throw new RuntimeException('"' . $app['title'] . '" holds a file that is not allowed in an app (' . appstore_cut($name, 80) . '). Nothing was changed.');
+            }
+            $total += (int) $stat['size'];
+            $plan[$name] = ['index' => $i, 'size' => (int) $stat['size']];
+            if (count($plan) > APPSTORE_MAX_FILES || $total > APPSTORE_MAX_UNPACKED) {
+                throw new RuntimeException('"' . $app['title'] . '" is far bigger than an app may be. Nothing was changed.');
+            }
+        }
+        if (!isset($plan['index.html'])) {
+            throw new RuntimeException('"' . $app['title'] . '" has no index.html, so it cannot open. Nothing was changed.');
+        }
+        appstore_rmdir($to);
+        foreach ($plan as $name => $p) {
+            $target = "$to/$name";
+            $in = (!is_dir(dirname($target)) && !@mkdir(dirname($target), 0755, true)) ? false
+                : (method_exists($zip, 'getStreamIndex') ? $zip->getStreamIndex($p['index']) : $zip->getStream($name));
+            $out = $in === false ? false : @fopen($target, 'wb');
+            $n = $out === false ? false : stream_copy_to_stream($in, $out, $p['size'] + 1);
+            if (is_resource($in)) {
+                fclose($in);
+            }
+            if ($out !== false) {
+                fclose($out);
+            }
+            if ($n !== $p['size']) {
+                appstore_rmdir($to);
+                throw new RuntimeException('"' . $app['title'] . '" could not be read, or written on this server. Nothing was changed.');
+            }
+        }
+    } finally {
+        $zip->close();
+    }
 }
 
 /** Deletes an app from this server. People who had added it simply no longer see it. */
 function appstore_delete(string $id, string $dataDir, string $webRoot): void
 {
-    $here = appstore_here($dataDir, $webRoot);
-    appstore_rmdir("$webRoot/apps/$id");
-    unset($here[$id]);
-    appstore_save_here($dataDir, $here);
+    appstore_locked($dataDir, static function () use ($id, $dataDir, $webRoot): void {
+        $here = appstore_here($dataDir, $webRoot);
+        $folder = "$webRoot/apps/$id";
+        $going = "$folder.deleting";
+        appstore_rmdir($going);
+        if (is_dir($folder) && !@rename($folder, $going)) {
+            throw new RuntimeException('The app could not be deleted (its folder is in use). Nothing was changed. Try again.');
+        }
+        unset($here[$id]);
+        try {
+            appstore_save_here($dataDir, $here);
+        } catch (RuntimeException $e) {
+            @rename($going, $folder);
+            throw $e;
+        }
+        appstore_rmdir($going);
+    });
 }
 
 function appstore_rmdir(string $dir): void

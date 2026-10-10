@@ -3,7 +3,7 @@
 // gets only wraps it cannot open, and a proof made from the recovery key.
 import { Bus } from '../core/bus.ts';
 import type { EncryptedStore } from '../store/encrypted-store.ts';
-import type { AuthApi, PublicUser, WrapBody } from './api.ts';
+import { AuthFailure, type AuthApi, type PublicUser, type WrapBody } from './api.ts';
 import {
   forgetKeys, keepKey, lockDown, newFileKey, newRecoveryKey, recoveryParts, restoreKey, unwrapWithPassword, unwrapWithRecovery,
   wrapWithPassword, wrapWithRecovery, type VaultKeys,
@@ -138,12 +138,23 @@ export class FilesVault {
     this.apply(r.vaultKeys);
   }
 
-  /** Converts every file to the state being moved to, then tells the server it is done. */
+  /**
+   * Converts every file to the state being moved to, then tells the server it is done. The server checks every file
+   * first; one saved meanwhile by another page in the old kind is converted on another pass (a few at most).
+   */
   async finish(progress: (done: number, total: number) => void, signal?: AbortSignal): Promise<void> {
     if (!this.keys || !this.moving) return;
     const target = this.keys.state === 'migrating-on' ? 'on' : 'off';
-    await this.store.migrate(progress, signal);
-    const r = await this.api.vault(target);
+    let r: { user: PublicUser; vaultKeys: VaultKeys | null };
+    for (let pass = 1; ; pass++) {
+      await this.store.migrate(progress, signal);
+      try {
+        r = await this.api.vault(target);
+        break;
+      } catch (error) {
+        if (!(error instanceof AuthFailure && error.data.redo) || pass >= 3) throw error;
+      }
+    }
     this.setUser(r.user);
     this.apply(r.vaultKeys);
     if (target === 'off') await forgetKeys();

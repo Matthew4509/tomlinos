@@ -292,7 +292,7 @@ export function agentPane(app: AppHandle): { el: HTMLElement; shown: (want?: Clo
   /** Reads the person's choices fresh (Settings may have changed them), changes one, and keeps them. */
   async function changePrefs(change: (p: AiPrefs) => AiPrefs): Promise<boolean> {
     try {
-      prefs = change(await readPrefs(shell.fs));
+      prefs = change(await readPrefs(shell.fs, true));
       await writePrefs(shell.fs, prefs);
       return true;
     } catch (error) {

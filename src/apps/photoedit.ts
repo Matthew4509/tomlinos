@@ -11,7 +11,7 @@ import type { AppDef, AppHandle } from '../shell/types.ts';
 import { mediaTypeOf } from './media.ts';
 import { pictureTooBig } from '../core/imagesize.ts';
 import { APPS } from './catalog.ts';
-import { okToReplace } from '../shell/savefile.ts';
+import { saveOver } from '../shell/savefile.ts';
 import {
   BLUR, brightnessContrast, convolve3, crop, flip, floodFill, greyscale, hexToRgba, invert, keepShape, rgbToHex, rotate90,
   saturation, sepia, SHARPEN, type Pixels,
@@ -43,8 +43,10 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
   const shell = app.shell;
   app.root.classList.add('pe');
   let path: string | null = null;
-  let modified = 0;
+  let loadedId = '';
   let dirty = false;
+  /** Counts changes, so a change made while a save is on its way stays marked unsaved. */
+  let edits = 0;
   let zoom = 1;
   let tool: Tool = 'brush';
   const undo: ImageData[] = [];
@@ -156,6 +158,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     redo.length = 0;
     while (undo.length > 1 && bytes(undo) > HISTORY_BYTES) undo.shift();
     dirty = true;
+    edits++;
     refresh();
   }
   function restore(from: ImageData[], to: ImageData[]) {
@@ -165,6 +168,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     setSize(img.width, img.height);
     ctx.putImageData(img, 0, 0);
     dirty = true;
+    edits++;
     paintZoom();
   }
   function setSize(w: number, hgt: number) {
@@ -254,7 +258,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       ctx.drawImage(img, 0, 0, w, hgt);
       if ('close' in img && typeof img.close === 'function') img.close();
       path = p;
-      modified = entry.modified;
+      loadedId = entry.id;
       dirty = false;
       undo.length = redo.length = 0;
       fit();
@@ -296,16 +300,21 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       replace = !!(await shell.fs.stat(dest).catch(() => null));
       if (replace && !(await shell.dialogs.confirm({ title: 'Replace it?', text: `“${baseName(dest)}” already exists. Replace it?`, ok: 'Replace', danger: true }))) return false;
     }
-    return write(dest, replace);
+    return write(dest, replace ? 'any' : 'new');
   }
 
-  async function write(dest: string, replace: boolean): Promise<boolean> {
+  /** `how`: 'new' = the name must be free; 'any' = replace whatever is there; 'opened' = replace only the copy opened. */
+  async function write(dest: string, how: 'new' | 'any' | 'opened'): Promise<boolean> {
     try {
+      const before = edits;
       const data = await encode(extensionOf(dest));
-      const entry = await shell.fs.writeFile(dest, data, replace ? {} : { mustBeNew: true });
+      const entry = how === 'opened'
+        ? await saveOver(shell, dest, data, loadedId)
+        : await shell.fs.writeFile(dest, data, how === 'new' ? { mustBeNew: true } : {});
+      if (!entry) return false;
       path = dest;
-      modified = entry.modified;
-      dirty = false;
+      loadedId = entry.id;
+      if (edits === before) dirty = false;
       refresh();
       shell.toast(`Saved “${entry.name}” (${formatSize(entry.size)}).`);
       return true;
@@ -320,8 +329,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       if (path) await shell.dialogs.alert('Saved as a new file', `Photo Editor saves PNG, JPEG and WebP. “${baseName(path)}” stays as it is; choose a name for the edited copy.`);
       return saveAs();
     }
-    if (!(await okToReplace(shell, path, modified))) return false;
-    return write(path, true);
+    return write(path, 'opened');
   }
 
   async function guard(): Promise<boolean> {

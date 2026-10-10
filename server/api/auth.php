@@ -13,6 +13,7 @@ declare(strict_types=1);
 require __DIR__ . '/../lib/http.php';
 require __DIR__ . '/../lib/auth.php';
 require __DIR__ . '/../lib/captcha.php';
+require __DIR__ . '/../lib/store.php';
 
 api_headers();
 api_guard();
@@ -522,15 +523,31 @@ try {
                 $vault = auth_vault_keys($body) + ['wrapRk' => auth_wrap_rk($body), 'stale' => false];
                 $rkey = auth_rkey_hash($dataDir, body_str($body, 'rkAuth'));
             }
-            $user = update_user($dataDir, $user['id'], static function (array $u) use ($to, $vault, $rkey): array {
-                $u['vault'] = $to === 'off' ? null : ['state' => $to] + $vault;
-                if ($rkey !== null) {
-                    $u['rkey'] = $rkey;
-                    $u['rkeyMade'] = time();
+            // Under the store's lock: no save is part-way through while the state changes, so every later save is checked
+            // against the new state (store.php). Finishing is refused while any file is still the old kind (one saved by
+            // another page during the change), and the key is kept until then.
+            $id = $user['id'];
+            [$wrong, $user] = store_locked(auth_user_store($dataDir, $id), static function () use ($dataDir, $id, $to, $vault, $rkey): array {
+                if ($to === 'on' || $to === 'off') {
+                    $wrong = store_count_unconverted(auth_user_store($dataDir, $id), $to === 'on');
+                    if ($wrong > 0) {
+                        return [$wrong, null];
+                    }
                 }
 
-                return $u;
+                return [0, update_user($dataDir, $id, static function (array $u) use ($to, $vault, $rkey): array {
+                    $u['vault'] = $to === 'off' ? null : ['state' => $to] + $vault;
+                    if ($rkey !== null) {
+                        $u['rkey'] = $rkey;
+                        $u['rkeyMade'] = time();
+                    }
+
+                    return $u;
+                })];
             });
+            if ($user === null) {
+                api_fail(409, sprintf('%s still %s (saved in another window or on another device while this ran). They are being converted again.', $wrong === 1 ? 'One file is' : "$wrong files are", $to === 'on' ? 'not encrypted' : 'encrypted'), ['redo' => $wrong]);
+            }
             $words = ['migrating-on' => 'Encrypting files started', 'on' => 'Files encrypted', 'migrating-off' => 'Decrypting files started', 'off' => 'Files decrypted (encryption off)'];
             auth_history_add($dataDir, $user['id'], $words[$to]);
             api_json(['ok' => true, 'user' => auth_public_user($user), 'vaultKeys' => auth_vault_for_owner($user)]);
@@ -586,7 +603,8 @@ try {
             }
             $store = auth_user_store($dataDir, $user['id']);
             $aside = $store . '/locked-' . date('Ymd-His');
-            if (is_dir($store . '/objects') && !@rename($store . '/objects', $aside)) {
+            // Under the store's lock, so a save part-way through finishes before (and never lands half in) the files set aside.
+            if (!store_locked($store, static fn (): bool => !is_dir($store . '/objects') || @rename($store . '/objects', $aside))) {
                 api_fail(500, 'The encrypted files could not be moved aside, so nothing was changed. Try again.');
             }
             // Both totals describe the files just set aside: the empty store starts from nothing (worked out again).

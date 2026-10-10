@@ -200,7 +200,7 @@ try {
 function mail_search_literal(Imap $imap, string $words): array
 {
     $uids = [];
-    foreach ($imap->cmd('UID SEARCH CHARSET UTF-8 TEXT {' . strlen($words) . '}', [$words]) as $r) {
+    foreach ($imap->cmd('UID SEARCH CHARSET UTF-8 UNDELETED TEXT {' . strlen($words) . '}', [$words]) as $r) {
         if (preg_match('/^SEARCH\s*(.*)$/i', $r['text'], $m)) {
             foreach (preg_split('/\s+/', trim($m[1])) as $u) {
                 if (ctype_digit($u)) {

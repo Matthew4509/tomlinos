@@ -6,16 +6,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PHP, extFlags, hasPhp } from './php-bin.ts';
+import { tempDir } from './tmp.ts';
 
 const root = join(import.meta.dirname, '..');
 const ext = extFlags('openssl');
 
 function php(body: string): Record<string, any> {
-  const dir = mkdtempSync(join(tmpdir(), 'tomlinos-ai-'));
+  const dir = tempDir('tomlinos-ai-');
   const file = join(dir, 't.php');
   writeFileSync(file, `<?php
 require ${JSON.stringify(join(root, 'server/lib/http.php'))};

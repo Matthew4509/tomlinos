@@ -3,9 +3,9 @@
 //   node test/browser.mjs [http://localhost:3042]
 import { chromium } from 'playwright-core';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tempDir } from './tmp.ts';
 
 const BASE = process.argv[2] ?? 'http://localhost:3042';
 const CHROME = process.env.CHROME_PATH ?? 'C:/Program Files/Google/Chrome/Application/chrome.exe';
@@ -587,7 +587,7 @@ await step('Power (Reload) reloads and keeps every file', async () => {
 
 await step('Explorer: upload a whole folder from the computer, keeping its shape; a second upload never overwrites', async () => {
   await closeAll();
-  const root = mkdtempSync(join(tmpdir(), 'tomlinos-up-'));
+  const root = tempDir('tomlinos-up-');
   const top = join(root, 'Holiday ' + stamp);
   mkdirSync(join(top, 'day1'), { recursive: true });
   writeFileSync(join(top, 'a.txt'), 'alpha');
@@ -647,7 +647,7 @@ await step('Explorer: Download gives a file as it is, and a folder as a valid zi
   await w.getByRole('button', { name: 'Download' }).click();
   const download = await dl;
   eq(download.suggestedFilename(), 'Holiday ' + stamp + ' (2).zip', 'zip name');
-  const zipPath = join(mkdtempSync(join(tmpdir(), 'tomlinos-dl-')), 'x.zip');
+  const zipPath = join(tempDir('tomlinos-dl-'), 'x.zip');
   await download.saveAs(zipPath);
   const run = spawnSync('python', ['-c', 'import zipfile,sys,json;z=zipfile.ZipFile(sys.argv[1]);assert z.testzip() is None;print(json.dumps(sorted(z.namelist())))', zipPath], { encoding: 'utf8' });
   eq(run.status, 0, 'python read the zip: ' + run.stderr);
@@ -660,14 +660,14 @@ await step('Explorer: Download gives a file as it is, and a folder as a valid zi
   await w.getByRole('button', { name: 'Download' }).click();
   const one = await dl2;
   eq(one.suggestedFilename(), 'a.txt', 'plain name');
-  const path2 = join(mkdtempSync(join(tmpdir(), 'tomlinos-dl-')), 'a.txt');
+  const path2 = join(tempDir('tomlinos-dl-'), 'a.txt');
   await one.saveAs(path2);
   eq(readFileSync(path2, 'utf8'), 'alpha', 'bytes');
 });
 
 await step('Explorer: Cancel stops an upload part-way and says what was saved', async () => {
   const w = fw();
-  const dir = mkdtempSync(join(tmpdir(), 'tomlinos-many-'));
+  const dir = tempDir('tomlinos-many-');
   for (let i = 0; i < 400; i++) writeFileSync(join(dir, `f${String(i).padStart(3, '0')}.txt`), 'x'.repeat(50));
   const files = [];
   for (let i = 0; i < 400; i++) files.push(join(dir, `f${String(i).padStart(3, '0')}.txt`));
@@ -684,7 +684,7 @@ await step('Explorer: Cancel stops an upload part-way and says what was saved', 
 });
 
 // ---- Apps: PDF viewer, text editor, pictures, player --------------------------------------------------------------
-const appDir = mkdtempSync(join(tmpdir(), 'tomlinos-apps-'));
+const appDir = tempDir('tomlinos-apps-');
 async function makeFiles() {
   // A real PDF, written by Chrome itself (embedded fonts, compressed streams, an image, two pages).
   const gen = await context.newPage();

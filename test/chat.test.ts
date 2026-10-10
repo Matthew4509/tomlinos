@@ -10,7 +10,7 @@ import {
   b64, directKey, generalCode, keysFromJwk, newGeneralKey, newKeys, openMessage, safetyCode, sealMessage, unb64, unwrapGeneral, wrapGeneral,
 } from '../src/apps/chat/crypto.ts';
 import { dmId } from '../src/apps/chat/session.ts';
-import { PHP } from './php-bin.ts';
+import { PHP, portFree } from './php-bin.ts';
 
 // ---- The encryption ------------------------------------------------------------------------------------------------
 
@@ -97,6 +97,7 @@ async function auth(op: string, body: unknown, cookie = ''): Promise<{ cookie: s
 }
 
 before(async () => {
+  await portFree(PORT);
   php = spawn(PHP, ['-S', `127.0.0.1:${PORT}`, '-t', 'public', 'server/dev-router.php'], { env: { ...process.env, DESKTOP_DATA_DIR: root }, stdio: 'ignore' });
   let up = false;
   for (let i = 0; i < 50 && !up; i++) {

@@ -14,7 +14,9 @@ desktop: they are saved on your server.
   photos and a photo editor, a PDF viewer, a media player, archives (zip), and a recycle bin.
 - **Everyday tools:** Mail (IMAP/SMTP, from your server), Calendar, Contacts, Calculator, Terminal, Task Manager,
   Shortcuts, and a Panel with today's events and a scratch pad.
-- **Chat:** encrypted end to end between the accounts on your own server, with safety codes to check keys. You can
+- **Chat:** between the accounts on your own server, sealed in the browser (end to end when everyone in the
+  conversation has file encryption on; what that does and does not cover is under Security), with safety codes to check
+  keys. You can
   delete your own messages (for everyone); the owner can clear General and choose, in Settings, whether messages vanish
   after 3, 7 or 30 days. Each person can also have their AI chats cleared after 3, 7 or 30 days.
 - **AI:** Qwen 3.5 0.8B (the default), Gemma 2 2B or Qwen 3.5 4B run in the browser
@@ -40,6 +42,14 @@ desktop: they are saved on your server.
 - Chat is end to end only when everyone in a conversation has file encryption on (the app says which). Mail
   passwords and the chat key are stored as plain files unless file encryption is on. The owner account can reset
   other people's passwords, which opens their files unless those files are encrypted.
+- What chat's encryption does not do, so you can judge it: a direct chat's key is worked out from the two people's
+  long-term keys (ECDH P-256) and does not change from message to message, so someone who later gets one of those keys
+  can open the earlier messages still kept. General has one key shared by everyone in it: a person added later is given
+  that key and can read the General messages still kept from before they joined, and switching an account off stops it
+  reaching the server but does not take back the key its browser already has (Clear General removes the messages; the
+  key stays). The server checks who sends each message; the encryption alone does not prove the sender to someone who
+  holds the same key. It suits a family or a small team on a server they trust; it is not a replacement for a
+  messenger like Signal where the server itself must not be trusted.
 - Anyone not signed in sees only a book reader (Sherlock Holmes) with a small Log in link, and the screensaver shows
   the same; the owner can choose the plain sign-in instead. Every page asks search engines not to list it.
 - The first visit to a new install asks for a set-up code read from the server's own files, so a stranger who finds
@@ -97,6 +107,18 @@ root, and leave `tomlinos/` where it is, beside the web root. Then follow steps 
 
 `INSTALL.txt` in the zip has the full notes (updating, AI models, a forgotten owner password). Do not put the site
 behind a proxy or "Flexible SSL" CDN: the server must see each visitor's real address and a real HTTPS connection.
+
+### Backups and restoring
+
+Everything that is yours is in `tomlinos/data/` (files, accounts, chat) and `tomlinos/config.php`. Saved AI models
+(`tomlinos/models/`) can be fetched again, so they need no backup. Back up those two with cPanel's Backup, or File
+Manager > Compress. To restore, put them back where they were, then run `php tomlinos/tools/store-check.php` in cPanel >
+Terminal: it says whether each person's files hang together. With `--repair` it also finishes a save that was cut
+off and corrects the totals; it never deletes a file. Encrypted files open again only with the password or recovery
+key that opened them before.
+
+System update keeps the version from before the last update: Application manager > Updates > Go back, or, if the
+desktop will not open, `php tomlinos/tools/rollback-update.php` in cPanel > Terminal.
 
 ## Build from source
 

@@ -2,18 +2,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { crc32, zipStore } from '../src/core/zip.ts';
 import { planUpload } from '../src/shell/transfer.ts';
+import { tempDir } from './tmp.ts';
 
 test('crc32 matches the standard check value', () => {
   assert.equal(crc32(new TextEncoder().encode('123456789')), 0xcbf43926);
 });
 
 test('a zip we write is a valid zip with the right files, folders and bytes', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'zip-'));
+  const dir = tempDir('zip-');
   const path = join(dir, 't.zip');
   const enc = new TextEncoder();
   writeFileSync(path, zipStore([

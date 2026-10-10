@@ -1,7 +1,7 @@
 // Which store apps (server/lib/appstore.php) this person has added to their desktop: a short list in their own files, so
 // it follows them to every device and never changes anyone else's desktop. A missing or damaged list means none. An
 // app on the list that is not on this server (deleted by the owner) is simply not shown.
-import type { FileSystem } from '../fs/fs.ts';
+import { FsError, type FileSystem } from '../fs/fs.ts';
 
 export const INSTALLED_PATH = '/System/apps.json';
 
@@ -15,9 +15,20 @@ export function cleanInstalled(raw: unknown): string[] {
   return [...new Set(list.filter(isStoreId))];
 }
 
-export async function readInstalled(fs: FileSystem): Promise<string[]> {
+/**
+ * `strict` (before changing the list): a list that is there but could not be read (the server out of reach, say) throws,
+ * so the change is not saved over it. Otherwise it reads as none, for showing.
+ */
+export async function readInstalled(fs: FileSystem, strict = false): Promise<string[]> {
+  let text: string;
   try {
-    return cleanInstalled(JSON.parse(await fs.readText(INSTALLED_PATH)));
+    text = await fs.readText(INSTALLED_PATH);
+  } catch (error) {
+    if (strict && !(error instanceof FsError)) throw error;
+    return [];
+  }
+  try {
+    return cleanInstalled(JSON.parse(text));
   } catch {
     return [];
   }

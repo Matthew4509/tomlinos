@@ -6,9 +6,9 @@
 import { chromium } from 'playwright-core';
 import { HIDDEN_APPS } from '../src/release.ts';
 import { etaFor } from '../public/office-printer/js/engine.js';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tempDir } from './tmp.ts';
 
 const BASE = process.argv[2] ?? 'http://127.0.0.1:3043';
 const SHOTS = process.argv[3] ?? null;
@@ -505,7 +505,7 @@ await step('Ctrl+P with nothing open: the printer answers about its own report',
 });
 
 await step('Ctrl+P in Notepad prints that file: the Dot Matrix takes the plain text', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'tomlinos-printer-'));
+  const dir = tempDir('tomlinos-printer-');
   writeFileSync(join(dir, 'memo.txt'), 'Remember to buy cyan.\r\n');
   await page.keyboard.press('Control+Alt+e');
   const explorer = front();

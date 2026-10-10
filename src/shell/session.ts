@@ -2,7 +2,7 @@
 // where each app's window was last. One small JSON file in the hidden System folder. Every field is checked on the
 // way in, so a damaged or hand-edited file falls back to defaults field by field instead of breaking the desktop.
 // Nothing here lists files the person has opened: window prefs are per app, and a folder's view prefs are capped.
-import type { FileSystem } from '../fs/fs.ts';
+import { FsError, type FileSystem } from '../fs/fs.ts';
 
 export type Wallpaper = { kind: 'colour'; value: string } | { kind: 'picture'; path: string };
 /** The colour scheme: Xfce (Greybird, as Debian's Xfce ships it; the default), the blue original, olive green, silver or dark. */
@@ -217,6 +217,8 @@ export class Session {
   private timer = 0;
   private waiting = false;
   private loaded = false;
+  /** Why the settings kept could not be read at the start (not "none yet"): nothing is then saved over them. */
+  private unread: unknown = null;
   private saving: Promise<void> = Promise.resolve();
   /** Called with the reason when saving fails, so the person is told once instead of every attempt. */
   onSaveError: (error: unknown) => void = () => {};
@@ -226,11 +228,15 @@ export class Session {
   }
 
   async load(): Promise<void> {
+    this.data = defaultSession();
+    this.unread = null;
     try {
+      // A damaged file starts from the defaults too, and the next save replaces it.
       this.data = parseSession(JSON.parse(await this.fs.readText(SESSION_PATH)));
-    } catch {
-      // No file yet, or one we cannot read: start from the defaults. The next save replaces it.
-      this.data = defaultSession();
+    } catch (error) {
+      // None yet: the defaults, kept on the first change. One that is there but could not be read (the server out of
+      // reach, say): the defaults for this page only, never saved over the person's real settings.
+      if (!(error instanceof FsError) && !(error instanceof SyntaxError)) this.unread = error;
     }
     this.loaded = true;
   }
@@ -252,6 +258,13 @@ export class Session {
     clearTimeout(this.timer);
     this.waiting = false;
     if (!this.loaded) return this.saving;
+    if (this.unread) {
+      const reason = this.unread instanceof Error ? ` (${this.unread.message})` : '';
+      this.unread = null;
+      this.loaded = false;
+      this.onSaveError(new Error(`Your desktop settings could not be read when this page opened${reason}, so changes made here are not kept, rather than replace them. Reload the page to read them again.`));
+      return this.saving;
+    }
     const text = JSON.stringify(this.data);
     this.saving = this.saving
       .then(async () => {

@@ -147,7 +147,8 @@ class DesktopShell implements Shell {
 
   async setInstalled(id: string, on: boolean): Promise<void> {
     if ((on && !this.storeApps.has(id)) || this.installedApps.has(id) === on) return;
-    const next = new Set(this.installedApps);
+    // The list as kept now (another device may have changed it), read strictly: one that cannot be read is not replaced.
+    const next = new Set(await readInstalled(this.fs, true));
     if (on) next.add(id);
     else next.delete(id);
     // Saved first: if the person's files cannot be written, nothing changes on screen either.

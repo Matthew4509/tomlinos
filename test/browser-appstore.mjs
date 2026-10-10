@@ -46,7 +46,8 @@ execFileSync(process.execPath, [join(root, 'tools', 'store-publish.mjs'), 'offic
   { env: { ...process.env, TOMLINOS_RELEASE_KEY: join(work, 'key.pem') }, stdio: 'pipe' });
 const data = join(work, 'data');
 
-const server = spawn(PHP, [...extFlags('openssl', 'mbstring', 'sodium', 'zip'), '-S', `127.0.0.1:${PORT}`, '-t', join(root, 'out'), join(root, 'server', 'dev-router.php')], {
+// opcache off: with it on, PHP's own test server on Windows can crash part-way through a run (0xC0000409).
+const server = spawn(PHP, [...extFlags('openssl', 'mbstring', 'sodium', 'zip'), '-d', 'opcache.enable=0', '-S', `127.0.0.1:${PORT}`, '-t', join(root, 'out'), join(root, 'server', 'dev-router.php')], {
   cwd: root,
   env: { ...process.env, DESKTOP_DATA_DIR: data, DESKTOP_APPSTORE_DIR: storeDir, DESKTOP_APPSTORE_KEY: publicRaw },
   stdio: 'ignore',
@@ -54,6 +55,8 @@ const server = spawn(PHP, [...extFlags('openssl', 'mbstring', 'sodium', 'zip'), 
 const stop = () => {
   server.kill();
   rmSync(join(root, 'out', 'apps'), { recursive: true, force: true });
+  // The throw-away key, store and data folder go too (left behind, every run added one).
+  rmSync(work, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 };
 await new Promise(r => setTimeout(r, 1500));
 

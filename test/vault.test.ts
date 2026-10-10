@@ -4,13 +4,17 @@
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   isSealed, newFileKey, newRecoveryKey, recoveryParts, seal, unseal, unwrapWithPassword, unwrapWithRecovery, wrapWithPassword, wrapWithRecovery,
 } from '../src/auth/vault.ts';
-import { PHP } from './php-bin.ts';
+import { PHP, portFree } from './php-bin.ts';
+import { FileSystem } from '../src/fs/fs.ts';
+import { EncryptedStore } from '../src/store/encrypted-store.ts';
+import { ServerStore } from '../src/store/server-store.ts';
+import { StoreError } from '../src/store/store.ts';
 
 const PORT = 3096;
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -60,6 +64,7 @@ class Client {
 }
 
 before(async () => {
+  await portFree(PORT);
   php = spawn(PHP, ['-S', `127.0.0.1:${PORT}`, '-t', 'public', 'server/dev-router.php'], { env: { ...process.env, DESKTOP_DATA_DIR: data, DESKTOP_TEST_CAPTCHA: '1' }, stdio: 'ignore' });
   for (let i = 0; i < 50; i++) {
     try {
@@ -230,12 +235,20 @@ test('forgot password with encryption on: the recovery key reopens the files und
 test('turning encryption off moves back in order; starting again sets the locked files aside, never deletes them', async () => {
   assert.equal((await owner.call('vault', { state: 'migrating-off', password: 'wrong' })).status, 403);
   assert.equal((await owner.call('vault', { state: 'migrating-off', password: pw })).status, 200);
+  // The top folder is still sealed: "off" is refused, and the key kept, until the browser has rewritten it plain.
+  const early = await owner.call('vault', { state: 'off' });
+  assert.equal(early.status, 409, JSON.stringify(early.json));
+  assert.equal(early.json.redo, 1);
+  assert.equal((await owner.call('status')).json.vaultKeys.state, 'migrating-off', 'the key is kept');
+  assert.equal(await owner.put('/', new TextEncoder().encode('[]')), 200);
   assert.equal((await owner.call('vault', { state: 'off' })).json.vaultKeys, null);
   // Jo lost everything: start again.
   const jo = new Client();
   await jo.call('login', { name: 'jo', password: 'owner-set-password-3' });
   const joId = (await jo.call('status')).json.user.id;
-  assert.equal(await jo.put('/', new Uint8Array([1, 2, 3])), 200);
+  // Jo's encryption is on, so only a sealed record is taken (the server cannot open it, only see that it is sealed).
+  assert.equal(await jo.put('/', new Uint8Array([1, 2, 3])), 409, 'nothing plain is taken while encryption is on');
+  assert.equal(await jo.put('/', await seal(await newFileKey(), '/', new Uint8Array([1, 2, 3]))), 200);
   assert.equal((await jo.call('vault-abandon', { confirm: 'yes' })).status, 400);
   assert.equal((await jo.call('vault-abandon', { confirm: 'start again' })).status, 403, 'the password is needed');
   const fresh = await jo.call('vault-abandon', { confirm: 'start again', password: 'owner-set-password-3' });
@@ -263,4 +276,129 @@ test('the server tool resets a password and marks encrypted files for the recove
   const again = new Client();
   assert.equal((await again.call('login', { name: 'jo', password: newPass })).status, 200);
   assert.equal((await again.call('status')).json.vaultKeys.stale, true);
+});
+
+// ---- Switching encryption while another page saves ---------------------------------
+
+const sam = new Client();
+const SAM_PW = 'quarry-bramble-61';
+let samId = '';
+/** Two tabs of Sam's (the same session), each with the browser's own store classes, talking to the test server. */
+function page(): { fs: FileSystem; store: EncryptedStore } {
+  const store = new EncryptedStore(new ServerStore(`${BASE}/api/store.php`));
+  return { fs: new FileSystem(store), store };
+}
+const realFetch = globalThis.fetch;
+function asSam(): () => void {
+  globalThis.fetch = ((url: string | URL, init: RequestInit = {}) => realFetch(url, { ...init, headers: { ...(init.headers as Record<string, string>), Cookie: sam.cookie } })) as typeof fetch;
+  return () => (globalThis.fetch = realFetch);
+}
+async function rawRecords(): Promise<Map<string, Uint8Array>> {
+  const out = new Map<string, Uint8Array>();
+  for (const key of (await sam.keys()).json.keys as string[]) {
+    const res = await realFetch(`${BASE}/api/store.php?key=${encodeURIComponent(key)}`, { headers: { 'X-Desktop-Store': '1', Cookie: sam.cookie } });
+    out.set(key, new Uint8Array(await res.arrayBuffer()));
+  }
+  return out;
+}
+/** A record put straight on the server's disk, as a save cut off part-way or a stale page could have left it. */
+function plant(key: string, bytes: Uint8Array): void {
+  const dir = join(data, 'users', samId, 'objects', key.slice(0, 2));
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, key), Buffer.concat([Buffer.from('0'.repeat(32)), bytes]));
+}
+const PLANTED = '0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a';
+
+test('a page that missed encryption being turned on cannot leave a plain file behind: its save is refused, it catches up, and "on" is said only when every file is sealed', async () => {
+  assert.equal((await owner.call('user-create', { name: 'sam', next: SAM_PW, password: pw })).status, 200);
+  assert.equal((await sam.call('login', { name: 'sam', password: SAM_PW })).status, 200);
+  samId = (await sam.call('status')).json.user.id;
+  const restore = asSam();
+  try {
+    const a = page();
+    const b = page();
+    await a.fs.writeText('/Documents/old.txt', 'written before');
+    await b.fs.list('/Documents');
+
+    // Tab A turns encryption on and starts converting; tab B has not heard.
+    const key = await newFileKey();
+    const parts = await recoveryParts(newRecoveryKey());
+    const on = await sam.call('vault', { state: 'migrating-on', password: SAM_PW, ...(await wrapWithPassword(key, SAM_PW, ROUNDS)), wrapRk: await wrapWithRecovery(key, parts.kek), rkAuth: parts.auth });
+    assert.equal(on.status, 200, JSON.stringify(on.json));
+    a.store.state = 'migrating-on';
+    a.store.fileKey = key;
+    let refused: unknown = null;
+    const listKeys = a.store.inner.keys.bind(a.store.inner);
+    a.store.inner.keys = async () => {
+      const keys = await listKeys();
+      // After A took its list of records: B saves a new file, still thinking encryption is off.
+      refused = await b.fs.writeText('/Documents/new.txt', 'plaintext secret').then(() => null, e => e);
+      return keys;
+    };
+    await a.store.migrate(() => undefined);
+    assert.ok(refused instanceof StoreError && refused.status === 409 && /switched on or off/.test(refused.message), String(refused));
+
+    // B catches up (the page does this itself on that refusal) and saves again: sealed this time.
+    b.store.state = 'migrating-on';
+    b.store.fileKey = key;
+    await b.fs.writeText('/Documents/new.txt', 'plaintext secret');
+    const done = await sam.call('vault', { state: 'on' });
+    assert.equal(done.status, 200, JSON.stringify(done.json));
+    a.store.state = 'on';
+    for (const [k, bytes] of await rawRecords()) {
+      assert.ok(isSealed(bytes), `record ${k} is sealed on the server`);
+      assert.ok(!Buffer.from(bytes).toString('latin1').includes('plaintext secret'));
+    }
+    assert.equal(await a.fs.readText('/Documents/new.txt'), 'plaintext secret', 'and it opens in the encrypted desktop');
+  } finally {
+    restore();
+  }
+});
+
+test('while encryption is on, nothing plain is taken even from a page that claims nothing; a plain record found at the end blocks "on" until converted', async () => {
+  const restore = asSam();
+  try {
+    assert.equal(await sam.put(PLANTED, new TextEncoder().encode('plain, no header')), 409);
+    // Back to migrating-on with a plain record on disk (as an interrupted save could leave): "on" is refused and says how many.
+    assert.equal((await sam.call('vault', { state: 'migrating-off', password: SAM_PW })).status, 200);
+    assert.equal((await sam.call('vault', { state: 'migrating-on', password: SAM_PW })).status, 200);
+    plant(PLANTED, new TextEncoder().encode('left behind in plain'));
+    const refused = await sam.call('vault', { state: 'on' });
+    assert.equal(refused.status, 409, JSON.stringify(refused.json));
+    assert.equal(refused.json.redo, 1);
+    assert.equal((await sam.call('status')).json.vaultKeys.state, 'migrating-on');
+  } finally {
+    restore();
+  }
+});
+
+test('turning off: a page that still seals is refused, a sealed record left on disk blocks "off", and the key stays until every file is plain', async () => {
+  const restore = asSam();
+  try {
+    const status = (await sam.call('status')).json;
+    const key = await unwrapWithPassword(status.vaultKeys, SAM_PW, true);
+    // Finish turning on first (seal the planted record), then turn off.
+    const p = page();
+    p.store.state = 'migrating-on';
+    p.store.fileKey = key;
+    await p.store.migrate(() => undefined);
+    assert.equal((await sam.call('vault', { state: 'on' })).status, 200);
+    assert.equal((await sam.call('vault', { state: 'migrating-off', password: SAM_PW })).status, 200);
+    const stale = page();
+    stale.store.state = 'on';
+    stale.store.fileKey = key;
+    await assert.rejects(stale.fs.writeText('/Documents/late.txt', 'sealed by a stale page'), (e: unknown) => e instanceof StoreError && e.status === 409);
+    p.store.state = 'migrating-off';
+    await p.store.migrate(() => undefined);
+    plant(PLANTED, await seal(key, PLANTED, new TextEncoder().encode('left behind sealed')));
+    const refused = await sam.call('vault', { state: 'off' });
+    assert.equal(refused.status, 409, JSON.stringify(refused.json));
+    assert.ok((await sam.call('status')).json.vaultKeys?.wrapPw, 'the key is not thrown away while a file still needs it');
+    await p.store.migrate(() => undefined);
+    assert.equal((await sam.call('vault', { state: 'off' })).json.vaultKeys, null);
+    for (const [k, bytes] of await rawRecords()) assert.ok(!isSealed(bytes), `record ${k} is plain again`);
+    assert.equal(new TextDecoder().decode((await rawRecords()).get(PLANTED)), 'left behind sealed');
+  } finally {
+    restore();
+  }
 });

@@ -9,7 +9,7 @@
 // Saving over a file writes its bytes to a NEW record and deletes the old one in the same commit. That way the
 // folder record changes too, so two devices saving the same file are caught like any other clash.
 import { baseName, joinPath, nameKey, nameProblem, parentPath, splitPath, uniqueName } from './names.ts';
-import { FsError } from './errors.ts';
+import { FileChanged, FsError } from './errors.ts';
 import { newKey, ROOT_KEY, StoreConflict, type Store, type StoreOp } from '../store/store.ts';
 
 export interface Entry {
@@ -31,7 +31,7 @@ interface FolderRecord {
 }
 
 
-export { FsError };
+export { FileChanged, FsError };
 
 export const STANDARD_FOLDERS = ['Desktop', 'Documents', 'Pictures', 'Videos', 'Music'];
 export const SYSTEM_FOLDER = 'System';
@@ -302,8 +302,12 @@ export class FileSystem {
 
   // ---- Changing ------------------------------------------------------------------------------------------------
 
-  /** Creates the file, or replaces its contents if it exists. Returns the saved entry. */
-  async writeFile(path: string, data: Uint8Array, options: { hidden?: boolean; mustBeNew?: boolean } = {}): Promise<Entry> {
+  /**
+   * Creates the file, or replaces its contents if it exists. Returns the saved entry. With `replacing` (the id of the copy
+   * the person opened; every save makes a new id), a different copy found there at the moment of saving is not replaced:
+   * FileChanged is thrown instead. The check is part of the commit, so a save from another device in between is caught.
+   */
+  async writeFile(path: string, data: Uint8Array, options: { hidden?: boolean; mustBeNew?: boolean; replacing?: string } = {}): Promise<Entry> {
     const name = baseName(path);
     checkName(name);
     return this.change(async c => {
@@ -313,6 +317,7 @@ export class FileSystem {
       if (old && (old.kind === 'folder' || options.mustBeNew)) {
         throw new FsError(`There is already ${old.kind === 'folder' ? 'a folder' : 'a file'} called "${old.name}" here.`);
       }
+      if (old && options.replacing && old.id !== options.replacing) throw new FileChanged(old.name, old.id);
       const id = newKey();
       c.putBytes(id, data);
       const entry: Entry = { name: old?.name ?? name, id, kind: 'file', size: data.length, modified: Date.now() };

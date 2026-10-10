@@ -5,17 +5,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PHP, extFlags, hasPhp } from './php-bin.ts';
 import { filterModels } from '../src/apps/assistant/openrouter.ts';
+import { tempDir } from './tmp.ts';
 
 const root = join(import.meta.dirname, '..');
 const ext = extFlags('openssl', 'curl');
 
 function php(body: string): Record<string, any> {
-  const dir = mkdtempSync(join(tmpdir(), 'tomlinos-or-'));
+  const dir = tempDir('tomlinos-or-');
   const file = join(dir, 't.php');
   writeFileSync(file, `<?php
 require ${JSON.stringify(join(root, 'server/lib/http.php'))};

@@ -53,6 +53,8 @@ export class ServerStore implements Store {
   readonly label = "this desktop's server";
   /** Told when the server says the person is signed out (401) or the screen is locked (423), so the page can ask. */
   onAuthLost: ((kind: 'signin' | 'locked', message: string) => void) | null = null;
+  /** Told when a save was refused because encryption was switched on or off elsewhere, so the page can catch up. */
+  onVaultChanged: (() => void) | null = null;
   private api: string;
 
   constructor(api: string) {
@@ -94,21 +96,29 @@ export class ServerStore implements Store {
     return Array.isArray(keys) ? keys.filter((k: unknown): k is string => typeof k === 'string') : [];
   }
 
-  async commit(ops: StoreOp[]): Promise<Record<string, string>> {
+  /**
+   * `sealed`: whether this page sealed what it sends (the encrypting store says). The server refuses the commit if the
+   * account's encryption has moved on since this page last heard (switched in another window or on another device).
+   */
+  async commit(ops: StoreOp[], sealed?: boolean): Promise<Record<string, string>> {
     if (!ops.length) return {};
     const res = await this.send(`${this.api}?op=commit`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/octet-stream' },
+      headers: { 'Content-Type': 'application/octet-stream', ...(sealed === undefined ? {} : { 'X-Store-Sealed': sealed ? '1' : '0' }) },
       body: encodeCommit(ops) as BodyInit,
     });
     if (res.status === 409) {
-      let keys: string[] = [];
+      let body: { keys?: string[]; vault?: boolean; error?: string } = {};
       try {
-        keys = (await res.json()).keys ?? [];
+        body = await res.json();
       } catch {
         // The keys only speed up the retry; without them every cached record is re-read.
       }
-      throw new StoreConflict(keys);
+      if (body.vault) {
+        this.onVaultChanged?.();
+        throw new StoreError(body.error ?? 'Encryption of your files was switched on or off elsewhere, so this was not saved. Save again in a moment.', 409);
+      }
+      throw new StoreConflict(body.keys ?? []);
     }
     if (!res.ok) throw await this.failure(res);
     return (await res.json()).versions ?? {};

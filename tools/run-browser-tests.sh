@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs all eight browser suites, ONE AFTER ANOTHER, each against its own PHP server on a NEW empty data folder, and
+# Runs all nine browser suites, ONE AFTER ANOTHER, each against its own PHP server on a NEW empty data folder, and
 # prints a summary. Exits 1 if any suite failed or stopped before its summary line. Needs `npm run build` first.
 # (Running them all at once can overload a computer and fail steps at random; one at a time, a red result means
 # something. Takes about 20 minutes.)
@@ -12,8 +12,9 @@ export PHP_BIN="$PHP"
 # Mail and the Reader's library need openssl (and mbstring for mail headers). A portable Windows PHP has them in ext/ but not
 # switched on in its shared php.ini, and has no CA list of its own; pass both here rather than editing that php.ini.
 PHPDIR="$(dirname "$PHP")"
-PHP_FLAGS=""
-[ -f "$PHPDIR/ext/php_openssl.dll" ] && PHP_FLAGS="-d extension_dir=$PHPDIR/ext -d extension=openssl -d extension=mbstring -d extension=curl -d openssl.cafile=$PHPDIR/extras/cacert.pem"
+# opcache off: with it on, PHP's own test server on Windows can crash part-way through a run (0xC0000409).
+PHP_FLAGS="-d opcache.enable=0"
+[ -f "$PHPDIR/ext/php_openssl.dll" ] && PHP_FLAGS="-d opcache.enable=0 -d extension_dir=$PHPDIR/ext -d extension=openssl -d extension=mbstring -d extension=curl -d openssl.cafile=$PHPDIR/extras/cacert.pem"
 LOGS="$PARENT/tomlinos-browser-logs-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$LOGS"
 PORT=3043
@@ -24,7 +25,7 @@ if netstat -ano 2>/dev/null | grep -qE "[:.]$PORT +.*LISTEN"; then
   exit 2
 fi
 status=0
-for suite in desktop accounts vault features apps printer privacy aichat; do
+for suite in desktop accounts vault features apps printer privacy aichat safety; do
   DATA="$PARENT/tomlinos-test-$(date +%Y%m%d-%H%M%S)-$suite"
   mkdir -p "$DATA" "$DATA-models"
   # Model saves follow pinned versions: the stand-in for Hugging Face comes with its own pins.
@@ -52,6 +53,8 @@ for suite in desktop accounts vault features apps printer privacy aichat; do
   fi
   echo "== $suite: $summary"
   grep -E '^  FAIL|^       ' "$LOGS/$suite.txt" | head -20
+  # The data folder goes with its run (the log above is kept): left behind, every run added one.
+  rm -rf "$DATA" "$DATA-models" "$DATA-pins.json"
   sleep 1
 done
 echo "logs: $LOGS"

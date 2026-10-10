@@ -28,7 +28,7 @@ export const calculatorApp: AppDef = {
     let data: SheetData = emptySheet();
     let savedJson = JSON.stringify(data);
     let path: string | null = null;
-    let loadedModified = 0;
+    let loadedId = '';
     let selected: string | null = null;
     let building: { target: string; sum: Sum; op: Op | null } | null = null;
     let open = false;
@@ -297,10 +297,11 @@ export const calculatorApp: AppDef = {
     }
 
     // ---- Files ----
-    const encoded = () => new TextEncoder().encode(JSON.stringify(data, null, 1));
-    const markSaved = (modified: number) => {
-      loadedModified = modified;
-      savedJson = JSON.stringify(data);
+    // What a save writes, taken when the save starts: a change made while it is on its way stays unsaved.
+    const snapshot = () => ({ json: JSON.stringify(data), bytes: new TextEncoder().encode(JSON.stringify(data, null, 1)) });
+    const markSaved = (id: string, snap: { json: string }) => {
+      loadedId = id;
+      savedJson = snap.json;
       title();
     };
 
@@ -323,9 +324,10 @@ export const calculatorApp: AppDef = {
       if (name === null) return false;
       const finalName = /\.calc$/i.test(name) ? name : `${name}.calc`;
       try {
-        const entry = await shell.fs.writeFile(joinPath(folder, finalName), encoded(), { mustBeNew: true });
+        const snap = snapshot();
+        const entry = await shell.fs.writeFile(joinPath(folder, finalName), snap.bytes, { mustBeNew: true });
         path = joinPath(folder, entry.name);
-        markSaved(entry.modified);
+        markSaved(entry.id, snap);
         shell.toast(`Saved “${entry.name}”.`);
         return true;
       } catch (error) {
@@ -337,9 +339,10 @@ export const calculatorApp: AppDef = {
     async function save(): Promise<boolean> {
       if (!path) return saveAs();
       try {
-        const entry = await saveOver(shell, path, encoded(), loadedModified);
+        const snap = snapshot();
+        const entry = await saveOver(shell, path, snap.bytes, loadedId);
         if (!entry) return false;
-        markSaved(entry.modified);
+        markSaved(entry.id, snap);
         shell.toast(`Saved “${entry.name}”.`);
         return true;
       } catch (error) {
@@ -355,7 +358,7 @@ export const calculatorApp: AppDef = {
         if (entry.size > MAX_FILE) throw new SyntaxError('too big');
         data = parseSheet(new TextDecoder().decode(await shell.fs.readFile(arg)));
         path = arg;
-        loadedModified = entry.modified;
+        loadedId = entry.id;
         savedJson = JSON.stringify(data);
       } catch (error) {
         await shell.dialogs.alert('Could not open the sheet', error instanceof SyntaxError

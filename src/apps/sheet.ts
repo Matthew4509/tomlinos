@@ -28,7 +28,7 @@ export const sheetApp: AppDef = {
     app.root.classList.add('sheet');
     const wb = new Workbook();
     let path: string | null = null;
-    let loadedModified = 0;
+    let loadedId = '';
     let savedVersion = wb.version;
     let label = 'Untitled';
 
@@ -52,7 +52,7 @@ export const sheetApp: AppDef = {
             throw new SyntaxProblem('This is not a spreadsheet this app can open (it is not a saved spreadsheet).');
           }
           path = arg;
-          loadedModified = entry.modified;
+          loadedId = entry.id;
           label = name;
         }
         // An opened file starts clean, with nothing to undo.
@@ -279,10 +279,12 @@ export const sheetApp: AppDef = {
       if (!grid.commit()) return false;
       if (!path) return saveAs();
       try {
-        const entry = await saveOver(shell, path, new TextEncoder().encode(wb.serialize()), loadedModified);
+        // The version is taken with the bytes: a change made while the save is on its way stays unsaved.
+        const version = wb.version;
+        const entry = await saveOver(shell, path, new TextEncoder().encode(wb.serialize()), loadedId);
         if (!entry) return false;
-        loadedModified = entry.modified;
-        savedVersion = wb.version;
+        loadedId = entry.id;
+        savedVersion = version;
         refresh();
         shell.toast(`Saved “${entry.name}”.`);
         return true;
@@ -313,11 +315,12 @@ export const sheetApp: AppDef = {
       if (name === null) return false;
       const finalName = /\.sheet$/i.test(name) ? name : `${name}.sheet`;
       try {
+        const version = wb.version;
         const entry = await shell.fs.writeFile(joinPath(folder, finalName), new TextEncoder().encode(wb.serialize()), { mustBeNew: true });
         path = joinPath(folder, entry.name);
         label = entry.name;
-        loadedModified = entry.modified;
-        savedVersion = wb.version;
+        loadedId = entry.id;
+        savedVersion = version;
         refresh();
         shell.toast(`Saved “${entry.name}”.`);
         return true;

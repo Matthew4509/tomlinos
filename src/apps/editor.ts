@@ -19,7 +19,7 @@ export const editorApp: AppDef = {
   async launch(app, arg) {
     const shell = app.shell;
     let path: string | null = arg ?? null;
-    let loadedModified = 0;
+    let loadedId = '';
     let saved = '';
     let eol: Eol = '\n';
     let savedEol: Eol = '\n';
@@ -95,7 +95,7 @@ export const editorApp: AppDef = {
         eol = savedEol = detectEol(text, '\n');
         area.value = toBox(text);
         saved = area.value;
-        loadedModified = entry.modified;
+        loadedId = entry.id;
       } catch (error) {
         area.disabled = true;
         saveBtn.disabled = saveAsBtn.disabled = true;
@@ -107,11 +107,12 @@ export const editorApp: AppDef = {
     }
     setZoom(100);
 
-    const encoded = () => new TextEncoder().encode(toFile(area.value, eol));
-    const markSaved = (modified: number) => {
-      loadedModified = modified;
-      saved = area.value;
-      savedEol = eol;
+    // What a save writes, taken when the save starts: typing while it is on its way stays unsaved (and marked so).
+    const snapshot = () => ({ text: area.value, eol, bytes: new TextEncoder().encode(toFile(area.value, eol)) });
+    const markSaved = (id: string, snap: { text: string; eol: Eol }) => {
+      loadedId = id;
+      saved = snap.text;
+      savedEol = snap.eol;
       refresh();
     };
 
@@ -133,9 +134,10 @@ export const editorApp: AppDef = {
       });
       if (name === null) return false;
       try {
-        const entry = await shell.fs.writeFile(joinPath(folder, name), encoded(), { mustBeNew: true });
+        const snap = snapshot();
+        const entry = await shell.fs.writeFile(joinPath(folder, name), snap.bytes, { mustBeNew: true });
         path = joinPath(folder, entry.name);
-        markSaved(entry.modified);
+        markSaved(entry.id, snap);
         shell.toast(`Saved “${entry.name}”.`);
         return true;
       } catch (error) {
@@ -147,9 +149,10 @@ export const editorApp: AppDef = {
     async function save(): Promise<boolean> {
       if (!path) return saveAs();
       try {
-        const entry = await saveOver(shell, path, encoded(), loadedModified);
+        const snap = snapshot();
+        const entry = await saveOver(shell, path, snap.bytes, loadedId);
         if (!entry) return false;
-        markSaved(entry.modified);
+        markSaved(entry.id, snap);
         shell.toast(`Saved “${entry.name}”.`);
         return true;
       } catch (error) {

@@ -12,7 +12,7 @@ require __DIR__ . '/../lib/outbound.php';
 require __DIR__ . '/../lib/updater.php';
 
 api_headers();
-api_guard();
+api_guard(true);
 
 $config = api_config();
 $root = rtrim((string) $config['data_dir'], '/\\');

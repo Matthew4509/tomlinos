@@ -12,13 +12,13 @@ import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createServer, request, type Server } from 'node:http';
 import { createServer as netServer } from 'node:net';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { BUILT_IN_MODELS } from '../src/apps/assistant/engine.ts';
 import { MODEL_LIBS } from '../src/apps/assistant/modellibs.ts';
 import { PHP, extFlags, hasPhp } from './php-bin.ts';
+import { tempDir } from './tmp.ts';
 
 const root = join(import.meta.dirname, '..');
 const ext = extFlags('openssl', 'curl');
@@ -36,7 +36,7 @@ const REV = 'a'.repeat(40);
 const LIBS_REV = 'b'.repeat(40);
 
 // The tests' pins: what the stand-in serves, with its real checksums.
-const pinsDir = mkdtempSync(join(tmpdir(), 'tomlinos-pins-'));
+const pinsDir = tempDir('tomlinos-pins-');
 const pinsFile = join(pinsDir, 'pins.json');
 writeFileSync(pinsFile, JSON.stringify({
   models: { [ID]: { repo: `mlc-ai/${ID}`, rev: REV, files: [
@@ -123,7 +123,7 @@ if (!isset($plan['error'])) {
 test('a model is saved in pieces through the redirect, checked, and listed; removing it frees the space', { skip: noPhp }, async () => {
   const mode: Mode = { ranges: [] };
   const { server, base } = await standIn(mode);
-  const dir = mkdtempSync(join(tmpdir(), 'tomlinos-models-'));
+  const dir = tempDir('tomlinos-models-');
   try {
     const r = await php(base, dir, `${SAVE}
 models_ensure_htaccess($m);
@@ -152,7 +152,7 @@ echo json_encode(['plan' => $plan, 'steps' => $steps, 'index' => models_index_re
 test('a stopped save carries on where it stopped', { skip: noPhp }, async () => {
   const mode: Mode = { ranges: [] };
   const { server, base } = await standIn(mode);
-  const dir = mkdtempSync(join(tmpdir(), 'tomlinos-models-'));
+  const dir = tempDir('tomlinos-models-');
   try {
     const target = join(dir, 'models', ID, 'resolve', 'main', 'params_shard_0.bin');
     const first = await php(base, dir, `$plan = models_make_plan('${ID}'); echo json_encode(models_fetch_piece($m, '${ID}', $plan['files'][1]));`);
@@ -173,7 +173,7 @@ test('a file that is not the pinned version is thrown away; a server ignoring th
     [{ evilRedirect: true, ranges: [] }, /somewhere this server will not fetch from/],
   ] as Array<[Mode, RegExp]>) {
     const { server, base } = await standIn(mode);
-    const dir = mkdtempSync(join(tmpdir(), 'tomlinos-models-'));
+    const dir = tempDir('tomlinos-models-');
     try {
       const r = await php(base, dir, `${SAVE} echo json_encode(['steps' => $steps]);`);
       const refusal = r.steps.find((s: [string, { error?: string }]) => s[1].error);
@@ -189,7 +189,7 @@ test('a file that is not the pinned version is thrown away; a server ignoring th
 });
 
 test('only Hugging Face and GitHub file servers over https are fetched from', { skip: noPhp }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'tomlinos-models-'));
+  const dir = tempDir('tomlinos-models-');
   const r = await php('', dir, `echo json_encode(array_map('models_host_allowed', [
   'https://huggingface.co/mlc-ai/x/resolve/main/a.bin', 'https://us.aws.cdn.hf.co/xet-bridge-us/abc', 'https://cas-bridge.xethub.hf.co/x',
   'https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/x.wasm', 'http://huggingface.co/x', 'https://huggingface.co:8443/x',
@@ -237,8 +237,8 @@ test('the mirror: filled from Hugging Face and checked, it serves a TOMLIN OS se
   const good = await standIn({ ranges: [] });
   const goneMode: Mode = { gone: true, ranges: [] };
   const gone = await standIn(goneMode);
-  const files = mkdtempSync(join(tmpdir(), 'tomlinos-mirror-'));
-  const dir = mkdtempSync(join(tmpdir(), 'tomlinos-models-'));
+  const files = tempDir('tomlinos-mirror-');
+  const dir = tempDir('tomlinos-models-');
   let door: { proc: ChildProcess; url: string } | null = null;
   try {
     // Run without blocking: the stand-in answers from this same process.
@@ -296,7 +296,7 @@ test('without a mirror, a file gone upstream stops the save with the reason; oth
   const gone = await standIn({ gone: true, ranges: [] });
   const wrongMode: Mode = { wrongBytes: true, ranges: [] };
   const wrong = await standIn(wrongMode);
-  const dir = mkdtempSync(join(tmpdir(), 'tomlinos-models-'));
+  const dir = tempDir('tomlinos-models-');
   try {
     const run = (base: string, mirror: string) => php(base, dir, `$plan = models_make_plan('${ID}');
 $steps = [];
@@ -318,7 +318,7 @@ echo json_encode(['steps' => $steps, 'from' => array_column($plan['files'], 'fro
 });
 
 test('a model removed can be saved again only a day later', { skip: noPhp }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'tomlinos-models-'));
+  const dir = tempDir('tomlinos-models-');
   mkdirSync(join(dir, 'data', 'models'), { recursive: true });
   const r = await php('', dir, `$d = ${JSON.stringify(join(dir, 'data'))};
 $before = models_resave_wait($d, '${ID}');
@@ -346,7 +346,7 @@ test('the real pins cover every built-in model and every program, and the page g
 });
 
 test('the built-in models on the server, in the page and in the WebLLM this TOMLIN OS ships all agree', { skip: noPhp }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'tomlinos-models-'));
+  const dir = tempDir('tomlinos-models-');
   const catalog = await php('', dir, 'echo json_encode(MODEL_CATALOG);');
   assert.deepEqual(Object.keys(catalog), BUILT_IN_MODELS.map(m => m.id), 'the same models, in the same order');
   for (const m of BUILT_IN_MODELS) assert.equal(catalog[m.id].name, m.name);

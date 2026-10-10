@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { base32Decode, base32Encode, parseOtpauth, totpAt } from '../src/core/totp.ts';
-import { PHP } from './php-bin.ts';
+import { PHP, portFree } from './php-bin.ts';
 
 const PORT = 3098;
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -101,6 +101,7 @@ let ownerSecret = '';
 let recovery: string[] = [];
 
 before(async () => {
+  await portFree(PORT);
   // Files from before accounts existed: the owner should take them over, not lose them.
   mkdirSync(join(data, 'objects', 'ro'), { recursive: true });
   writeFileSync(join(data, 'objects', 'ro', 'root'), '0'.repeat(32) + '[]');

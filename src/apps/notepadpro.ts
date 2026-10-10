@@ -35,7 +35,8 @@ interface Doc {
   saved: any;
   eol: Eol;
   savedEol: Eol;
-  modified: number;
+  /** The id of the copy opened or last saved (every save makes a new one), so a save replaces only that copy. */
+  fileId: string;
   lang: string;
   tab: HTMLElement;
 }
@@ -287,11 +288,11 @@ async function run(app: AppHandle, cm: Bundle, arg: string | undefined): Promise
     view.focus();
   }
 
-  function addDoc(text: string, path: string | null, name: string, modified = 0): Doc {
+  function addDoc(text: string, path: string | null, name: string, fileId = ''): Doc {
     const eol = detectEol(text, '\n');
     const lang = langFor(name).id;
     const state = cm.EditorState.create({ doc: toBox(text), extensions: extensions(lang) });
-    const d: Doc = { id: nextId++, path, name, state, saved: state.doc, eol, savedEol: eol, modified, lang, tab: null as unknown as HTMLElement };
+    const d: Doc = { id: nextId++, path, name, state, saved: state.doc, eol, savedEol: eol, fileId, lang, tab: null as unknown as HTMLElement };
     d.tab = makeTab(d);
     docs.push(d);
     tabs.append(d.tab);
@@ -316,7 +317,7 @@ async function run(app: AppHandle, cm: Bundle, arg: string | undefined): Promise
       const text = new TextDecoder('utf-8', { fatal: true }).decode(await shell.fs.readFile(path));
       // An untouched empty "new" tab is replaced, as in Notepad++.
       const spare = docs.length === 1 && !docs[0].path && !isDirty(docs[0]) && view.state.doc.length === 0 ? docs[0] : null;
-      addDoc(text, path, entry.name, entry.modified);
+      addDoc(text, path, entry.name, entry.id);
       if (spare) removeDoc(spare);
     } catch (error) {
       await shell.dialogs.alert('Could not open that', error instanceof TypeError
@@ -371,7 +372,12 @@ async function run(app: AppHandle, cm: Bundle, arg: string | undefined): Promise
   }
 
   // ---- Saving ----
-  const encoded = (d: Doc) => new TextEncoder().encode(toFile(view.state.doc.toString(), d.eol));
+  // Taken when a save starts, from the tab being saved: typing (or switching tabs) while it is on its way does not count as saved.
+  const snapshot = (d: Doc) => {
+    const doc = d === active ? view.state.doc : d.state.doc;
+    return { doc, eol: d.eol, bytes: new TextEncoder().encode(toFile(doc.toString(), d.eol)) };
+  };
+  type Snapshot = ReturnType<typeof snapshot>;
 
   async function saveAs(): Promise<boolean> {
     const d = active;
@@ -379,13 +385,14 @@ async function run(app: AppHandle, cm: Bundle, arg: string | undefined): Promise
     const target = await pickSave(shell, { title: 'Save as', folder: d.path ? parentPath(d.path) : '/Documents', name: d.name });
     if (!target) return false;
     try {
-      const entry = await shell.fs.writeFile(target.path, encoded(d), target.replace ? {} : { mustBeNew: true });
+      const snap = snapshot(d);
+      const entry = await shell.fs.writeFile(target.path, snap.bytes, target.replace ? {} : { mustBeNew: true });
       d.path = target.path;
       d.name = entry.name;
-      d.modified = entry.modified;
+      d.fileId = entry.id;
       const lang = langFor(entry.name).id;
-      if (lang !== d.lang) setLang(lang);
-      markSaved(d);
+      if (lang !== d.lang && d === active) setLang(lang);
+      markSaved(d, snap);
       labelTab(d);
       shell.toast(`Saved “${entry.name}”.`);
       return true;
@@ -400,10 +407,11 @@ async function run(app: AppHandle, cm: Bundle, arg: string | undefined): Promise
     if (!d) return false;
     if (!d.path) return saveAs();
     try {
-      const entry = await saveOver(shell, d.path, encoded(d), d.modified);
+      const snap = snapshot(d);
+      const entry = await saveOver(shell, d.path, snap.bytes, d.fileId);
       if (!entry) return false;
-      d.modified = entry.modified;
-      markSaved(d);
+      d.fileId = entry.id;
+      markSaved(d, snap);
       shell.toast(`Saved “${entry.name}”.`);
       return true;
     } catch (error) {
@@ -412,9 +420,9 @@ async function run(app: AppHandle, cm: Bundle, arg: string | undefined): Promise
     }
   }
 
-  function markSaved(d: Doc) {
-    d.saved = view.state.doc;
-    d.savedEol = d.eol;
+  function markSaved(d: Doc, snap: Snapshot) {
+    d.saved = snap.doc;
+    d.savedEol = snap.eol;
     refresh();
   }
 

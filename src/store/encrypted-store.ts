@@ -51,11 +51,11 @@ export class EncryptedStore implements Store {
   }
 
   async commit(ops: StoreOp[]): Promise<Record<string, string>> {
-    if (!this.sealing) return this.inner.commit(ops);
+    if (!this.sealing) return this.inner.commit(ops, false);
     const fileKey = this.needKey();
     const sealed: StoreOp[] = [];
     for (const o of ops) sealed.push(o.op === 'put' ? { ...o, data: await seal(fileKey, o.key, o.data) } : o);
-    return this.inner.commit(sealed);
+    return this.inner.commit(sealed, true);
   }
 
   /**
@@ -75,7 +75,7 @@ export class EncryptedStore implements Store {
       const ops: StoreOp[] = [];
       for (const r of batch) ops.push({ op: 'put', key: r.key, expect: r.version, data: await convert(r.key, r.data) });
       try {
-        await this.inner.commit(ops);
+        await this.inner.commit(ops, want);
       } catch (error) {
         if (!(error instanceof StoreConflict)) throw error;
         // Someone changed one of these meanwhile: redo them one at a time from what is there now.
@@ -107,7 +107,7 @@ export class EncryptedStore implements Store {
       const r = await this.inner.get(key);
       if (!r || isSealed(r.data) === want) return;
       try {
-        await this.inner.commit([{ op: 'put', key, expect: r.version, data: await convert(key, r.data) }]);
+        await this.inner.commit([{ op: 'put', key, expect: r.version, data: await convert(key, r.data) }], want);
         return;
       } catch (error) {
         if (!(error instanceof StoreConflict)) throw error;

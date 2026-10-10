@@ -50,7 +50,8 @@ function uidSet(text, box) {
   return out;
 }
 
-export async function startFakeMail({ imap = 3143, smtp = 3587 } = {}) {
+/** `caps`: what the IMAP server says it can do (a test leaves out MOVE and UIDPLUS to try the older way). */
+export async function startFakeMail({ imap = 3143, smtp = 3587, caps = 'MOVE UIDPLUS' } = {}) {
   const boxes = seed();
   const delivered = [];
 
@@ -61,11 +62,11 @@ export async function startFakeMail({ imap = 3143, smtp = 3587 } = {}) {
     let pending = null; // { tag, head, need, after } while a literal is arriving
     const send = s => sock.write(s);
     const q = s => `"${s.replace(/["\\]/g, m => '\\' + m)}"`;
-    send('* OK [CAPABILITY IMAP4rev1 AUTH=PLAIN SASL-IR MOVE UIDPLUS] Fake IMAP ready\r\n');
+    send(`* OK [CAPABILITY IMAP4rev1 AUTH=PLAIN SASL-IR ${caps}] Fake IMAP ready\r\n`);
 
     const handle = (tag, cmd, lit) => {
       const up = cmd.toUpperCase();
-      if (up === 'CAPABILITY') return send('* CAPABILITY IMAP4rev1 AUTH=PLAIN SASL-IR MOVE UIDPLUS\r\n' + `${tag} OK done\r\n`);
+      if (up === 'CAPABILITY') return send(`* CAPABILITY IMAP4rev1 AUTH=PLAIN SASL-IR ${caps}\r\n${tag} OK done\r\n`);
       if (up.startsWith('AUTHENTICATE PLAIN ')) {
         const [, user, pass] = Buffer.from(cmd.slice(19), 'base64').toString().split('\0');
         authed = user === USER && pass === PASS;
@@ -105,6 +106,8 @@ export async function startFakeMail({ imap = 3143, smtp = 3587 } = {}) {
         let hits = selected.msgs;
         const text = /TEXT "((?:[^"\\]|\\.)*)"/i.exec(m[1])?.[1] ?? (lit[0] ?? null);
         if (text !== null && /TEXT/i.test(m[1])) hits = hits.filter(x => x.raw.toLowerCase().includes(text.toLowerCase()));
+        if (/\bUNDELETED\b/i.test(m[1])) hits = hits.filter(x => !x.flags.has('\\Deleted'));
+        else if (/\bDELETED\b/i.test(m[1])) hits = hits.filter(x => x.flags.has('\\Deleted'));
         return send(`* SEARCH ${hits.map(x => x.uid).join(' ')}\r\n${tag} OK done\r\n`);
       }
       m = /^UID FETCH (\S+) \((.*)\)$/i.exec(cmd);
@@ -133,6 +136,14 @@ export async function startFakeMail({ imap = 3143, smtp = 3587 } = {}) {
         const set = uidSet(m[1], selected);
         for (const x of selected.msgs) if (set.has(x.uid)) for (const f of m[3].split(' ')) m[2] === '+' ? x.flags.add(f) : x.flags.delete(f);
         return send(`${tag} OK done\r\n`);
+      }
+      m = /^UID COPY (\S+) "((?:[^"\\]|\\.)*)"$/i.exec(cmd);
+      if (m) {
+        const to = boxes[m[2]];
+        if (!to) return send(`${tag} NO no such folder\r\n`);
+        const set = uidSet(m[1], selected);
+        for (const x of selected.msgs.filter(y => set.has(y.uid))) to.msgs.push({ ...x, uid: to.next++, flags: new Set(x.flags) });
+        return send(`${tag} OK copied\r\n`);
       }
       m = /^UID MOVE (\S+) "((?:[^"\\]|\\.)*)"$/i.exec(cmd);
       if (m) {

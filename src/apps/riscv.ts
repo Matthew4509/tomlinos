@@ -3,6 +3,7 @@
 // (.s and .asm); the Examples menu loads the example RISC-V games. F5 runs, F6 pauses, F8 steps, F9 checks.
 import { h, on } from '../core/dom.ts';
 import { baseName, joinPath, nameProblem, parentPath } from '../fs/names.ts';
+import { saveOver } from '../shell/savefile.ts';
 import type { AppDef, AppHandle } from '../shell/types.ts';
 import { dosAlert, dosBox, DosMenuBar, dosPrompt, type DosItem } from './riscv/dos.ts';
 import { EXAMPLES } from './riscv/examples.ts';
@@ -33,7 +34,8 @@ class Studio {
   private path: string | null = null;
   private name = 'UNTITLED.S';
   private saved = '';
-  private loadedModified = 0;
+  /** The id of the copy opened or last saved (every save makes a new one), so Save replaces only that copy. */
+  private loadedId = '';
   private assembledText: string | null = null;
   private keysNote = '';
   /** Loaded from the Examples menu and not saved anywhere yet. */
@@ -512,7 +514,7 @@ class Studio {
         throw new Error(`"${entry.name}" does not look like text, so it was not opened. It is safe where it is.`);
       }
       this.setSource(text.replace(/\r\n?/g, '\n'), path, entry.name, '', true);
-      this.loadedModified = entry.modified;
+      this.loadedId = entry.id;
       this.folder = parentPath(path);
       return true;
     } catch (error) {
@@ -525,19 +527,17 @@ class Studio {
     if (!this.path) return this.saveAs();
     const shell = this.app.shell;
     try {
-      const now = await shell.fs.stat(this.path);
-      if (now && now.modified !== this.loadedModified) {
-        const ok = await dosBox<boolean>(this.app.root, {
-          title: 'Changed somewhere else',
-          body: [h('p', {}, `${this.name} was changed after you opened it (in another window or on another device).`), h('p', {}, 'Saving now replaces that newer version with yours.')],
-          buttons: [{ label: 'Replace It', value: true }, { label: 'Cancel', value: false, primary: true }],
-        });
-        if (!ok) return false;
-      }
-      const entry = await shell.fs.writeFile(this.path, new TextEncoder().encode(this.area.value));
-      this.loadedModified = entry.modified;
-      this.saved = this.area.value;
-      this.app.setDirty(false);
+      // Taken when the save starts: typing while it is on its way stays unsaved.
+      const text = this.area.value;
+      const entry = await saveOver(shell, this.path, new TextEncoder().encode(text), this.loadedId, async () => true === await dosBox<boolean>(this.app.root, {
+        title: 'Changed somewhere else',
+        body: [h('p', {}, `${this.name} was changed after you opened it (in another window or on another device).`), h('p', {}, 'Saving now replaces that newer version with yours.')],
+        buttons: [{ label: 'Replace It', value: true }, { label: 'Cancel', value: false, primary: true }],
+      }));
+      if (!entry) return false;
+      this.loadedId = entry.id;
+      this.saved = text;
+      this.app.setDirty(this.area.value !== text);
       shell.toast(`Saved ${entry.name}.`);
       return true;
     } catch (error) {
@@ -561,14 +561,15 @@ class Studio {
         });
         if (!ok) return false;
       }
-      const entry = await shell.fs.writeFile(path, new TextEncoder().encode(this.area.value), existing ? {} : { mustBeNew: true });
+      const text = this.area.value;
+      const entry = await shell.fs.writeFile(path, new TextEncoder().encode(text), existing ? {} : { mustBeNew: true });
       this.path = joinPath(parentPath(path), entry.name);
       this.name = entry.name;
       this.example = false;
       this.folder = parentPath(path);
-      this.loadedModified = entry.modified;
-      this.saved = this.area.value;
-      this.app.setDirty(false);
+      this.loadedId = entry.id;
+      this.saved = text;
+      this.app.setDirty(this.area.value !== text);
       this.showTitle();
       shell.toast(`Saved ${entry.name} in ${this.folder}.`);
       return true;

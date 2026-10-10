@@ -4,21 +4,21 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile, execFileSync } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PHP, hasPhp } from './php-bin.ts';
+import { tempDir } from './tmp.ts';
 
 const root = join(import.meta.dirname, '..');
 const fakeUrl = new URL('./fake-mail.mjs', import.meta.url).href;
 const { startFakeMail, USER, PASS } = (await import(fakeUrl)) as {
-  startFakeMail(p: { imap: number; smtp: number }): Promise<{ delivered: Array<{ from: string; to: string[]; raw: string }>; close(): Promise<unknown> }>;
+  startFakeMail(p: { imap: number; smtp: number; caps?: string }): Promise<{ delivered: Array<{ from: string; to: string[]; raw: string }>; close(): Promise<unknown> }>;
   USER: string;
   PASS: string;
 };
 
 function script(code: string): { file: string; dir: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'tomlinos-mailnet-'));
+  const dir = tempDir('tomlinos-mailnet-');
   const file = join(dir, 't.php');
   writeFileSync(file, `<?php\nrequire ${JSON.stringify(join(root, 'server/lib/http.php'))};\nrequire ${JSON.stringify(join(root, 'server/lib/mailnet.php'))};\n${code}`);
   return { file, dir };
@@ -122,6 +122,31 @@ test('IMAP and SMTP against the stand-in: sign in, folders, headers, a message, 
     assert.match(d.raw, /In-Reply-To: <m1@example\.org>/);
     assert.match(d.raw, /Content-Disposition: attachment; filename="a.txt"/);
     assert.match(d.raw, /\r\n\.\r\nA line with a dot above|=2E|\r\n\.\r\n/, 'a lone dot survives the trip');
+  } finally {
+    await mail.close();
+  }
+});
+
+test('without UIDPLUS, deleting one message never expunges messages another mail app marked deleted', { skip: !has && 'no PHP' }, async () => {
+  const mail = await startFakeMail({ imap: 3244, smtp: 3688, caps: '' });
+  try {
+    const env = { DESKTOP_MAIL_ALLOW_HOSTS: '127.0.0.1:3244', DESKTOP_MAIL_ALLOW_PLAIN: '1' };
+    const r = await phpAsync(`
+      $i = new Imap('127.0.0.1', 3244, 'none', ${JSON.stringify(USER)}, ${JSON.stringify(PASS)});
+      $i->select('INBOX');
+      $i->destroy([2]); // nothing else marked: expunged at once
+      $first = ['listed' => $i->uids(), 'marked' => $i->uids('DELETED')];
+      $i->cmd('UID STORE 3 +FLAGS.SILENT (\\Deleted)'); // marked by another mail app, not removed yet
+      $i->move([1], 'Trash');
+      $listed = $i->uids();
+      $marked = $i->uids('DELETED');
+      $i->select('Trash');
+      $trash = count($i->uids());
+      echo json_encode(['first' => $first, 'listed' => $listed, 'marked' => $marked, 'trash' => $trash]);`, env) as Record<string, any>;
+    assert.deepEqual(r.first, { listed: [1, 3], marked: [] }, 'with no other message marked, deleting for good expunges');
+    assert.deepEqual(r.listed, [], 'the moved message is left out of the list (and so is the one the other app marked)');
+    assert.deepEqual(r.marked, [1, 3], 'nothing was expunged: message 3, marked by the other app, is still there for it');
+    assert.equal(r.trash, 1, 'the moved message is in Trash');
   } finally {
     await mail.close();
   }

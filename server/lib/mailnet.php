@@ -398,10 +398,11 @@ final class Imap
         return [$exists, $validity];
     }
 
-    /** @return int[] */
+    /** @return int[] The messages matching, leaving out any marked deleted (see expunge) unless asked for those. */
     public function uids(string $criteria = 'ALL'): array
     {
         $uids = [];
+        $criteria = $criteria === 'DELETED' ? $criteria : ($criteria === 'ALL' ? 'UNDELETED' : 'UNDELETED ' . $criteria);
         foreach ($this->cmd('UID SEARCH ' . $criteria) as $r) {
             if (preg_match('/^SEARCH\s*(.*)$/i', $r['text'], $m)) {
                 foreach (preg_split('/\s+/', trim($m[1])) as $u) {
@@ -487,7 +488,7 @@ final class Imap
         }
         $this->cmd("UID COPY $set " . self::q($toRaw));
         $this->cmd("UID STORE $set +FLAGS.SILENT (\\Deleted)");
-        $this->cmd(in_array('UIDPLUS', $this->caps, true) ? "UID EXPUNGE $set" : 'EXPUNGE');
+        $this->expunge($uids);
     }
 
     /** Deletes for good (used in the Trash folder itself). */
@@ -495,7 +496,28 @@ final class Imap
     {
         $set = implode(',', array_map('intval', $uids));
         $this->cmd("UID STORE $set +FLAGS.SILENT (\\Deleted)");
-        $this->cmd(in_array('UIDPLUS', $this->caps, true) ? "UID EXPUNGE $set" : 'EXPUNGE');
+        $this->expunge($uids);
+    }
+
+    /**
+     * Removes the messages just marked deleted, and only those. With UIDPLUS the server is told which. Without it, EXPUNGE
+     * removes EVERY message marked deleted in the folder, including ones another mail app marked and has not removed yet,
+     * so it is sent only when no other message is marked. Otherwise these stay marked deleted (the list leaves them out:
+     * see uids) until the mail server or that other app removes them. True when they are gone now.
+     */
+    private function expunge(array $uids): bool
+    {
+        if (in_array('UIDPLUS', $this->caps, true)) {
+            $this->cmd('UID EXPUNGE ' . implode(',', array_map('intval', $uids)));
+
+            return true;
+        }
+        if (array_diff($this->uids('DELETED'), array_map('intval', $uids))) {
+            return false;
+        }
+        $this->cmd('EXPUNGE');
+
+        return true;
     }
 
     /** Adds a message to a folder (a copy of sent mail in Sent). */

@@ -178,7 +178,9 @@ export const chatApp: AppDef = {
       const names = plain.map(p => (p.me ? 'your' : `${p.display}'s`));
       lock.title = plain.length
         ? `Messages are encrypted on the way and on the server, but not end to end: ${names.join(' and ')} files are not encrypted, so that chat key is kept readable on this server. Turn on file encryption in My account to close this gap.`
-        : 'Only the people in this conversation can open its messages. The server keeps them scrambled.';
+        : c === 'general'
+          ? 'Only people given the General key can open its messages, and the server keeps them scrambled. Someone added later is given it too, and can read the messages still kept from before.'
+          : 'Only the people in this conversation can open its messages. The server keeps them scrambled.';
     }
 
     function renderThreadHead(): void {

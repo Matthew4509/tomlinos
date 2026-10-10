@@ -97,7 +97,7 @@ export function aiSettings(shell: Shell, signal: AbortSignal): HTMLElement {
   // ---- Your model list ----
   async function changePrefs(change: (p: AiPrefs) => AiPrefs): Promise<void> {
     try {
-      await writePrefs(shell.fs, change(await readPrefs(shell.fs)));
+      await writePrefs(shell.fs, change(await readPrefs(shell.fs, true)));
     } catch (error) {
       await shell.report('Could not keep your AI choices', error);
     }

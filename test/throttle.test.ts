@@ -5,15 +5,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PHP, hasPhp } from './php-bin.ts';
+import { tempDir } from './tmp.ts';
 
 const root = join(import.meta.dirname, '..');
 
 test('wrong tries from one address do not stop the right person at another; the guessing address still waits', { skip: !hasPhp && 'no PHP' }, () => {
-  const dir = mkdtempSync(join(tmpdir(), 'tomlinos-throttle-'));
+  const dir = tempDir('tomlinos-throttle-');
   const file = join(dir, 't.php');
   writeFileSync(file, `<?php
 require ${JSON.stringify(join(root, 'server/lib/http.php'))};

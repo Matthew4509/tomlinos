@@ -1,7 +1,7 @@
 // Each person's own choices about the AI models, kept in their files (/System/ai-prefs.json): favourites (listed first
 // in Chat › Agents, the first one chosen when nothing else is), models hidden from the list, and whether the built-in
 // AI disconnects by itself when it has not been used for a while (freeing its graphics memory).
-import type { FileSystem } from '../../fs/fs.ts';
+import { FsError, type FileSystem } from '../../fs/fs.ts';
 
 export const PREFS_PATH = '/System/ai-prefs.json';
 /** Minutes without a question before "Disconnect when idle" stops the built-in AI. */
@@ -27,9 +27,20 @@ export function cleanPrefs(raw: unknown): AiPrefs {
   return { favourites, hidden: ids(r.hidden).filter(id => !favourites.includes(id)), idleDisconnect: r.idleDisconnect === true };
 }
 
-export async function readPrefs(fs: FileSystem): Promise<AiPrefs> {
+/**
+ * `strict` (before changing them): choices that are kept but could not be read (the server out of reach, say) throw, so the
+ * change is not saved over them. Otherwise none are kept, or damaged, reads as the defaults.
+ */
+export async function readPrefs(fs: FileSystem, strict = false): Promise<AiPrefs> {
+  let text: string;
   try {
-    return cleanPrefs(JSON.parse(await fs.readText(PREFS_PATH)));
+    text = await fs.readText(PREFS_PATH);
+  } catch (error) {
+    if (strict && !(error instanceof FsError)) throw error;
+    return { ...NO_PREFS, favourites: [], hidden: [] };
+  }
+  try {
+    return cleanPrefs(JSON.parse(text));
   } catch {
     return { ...NO_PREFS, favourites: [], hidden: [] };
   }

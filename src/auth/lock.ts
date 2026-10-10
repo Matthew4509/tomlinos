@@ -19,8 +19,11 @@ import { SHEET_KINDS, type LockSettings, type LockWords } from '../shell/session
 import type { Shell } from '../shell/types.ts';
 import { AuthFailure, type AuthApi, type PublicUser } from './api.ts';
 import { passwordField } from './gate.ts';
+import { lockPending, markLockPending } from './vault.ts';
 
 type Phase = 'open' | 'saver' | 'prompt';
+
+const NO_SERVER = "This desktop's server cannot be reached, so the screen cannot be unlocked yet (the server checks the PIN or password). It stays locked; try again when the connection is back.";
 
 /** The Reader (a book, a page at a time), shown in a frame by the reader screensaver. */
 export const READER_PATH = 'reader/index.html';
@@ -43,6 +46,8 @@ export class LockScreen {
   private layer: HTMLElement;
   private phase: Phase = 'open';
   private serverLocked = false;
+  /** Asking the server for the lock again (it could not be reached when the screen was locked), every few seconds. */
+  private retry: number | null = null;
   private lastActive = Date.now();
   private escAt = 0;
   private view: AbortController | null = null;
@@ -99,12 +104,13 @@ export class LockScreen {
       } else this.escAt = now;
     }, signal);
 
-    // Another tab (or device) may have locked or ended this session: check whenever this tab comes back.
+    // Another tab (or device) may have locked or ended this session, or locked it while the server could not be reached:
+    // check whenever this tab comes back.
     on(document, 'visibilitychange', () => {
       if (document.hidden || !this.o.api || this.phase !== 'open') return;
-      this.o.api.status().then(status => {
+      this.o.api.status().then(async status => {
         if (!status.signedIn) this.o.signedOut('You were signed out in another tab or on another device.');
-        else if (status.locked) void this.show(true);
+        else if (status.locked || (status.user && (await lockPending(status.user.id)))) void this.show(true);
       }).catch(() => undefined);
     }, signal);
   }
@@ -125,18 +131,58 @@ export class LockScreen {
     if (locking) {
       // A setting changed just before (the screensaver itself, often) is written first: once locked, the server refuses it.
       await this.o.shell.session.flushWaiting().catch(() => undefined);
-      try {
-        await this.o.api!.lock();
-        this.serverLocked = true;
-      } catch (error) {
-        if (error instanceof AuthFailure && error.signedOut) {
-          this.reset();
-          this.o.signedOut(error.message);
-        }
-        // Server unreachable: the screen still covers everything, and the next file request asks the server anyway.
-        this.serverLocked = true;
-      }
+      if ((await this.lockServer()) === 'unreached') this.holdLock();
     }
+  }
+
+  /**
+   * The server could not be reached to lock: the screen covers everything, but only the server's lock keeps a reload or
+   * another tab out (and checks the PIN), so it is asked for again until it holds, and remembered in this browser in case
+   * the page is reloaded first. Until then no unlock is tried (lockServer comes first).
+   */
+  private holdLock(): void {
+    const user = this.o.user();
+    if (user) void markLockPending(user.id, true);
+    this.retry ??= window.setInterval(() => void this.lockServer(), 5000);
+  }
+
+  /**
+   * Asks the server to hold the lock: 'locked' once it does (or already did), 'unreached' when it could not be asked, or
+   * 'ended' when it says the session is over (then the sign-in has already been handed over).
+   */
+  private async lockServer(): Promise<'locked' | 'unreached' | 'ended'> {
+    if (this.serverLocked) return 'locked';
+    try {
+      await this.o.api!.lock();
+    } catch (error) {
+      if (error instanceof AuthFailure && error.signedOut) {
+        this.reset();
+        this.o.signedOut(error.message);
+        return 'ended';
+      }
+      return 'unreached';
+    }
+    this.serverLocked = true;
+    this.stopRetry();
+    const user = this.o.user();
+    if (user) void markLockPending(user.id, false);
+    return 'locked';
+  }
+
+  private stopRetry(): void {
+    if (this.retry !== null) clearInterval(this.retry);
+    this.retry = null;
+  }
+
+  /**
+   * Before an unlock is tried: the server must hold the lock, or it would let any PIN through. 'unreached' = say so and
+   * keep asking; 'ended' = the session is over and the sign-in already shows.
+   */
+  private async lockedForUnlock(): Promise<'locked' | 'unreached' | 'ended'> {
+    if (this.previewing || !this.canLock) return 'locked';
+    const r = await this.lockServer();
+    if (r === 'unreached') this.holdLock();
+    return r;
   }
 
   /**
@@ -165,6 +211,7 @@ export class LockScreen {
       this.o.shell.lockChanged.emit(true);
     }
     this.serverLocked = true;
+    this.stopRetry();
     this.drawPrompt('');
   }
 
@@ -193,6 +240,7 @@ export class LockScreen {
     }
     this.phase = 'open';
     this.serverLocked = false;
+    this.stopRetry();
     this.previewing = false;
     this.lastActive = Date.now();
   }
@@ -400,6 +448,11 @@ export class LockScreen {
       this.drawReaderLogin(wrong());
       return;
     }
+    const held = await this.lockedForUnlock();
+    if (held !== 'locked') {
+      if (held === 'unreached') this.drawReaderLogin(NO_SERVER);
+      return;
+    }
     try {
       await this.o.api!.unlockPassword(password, code);
       this.reset();
@@ -486,6 +539,11 @@ export class LockScreen {
       this.reset();
       return;
     }
+    const held = await this.lockedForUnlock();
+    if (held !== 'locked') {
+      if (held === 'unreached') this.drawPrompt(NO_SERVER);
+      return;
+    }
     try {
       await this.o.api!.unlockPin(pin);
       this.reset();
@@ -497,6 +555,11 @@ export class LockScreen {
   private async tryPassword(password: string, code: string): Promise<void> {
     if (this.previewing) {
       this.reset();
+      return;
+    }
+    const held = await this.lockedForUnlock();
+    if (held !== 'locked') {
+      if (held === 'unreached') this.drawPrompt(NO_SERVER, true);
       return;
     }
     try {

@@ -3,13 +3,13 @@
 //   node test/browser-apps.mjs [http://127.0.0.1:3047] [screenshot folder]
 import { chromium } from 'playwright-core';
 import { HIDDEN_APPS } from '../src/release.ts';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { deflateRawSync } from 'node:zlib';
 import { startFakeMail, USER as MAIL_USER, PASS as MAIL_PASS } from './fake-mail.mjs';
 import { startFakeAnthropic, KEY as AI_KEY } from './fake-anthropic.mjs';
 import { startFakeHuggingFace, SHARD_BYTES } from './fake-huggingface.mjs';
+import { tempDir } from './tmp.ts';
 
 const BASE = process.argv[2] ?? 'http://127.0.0.1:3047';
 const SHOTS = process.argv[3] ?? null;
@@ -126,7 +126,7 @@ await step('set up the owner', async () => {
   await page.locator('#desktop .item').first().waitFor({ timeout: 20000 });
 });
 
-const dir = mkdtempSync(join(tmpdir(), 'tomlinos-apps2-'));
+const dir = tempDir('tomlinos-apps2-');
 await step('upload a zip and a Windows (CRLF) text file into Documents', async () => {
   writeFileSync(join(dir, 'bundle.zip'), makeZip());
   writeFileSync(join(dir, 'windows.txt'), 'alpha\r\nbeta cat\r\ngamma Cat\r\n');

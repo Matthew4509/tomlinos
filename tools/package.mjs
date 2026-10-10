@@ -123,6 +123,10 @@ cPanel Terminal, not the web).
 Held out by the sign-in brakes (wrong passwords): wait, use "Email me an unlock link" (set an unlock email in My
 account first), or run  php tomlinos/tools/clear-brakes.php  from the cPanel Terminal (or delete
 tomlinos/data/accounts/throttle.json in File Manager). Addresses listed in trusted_ips (tomlinos/config.php) are never held.
+Backups: everything that is yours is in tomlinos/data/ and tomlinos/config.php (copy both). After putting a backup
+back, run  php tomlinos/tools/store-check.php  from the cPanel Terminal: it says whether each person's files hang
+together (--repair finishes a save that was cut off and corrects the totals; it never deletes a file). The version
+before the last System update: Application manager > Updates > Go back, or  php tomlinos/tools/rollback-update.php
 Mail, the Reader's library and your own Claude or OpenRouter key need the PHP extension "openssl";
 Claude and saving AI models also need "curl" (server-check.php says).
 Games and other add-ons: the owner downloads them in the Application manager from the TOMLIN OS app store (only apps

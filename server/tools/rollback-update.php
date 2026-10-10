@@ -7,5 +7,10 @@ if (PHP_SAPI !== 'cli') {
     exit("Run this from the cPanel Terminal, not the web.\n");
 }
 require __DIR__ . '/../lib/updater.php';
-$v = update_rollback();
+try {
+    $v = update_rollback();
+} catch (RuntimeException $e) {
+    fwrite(STDERR, $e->getMessage() . "\n");
+    exit(1);
+}
 echo $v === null ? "There is no earlier version kept to go back to.\n" : "Put back TOMLIN OS $v.\n";

@@ -173,6 +173,27 @@ export async function restoreKey(userId: string): Promise<CryptoKey | null> {
   }
 }
 
+/**
+ * A lock asked for while the server could not be reached: remembered here (beside the kept key, and forgotten with it) so
+ * a reload, or another tab, locks the session on the server before showing anything.
+ */
+export async function markLockPending(userId: string, pending: boolean): Promise<void> {
+  try {
+    if (pending) await withKeys('readwrite', s => s.put(Date.now(), `lock:${userId}`));
+    else await withKeys('readwrite', s => s.delete(`lock:${userId}`));
+  } catch {
+    // Storage refused (a private window): the lock is still asked for again while this page stays open.
+  }
+}
+
+export async function lockPending(userId: string): Promise<boolean> {
+  try {
+    return typeof (await withKeys<unknown>('readonly', s => s.get(`lock:${userId}`))) === 'number';
+  } catch {
+    return false;
+  }
+}
+
 export async function forgetKeys(): Promise<void> {
   try {
     await withKeys('readwrite', s => s.clear());
