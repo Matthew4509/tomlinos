@@ -37,6 +37,8 @@ export class Sheet {
   cells = new Map<number, Cell>();
   colW = new Map<number, number>();
   rowH = new Map<number, number>();
+  /** Rows whose height was set to fit wrapped text (not dragged by hand): they grow and shrink with it. */
+  rowFit = new Set<number>();
   constructor(name: string) {
     this.name = name;
   }
@@ -61,6 +63,8 @@ export interface Entry {
   cell?: Cell;
   /** A format the typed text implies (12% is a percent). */
   fmt?: CellStyle;
+  /** Text on several lines: the cell wraps, as Excel turns on Wrap Text for it. */
+  wrap?: boolean;
 }
 
 const NUMBER = /^[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)?(?:\.\d+)?(?:e[-+]?\d+)?$/i;
@@ -91,7 +95,7 @@ export function parseEntry(input: string): Entry {
     const n = Number(t.replace(/,/g, ''));
     if (Number.isFinite(n)) return { cell: { v: n } };
   }
-  return { cell: { v: input } };
+  return input.includes('\n') ? { cell: { v: input }, wrap: true } : { cell: { v: input } };
 }
 
 export class Workbook {
@@ -321,6 +325,7 @@ export class Workbook {
     if (after || old?.s) {
       let style = old?.s ? this.styles[old.s] : undefined;
       if (entry.fmt && !style?.fmt) style = { ...style, ...entry.fmt };
+      if (entry.wrap && !style?.wrap) style = { ...style, wrap: true };
       // Typing a number into a "Text" cell keeps it as text.
       if (after && style?.fmt === 'text' && after.v !== undefined && typeof after.v !== 'string' && after.f === undefined) after = { v: input };
       const id = style ? this.internStyle(style) : 0;
@@ -568,8 +573,10 @@ export class Workbook {
         const m = remap(i);
         if (m !== null) next.set(m, size);
       }
-      if (axis === 'row') target.rowH = next;
-      else target.colW = next;
+      if (axis === 'row') {
+        target.rowH = next;
+        target.rowFit = new Set([...target.rowFit].map(remap).filter((m): m is number => m !== null && next.has(m)));
+      } else target.colW = next;
     });
   }
 
@@ -620,6 +627,24 @@ export class Workbook {
     const map = axis === 'row' ? this.sheets[s].rowH : this.sheets[s].colW;
     if (size === null) map.delete(index);
     else map.set(index, Math.max(axis === 'row' ? 12 : 16, Math.min(axis === 'row' ? 400 : 800, Math.round(size))));
+    // A height set by hand stays as set: fitting the text no longer changes it.
+    if (axis === 'row') this.sheets[s].rowFit.delete(index);
+    this.version++;
+  }
+
+  /** Sets a row to the height its wrapped text needs (null: the standard height). Rows sized by hand are left alone. */
+  fitRow(s: number, row: number, height: number | null): void {
+    const sheet = this.sheets[s];
+    if (sheet.rowH.has(row) && !sheet.rowFit.has(row)) return;
+    const h = height === null ? null : Math.max(12, Math.min(400, Math.round(height)));
+    if ((sheet.rowH.get(row) ?? null) === h) return;
+    if (h === null) {
+      sheet.rowH.delete(row);
+      sheet.rowFit.delete(row);
+    } else {
+      sheet.rowH.set(row, h);
+      sheet.rowFit.add(row);
+    }
     this.version++;
   }
 
@@ -666,6 +691,7 @@ export class Workbook {
       name: sh.name,
       colW: Object.fromEntries(sh.colW),
       rowH: Object.fromEntries(sh.rowH),
+      rowFit: [...sh.rowFit],
       cells: [...sh.cells].map(([k, c]) => [colOfKey(k), rowOfKey(k), c.v ?? null, c.f ?? null, c.s ?? 0]),
     }));
     return JSON.stringify({ format: FILE_FORMAT, version: 1, symbol: this.symbol, active: this.active, styles: this.styles, sheets });
@@ -715,6 +741,9 @@ export class Workbook {
           }
         }
       }
+      if (Array.isArray(rs.rowFit)) {
+        for (const r of rs.rowFit.slice(0, 5000)) if (Number.isInteger(r) && sheet.rowH.has(r as number)) sheet.rowFit.add(r as number);
+      }
       sheets.push(sheet);
     }
     const names = new Set(sheets.map(s => s.name.toLowerCase()));
@@ -732,9 +761,12 @@ export class Workbook {
 
   // ---- CSV ---------------------------------------------------------------------------------------------------------
 
-  /** Puts CSV/TSV text into the sheet starting at (col, row). Returns how many cells were set. */
-  importText(s: number, col: number, row: number, textIn: string): number {
-    const table = parseDelimited(textIn);
+  /**
+   * Puts CSV/TSV text into the sheet starting at (col, row). Returns how many cells were set. A paste passes '\t': split
+   * at tabs only, as Excel does, so a comma in pasted text stays in its cell. Left out, the delimiter is guessed (a CSV file).
+   */
+  importText(s: number, col: number, row: number, textIn: string, delimiter?: '\t'): number {
+    const table = parseDelimited(textIn, delimiter);
     const changes: Change[] = [];
     let created = 0;
     let count = 0;
@@ -745,13 +777,17 @@ export class Workbook {
       const key = keyOf(cc, rr);
       const old = this.sheets[s].cells.get(key);
       let after: Cell | undefined;
+      let wrap = false;
       try {
         // A pasted "=..." from elsewhere is kept as a formula only if it is one we understand.
-        after = parseEntry(field).cell;
+        const entry = parseEntry(field);
+        after = entry.cell;
+        wrap = !!entry.wrap;
       } catch {
         after = { v: field };
       }
-      if (old?.s) after = { ...(after ?? {}), s: old.s };
+      if (wrap && !this.styleOf(old)?.wrap) after = { ...(after ?? {}), s: this.internStyle({ ...this.styleOf(old), wrap: true }) };
+      else if (old?.s) after = { ...(after ?? {}), s: old.s };
       if (!old && after) created++;
       changes.push({ sheet: s, key, after });
       if (after) count++;
@@ -771,8 +807,11 @@ export class Workbook {
         let t = shown ? this.display(s, col, row) : valueToText(v);
         // Any text that a spreadsheet program would read as a formula (typed, or the result of one) is kept as text.
         if (typeof v === 'string' && /^[=+\-@\t\r]/.test(t)) t = `'${t}`;
-        if (delimiter === '\t') t = t.replace(/[\t\r\n]+/g, ' ');
-        else if (/[",\r\n]/.test(t)) t = `"${t.replace(/"/g, '""')}"`;
+        // A copy (tab-separated): a cell with line breaks or tabs goes in quotes, as Excel copies it, so it pastes back
+        // as one cell.
+        if (delimiter === '\t') {
+          if (/[\t\r\n]/.test(t) || t.startsWith('"')) t = `"${t.replace(/"/g, '""')}"`;
+        } else if (/[",\r\n]/.test(t)) t = `"${t.replace(/"/g, '""')}"`;
         fields.push(t);
       }
       lines.push(fields.join(delimiter));
@@ -791,7 +830,7 @@ function cleanStyle(raw: unknown): CellStyle {
   const out: CellStyle = {};
   if (!raw || typeof raw !== 'object') return out;
   const r = raw as Record<string, unknown>;
-  for (const k of ['b', 'i', 'u', 'bt', 'bb', 'bl', 'br'] as const) if (r[k] === true) out[k] = true;
+  for (const k of ['b', 'i', 'u', 'bt', 'bb', 'bl', 'br', 'wrap'] as const) if (r[k] === true) out[k] = true;
   if (r.al === 'l' || r.al === 'c' || r.al === 'r') out.al = r.al;
   if (r.fmt === 'number' || r.fmt === 'currency' || r.fmt === 'percent' || r.fmt === 'comma' || r.fmt === 'text') out.fmt = r.fmt;
   if (typeof r.dec === 'number' && Number.isInteger(r.dec) && r.dec >= 0 && r.dec <= 15) out.dec = r.dec;
@@ -800,11 +839,14 @@ function cleanStyle(raw: unknown): CellStyle {
   return out;
 }
 
-/** Splits CSV or tab-separated text into rows of fields (quotes, doubled quotes, and line breaks inside quotes work). */
-export function parseDelimited(input: string): string[][] {
+/**
+ * Splits CSV or tab-separated text into rows of fields (quotes, doubled quotes, and line breaks inside quotes work).
+ * The delimiter is guessed from the first line unless one is given.
+ */
+export function parseDelimited(input: string, given?: '\t'): string[][] {
   const firstLine = input.split(/\r?\n/, 1)[0] ?? '';
   const count = (ch: string) => firstLine.split(ch).length - 1;
-  const delimiter = count('\t') > 0 && count('\t') >= count(',') ? '\t' : count(';') > count(',') ? ';' : ',';
+  const delimiter = given ?? (count('\t') > 0 && count('\t') >= count(',') ? '\t' : count(';') > count(',') ? ';' : ',');
   const rows: string[][] = [];
   let row: string[] = [];
   let field = '';

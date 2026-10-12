@@ -13,6 +13,8 @@ export const E = {
   NUM: new CellError('#NUM!'),
   NA: new CellError('#N/A'),
   CIRC: new CellError('#CIRC!'),
+  /** A list that came out empty (TEXTSPLIT with nothing left). */
+  CALC: new CellError('#CALC!'),
 };
 
 /** null = an empty cell. */
@@ -23,6 +25,8 @@ export interface CellStyle {
   i?: boolean;
   u?: boolean;
   al?: 'l' | 'c' | 'r';
+  /** Wrap text: long text and line breaks show on several lines, and the row grows to fit. */
+  wrap?: boolean;
   fmt?: 'number' | 'currency' | 'percent' | 'comma' | 'text';
   dec?: number;
   fill?: string;

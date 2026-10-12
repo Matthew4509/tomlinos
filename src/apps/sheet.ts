@@ -94,6 +94,8 @@ export const sheetApp: AppDef = {
       try {
         wb.setStyle(wb.active, grid.sel(), patch);
         grid.widen(grid.sel());
+        // Bold or wrapping changes how tall wrapped text is.
+        grid.fitRows();
         onChange();
       } catch (error) {
         void report(error);
@@ -122,6 +124,7 @@ export const sheetApp: AppDef = {
     const italicBtn = btn('I', 'Italic (Ctrl+I)', () => doStyle(s => ({ ...s, i: !activeStyle().i })), 'italic');
     const underBtn = btn('U', 'Underline (Ctrl+U)', () => doStyle(s => ({ ...s, u: !activeStyle().u })), 'under');
     const alignBtns = (['l', 'c', 'r'] as const).map(al => btn(al === 'l' ? '⇤' : al === 'c' ? '↔' : '⇥', `Align ${al === 'l' ? 'left' : al === 'c' ? 'centre' : 'right'}`, () => doStyle(s => ({ ...s, al: activeStyle().al === al ? undefined : al }))));
+    const wrapBtn = btn('Wrap Text', 'Wrap text: show long text and line breaks on several lines (Alt+Enter starts a new line while typing)', () => doStyle(s => ({ ...s, wrap: activeStyle().wrap ? undefined : true })), 'text-rb');
 
     let palette: HTMLElement | null = null;
     const closePalette = () => {
@@ -267,7 +270,7 @@ export const sheetApp: AppDef = {
       group('Undo', undoBtn, redoBtn),
       group('Clipboard', btn('Paste', 'Paste (Ctrl+V)', () => grid.paste(), 'text-rb'), btn('Cut', 'Cut (Ctrl+X)', () => grid.copy(true), 'text-rb'), btn('Copy', 'Copy (Ctrl+C)', () => grid.copy(false), 'text-rb')),
       group('Font', boldBtn, italicBtn, underBtn, bordersBtn, fillBtn, colorBtn),
-      group('Alignment', ...alignBtns),
+      group('Alignment', ...alignBtns, wrapBtn),
       group('Number', fmtSelect, btn('$', 'Currency format', () => doStyle(s => ({ ...s, fmt: 'currency', dec: 2 }))), btn('%', 'Percent format', () => doStyle(s => ({ ...s, fmt: 'percent', dec: 0 }))), btn(',', 'Comma format', () => doStyle(s => ({ ...s, fmt: 'comma', dec: 2 }))), btn('.0→', 'More decimal places', () => decimals(1)), btn('←.0', 'Fewer decimal places', () => decimals(-1))),
       group('Editing', btn('Σ AutoSum', 'AutoSum (Alt+=)', () => grid.autoSum(), 'text-rb'), btn('A→Z', 'Sort A to Z (or smallest first)', () => sortRegion(true), 'text-rb'), btn('Z→A', 'Sort Z to A (or largest first)', () => sortRegion(false), 'text-rb')),
       group('Cells', insertBtn, deleteBtn),
@@ -481,6 +484,7 @@ export const sheetApp: AppDef = {
       press(italicBtn, s.i);
       press(underBtn, s.u);
       (['l', 'c', 'r'] as const).forEach((al, i) => press(alignBtns[i], s.al === al));
+      press(wrapBtn, s.wrap);
       fmtSelect.value = s.fmt ?? '';
       undoBtn.disabled = !wb.canUndo;
       redoBtn.disabled = !wb.canRedo;
@@ -515,7 +519,7 @@ export const sheetApp: AppDef = {
       if (ctrl && k === 's') {
         event.preventDefault();
         void (event.shiftKey ? saveAs() : save());
-      } else if (ctrl && !event.shiftKey && (k === 'b' || k === 'i' || k === 'u') && !(event.target instanceof HTMLInputElement && event.target.type === 'text' && grid.editing())) {
+      } else if (ctrl && !event.shiftKey && (k === 'b' || k === 'i' || k === 'u') && !(((event.target instanceof HTMLInputElement && event.target.type === 'text') || event.target instanceof HTMLTextAreaElement) && grid.editing())) {
         event.preventDefault();
         if (k === 'b') boldBtn.click();
         else if (k === 'i') italicBtn.click();

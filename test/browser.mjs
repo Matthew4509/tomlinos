@@ -1029,6 +1029,65 @@ await step('Spreadsheet: a CSV file opens as a new workbook; a damaged .sheet fi
   await page.locator('.win', { has: page.locator('.sheet') }).getByRole('button', { name: 'Close' }).click();
 });
 
+await step('Spreadsheet: a pasted block keeps its lines in one cell, Alt+Enter adds one, the cell wraps, and TEXTSPLIT / TEXTAFTER / XLOOKUP pull the lines apart', async () => {
+  await closeAll();
+  await page.locator('.start-btn').click();
+  await page.locator('.start-filter').fill('spreadsheet');
+  await page.locator('.start-item', { hasText: 'Spreadsheet' }).click();
+  await page.locator('.sheet .grid-scroll').waitFor();
+  const bar = page.locator('.sheet .formula-input');
+  const oneLine = (await bar.boundingBox()).height;
+  await goTo('A1');
+  await page.keyboard.press('F2');
+  // Text arriving with its line breaks (as a paste into the cell does), then a line typed after Alt+Enter.
+  await page.keyboard.insertText('Jane Citizen\n12 Example Street, Springfield');
+  await page.keyboard.press('Alt+Enter');
+  await page.keyboard.type('Phone: 0400 000 000');
+  await page.keyboard.press('Enter');
+  const whole = 'Jane Citizen\n12 Example Street, Springfield\nPhone: 0400 000 000';
+  eq(await page.locator('.sheet .name-box').inputValue(), 'A2', 'Enter put the text in and moved down');
+  eq(await cell('A1'), whole, 'three lines in one cell');
+  eq(await cell('A2'), 'empty', 'nothing spilled into the next row');
+  await goTo('A1');
+  eq(await bar.inputValue(), whole, 'the formula bar holds every line');
+  ok((await bar.boundingBox()).height > oneLine + 20, 'the formula bar grew to show the lines');
+  eq(await page.locator('.sheet').getByRole('button', { name: /^Wrap text/ }).getAttribute('aria-pressed'), 'true', 'Wrap Text turned on for it');
+  await goTo('B1');
+  await page.keyboard.type('=INDEX(TEXTSPLIT(A1,,CHAR(10)),2)');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('=TEXTAFTER(A1,"Phone: ")');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('=TEXTBEFORE(B1,",")');
+  await page.keyboard.press('Enter');
+  eq(await cell('B1'), '12 Example Street, Springfield', 'second line');
+  eq(await cell('B2'), '0400 000 000', 'after the label');
+  eq(await cell('B3'), '12 Example Street', 'before the comma');
+  await goTo('D1');
+  await typeRow(['Springfield', '3000']);
+  await typeRow(['Shelbyville', '3001']);
+  await goTo('B4');
+  await page.keyboard.type('=XLOOKUP(TEXTAFTER(B1,", "),D1:D2,E1:E2,"not listed")');
+  await page.keyboard.press('Enter');
+  eq(await cell('B4'), '3000', 'looked up from the pasted text');
+  // SHOTS=<folder>: a picture of the sheet at this point, for a person to look at.
+  if (process.env.SHOTS) {
+    await goTo('A1');
+    await page.locator('.win', { has: page.locator('.sheet') }).screenshot({ path: `${process.env.SHOTS}/sheet-lines.png` });
+  }
+  // Plain text pasted onto the sheet (not into a cell): a row per line, columns only at tabs, so commas stay.
+  await goTo('A6');
+  await page.locator('.sheet .grid-scroll').evaluate(el => {
+    const data = new DataTransfer();
+    data.setData('text/plain', 'Smith, Ann\t90\r\nBob\t75\r\n');
+    el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+  });
+  eq(await cell('A6'), 'Smith, Ann', 'the comma stayed in its cell');
+  eq(await cell('B6'), '90', 'split at the tab');
+  eq(await cell('A7'), 'Bob', 'next line, next row');
+  await page.locator('.win', { has: page.locator('.sheet') }).getByRole('button', { name: 'Close' }).click();
+  await page.locator('.dialog').getByRole('button', { name: 'Close without saving' }).click();
+});
+
 await step('phone size: windows fill the screen, taskbar is bigger, nothing scrolls sideways', async () => {
   await closeAll();
   await page.setViewportSize({ width: 390, height: 800 });

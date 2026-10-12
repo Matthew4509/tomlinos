@@ -443,15 +443,15 @@ body.is-dragging .win-body { pointer-events: none; }
 .palette-sw { height: 26px; border: 1px solid #999; border-radius: 3px; cursor: pointer; }
 .palette-sw:hover, .palette-sw:focus-visible { outline: 2px solid #1e7a45; }
 .palette-none { width: 100%; text-align: left; padding: 4px 6px; border: 0; background: #f0f0f0; cursor: pointer; border-radius: 3px; }
-.formula-bar { display: flex; align-items: center; gap: 4px; padding: 3px 6px; background: #fff; border-bottom: 1px solid #c8c8c8; }
+.formula-bar { display: flex; align-items: flex-start; gap: 4px; padding: 3px 6px; background: #fff; border-bottom: 1px solid #c8c8c8; }
 .name-box { width: 96px; height: 24px; border: 1px solid #bdbdbd; padding: 0 6px; font: 13px "Segoe UI", Arial, sans-serif; }
 .fx { font-style: italic; font-weight: 700; color: #666; padding: 0 6px; border-left: 1px solid #ddd; border-right: 1px solid #ddd; }
-.formula-input { flex: 1; min-width: 0; height: 24px; border: 1px solid #bdbdbd; padding: 0 6px; font: 13px "Segoe UI", Arial, sans-serif; }
+.formula-input { flex: 1; min-width: 0; box-sizing: border-box; height: 25px; border: 1px solid #bdbdbd; padding: 3px 6px; font: 13px "Segoe UI", Arial, sans-serif; line-height: 17px; resize: none; overflow: hidden auto; white-space: pre; }
 .grid-wrap { position: relative; flex: 1; min-height: 0; background: #fff; overflow: hidden; }
 .grid-canvas { position: absolute; left: 0; top: 0; pointer-events: none; }
 .grid-scroll { position: absolute; inset: 0; overflow: auto; outline: none; cursor: cell; }
 .grid-spacer { pointer-events: none; }
-.grid-editor { position: absolute; z-index: 5; box-sizing: border-box; border: 2px solid #1e7a45; padding: 0 3px; font: 13px "Segoe UI", Arial, sans-serif; background: #fff; outline: none; }
+.grid-editor { position: absolute; z-index: 5; box-sizing: border-box; border: 2px solid #1e7a45; padding: 0 3px; font: 13px "Segoe UI", Arial, sans-serif; line-height: 17px; background: #fff; outline: none; resize: none; overflow: hidden; white-space: pre; }
 .tabs-bar { display: flex; align-items: center; background: #e9e9e9; border-top: 1px solid #c8c8c8; padding: 0 6px; overflow-x: auto; }
 .sheet-tabs { display: flex; align-items: flex-end; gap: 1px; }
 .sheet-tab { border: 1px solid #c8c8c8; border-top: 0; padding: 3px 14px; background: #dcdcdc; cursor: pointer; font-size: 13px; }

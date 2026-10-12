@@ -48,7 +48,7 @@ export function addressOf(col: number, row: number): string {
 
 // ---- Tokens --------------------------------------------------------------------------------------------------------
 
-export type TokType = 'num' | 'str' | 'ident' | 'sheetq' | 'op' | 'lp' | 'rp' | 'comma' | 'colon' | 'bang' | 'err';
+export type TokType = 'num' | 'str' | 'ident' | 'sheetq' | 'op' | 'lp' | 'rp' | 'lb' | 'rb' | 'comma' | 'colon' | 'bang' | 'err';
 export interface Tok {
   type: TokType;
   text: string;
@@ -65,7 +65,7 @@ export function tokenize(src: string): Tok[] {
   const push = (type: TokType, start: number, end: number) => out.push({ type, text: src.slice(start, end), start, end });
   while (i < src.length) {
     const c = src[i];
-    if (c === ' ' || c === '\t' || c === '\n') {
+    if (c === ' ' || c === '\t' || c === '\n' || c === '\r') {
       i++;
       continue;
     }
@@ -112,6 +112,8 @@ export function tokenize(src: string): Tok[] {
       push('err', start, i);
     } else if (c === '(') { i++; push('lp', start, i); }
     else if (c === ')') { i++; push('rp', start, i); }
+    else if (c === '{') { i++; push('lb', start, i); }
+    else if (c === '}') { i++; push('rb', start, i); }
     else if (c === ',' || c === ';') { i++; push('comma', start, i); }
     else if (c === ':') { i++; push('colon', start, i); }
     else if (c === '!') { i++; push('bang', start, i); }

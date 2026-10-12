@@ -6,13 +6,49 @@ import { clamp } from '../../core/dom.ts';
 import { bindContextMenu, type MenuItem } from '../../shell/menu.ts';
 import type { Shell } from '../../shell/types.ts';
 import { addressOf, colName, MAX_COLS, MAX_ROWS, SyntaxProblem } from './refs.ts';
-import { CellError } from './values.ts';
-import { keyOf, type Range, type Workbook } from './workbook.ts';
+import { CellError, type CellStyle } from './values.ts';
+import { colOfKey, keyOf, parseDelimited, rowOfKey, type Range, type Workbook } from './workbook.ts';
 
 const HEAD_W = 46;
 const HEAD_H = 24;
 const COL_W = 64;
 const ROW_H = 20;
+/** One line of wrapped text, and the most lines a wrapped cell is laid out to (a row is at most 400 high anyway). */
+const LINE_H = 17;
+const MAX_LINES = 60;
+/** How many wrapped cells are measured to size their rows after a change (beyond that, rows keep their heights). */
+const MAX_FIT_CELLS = 5000;
+
+const fontFor = (style: CellStyle | undefined, z: number): string =>
+  `${style?.i ? 'italic ' : ''}${style?.b ? 'bold ' : ''}${13 * z}px "Segoe UI", Arial, Helvetica, sans-serif`;
+
+/** Text laid out in lines no wider than `width`: at its own line breaks, then between words (a long word is cut). */
+function wrapLines(ctx: CanvasRenderingContext2D, text: string, width: number): string[] {
+  const out: string[] = [];
+  for (const para of text.split(/\r?\n/)) {
+    let line = '';
+    for (const word of para.split(/(?<= )/)) {
+      if (ctx.measureText(line + word).width <= width || line === '') {
+        line += word;
+        // A word wider than the cell on its own is cut into pieces that fit.
+        while (ctx.measureText(line).width > width && line.length > 1) {
+          let cut = line.length - 1;
+          while (cut > 1 && ctx.measureText(line.slice(0, cut)).width > width) cut--;
+          out.push(line.slice(0, cut));
+          line = line.slice(cut);
+          if (out.length >= MAX_LINES) return out;
+        }
+      } else {
+        out.push(line.trimEnd());
+        line = word;
+      }
+      if (out.length >= MAX_LINES) return out;
+    }
+    out.push(line.trimEnd());
+    if (out.length >= MAX_LINES) return out;
+  }
+  return out;
+}
 const FONT = '13px "Segoe UI", Arial, Helvetica, sans-serif';
 const GRID = '#d9d9d9';
 const HEAD_BG = '#f0f0f0';
@@ -29,7 +65,7 @@ interface Clip {
 
 export interface Grid {
   readonly el: HTMLElement;
-  readonly formulaInput: HTMLInputElement;
+  readonly formulaInput: HTMLTextAreaElement;
   readonly nameBox: HTMLInputElement;
   wb: Workbook;
   sel(): Range;
@@ -50,6 +86,8 @@ export interface Grid {
   remove(axis: 'row' | 'col'): void;
   setActiveSheet(i: number): void;
   widen(r: Range): void;
+  /** Sizes rows to their wrapped text (rows sized by hand are left alone). */
+  fitRows(): void;
   onChange: () => void;
   onSelect: () => void;
   onEdit: (editing: boolean) => void;
@@ -60,11 +98,12 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
   const spacer = h('div', { class: 'grid-spacer' });
   scroller.append(spacer);
   const canvas = h('canvas', { class: 'grid-canvas', 'aria-hidden': 'true' });
-  const cellInput = h('input', { type: 'text', class: 'grid-editor', 'aria-label': 'Cell contents', spellcheck: 'false', autocomplete: 'off' });
+  // Text areas, not one-line boxes: a cell can hold several lines (Alt+Enter, or pasted text keeps its line breaks).
+  const cellInput = h('textarea', { class: 'grid-editor', 'aria-label': 'Cell contents', spellcheck: 'false', autocomplete: 'off', rows: 1, wrap: 'off' });
   css(cellInput, { display: 'none' });
   const live = h('div', { class: 'visually-hidden', role: 'status', 'aria-live': 'polite' });
   const root = h('div', { class: 'grid-wrap' }, canvas, scroller, cellInput, live);
-  const formulaInput = h('input', { type: 'text', class: 'formula-input', 'aria-label': 'Formula bar', spellcheck: 'false', autocomplete: 'off' });
+  const formulaInput = h('textarea', { class: 'formula-input', 'aria-label': 'Formula bar', spellcheck: 'false', autocomplete: 'off', rows: 1, wrap: 'off' });
   const nameBox = h('input', { type: 'text', class: 'name-box', 'aria-label': 'Cell address', spellcheck: 'false', autocomplete: 'off', value: 'A1' });
 
   const state = {
@@ -111,6 +150,7 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
     remove: axis => shift(axis, -1),
     setActiveSheet,
     widen: () => {},
+    fitRows: () => fitRows(),
     onChange: () => {},
     onSelect: () => {},
     onEdit: () => {},
@@ -213,7 +253,10 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
 
   function changed(): void {
     nameBox.value = sel().c0 === sel().c1 && sel().r0 === sel().r1 ? addressOf(state.cursor.col, state.cursor.row) : `${addressOf(sel().c0, sel().r0)}:${addressOf(sel().c1, sel().r1)}`;
-    if (!state.editing) formulaInput.value = grid.wb.editText(grid.wb.active, state.cursor.col, state.cursor.row);
+    if (!state.editing) {
+      formulaInput.value = grid.wb.editText(grid.wb.active, state.cursor.col, state.cursor.row);
+      sizeBar();
+    }
     const v = grid.wb.value(grid.wb.active, state.cursor.col, state.cursor.row);
     live.textContent = `${addressOf(state.cursor.col, state.cursor.row)}: ${v === null ? 'empty' : grid.wb.display(grid.wb.active, state.cursor.col, state.cursor.row)}`;
     grid.onSelect();
@@ -346,13 +389,33 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
         const shown = wbk.display(sheetIndex, c, r);
         if (shown === '') continue;
         const v = wbk.value(sheetIndex, c, r);
-        ctx.font = `${style?.i ? 'italic ' : ''}${style?.b ? 'bold ' : ''}${13 * z}px "Segoe UI", Arial, Helvetica, sans-serif`;
+        ctx.font = fontFor(style, z);
         ctx.fillStyle = v instanceof CellError ? '#c0392b' : (style?.color ?? '#000');
         const isNum = typeof v === 'number';
         const align = style?.al ?? (isNum ? 'r' : v instanceof CellError || typeof v === 'boolean' ? 'c' : 'l');
-        let text = shown;
-        let tw = ctx.measureText(text).width;
         const pad = 3 * z;
+        if (style?.wrap && !isNum) {
+          // Wrapped: line after line inside the cell, the last line where one line of text would sit.
+          const lines = wrapLines(ctx, shown, cw - pad * 2);
+          const lh = LINE_H * z;
+          let ly = y + ch - (ROW_H * z) / 2 - lh * (lines.length - 1);
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(x, y, cw, ch);
+          ctx.clip();
+          for (const line of lines) {
+            const lw = ctx.measureText(line).width;
+            const lx = align === 'r' ? x + cw - pad - lw : align === 'c' ? x + (cw - lw) / 2 : x + pad;
+            ctx.fillText(line, lx, ly + z);
+            if (style.u) ctx.fillRect(lx, ly + 7 * z, lw, Math.max(1, z));
+            ly += lh;
+          }
+          ctx.restore();
+          continue;
+        }
+        // Not wrapped: line breaks show as spaces, on one line.
+        let text = shown.replace(/\r?\n/g, ' ');
+        let tw = ctx.measureText(text).width;
         let clipX = x;
         let clipW = cw;
         if (tw > cw - pad * 2) {
@@ -378,8 +441,10 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
         ctx.rect(clipX, y, clipW, ch);
         ctx.clip();
         const tx = align === 'r' ? x + cw - pad - tw : align === 'c' ? x + (cw - tw) / 2 : x + pad;
-        ctx.fillText(text, tx, y + ch / 2 + z);
-        if (style?.u) ctx.fillRect(tx, y + ch / 2 + 7 * z, tw, Math.max(1, z));
+        // At the bottom of a tall row (one grown for wrapped text beside it), as Excel places it.
+        const ty = y + ch - (ROW_H * z) / 2;
+        ctx.fillText(text, tx, ty + z);
+        if (style?.u) ctx.fillRect(tx, ty + 7 * z, tw, Math.max(1, z));
         ctx.restore();
         clipX = x;
       }
@@ -398,7 +463,7 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
       if (v) {
         ctx.fillStyle = '#000';
         ctx.font = FONT.replace('13px', `${13 * z}px`);
-        ctx.fillText(v, a.x + 3 * z, a.y + a.h / 2 + z);
+        ctx.fillText(v.replace(/\r?\n/g, ' '), a.x + 3 * z, a.y + a.h / 2 + z);
       }
     }
     ctx.strokeStyle = ACCENT;
@@ -481,7 +546,26 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
   function placeEditor(): void {
     const b = rect(state.cursor.col, state.cursor.row, state.cursor.col, state.cursor.row);
     const wide = Math.max(b.w, 160 * state.zoom);
-    css(cellInput, { left: b.x, top: b.y, width: wide, height: b.h, display: 'block', 'font-size': `${13 * state.zoom}px` });
+    // Taller for every line typed or pasted, as Excel's in-cell editor grows.
+    const lines = Math.min(12, cellInput.value.split('\n').length);
+    const tall = Math.max(b.h, (lines * LINE_H + 6) * state.zoom);
+    css(cellInput, { left: b.x, top: b.y, width: wide, height: tall, display: 'block', 'font-size': `${13 * state.zoom}px`, 'line-height': `${LINE_H * state.zoom}px` });
+    sizeBar();
+  }
+
+  /** The formula bar shows up to four lines of a cell that has several. */
+  function sizeBar(): void {
+    const lines = Math.min(4, formulaInput.value.split('\n').length);
+    css(formulaInput, { height: lines * LINE_H + 8 });
+  }
+
+  /** Alt+Enter: a new line inside the cell (Enter alone puts the text in the cell). */
+  function newLine(input: HTMLTextAreaElement): void {
+    if (!state.editing) beginEdit(null, input === formulaInput ? 'bar' : 'cell');
+    input.setRangeText('\n', input.selectionStart, input.selectionEnd, 'end');
+    (input === cellInput ? formulaInput : cellInput).value = input.value;
+    state.pointAt = null;
+    placeEditor();
   }
 
   function beginEdit(initial: string | null, from: 'cell' | 'bar' = 'cell'): void {
@@ -520,6 +604,7 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
       throw error;
     }
     grid.widen({ c0: state.cursor.col, r0: state.cursor.row, c1: state.cursor.col, r1: state.cursor.row });
+    fitRows();
     endEdit();
     grid.onChange();
     return true;
@@ -531,21 +616,24 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
     scroller.focus({ preventScroll: true });
   }
 
-  const syncFrom = (src: HTMLInputElement, dst: HTMLInputElement) => () => {
+  const syncFrom = (src: HTMLTextAreaElement, dst: HTMLTextAreaElement) => () => {
     dst.value = src.value;
     state.pointAt = null;
     if (!state.editing) {
       // Typing in the formula bar starts an edit of the current cell.
       state.editing = true;
-      placeEditor();
       grid.onEdit(true);
     }
+    placeEditor();
   };
   on(cellInput, 'input', syncFrom(cellInput, formulaInput), signal);
   on(formulaInput, 'input', syncFrom(formulaInput, cellInput), signal);
 
   const editKeys = (event: KeyboardEvent) => {
-    if (event.key === 'Enter') {
+    if (event.key === 'Enter' && event.altKey && !event.ctrlKey && !event.metaKey) {
+      event.preventDefault();
+      newLine(event.target as HTMLTextAreaElement);
+    } else if (event.key === 'Enter') {
       event.preventDefault();
       if (commit()) {
         moveCursor(state.tabCol ?? state.cursor.col, state.cursor.row + (event.shiftKey ? -1 : 1), false);
@@ -756,6 +844,8 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
     }, abort.signal);
     const end = () => {
       abort.abort();
+      // A wider or narrower column changes how many lines its wrapped text needs.
+      if (edge.axis === 'col') fitRows();
       grid.onChange();
     };
     on(scroller, 'pointerup', end, abort.signal);
@@ -787,9 +877,39 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
   }
   grid.widen = widen;
 
+  /**
+   * Sizes every row that holds wrapped text to fit it, and puts rows that no longer need it back to the standard height.
+   * Rows sized by hand are left alone (Workbook.fitRow).
+   */
+  function fitRows(): void {
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const s = grid.wb.active;
+    const sheet = grid.wb.sheets[s];
+    const need = new Map<number, number>();
+    let measured = 0;
+    for (const [k, cell] of sheet.cells) {
+      const style = grid.wb.styleOf(cell);
+      if (!style?.wrap || (cell.v === undefined && cell.f === undefined)) continue;
+      if (++measured > MAX_FIT_CELLS) break;
+      const col = colOfKey(k);
+      const row = rowOfKey(k);
+      const shown = grid.wb.display(s, col, row);
+      if (!shown || typeof grid.wb.value(s, col, row) === 'number') continue;
+      ctx.font = fontFor(style, 1);
+      const lines = wrapLines(ctx, shown, (sheet.colW.get(col) ?? COL_W) - 6).length;
+      need.set(row, Math.max(need.get(row) ?? 0, lines * LINE_H + 5));
+    }
+    for (const row of [...sheet.rowFit]) if (!need.has(row)) grid.wb.fitRow(s, row, null);
+    for (const [row, height] of need) grid.wb.fitRow(s, row, height > ROW_H ? height : null);
+    redraw();
+  }
+
   function autoFit(axis: 'col' | 'row', index: number): void {
     if (axis === 'row') {
+      // Double-clicking a row's edge: back to fitting its text (or the standard height).
       grid.wb.setSize(grid.wb.active, 'row', index, null);
+      fitRows();
     } else {
       const ctx = canvas.getContext('2d')!;
       ctx.font = FONT;
@@ -947,6 +1067,7 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
   }, signal);
 
   function afterEdit(): void {
+    fitRows();
     state.geomVersion = -1;
     changed();
     grid.onChange();
@@ -1063,10 +1184,13 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
         if (clip.cut) state.clip = null;
         select({ c0: target.col, r0: target.row, c1: target.col + width * (clip.cut ? 1 : tilesX) - 1, r1: target.row + height * (clip.cut ? 1 : tilesY) - 1 }, target);
       } else if (text !== null && text !== '') {
-        const rows = text.replace(/\r?\n$/, '').split(/\r?\n/);
-        const cols = Math.max(...rows.map(r => r.split('\t').length));
-        grid.wb.importText(grid.wb.active, target.col, target.row, text.replace(/\r?\n$/, ''));
-        select({ c0: target.col, r0: target.row, c1: Math.min(MAX_COLS - 1, target.col + cols - 1), r1: Math.min(MAX_ROWS - 1, target.row + rows.length - 1) }, target);
+        // Text from another program: a line per row, split into columns at tabs only (as Excel pastes it); a cell
+        // copied with its line breaks comes in quotes and stays one cell.
+        const body = text.replace(/\r?\n$/, '');
+        const table = parseDelimited(body, '\t');
+        const cols = table.reduce((most, r) => Math.max(most, r.length), 1);
+        grid.wb.importText(grid.wb.active, target.col, target.row, body, '\t');
+        select({ c0: target.col, r0: target.row, c1: Math.min(MAX_COLS - 1, target.col + cols - 1), r1: Math.min(MAX_ROWS - 1, target.row + Math.max(1, table.length) - 1) }, target);
       }
       afterEdit();
     } catch (error) {
