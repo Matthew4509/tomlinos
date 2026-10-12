@@ -94,7 +94,8 @@ function chat_convs_of(string $uid, array $users): array
 {
     $convs = ['general'];
     foreach ($users as $id => $_) {
-        if ($id !== $uid) {
+        // A key of digits only comes back from PHP as a number: compared as text, as the ids are.
+        if ((string) $id !== $uid) {
             $convs[] = chat_dm($uid, (string) $id);
         }
     }
@@ -168,6 +169,7 @@ try {
             $reads = auth_read_json("$dir/reads.json", [])[$uid] ?? [];
             $people = [];
             foreach ($users as $id => $u) {
+                $id = (string) $id; // a key of digits only comes back from PHP as a number
                 $people[] = [
                     'id' => $id, 'name' => $u['name'], 'display' => $u['display'], 'me' => $id === $uid,
                     'pub' => $keys[$id]['pub'] ?? null,

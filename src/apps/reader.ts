@@ -55,6 +55,24 @@ export const readerApp: AppDef = {
     };
     const frame = h('iframe', { class: 'reader-app-frame', src: `reader/index.html${queryFor(arg)}`, title: 'Reader' }) as HTMLIFrameElement;
     app.root.append(frame);
+    // Keys and clicks inside the frame never reach the desktop, so someone reading for a while would be taken for away
+    // and locked out mid-chapter: the frame's own activity is passed on (at most once a second).
+    on(frame, 'load', () => {
+      let last = 0;
+      const pass = () => {
+        const now = Date.now();
+        if (now - last < 1000) return;
+        last = now;
+        window.dispatchEvent(new Event('tomlinos-activity'));
+      };
+      try {
+        const inner = frame.contentWindow;
+        if (!inner) return;
+        for (const type of ['pointerdown', 'pointermove', 'keydown', 'wheel', 'touchstart', 'scroll']) on(inner, type, pass, signal, { capture: true, passive: true });
+      } catch {
+        // Not this site's page (it cannot be): nothing to listen to.
+      }
+    }, signal);
     // Opened again while open (a store app asking for another book): the Reader loads that one instead.
     app.onReopen(next => {
       const query = queryFor(next);

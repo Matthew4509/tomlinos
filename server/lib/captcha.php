@@ -69,7 +69,20 @@ function captcha_new(string $dataDir, string $ip): array
             unset($kept[$old]);
         }
         $kept[$id] = ['hash' => hash('sha256', $answer), 'until' => $now + CAPTCHA_TTL, 'ip' => $ip];
-        auth_write_json(captcha_file($dataDir), array_slice($kept, -CAPTCHA_MAX_KEPT, null, true));
+        // Full: the address holding the most pictures gives up its oldest, not whoever asked longest ago. Otherwise a few
+        // dozen addresses asking for pictures non-stop push out a real visitor's picture before they can answer it.
+        while (count($kept) > CAPTCHA_MAX_KEPT) {
+            $per = array_count_values(array_map(static fn ($c) => (string) ($c['ip'] ?? ''), $kept));
+            arsort($per);
+            $most = (string) array_key_first($per);
+            foreach ($kept as $k => $c) {
+                if ((string) ($c['ip'] ?? '') === $most) {
+                    unset($kept[$k]);
+                    break;
+                }
+            }
+        }
+        auth_write_json(captcha_file($dataDir), $kept);
     });
 
     // The server tests set DESKTOP_TEST_CAPTCHA to read the answer (only an environment variable can; never on a live site).

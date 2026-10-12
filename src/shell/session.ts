@@ -2,7 +2,7 @@
 // where each app's window was last. One small JSON file in the hidden System folder. Every field is checked on the
 // way in, so a damaged or hand-edited file falls back to defaults field by field instead of breaking the desktop.
 // Nothing here lists files the person has opened: window prefs are per app, and a folder's view prefs are capped.
-import { FsError, type FileSystem } from '../fs/fs.ts';
+import { FileChanged, FsError, type FileSystem } from '../fs/fs.ts';
 
 export type Wallpaper = { kind: 'colour'; value: string } | { kind: 'picture'; path: string };
 /** The colour scheme: Xfce (Greybird, as Debian's Xfce ships it; the default), the blue original, olive green, silver or dark. */
@@ -97,7 +97,7 @@ export interface SessionData {
   theme: Theme;
   /** Calendar reminders due at or before this moment (ms) have been shown, so a reload or another tab does not repeat them. */
   remindedUntil: number;
-  /** Desktop icon cells, keyed by the item's id (not its path, so a rename keeps its place). */
+  /** Desktop icon cells, keyed "name:<name>" (an id changes with every save); a rename on the desktop carries the place over. */
   icons: Record<string, [number, number]>;
   views: Record<string, ViewPrefs>;
   windows: Record<string, WindowPrefs>;
@@ -238,8 +238,17 @@ export class Session {
       // reach, say): the defaults for this page only, never saved over the person's real settings.
       if (!(error instanceof FsError) && !(error instanceof SyntaxError)) this.unread = error;
     }
+    this.base = Session.parts(this.data);
     this.loaded = true;
   }
+
+  /** Each setting as text, to tell which ones this page has changed since it read or wrote them. */
+  private static parts(data: SessionData): Record<string, string> {
+    return Object.fromEntries(Object.entries(data).map(([k, v]) => [k, JSON.stringify(v)]));
+  }
+
+  /** The settings as this page last read or wrote them. */
+  private base: Record<string, string> = {};
 
   /** Marks the session changed; it is written a moment later, once, however many changes come in between. */
   touch(): void {
@@ -265,14 +274,43 @@ export class Session {
       this.onSaveError(new Error(`Your desktop settings could not be read when this page opened${reason}, so changes made here are not kept, rather than replace them. Reload the page to read them again.`));
       return this.saving;
     }
-    const text = JSON.stringify(this.data);
     this.saving = this.saving
-      .then(async () => {
-        await this.fs.ensureFolder('/System', { hidden: true });
-        await this.fs.writeText(SESSION_PATH, text, { hidden: true });
-      })
+      .then(() => this.write())
       .catch(error => this.onSaveError(error));
     return this.saving;
+  }
+
+  /**
+   * Writes only the settings this page changed, on top of the file as it is now: another tab (or device) that changed
+   * other settings meanwhile keeps its changes. Written over exactly the copy read, so a save in between is read again.
+   */
+  private async write(): Promise<void> {
+    await this.fs.ensureFolder('/System', { hidden: true });
+    for (let attempt = 1; ; attempt++) {
+      const now = Session.parts(this.data);
+      const mine = Object.keys(now).filter(k => now[k] !== this.base[k]);
+      if (!mine.length) return;
+      const entry = await this.fs.stat(SESSION_PATH);
+      let theirs: SessionData = defaultSession();
+      if (entry) {
+        try {
+          theirs = parseSession(JSON.parse(await this.fs.readText(SESSION_PATH)));
+        } catch (error) {
+          if (!(error instanceof SyntaxError)) throw error;
+        }
+      }
+      const merged: Record<string, unknown> = { ...theirs };
+      for (const k of mine) merged[k] = JSON.parse(now[k]);
+      try {
+        await this.fs.writeText(SESSION_PATH, JSON.stringify(merged), entry ? { hidden: true, replacing: entry.id } : { hidden: true, mustBeNew: true });
+      } catch (error) {
+        const raced = error instanceof FileChanged || (!entry && error instanceof FsError && (await this.fs.stat(SESSION_PATH)) !== null);
+        if (raced && attempt < 5) continue;
+        throw error;
+      }
+      for (const k of mine) this.base[k] = now[k];
+      return;
+    }
   }
 
   setView(path: string, prefs: ViewPrefs): void {

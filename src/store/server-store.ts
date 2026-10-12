@@ -4,6 +4,7 @@ import { collapseOps, StoreConflict, StoreError, type Store, type StoreOp, type 
 
 const OP_PUT = 1;
 const OP_DEL = 2;
+const OP_CHECK = 3;
 const text = new TextEncoder();
 
 /** The commit body server/lib/store.php parses: see store_parse_commit there. Little-endian lengths. */
@@ -20,7 +21,7 @@ export function encodeCommit(ops: StoreOp[]): Uint8Array {
     const head = new Uint8Array(1 + 2 + key.length + 1 + expect.length + (o.op === 'put' ? 4 : 0));
     const view = new DataView(head.buffer);
     let at = 0;
-    view.setUint8(at, o.op === 'put' ? OP_PUT : OP_DEL);
+    view.setUint8(at, o.op === 'put' ? OP_PUT : o.op === 'del' ? OP_DEL : OP_CHECK);
     view.setUint16((at += 1), key.length, true);
     head.set(key, (at += 2));
     view.setUint8((at += key.length), expect.length);

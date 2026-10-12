@@ -1003,14 +1003,20 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
     while (row - above - 1 >= 0 && numeric(col, row - above - 1)) above++;
     let leftN = 0;
     while (col - leftN - 1 >= 0 && numeric(col - leftN - 1, row)) leftN++;
-    const many = sel();
+    const picked = sel();
     let formula: string;
-    if (many.r1 > many.r0 || many.c1 > many.c0) {
-      // A block is selected: put the totals in the row below (or column to the right).
+    if (picked.r1 > picked.r0 || picked.c1 > picked.c0) {
+      // A block is selected: put the totals in the row below (or column to the right). A whole row or column (or the
+      // whole sheet) is cut to the cells in use, so the totals land beside the figures, not past the sheet's edge.
+      const used = grid.wb.usedBounds(s);
+      const many = { ...picked, r1: Math.min(picked.r1, Math.max(picked.r0, used.rows - 1)), c1: Math.min(picked.c1, Math.max(picked.c0, used.cols - 1)) };
       const tall = many.r1 - many.r0 >= many.c1 - many.c0;
       try {
-        if (tall) for (let c = many.c0; c <= many.c1; c++) grid.wb.setInput(s, c, many.r1 + 1, `=SUM(${addressOf(c, many.r0)}:${addressOf(c, many.r1)})`);
-        else for (let r = many.r0; r <= many.r1; r++) grid.wb.setInput(s, many.c1 + 1, r, `=SUM(${addressOf(many.c0, r)}:${addressOf(many.c1, r)})`);
+        // One step: a single Undo takes every total back.
+        grid.wb.batch(() => {
+          if (tall) for (let c = many.c0; c <= many.c1; c++) grid.wb.setInput(s, c, many.r1 + 1, `=SUM(${addressOf(c, many.r0)}:${addressOf(c, many.r1)})`);
+          else for (let r = many.r0; r <= many.r1; r++) grid.wb.setInput(s, many.c1 + 1, r, `=SUM(${addressOf(many.c0, r)}:${addressOf(many.c1, r)})`);
+        });
         afterEdit();
       } catch (error) {
         void report(error);
@@ -1051,7 +1057,9 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
         const tilesX = Math.max(1, Math.floor((s.c1 - s.c0 + 1) / width));
         const tilesY = Math.max(1, Math.floor((s.r1 - s.r0 + 1) / height));
         if (tilesX * tilesY <= 1 || clip.cut) grid.wb.copyBlock(grid.wb.active, clip.range, target, { cut: clip.cut, fromSheet: clip.sheet });
-        else for (let ty = 0; ty < tilesY; ty++) for (let tx = 0; tx < tilesX; tx++) grid.wb.copyBlock(grid.wb.active, clip.range, { col: target.col + tx * width, row: target.row + ty * height }, { fromSheet: clip.sheet });
+        else grid.wb.batch(() => {
+          for (let ty = 0; ty < tilesY; ty++) for (let tx = 0; tx < tilesX; tx++) grid.wb.copyBlock(grid.wb.active, clip.range, { col: target.col + tx * width, row: target.row + ty * height }, { fromSheet: clip.sheet });
+        });
         if (clip.cut) state.clip = null;
         select({ c0: target.col, r0: target.row, c1: target.col + width * (clip.cut ? 1 : tilesX) - 1, r1: target.row + height * (clip.cut ? 1 : tilesY) - 1 }, target);
       } else if (text !== null && text !== '') {

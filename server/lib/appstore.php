@@ -15,6 +15,8 @@
 // folder (appstore.json); an app whose folder has gone (deleted by hand) counts as not here.
 declare(strict_types=1);
 
+require_once __DIR__ . '/download.php';
+
 const APPSTORE_SOURCES = [
     'https://raw.githubusercontent.com/Matthew4509/tomlinos/main/appstore/catalogue.json',
 ];
@@ -194,11 +196,13 @@ function appstore_fetch_zip(array $app, string $to): void
     $local = (string) getenv('DESKTOP_APPSTORE_DIR');
     $urls = $local !== '' ? array_map(fn ($u) => $local . '/' . basename(parse_url($u, PHP_URL_PATH) ?: ''), $app['zips']) : $app['zips'];
     foreach ($urls as $url) {
-        // A GitHub release file answers with a redirect to GitHub's file host: followed, and the signed fingerprint
-        // below decides whether what arrived is the app.
-        $ctx = stream_context_create(['http' => ['timeout' => 60, 'follow_location' => 1, 'max_redirects' => 5, 'header' => "User-Agent: TomlinOS\r\n"],
-            'ssl' => ['verify_peer' => true, 'verify_peer_name' => true]]);
-        $in = @fopen($url, 'rb', false, $ctx);
+        // A GitHub release file answers with a redirect to GitHub's file host: followed (on https only), and the signed
+        // fingerprint below decides whether what arrived is the app.
+        try {
+            $in = download_open((string) $url);
+        } catch (RuntimeException) {
+            $in = false; // sent to plain http: the next address is tried
+        }
         if ($in === false) {
             continue;
         }

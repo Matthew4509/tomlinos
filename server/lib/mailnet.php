@@ -22,11 +22,16 @@ const MAIL_MAX_MESSAGE = 25 * 1024 * 1024;
  * (100.64/10). IPv6: only ordinary global addresses (2000::/3), and an IPv4 address carried inside one (::ffff:,
  * 6to4 2002::, NAT64 64:ff9b::) is judged as that IPv4 address (so 64:ff9b::7f00:1 cannot slip through).
  */
+// PHP 8.2's own list of addresses that are not for the open internet (benchmark 198.18/15, 192.0.0/24, multicast,
+// documentation ranges), on top of the private and reserved ones.
+const MAIL_GLOBAL_ONLY = FILTER_FLAG_GLOBAL_RANGE;
+
 function mail_public_ip(string $ip): bool
 {
     if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
-        return filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== false
-            && !preg_match('/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./', $ip);
+        return filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE | MAIL_GLOBAL_ONLY) !== false
+            && !preg_match('/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./', $ip)
+            && (int) explode('.', $ip)[0] < 224; // multicast (224/4), which PHP's lists leave in
     }
     $bin = @inet_pton($ip);
     if ($bin === false || strlen($bin) !== 16) {
@@ -47,7 +52,7 @@ function mail_public_ip(string $ip): bool
         return false; // outside 2000::/3: loopback, link-local, unique-local, multicast, and the rest
     }
 
-    return filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== false;
+    return filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE | MAIL_GLOBAL_ONLY) !== false;
 }
 
 /** A public address for $host, or a refusal. Returns [ip, allowedPlain]. */
@@ -329,6 +334,12 @@ final class Imap
                     $list[] = $s;
                 } elseif ($ch === "\0") {
                     $end = strpos($text, "\0", $i + 1);
+                    if ($end === false) {
+                        // A NUL the server sent itself, not one of our literal markers: the rest is unreadable. (Read
+                        // on, $i would go back to the start and the parse would never end.)
+                        $i = $n;
+                        break;
+                    }
                     $list[] = $lits[(int) substr($text, $i + 2, $end - $i - 2)] ?? '';
                     $i = $end + 1;
                 } else {
@@ -659,8 +670,10 @@ function mail_header_text(string $s): string
         return $s;
     }
     $out = [];
-    // Split on whole characters so no letter is cut in half between encoded words.
-    foreach (preg_split('/(?<=.{30})/us', $s, -1, PREG_SPLIT_NO_EMPTY) ?: [$s] as $chunk) {
+    // Pieces of up to 11 whole characters (never a letter cut in half): 44 bytes at most, so each encoded word stays
+    // within the 75 characters the format allows.
+    preg_match_all('/.{1,11}/us', $s, $pieces);
+    foreach ($pieces[0] ?: [$s] as $chunk) {
         $out[] = '=?UTF-8?B?' . base64_encode($chunk) . '?=';
     }
 
@@ -674,7 +687,8 @@ function mail_address(string $email, string $name = ''): string
     if ($name === '') {
         return $email;
     }
-    $shown = preg_match('/^[\w .\'-]+$/u', $name) && !preg_match('/[^\x20-\x7e]/', $name) ? '"' . addcslashes($name, '"\\') . '"' : mail_header_text($name);
+    // Plain ASCII is always quoted: "Smith, John" unquoted reads as two addresses, "Sales: Team" as a group.
+    $shown = !preg_match('/[^\x20-\x7e]/', $name) ? '"' . addcslashes($name, '"\\') . '"' : mail_header_text($name);
 
     return $shown . ' <' . $email . '>';
 }
@@ -701,16 +715,18 @@ function mail_build(array $m): string
     $h = [
         'Date: ' . date(DATE_RFC2822),
         'From: ' . mail_address($m['from'], $m['fromName'] ?? ''),
-        'To: ' . implode(', ', $m['to']),
+        // One address a line: a header line may be at most 998 characters, and 40 addresses on one line pass that.
+        'To: ' . implode(",\r\n ", $m['to']),
     ];
     if ($m['cc']) {
-        $h[] = 'Cc: ' . implode(', ', $m['cc']);
+        $h[] = 'Cc: ' . implode(",\r\n ", $m['cc']);
     }
     $h[] = 'Subject: ' . mail_header_text($m['subject']);
     $h[] = 'Message-ID: <' . bin2hex(random_bytes(12)) . '@' . $domain . '>';
     if (!empty($m['inReplyTo'])) {
         $h[] = 'In-Reply-To: ' . $m['inReplyTo'];
-        $h[] = 'References: ' . trim(($m['references'] ?? '') . ' ' . $m['inReplyTo']);
+        $refs = preg_split('/\s+/', trim(($m['references'] ?? '') . ' ' . $m['inReplyTo']), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        $h[] = 'References: ' . implode("\r\n ", $refs);
     }
     $h[] = 'MIME-Version: 1.0';
     $h[] = 'X-Mailer: TOMLIN OS Mail';

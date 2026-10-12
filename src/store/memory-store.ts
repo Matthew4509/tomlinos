@@ -18,6 +18,7 @@ export class MemoryStore implements Store {
     if (conflicts.length) throw new StoreConflict(conflicts);
     const versions: Record<string, string> = {};
     for (const o of final.values()) {
+      if (o.op === 'check') continue;
       if (o.op === 'del') {
         this.records.delete(o.key);
         versions[o.key] = '';

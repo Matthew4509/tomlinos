@@ -2,7 +2,7 @@
 // and both ask first. Each deleted item sits in its own slot folder under /System/Trash, keeping its name, and a
 // small list (/System/trash.json) remembers where each one came from. If that list is lost, the slots are still
 // there and are shown as "original location unknown"; nothing is lost with it.
-import { FsError, type Entry, type FileSystem } from '../fs/fs.ts';
+import { FileChanged, FsError, type Entry, type FileSystem } from '../fs/fs.ts';
 import { baseName, joinPath, nameKey, parentPath, uniqueName } from '../fs/names.ts';
 import { newKey } from '../store/store.ts';
 
@@ -39,24 +39,57 @@ export class RecycleBin {
   }
 
   private async readMeta(): Promise<Meta> {
+    return (await this.readMetaWithId()).meta;
+  }
+
+  /** The list and the id of the copy it came from ('' when there is none). */
+  private async readMetaWithId(): Promise<{ meta: Meta; id: string }> {
+    const entry = await this.fs.stat(META_PATH).catch(() => null);
     try {
       const raw = JSON.parse(await this.fs.readText(META_PATH));
       if (raw && raw.v === 1 && Array.isArray(raw.items)) {
         return {
-          v: 1,
-          items: raw.items.filter(
-            (i: any) => i && typeof i.slot === 'string' && typeof i.name === 'string' && typeof i.from === 'string' && typeof i.deleted === 'number',
-          ),
+          id: entry?.id ?? '',
+          meta: {
+            v: 1,
+            items: raw.items.filter(
+              (i: any) => i && typeof i.slot === 'string' && typeof i.name === 'string' && typeof i.from === 'string' && typeof i.deleted === 'number',
+            ),
+          },
         };
       }
     } catch {
       // Missing or unreadable: the slots themselves are the source of truth.
     }
-    return { v: 1, items: [] };
+    return { meta: { v: 1, items: [] }, id: entry?.id ?? '' };
   }
 
-  private async writeMeta(meta: Meta): Promise<void> {
-    await this.fs.writeText(META_PATH, JSON.stringify(meta), { hidden: true });
+  /**
+   * Changes the list on top of the copy there now, so two deletes (or a delete and a restore) close together, in this
+   * window or another, never drop each other's lines. A copy saved in between is read again and the change redone.
+   */
+  private async changeMeta(apply: (meta: Meta) => void): Promise<void> {
+    for (let attempt = 1; ; attempt++) {
+      const { meta, id } = await this.readMetaWithId();
+      apply(meta);
+      try {
+        await this.fs.writeText(META_PATH, JSON.stringify(meta), id ? { hidden: true, replacing: id } : { hidden: true, mustBeNew: true });
+        return;
+      } catch (error) {
+        const raced = error instanceof FileChanged || (!id && error instanceof FsError && (await this.fs.stat(META_PATH)) !== null);
+        if (!raced || attempt >= 5) throw error;
+      }
+    }
+  }
+
+  /** The slot folders, or none when the bin was never made. */
+  private async slotFolders(): Promise<Entry[]> {
+    try {
+      return (await this.fs.list(TRASH_DIR, true)).filter(e => e.kind === 'folder');
+    } catch (error) {
+      if (error instanceof FsError) return [];
+      throw error;
+    }
   }
 
   private async ensureDir(): Promise<void> {
@@ -66,13 +99,7 @@ export class RecycleBin {
 
   /** What is in the bin, newest first. */
   async list(): Promise<BinItem[]> {
-    let slots: Entry[];
-    try {
-      slots = (await this.fs.list(TRASH_DIR, true)).filter(e => e.kind === 'folder');
-    } catch (error) {
-      if (error instanceof FsError) return [];
-      throw error;
-    }
+    const slots = await this.slotFolders();
     const meta = await this.readMeta();
     const items: BinItem[] = [];
     for (const slot of slots) {
@@ -91,8 +118,9 @@ export class RecycleBin {
     return items.sort((a, b) => b.deleted - a.deleted);
   }
 
+  /** How many items: the slot folders alone (one request, not one per item: it runs on every change to the bin). */
   async count(): Promise<number> {
-    return (await this.list()).length;
+    return (await this.slotFolders()).length;
   }
 
   /** Moves paths into the bin one at a time, so one failure does not stop the rest. Returns what happened. */
@@ -119,11 +147,7 @@ export class RecycleBin {
         failures.push({ name, reason: error instanceof Error ? error.message : String(error) });
       }
     }
-    if (added.length) {
-      const meta = await this.readMeta();
-      meta.items.push(...added);
-      await this.writeMeta(meta);
-    }
+    if (added.length) await this.changeMeta(meta => void meta.items.push(...added));
     return { slots, failures };
   }
 
@@ -135,6 +159,7 @@ export class RecycleBin {
     const meta = await this.readMeta();
     const restored: Array<{ name: string; to: string; fallback: boolean }> = [];
     const failures: Failure[] = [];
+    const done: string[] = [];
     for (const slot of slots) {
       const slotPath = `${TRASH_DIR}/${slot}`;
       let name = slot;
@@ -155,13 +180,13 @@ export class RecycleBin {
         if (nameKey(finalName) !== nameKey(inside.name)) await this.fs.rename(`${slotPath}/${inside.name}`, finalName);
         await this.fs.move([`${slotPath}/${finalName}`], dest);
         await this.fs.remove([slotPath]);
-        meta.items = meta.items.filter(i => i.slot !== slot);
+        done.push(slot);
         restored.push({ name: finalName, to: dest, fallback });
       } catch (error) {
         failures.push({ name, reason: error instanceof Error ? error.message : String(error) });
       }
     }
-    if (restored.length) await this.writeMeta(meta);
+    if (done.length) await this.changeMeta(m => void (m.items = m.items.filter(i => !done.includes(i.slot))));
     return { restored, failures };
   }
 
@@ -177,19 +202,18 @@ export class RecycleBin {
         failures.push({ name: slot, reason: error instanceof Error ? error.message : String(error) });
       }
     }
-    if (gone.length) {
-      const meta = await this.readMeta();
-      meta.items = meta.items.filter(i => !gone.includes(i.slot));
-      await this.writeMeta(meta);
-    }
+    if (gone.length) await this.changeMeta(m => void (m.items = m.items.filter(i => !gone.includes(i.slot))));
     return { failures };
   }
 
-  /** Destroys items deleted before the cutoff (ms since 1970). Returns how many went. */
+  /** Destroys items deleted before the cutoff (ms since 1970). Returns how many went. Two requests when nothing is due. */
   async purgeBefore(cutoff: number): Promise<number> {
-    const old = (await this.list()).filter(i => i.deleted < cutoff);
+    const slots = await this.slotFolders();
+    if (!slots.length) return 0;
+    const meta = await this.readMeta();
+    const old = slots.filter(s => (meta.items.find(i => i.slot === s.name)?.deleted ?? s.modified) < cutoff).map(s => s.name);
     if (!old.length) return 0;
-    const { failures } = await this.destroy(old.map(i => i.slot));
+    const { failures } = await this.destroy(old);
     return old.length - failures.length;
   }
 

@@ -35,10 +35,30 @@ export function stageDraft(acct: MailAccount, draft: Draft, sentFolder: string):
   return id;
 }
 
-/** "a@b.c, Ann <d@e.f>; g@h.i" -> the addresses alone (the server checks each again). */
+/** "a@b.c, Ann <d@e.f>; "Lee, Bo" <g@h.i>" -> the addresses alone (the server checks each again). */
 export function splitAddresses(text: string): string[] {
-  return text.split(/[,;\n]/).map(s => {
-    const m = /<([^<>]+)>/.exec(s);
+  // Split only on commas, semicolons and new lines outside a quoted name and outside <...>.
+  const parts: string[] = [];
+  let cur = '';
+  let quoted = false;
+  let angle = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quoted && c === '\\') {
+      cur += c + (text[++i] ?? '');
+      continue;
+    }
+    if (c === '"' && !angle) quoted = !quoted;
+    else if (!quoted && c === '<') angle = true;
+    else if (!quoted && c === '>') angle = false;
+    if (!quoted && !angle && (c === ',' || c === ';' || c === '\n')) {
+      parts.push(cur);
+      cur = '';
+    } else cur += c;
+  }
+  parts.push(cur);
+  return parts.map(s => {
+    const m = /<([^<>]+)>\s*$/.exec(s);
     return (m ? m[1] : s).trim();
   }).filter(Boolean);
 }

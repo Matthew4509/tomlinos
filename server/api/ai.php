@@ -120,6 +120,7 @@ if (!is_array($body) || !is_array($body['messages'] ?? null)) {
 }
 $messages = [];
 $chars = 0;
+$bytes = 0; // for the cost reserve: Chinese, Japanese or Korean run to a token a letter or more, 3 bytes each
 foreach (array_values($body['messages']) as $i => $m) {
     $role = is_array($m) ? body_str($m, 'role') : '';
     $content = is_array($m) ? body_str($m, 'content') : '';
@@ -128,6 +129,7 @@ foreach (array_values($body['messages']) as $i => $m) {
         api_fail(400, 'The conversation was not in the expected order. Start a new chat and try again.');
     }
     $chars += $letters($content);
+    $bytes += strlen($content);
     $messages[] = ['role' => $role, 'content' => $content];
 }
 if (!$messages || count($messages) > 80 || count($messages) % 2 === 0) {
@@ -147,7 +149,7 @@ if ($wait > 0) {
     api_fail(429, 'That is 120 questions in an hour. Wait a few minutes, then carry on.', ['wait' => $wait]);
 }
 $model = $s['model'];
-$worst = ai_worst_micro($model, $chars);
+$worst = ai_worst_micro($model, $bytes);
 $reserve = ai_reserve($root, $uid, $s['cap'], $worst);
 if ($reserve === null) {
     $spent = ai_ledger_read($root, $uid, ai_month())['spent'];

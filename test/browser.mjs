@@ -994,7 +994,8 @@ await step('Spreadsheet: Save as makes a .sheet file; reopening it from Explorer
   await dlg.waitFor();
   await dlg.locator('input').fill('budget-' + stamp + '.sheet');
   await dlg.getByRole('button', { name: 'Save' }).click();
-  await page.locator('.toast', { hasText: 'Saved' }).last().waitFor();
+  // The toast naming this file: an earlier "Saved" (the Text Editor's) can still be on screen while this save runs.
+  await page.locator('.toast', { hasText: 'Saved “budget-' + stamp }).waitFor();
   await page.locator('.win', { has: page.locator('.sheet') }).getByRole('button', { name: 'Close' }).click();
   const w = await openDocuments();
   await w.locator('.item', { hasText: 'budget-' + stamp }).first().dblclick();

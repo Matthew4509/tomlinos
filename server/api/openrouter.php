@@ -128,6 +128,7 @@ if (!is_array($body) || !is_array($body['messages'] ?? null)) {
 }
 $messages = [];
 $chars = 0;
+$bytes = 0; // for the cost reserve: Chinese, Japanese or Korean run to a token a letter or more, 3 bytes each
 foreach (array_values($body['messages']) as $i => $m) {
     $role = is_array($m) ? body_str($m, 'role') : '';
     $content = is_array($m) ? body_str($m, 'content') : '';
@@ -136,6 +137,7 @@ foreach (array_values($body['messages']) as $i => $m) {
         api_fail(400, 'The conversation was not in the expected order. Start a new chat and try again.');
     }
     $chars += $letters($content);
+    $bytes += strlen($content);
     $messages[] = ['role' => $role, 'content' => $content];
 }
 if (!$messages || count($messages) > 80 || count($messages) % 2 === 0) {
@@ -158,7 +160,7 @@ $wait = rate_take($root, $uid, 'or-chat', 120, 3600);
 if ($wait > 0) {
     api_fail(429, 'That is 120 questions in an hour. Wait a few minutes, then carry on.', ['wait' => $wait]);
 }
-$worst = or_worst_micro($model, $chars);
+$worst = or_worst_micro($model, $bytes);
 $reserve = ai_reserve($root, $uid, $s['cap'], $worst, null, OR_BOOK);
 if ($reserve === null) {
     $spent = ai_ledger_read($root, $uid, ai_month(), OR_BOOK)['spent'];
@@ -191,6 +193,8 @@ try {
             'model' => $model['id'],
             'max_tokens' => OR_MAX_OUTPUT,
             'stream' => true,
+            // The tokens and OpenRouter's own cost in the last message, so what is booked is what was charged.
+            'usage' => ['include' => true],
             'messages' => array_merge([['role' => 'system', 'content' => 'You are the AI inside TOMLIN OS, a person\'s own web desktop. Answer plainly and helpfully, like a person would. Keep answers short unless asked for more. When asked to summarise or rewrite, reply with only the result.']], $messages),
         ],
         'stream' => true,
@@ -232,6 +236,12 @@ if ($r['out'] === 0 && $emitted > 0) {
 }
 // OpenRouter's own figure when it sent one; otherwise worked out from the list prices.
 $cost = $r['cost'] !== null ? (int) ceil($r['cost'] * 1e6) : or_cost_micro($model, $r['in'], $r['out']);
+if ($r['cost'] === null && $r['in'] === 0 && $r['out'] === 0 && !$r['aborted'] && $r['error'] === null && $r['stop'] !== '') {
+    // Finished, but no count came and no words either (a model that only "thought"): booked at the most it could have
+    // cost, never at nothing, so the monthly cap still holds.
+    $cost = $worst;
+    $note = trim($note . ', no count sent: booked at the most it could cost', ', ');
+}
 ai_book($root, $uid, $reserve, ['model' => $model['name'], 'in' => $r['in'], 'out' => $r['out'], 'cost' => $cost, 'note' => $note ?: ($r['stop'] === 'length' ? 'cut at the length limit' : '')], null, OR_BOOK);
 $emit([
     'done' => true, 'model' => $model['name'], 'in' => $r['in'], 'out' => $r['out'], 'cost' => $dollars($cost),

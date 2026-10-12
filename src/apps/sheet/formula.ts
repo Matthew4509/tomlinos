@@ -12,6 +12,8 @@ export type Node =
   | { t: 'str'; v: string }
   | { t: 'bool'; v: boolean }
   | { t: 'err'; e: CellError }
+  /** An argument left empty, as in IF(A1>2,"y",): a blank, as a blank cell would be. */
+  | { t: 'blank' }
   | { t: 'ref'; ref: Ref; sheet?: string }
   | { t: 'range'; a: Ref; b: Ref; sheet?: string }
   | { t: 'un'; op: '-' | '+' | '%'; x: Node }
@@ -107,7 +109,7 @@ export function parseFormula(text: string): Node {
         if (toks[p]?.type === 'rp') p++;
         else {
           for (;;) {
-            if (toks[p]?.type === 'comma' || toks[p]?.type === 'rp') args.push({ t: 'err', e: E.NAME } as Node);
+            if (toks[p]?.type === 'comma' || toks[p]?.type === 'rp') args.push({ t: 'blank' });
             else args.push(comparison(d + 1));
             const n = toks[p++];
             if (n?.type === 'rp') break;
@@ -190,6 +192,7 @@ class Ev {
       case 'str': return n.v;
       case 'bool': return n.v;
       case 'err': return n.e;
+      case 'blank': return null;
       case 'ref': {
         const s = this.sheetOf(n.sheet);
         return s < 0 ? E.REF : this.cell(s, n.ref.col, n.ref.row);
@@ -237,7 +240,8 @@ class Ev {
 export function text(v: Value): string {
   if (v === null) return '';
   if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';
-  if (typeof v === 'number') return formatNumber(v, undefined);
+  // Every digit, as a spreadsheet joins a number into text (="Ref "&A1 with 123456789012 keeps all twelve).
+  if (typeof v === 'number') return String(clean(v)).replace('e', 'E');
   if (v instanceof CellError) return v.code;
   return v;
 }
@@ -271,6 +275,10 @@ function rank(v: Value): number {
 }
 
 function compare(op: string, l: Value, r: Value): boolean {
+  // A blank cell is "" next to text, FALSE next to TRUE/FALSE, and 0 next to a number (so =A1="" is TRUE when A1 is empty).
+  const blankAs = (other: Value): Value => (typeof other === 'string' ? '' : typeof other === 'boolean' ? false : 0);
+  if (l === null && r !== null) l = blankAs(r);
+  else if (r === null && l !== null) r = blankAs(l);
   let c: number;
   if (rank(l) !== rank(r)) c = rank(l) - rank(r);
   else if (typeof l === 'string' && typeof r === 'string') c = l.toLowerCase() < r.toLowerCase() ? -1 : l.toLowerCase() > r.toLowerCase() ? 1 : 0;
@@ -348,6 +356,10 @@ function makeMatcher(criteria: Value): ((v: Value) => boolean) | CellError {
     const asNum = rest.trim() !== '' && !Number.isNaN(Number(rest)) ? Number(rest) : null;
     operand = asNum !== null ? asNum : rest;
   }
+  // "<>" alone counts the cells that hold something; "=" or "" alone counts the empty ones.
+  if (operand === '' && (op === '=' || op === '<>')) {
+    return v => ((v === null || v === '') === (op === '='));
+  }
   if (typeof operand === 'string') {
     const pattern = new RegExp('^' + operand.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$', 'is');
     return v => {
@@ -401,8 +413,9 @@ const FUNCTIONS: Record<string, Fn> = {
   SUM: (ev, a, d) => { const n = numbers(ev, a, d); return n instanceof CellError ? n : clean(n.reduce((x, y) => x + y, 0)); },
   PRODUCT: (ev, a, d) => { const n = numbers(ev, a, d); return n instanceof CellError ? n : clean(n.reduce((x, y) => x * y, 1)); },
   AVERAGE: (ev, a, d) => { const n = numbers(ev, a, d); return n instanceof CellError ? n : n.length ? clean(n.reduce((x, y) => x + y, 0) / n.length) : E.DIV0; },
-  MIN: (ev, a, d) => { const n = numbers(ev, a, d); return n instanceof CellError ? n : n.length ? Math.min(...n) : 0; },
-  MAX: (ev, a, d) => { const n = numbers(ev, a, d); return n instanceof CellError ? n : n.length ? Math.max(...n) : 0; },
+  // A loop, not Math.min(...n): spreading a range of hundreds of thousands of cells overflows the call stack.
+  MIN: (ev, a, d) => { const n = numbers(ev, a, d); return n instanceof CellError ? n : n.length ? n.reduce((x, y) => (y < x ? y : x)) : 0; },
+  MAX: (ev, a, d) => { const n = numbers(ev, a, d); return n instanceof CellError ? n : n.length ? n.reduce((x, y) => (y > x ? y : x)) : 0; },
   MEDIAN: (ev, a, d) => {
     const n = numbers(ev, a, d);
     if (n instanceof CellError) return n;

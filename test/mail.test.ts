@@ -2,7 +2,8 @@
 // Run: npm test
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { decodeWords, parseAddresses, parseContentType, parseMessage, replySubject, summary } from '../src/apps/mail/mime.ts';
+import { decodeWords, parseAddresses, parseContentType, parseMessage, replySubject, showAddress, summary } from '../src/apps/mail/mime.ts';
+import { splitAddresses } from '../src/apps/mail/compose.ts';
 
 const enc = (s: string) => new Uint8Array(Buffer.from(s, 'latin1'));
 const utf8 = (s: string) => new Uint8Array(Buffer.from(s, 'utf8'));
@@ -27,6 +28,33 @@ test('content type parameters, including an RFC 2231 name in pieces', () => {
   assert.equal(ct.type, 'application/pdf');
   assert.equal(ct.params.name, 'résumé.pdf');
   assert.equal(ct.params.x, 'a;b');
+});
+
+test('a name with one star is encoded, not numbered: filename*=UTF-8\'\'... is decoded', () => {
+  assert.equal(parseContentType('application/pdf; filename*=UTF-8\'\'r%C3%A9sum%C3%A9.pdf').params.filename, 'résumé.pdf');
+});
+
+test('a parameter called __proto__ or constructor is only a name: nothing outside the message changes', () => {
+  const ct = parseContentType('text/plain; __proto__*0*=utf-16le\'\'x; constructor*=x; toString=y');
+  assert.equal(({} as Record<string, unknown>).charset, undefined);
+  assert.equal(Object.getPrototypeOf(ct.params), null);
+  const m = parseMessage(enc('Subject: hi\r\nContent-Type: text/plain\r\n\r\nHello there\r\n'));
+  assert.equal(m.text?.trim(), 'Hello there');
+  // A summary with such a header still reads, so the folder list still loads.
+  assert.equal(summary('Subject: x\r\nContent-Type: text/plain; __proto__*0*=utf-16le\'\'x').subject, 'x');
+});
+
+test('a part with no headers keeps its first paragraph', () => {
+  const raw = 'Content-Type: multipart/mixed; boundary="b"\r\n\r\n--b\r\n\r\nFirst paragraph\r\n\r\nSecond\r\n--b--\r\n';
+  assert.match(parseMessage(enc(raw)).text ?? '', /First paragraph[\s\S]*Second/);
+});
+
+test('replying to a name with a comma keeps one person, quoted, and sending splits it as one address', () => {
+  const [bo] = parseAddresses('"Lee, Bo" <bo@x.com>');
+  const shown = showAddress(bo);
+  assert.equal(shown, '"Lee, Bo" <bo@x.com>');
+  assert.deepEqual(parseAddresses(shown), [bo]);
+  assert.deepEqual(splitAddresses(`${shown}, ann@y.com; "Odd \\"Name\\"; x" <c@z.com>\nd@w.com`), ['bo@x.com', 'ann@y.com', 'c@z.com', 'd@w.com']);
 });
 
 test('a multipart message: plain, HTML and an attachment, quoted-printable and base64', () => {

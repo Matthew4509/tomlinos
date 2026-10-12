@@ -111,7 +111,7 @@ test('a second window that renames to a name the first just took is refused, not
   await assert.rejects(two.rename('/Documents/a.txt', 'b.txt'), /already something called/);
 });
 
-test('a store that always clashes gives up after three tries with a clear message', async () => {
+test('a store that always clashes gives up after six tries (spaced out) with a clear message', async () => {
   const inner = new MemoryStore();
   let commits = 0;
   const store: Store = {
@@ -127,7 +127,7 @@ test('a store that always clashes gives up after three tries with a clear messag
   };
   const fs = new FileSystem(store);
   await assert.rejects(fs.writeText('/Documents/a.txt', 'x'), /kept changing/);
-  assert.equal(commits, 3);
+  assert.equal(commits, 6);
 });
 
 test('the commit body matches what server/lib/store.php parses', () => {

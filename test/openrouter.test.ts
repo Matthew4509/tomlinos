@@ -51,7 +51,7 @@ echo json_encode([
   assert.equal(r.variable, null, 'the automatic router has no fixed price');
   assert.equal(r.junk, null);
   assert.equal(r.cost, 10500, '1000 x $3 + 500 x $15 per million = $0.0105');
-  assert.equal(r.worst, (1000 + 200) * 3 + 8000 * 15, 'input at 3 letters a token, plus a full answer');
+  assert.equal(r.worst, (1500 + 200) * 3 + 8000 * 15, 'input at a token per 2 bytes, plus a full answer');
 });
 
 test('the stream: the answer piece by piece, then the tokens and OpenRouter\'s own cost from the last message', { skip: !hasPhp && 'no PHP' }, () => {

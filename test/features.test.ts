@@ -11,11 +11,13 @@ import { linkTarget, webAddress } from '../src/apps/link.ts';
 import { parseSession } from '../src/shell/session.ts';
 
 const ev = (over: Partial<CalEvent>): CalEvent => ({ uid: 'u1', title: 'Pruning, Smith; "garden"', date: '2026-09-26', start: '09:30', end: '11:00', notes: 'Line one\nLine two, with comma', repeat: 'none', remind: 15, ...over });
+// A record read from a file also carries what the file held beyond its fields (keep): compared without it.
+const bare = <T extends { keep?: unknown }>({ keep: _, ...rest }: T) => rest;
 
 test('an event survives writing and reading back, commas, semicolons and new lines included', () => {
   const e = ev({});
   const back = parseIcs(writeIcs([e, ev({ uid: 'u2', start: '', end: '', repeat: 'yearly', remind: -1, title: 'Birthday' })]));
-  assert.deepEqual(back[0], e);
+  assert.deepEqual(bare(back[0]), e);
   assert.equal(back[1].start, '');
   assert.equal(back[1].repeat, 'yearly');
 });
@@ -47,7 +49,7 @@ test('a reminder falls the chosen minutes before the start; all-day ones at 09:0
 
 test('a contact survives writing and reading back; a phone export with N only and typed fields reads', () => {
   const c = { ...emptyContact(), name: 'Jane O\'Neil; Gardener', org: 'Gardens, Ltd', phones: ['+61 400 000 000', '02 9999 9999'], emails: ['jane@example.com'], address: '1 Key St, Sydney', birthday: '1980-02-29', notes: 'Prefers\nmornings' };
-  assert.deepEqual(parseVcf(writeVcf([c]))[0], c);
+  assert.deepEqual(bare(parseVcf(writeVcf([c]))[0]), c);
   const phone = parseVcf('BEGIN:VCARD\nVERSION:2.1\nN:Smith;John;;;\nTEL;CELL;PREF:0411 111 111\nEMAIL;TYPE=INTERNET:j@s.com\nBDAY:19700101\nEND:VCARD\n');
   assert.equal(phone[0].name, 'John Smith');
   assert.deepEqual(phone[0].phones, ['0411 111 111']);

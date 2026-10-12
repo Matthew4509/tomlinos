@@ -1,6 +1,8 @@
 // Contacts read from and written to a .vcf file (vCard 3.0), so the address book can be downloaded into a phone or
-// another program, and a .vcf from elsewhere can be opened here.
-import { escapeValue, readLines, splitParts, unescapeValue, writeLine } from './lines.ts';
+// another program, and a .vcf from elsewhere can be opened here. What a card from elsewhere holds that this app does
+// not edit (a photo, web addresses, phone types) is kept and written back as it was; a field changed here is written
+// fresh.
+import { escapeValue, foldLine, idFromText, readLines, splitParts, unescapeValue, writeLine } from './lines.ts';
 
 export interface Contact {
   uid: string;
@@ -12,27 +14,61 @@ export interface Contact {
   /** YYYY-MM-DD or '' */
   birthday: string;
   notes: string;
+  /** What the file held for this card beyond the fields above (absent for a card made here). */
+  keep?: CardKeep;
 }
+
+type Field = 'name' | 'org' | 'phones' | 'emails' | 'address' | 'birthday' | 'notes';
+
+interface CardKeep {
+  /** The file's own UID ('' when it gave none). */
+  uid: string;
+  version: string;
+  /** Lines this app does not edit, as they were. */
+  lines: string[];
+  /** Each edited field's own lines, written back while the field is unchanged here; and its value as read. */
+  raw: Partial<Record<Field, string[]>>;
+  was: Record<Field, string>;
+}
+
+const FIELD_OF: Record<string, Field> = { FN: 'name', N: 'name', ORG: 'org', TEL: 'phones', EMAIL: 'emails', ADR: 'address', BDAY: 'birthday', NOTE: 'notes' };
 
 export const emptyContact = (): Contact => ({ uid: crypto.randomUUID(), name: '', org: '', phones: [], emails: [], address: '', birthday: '', notes: '' });
 
+const valueOf = (c: Contact, f: Field): string => JSON.stringify(c[f]);
+
 export function parseVcf(text: string): Contact[] {
   const out: Contact[] = [];
+  const seen = new Map<string, number>();
   let cur: Contact | null = null;
+  let keep: CardKeep | null = null;
+  let raw: string[] = [];
   let nameFromN = '';
   for (const line of readLines(text)) {
     if (line.name === 'BEGIN' && line.value.toUpperCase() === 'VCARD') {
       cur = emptyContact();
+      keep = { uid: '', version: '', lines: [], raw: {}, was: {} as Record<Field, string> };
+      raw = [];
       nameFromN = '';
     } else if (line.name === 'END' && line.value.toUpperCase() === 'VCARD') {
-      if (cur) {
+      if (cur && keep) {
         if (!cur.name) cur.name = nameFromN || cur.org || cur.emails[0] || cur.phones[0] || '(no name)';
+        // No UID in the file: one worked out from the card itself, the same each time the file is read.
+        cur.uid = keep.uid || idFromText(raw.join('\n'), seen);
+        keep.uid ||= cur.uid;
+        for (const f of Object.values(FIELD_OF)) keep.was[f] = valueOf(cur, f);
+        cur.keep = keep;
         out.push(cur);
       }
       cur = null;
-    } else if (cur) {
+      keep = null;
+    } else if (cur && keep) {
+      raw.push(line.raw);
       const v = unescapeValue(line.value);
-      if (line.name === 'UID') cur.uid = line.value.slice(0, 200);
+      const field = FIELD_OF[line.name];
+      if (field) (keep.raw[field] ??= []).push(line.raw);
+      if (line.name === 'UID') keep.uid = line.value.slice(0, 200);
+      else if (line.name === 'VERSION') keep.version = line.value.trim().slice(0, 10);
       else if (line.name === 'FN') cur.name = v.slice(0, 300);
       else if (line.name === 'N') {
         const [family, given, middle] = splitParts(line.value);
@@ -45,6 +81,7 @@ export function parseVcf(text: string): Contact[] {
         const m = /^(\d{4})-?(\d{2})-?(\d{2})/.exec(line.value);
         if (m) cur.birthday = `${m[1]}-${m[2]}-${m[3]}`;
       } else if (line.name === 'NOTE') cur.notes = v.slice(0, 20000);
+      else if (!field) keep.lines.push(line.raw);
     }
   }
   return out;
@@ -53,15 +90,20 @@ export function parseVcf(text: string): Contact[] {
 export function writeVcf(contacts: Contact[]): string {
   const out: string[] = [];
   for (const c of contacts) {
-    out.push('BEGIN:VCARD', 'VERSION:3.0', writeLine('UID', c.uid), writeLine('FN', escapeValue(c.name)));
+    const k = c.keep;
+    // Unchanged here: the file's own lines for that field. Changed (or a card made here): written fresh.
+    const kept = (f: Field): string[] | null => (k && k.raw[f]?.length && k.was[f] === valueOf(c, f) ? k.raw[f]!.map(foldLine) : null);
+    out.push('BEGIN:VCARD', `VERSION:${k?.version || '3.0'}`, writeLine('UID', k?.uid || c.uid));
     // N is required by the format; the whole name goes in the family-name part rather than guessing where it splits.
-    out.push(writeLine('N', `${escapeValue(c.name)};;;;`));
-    if (c.org) out.push(writeLine('ORG', escapeValue(c.org)));
-    for (const p of c.phones) out.push(writeLine('TEL', escapeValue(p)));
-    for (const e of c.emails) out.push(writeLine('EMAIL', escapeValue(e)));
-    if (c.address) out.push(writeLine('ADR', `;;${escapeValue(c.address)};;;;`));
-    if (c.birthday) out.push(`BDAY:${c.birthday}`);
-    if (c.notes) out.push(writeLine('NOTE', escapeValue(c.notes)));
+    out.push(...(kept('name') ?? [writeLine('FN', escapeValue(c.name)), writeLine('N', `${escapeValue(c.name)};;;;`)]));
+    out.push(...(kept('org') ?? (c.org ? [writeLine('ORG', escapeValue(c.org))] : [])));
+    out.push(...(kept('phones') ?? c.phones.map(p => writeLine('TEL', escapeValue(p)))));
+    out.push(...(kept('emails') ?? c.emails.map(e => writeLine('EMAIL', escapeValue(e)))));
+    // Only the first address is shown here: a changed one replaces it, and any others stay.
+    out.push(...(kept('address') ?? [...(c.address ? [writeLine('ADR', `;;${escapeValue(c.address)};;;;`)] : []), ...(k?.raw.address?.slice(1).map(foldLine) ?? [])]));
+    out.push(...(kept('birthday') ?? (c.birthday ? [`BDAY:${c.birthday}`] : [])));
+    out.push(...(kept('notes') ?? (c.notes ? [writeLine('NOTE', escapeValue(c.notes))] : [])));
+    for (const raw of k?.lines ?? []) out.push(foldLine(raw));
     out.push('END:VCARD');
   }
   return out.join('\r\n') + (out.length ? '\r\n' : '');

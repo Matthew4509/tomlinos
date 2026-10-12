@@ -8,6 +8,12 @@ export function writeZip(from, to) {
   const local = [];
   const central = [];
   let offset = 0;
+  // Every file is dated with the moment of packing (a zero date reads as 1980, or as no date at all). Unzipped, each
+  // release's files are then newer than the last's, so the web server's "has it changed?" answer is right even for a
+  // file whose size did not change.
+  const now = new Date();
+  const dosTime = (now.getHours() << 11) | (now.getMinutes() << 5) | Math.floor(now.getSeconds() / 2);
+  const dosDate = ((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate();
   const add = (name, data) => {
     const nameBytes = Buffer.from(name, 'utf8');
     const packed = data.length ? deflateRawSync(data) : Buffer.alloc(0);
@@ -16,9 +22,11 @@ export function writeZip(from, to) {
     const crc = crc32(data);
     const head = Buffer.alloc(30);
     head.writeUInt32LE(0x04034b50, 0); head.writeUInt16LE(20, 4); head.writeUInt16LE(0x0800, 6); head.writeUInt16LE(method, 8);
+    head.writeUInt16LE(dosTime, 10); head.writeUInt16LE(dosDate, 12);
     head.writeUInt32LE(crc, 14); head.writeUInt32LE(body.length, 18); head.writeUInt32LE(data.length, 22); head.writeUInt16LE(nameBytes.length, 26);
     const dir = Buffer.alloc(46);
     dir.writeUInt32LE(0x02014b50, 0); dir.writeUInt16LE(20, 4); dir.writeUInt16LE(20, 6); dir.writeUInt16LE(0x0800, 8); dir.writeUInt16LE(method, 10);
+    dir.writeUInt16LE(dosTime, 12); dir.writeUInt16LE(dosDate, 14);
     dir.writeUInt32LE(crc, 16); dir.writeUInt32LE(body.length, 20); dir.writeUInt32LE(data.length, 24); dir.writeUInt16LE(nameBytes.length, 28);
     dir.writeUInt32LE(name.endsWith('/') ? 0x10 : 0, 38); dir.writeUInt32LE(offset, 42);
     local.push(head, nameBytes, body);

@@ -53,7 +53,8 @@ if (str_starts_with($path, '/models/')) {
 $root = realpath($_SERVER['DOCUMENT_ROOT']);
 // A folder's own page, as the live server does (/reader/ is reader/index.html).
 $rel = str_ends_with($path, '/') ? rawurldecode($path) . 'index.html' : rawurldecode($path);
-$file = $root === false ? false : realpath($root . $rel);
+// A null byte (/%00) makes realpath() throw, which would print the server's own folders: simply not found.
+$file = $root === false || str_contains($rel, "\0") ? false : realpath($root . $rel);
 $types = [
     'html' => 'text/html; charset=utf-8', 'js' => 'text/javascript; charset=utf-8', 'css' => 'text/css; charset=utf-8',
     'json' => 'application/json', 'png' => 'image/png', 'svg' => 'image/svg+xml', 'ico' => 'image/x-icon',

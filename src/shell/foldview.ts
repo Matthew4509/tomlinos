@@ -205,24 +205,47 @@ export function createFolderView(o: ViewOptions): FolderView {
     };
   }
 
+  /**
+   * Where an icon's place is kept: by its name (one folder, so names are unique), not by its id, which every save
+   * changes. A place kept under the id (before this) is moved across the first time the icon is drawn.
+   */
+  function cellKey(item: Item): string {
+    return item.entry ? `name:${nameKey(item.name)}` : item.key;
+  }
+
   /** Desktop only: each icon gets its saved cell, or the next free one (which is then saved). */
   function placeIcons(): void {
     const { cols, rows } = gridSize();
     const saved = shell.session.data.icons;
+    let dirty = false;
+    const byItem: Record<string, [number, number]> = {};
+    for (const item of items) {
+      const k = cellKey(item);
+      if (!saved[k] && k !== item.key && saved[item.key]) {
+        saved[k] = saved[item.key];
+        delete saved[item.key];
+        dirty = true;
+      }
+      if (saved[k]) byItem[item.key] = saved[k];
+    }
     const ids = [...priority, ...items.map(i => i.key).filter(k => !priority.includes(k))].filter(k => items.some(i => i.key === k));
-    const result = allocate(ids, saved, cols, rows);
+    const result = allocate(ids, byItem, cols, rows);
     cells = result.cells;
     priority = [];
-    let dirty = result.changed;
-    for (const [key, cell] of cells) {
-      const was = saved[key];
+    for (const item of items) {
+      const cell = cells.get(item.key);
+      if (!cell) continue;
+      const k = cellKey(item);
+      const was = saved[k];
+      // A place outside today's smaller grid (a narrow window, the phone keyboard up) is kept for when there is room again.
+      if (was && (was[0] >= cols || was[1] >= rows)) continue;
       if (!was || was[0] !== cell[0] || was[1] !== cell[1]) {
-        saved[key] = cell;
+        saved[k] = cell;
         dirty = true;
       }
     }
     // Forget cells of things that are gone.
-    const known = new Set(items.map(i => i.key));
+    const known = new Set(items.map(cellKey));
     for (const key of Object.keys(saved)) {
       if (!known.has(key) && !failure) {
         delete saved[key];
@@ -389,11 +412,14 @@ export function createFolderView(o: ViewOptions): FolderView {
       }
     }, signal);
     on(input, 'blur', () => void commit(true), signal);
+    // Enter then a click elsewhere (or Enter twice) while the name is checked must rename once, not twice.
+    let checking = false;
     async function commit(fromBlur: boolean): Promise<void> {
-      if (done) return;
+      if (done || checking) return;
       const value = input.value;
       if (value === item!.name) return stop();
-      const reason = await check();
+      checking = true;
+      const reason = await check().finally(() => (checking = false));
       if (done) return;
       if (reason) {
         if (!fromBlur) return;
@@ -406,6 +432,14 @@ export function createFolderView(o: ViewOptions): FolderView {
       built.delete(key);
       const renamed = await shell.actions.rename(item!.path, value);
       if (renamed) focusKey = renamed.id;
+      // A renamed desktop icon keeps its place.
+      const icons = shell.session.data.icons;
+      const place = desktop && renamed ? icons[cellKey(item!)] : undefined;
+      if (place && renamed) {
+        delete icons[cellKey(item!)];
+        icons[`name:${nameKey(renamed.name)}`] = place;
+        shell.session.touch();
+      }
       void refresh();
     }
   }
@@ -600,7 +634,7 @@ export function createFolderView(o: ViewOptions): FolderView {
             priority = moving.map(i => i.key);
             for (const m of moving) {
               const c = cells.get(m.key) ?? from;
-              saved[m.key] = [Math.max(0, Math.min(cols - 1, c[0] + to[0] - from[0])), Math.max(0, Math.min(rows - 1, c[1] + to[1] - from[1]))];
+              saved[cellKey(m)] = [Math.max(0, Math.min(cols - 1, c[0] + to[0] - from[0])), Math.max(0, Math.min(rows - 1, c[1] + to[1] - from[1]))];
             }
             shell.session.touch();
             render();
@@ -678,7 +712,7 @@ export function createFolderView(o: ViewOptions): FolderView {
       shell.session.setView(o.path(), { ...p, sort, desc });
       if (desktop) {
         // Sorting the desktop lays the icons out again in that order.
-        for (const item of items) delete shell.session.data.icons[item.key];
+        for (const item of items) delete shell.session.data.icons[cellKey(item)];
       }
       void refresh();
     };

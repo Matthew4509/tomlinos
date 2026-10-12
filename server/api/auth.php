@@ -163,7 +163,7 @@ try {
                 if ($users) {
                     api_fail(409, 'This desktop already has an owner. Sign in instead.');
                 }
-                $id = bin2hex(random_bytes(8));
+                $id = auth_new_user_id();
                 $user = ['id' => $id, 'name' => $name, 'display' => auth_cut($display !== '' ? $display : $name, 60), 'hash' => auth_hash_password($password), 'admin' => true, 'created' => time(), 'totp' => null, 'recovery' => [], 'pin' => null];
                 $users[$id] = $user;
                 auth_save_users($dataDir, $users);
@@ -199,7 +199,7 @@ try {
                     }
                 }
                 // Checked and charged in one step (a right password gives the try back), so parallel guesses cannot slip past.
-                $wait = auth_throttle_take($dataDir, $ip, $name);
+                $wait = auth_throttle_take($dataDir, $ip, $name, $charged);
                 if ($wait > 0) {
                     api_fail(429, sprintf('Too many wrong tries. Wait %s, then try again, or use "Email me an unlock link".', wait_words($wait)), ['wait' => $wait, 'held' => true]);
                 }
@@ -221,10 +221,15 @@ try {
                 api_fail(403, 'This account is switched off. Ask the owner of this desktop to switch it back on.');
             }
             $two = !empty($user['totp']['enabled']);
+            // Only a try that was charged is given back: a sign-in by unlock link was never charged, and refunding it
+            // would take a real wrong try off this address's count.
+            if (!$linked) {
+                auth_throttle_refund($dataDir, $ip, $charged);
+            }
             // With two-step on, the name's count is only cleared once the code is right too: a known password must not
-            // reset the brake on guessing codes.
-            auth_throttle_refund($dataDir, $ip);
-            if (!$two) {
+            // reset the brake on guessing codes. An unlock link proves the account's email as well, so its hold ends
+            // (or the two-step code that follows would be refused by the very hold the link was sent to lift).
+            if (!$two || $linked) {
                 auth_throttle_clear($dataDir, $name);
             }
             if (password_needs_rehash($user['hash'], defined('PASSWORD_ARGON2ID') ? PASSWORD_ARGON2ID : PASSWORD_DEFAULT)) {
@@ -254,6 +259,11 @@ try {
                 set_session_cookie('', $days);
                 api_fail(401, 'Two-step sign-in was turned off for this account while you were signing in. Sign in again with your password.', ['auth' => 'signin']);
             }
+            // The name held by the brakes (wrong codes count as wrong tries): no code is even looked at until the hold ends.
+            $held = auth_throttle_wait($dataDir, $ip, (string) $user['name']);
+            if ($held > 0) {
+                api_fail(429, sprintf('Too many wrong tries. Wait %s, then try again, or use "Email me an unlock link".', wait_words($held)), ['wait' => $held, 'held' => true]);
+            }
             // One try is used up BEFORE the code is checked, under the lock, so parallel guesses each take one.
             $used = auth_session_take_try($dataDir, $token);
             if ($used === null || $used > AUTH_CODE_TRIES) {
@@ -268,7 +278,7 @@ try {
             if ($step !== null && auth_totp_use($dataDir, $user['id'], $step)) {
                 // Right, and not used before.
             } else {
-                $hashed = hash_hmac('sha256', $code, auth_pepper($dataDir));
+                $hashed = hash_hmac('sha256', auth_recovery_form($code), auth_pepper($dataDir));
                 $left = null;
                 update_user($dataDir, $user['id'], static function (array $u) use ($hashed, &$left): array {
                     $at = array_search($hashed, $u['recovery'] ?? [], true);
@@ -637,7 +647,7 @@ try {
                 $code = strtolower(trim(body_str($body, 'code')));
                 $step = auth_totp_check($user['totp']['secret'], $code, (int) ($user['totp']['last'] ?? 0));
                 if ($step === null) {
-                    $hashed = hash_hmac('sha256', $code, auth_pepper($dataDir));
+                    $hashed = hash_hmac('sha256', auth_recovery_form($code), auth_pepper($dataDir));
                     $usedCode = in_array($hashed, $user['recovery'] ?? [], true) ? $hashed : null;
                     $ok = $usedCode !== null;
                 }
@@ -853,7 +863,7 @@ try {
                 if (count($users) >= $max) {
                     api_fail(409, "This desktop holds up to $max people (max_users in server/config.php).");
                 }
-                $id = bin2hex(random_bytes(8));
+                $id = auth_new_user_id();
                 $users[$id] = ['id' => $id, 'name' => $name, 'display' => auth_cut($display !== '' ? $display : $name, 60), 'hash' => auth_hash_password($password), 'admin' => false, 'created' => time(), 'totp' => null, 'recovery' => [], 'pin' => null];
                 auth_save_users($dataDir, $users);
 

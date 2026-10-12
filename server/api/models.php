@@ -26,17 +26,38 @@ $dir = models_dir($config);
 $op = (string) ($_GET['op'] ?? '');
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 
-/** The plan of a save in progress, or null. A plan from before versions were pinned is dropped with its part files. */
+/**
+ * The plan of a save in progress, or null. A plan made under other pins (from before versions were pinned, or before a
+ * System update moved the model to a newer version) is dropped with its part files and with any finished file whose
+ * pinned checksum has changed: carried on, its pieces would be fetched at the new version and checked against the old,
+ * and fail for ever, or the model would end up half one version and half the other.
+ */
 $planOf = static function (string $id) use ($root, $dir): ?array {
     $path = models_plan_path($root, $id);
     $plan = is_file($path) ? json_decode((string) file_get_contents($path), true) : null;
     if (!is_array($plan) || !is_array($plan['files'] ?? null)) {
         return null;
     }
-    if (($plan['rev'] ?? '') === '') {
+    $pins = models_pins();
+    $pin = $pins['models'][$id] ?? null;
+    $now = [];
+    foreach (is_array($pin['files'] ?? null) ? $pin['files'] : [] as $f) {
+        $now['model:' . ($f['path'] ?? '')] = (string) ($f['sha256'] ?? '');
+    }
+    $lib = isset(MODEL_CATALOG[$id]) ? basename(MODEL_CATALOG[$id]['lib']) : '';
+    $now['lib:' . $lib] = (string) ($pins['libs'][$lib]['sha256'] ?? '');
+    $same = static fn (array $f): bool => ($now[($f['kind'] ?? '') . ':' . ($f['path'] ?? '')] ?? null) === (string) ($f['sha256'] ?? '');
+    $stale = ($plan['rev'] ?? '') === '' || !is_array($pin) || $plan['rev'] !== (string) $pin['rev'];
+    foreach ($plan['files'] as $f) {
+        $stale = $stale || !is_array($f) || !$same($f);
+    }
+    if ($stale) {
         foreach ($plan['files'] as $f) {
             if (is_array($f) && models_safe_path((string) ($f['path'] ?? '')) && in_array($f['kind'] ?? '', ['model', 'lib'], true)) {
                 @unlink(models_target($dir, $id, $f) . '.part');
+                if (!$same($f)) {
+                    @unlink(models_target($dir, $id, $f));
+                }
             }
         }
         @unlink($path);

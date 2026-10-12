@@ -27,5 +27,16 @@ if (auth_find_user(auth_users($dataDir), $name) === null) {
     fwrite(STDERR, "There is nobody called \"$name\" on this desktop (data folder: $dataDir).\n");
     exit(1);
 }
-auth_throttle_clear($dataDir, $name);
+// The name's own counts, and the address brake of every address its wrong tries came from (else 20 wrong tries in a
+// quarter of an hour would still hold that address, or ask it for the picture).
+auth_locked($dataDir, static function () use ($dataDir, $name): void {
+    $path = auth_dir($dataDir) . '/throttle.json';
+    $t = auth_read_json($path, []);
+    foreach (array_keys($t['name'] ?? []) as $k) {
+        if (str_starts_with((string) $k, $name . '|')) {
+            unset($t['ip'][substr((string) $k, strlen($name) + 1)], $t['name'][$k]);
+        }
+    }
+    auth_write_json($path, $t);
+});
 echo "The brakes on \"$name\" are lifted, from every address. Sign in again now.\n";

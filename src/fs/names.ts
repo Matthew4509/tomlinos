@@ -33,10 +33,19 @@ export function cleanName(name: string): string {
     .trim()
     .replace(/\.+$/, '');
   const bytes = new TextEncoder();
+  // A very long name (one inside a zip can be 64 KB) is first cut to a length near the limit in one go, keeping its ending.
+  if (clean.length > MAX_NAME_BYTES * 2) {
+    const dot = clean.lastIndexOf('.');
+    const ext = dot > 0 && clean.length - dot <= 10 ? clean.slice(dot) : '';
+    clean = Array.from(clean.slice(0, clean.length - ext.length)).slice(0, MAX_NAME_BYTES).join('') + ext;
+  }
   while (bytes.encode(clean).length > MAX_NAME_BYTES) {
     const dot = clean.lastIndexOf('.');
     const ext = dot > 0 && clean.length - dot <= 10 ? clean.slice(dot) : '';
-    clean = clean.slice(0, clean.length - ext.length - 1) + ext;
+    // Shortened a whole character at a time: cutting between the two halves of an emoji leaves a broken "?".
+    const stem = Array.from(clean.slice(0, clean.length - ext.length));
+    stem.pop();
+    clean = stem.join('') + ext;
   }
   if (clean === '' || clean === '.' || clean === '..') clean = 'Untitled';
   return clean;

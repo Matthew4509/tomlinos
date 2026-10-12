@@ -150,22 +150,26 @@ export function parseAddresses(raw: string): Address[] {
 }
 
 export function showAddress(a: Address): string {
-  return a.name ? `${a.name} <${a.email}>` : a.email;
+  if (!a.name) return a.email;
+  // A name holding a comma (or another mark that splits addresses) is quoted, so "Lee, Bo" stays one person.
+  const name = /[,;:"<>@()[\]\\]/.test(a.name) ? `"${a.name.replace(/(["\\])/g, '\\$1')}"` : a.name;
+  return `${name} <${a.email}>`;
 }
 
 /** "text/plain; charset=utf-8; name*=UTF-8''r%C3%A9sum%C3%A9.pdf" -> type and parameters (RFC 2231 names decoded). */
 export function parseContentType(raw: string): { type: string; params: Record<string, string> } {
   const [typePart, ...rest] = splitParams(raw);
-  const params: Record<string, string> = {};
-  const pieces: Record<string, { charset: string; parts: string[] }> = {};
+  // No prototype: the names come from the sender, and one called __proto__ or constructor must stay a plain name.
+  const params: Record<string, string> = Object.create(null);
+  const pieces: Record<string, { charset: string; parts: string[] }> = Object.create(null);
   for (const p of rest) {
     const m = /^([^=\s]+)\s*=\s*(.*)$/.exec(p.trim());
     if (!m) continue;
     let name = m[1].toLowerCase();
     let value = m[2].trim();
     if (value.startsWith('"')) value = value.slice(1, value.endsWith('"') ? -1 : undefined).replace(/\\(.)/g, '$1');
-    // RFC 2231: name*0*=UTF-8''abc, name*1*=def, or name*=UTF-8''abc
-    const cont = /^(.+?)\*(\d+)?(\*)?$/.exec(name);
+    // RFC 2231: name*0*=UTF-8''abc, name*1*=def, or name*=UTF-8''abc (a lone * means encoded, not numbered)
+    const cont = name.includes('*') ? /^([^*]+)(?:\*(\d{1,3}))?(\*)?$/.exec(name) : null;
     if (cont) {
       name = cont[1];
       const entry = (pieces[name] ??= { charset: '', parts: [] });
@@ -211,6 +215,9 @@ function decodeBody(bin: string, encoding: string): string {
 }
 
 function splitHead(bin: string): [string, string] {
+  // A part with no headers starts with its blank line: all of it is body.
+  const bare = /^\r?\n/.exec(bin);
+  if (bare) return ['', bin.slice(bare[0].length)];
   const m = /\r?\n\r?\n/.exec(bin);
   return m ? [bin.slice(0, m.index), bin.slice(m.index + m[0].length)] : [bin, ''];
 }

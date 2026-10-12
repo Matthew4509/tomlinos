@@ -14,6 +14,11 @@ const MAX_CHANGES_PER_EDIT = 120_000;
 const MAX_UNDO = 100;
 const MAX_TEXT = 32_000;
 const MAX_SHEETS = 50;
+/** How many formulas deep one look may go before the sheet is worked out top-down instead (well inside a browser's stack). */
+const MAX_CHAIN = 400;
+
+/** A chain of formulas deeper than one look may follow (caught by Workbook.value). */
+class TooDeep extends Error {}
 
 export interface Cell {
   v?: number | string | boolean;
@@ -134,13 +139,56 @@ export class Workbook {
   }
 
   value(s: number, col: number, row: number): Value {
+    if (this.depth > 0) return this.valueOf(s, col, row);
+    // The cell asked for from outside (the grid, a sum): a chain of formulas each leaning on the one above (a running
+    // total down 5,000 rows) is too deep to work out in one go. Then the sheet is worked out from the top down once, each
+    // cell remembered, so every cell of the chain needs only its neighbour; only a chain that is still too deep is #NUM!.
+    try {
+      return this.valueOf(s, col, row);
+    } catch (error) {
+      if (!(error instanceof TooDeep) && !(error instanceof RangeError)) throw error;
+    }
+    this.depth = 0;
+    this.visiting.clear();
+    if (!this.warming) {
+      this.warming = true;
+      try {
+        for (const k of [...this.sheets[s].cells.keys()].sort((a, b) => a - b)) {
+          if (k > keyOf(col, row)) break;
+          try {
+            this.valueOf(s, colOfKey(k), rowOfKey(k));
+          } catch (error) {
+            if (!(error instanceof TooDeep) && !(error instanceof RangeError)) throw error;
+            this.depth = 0;
+            this.visiting.clear();
+          }
+        }
+      } finally {
+        this.warming = false;
+      }
+      try {
+        return this.valueOf(s, col, row);
+      } catch (error) {
+        if (!(error instanceof TooDeep) && !(error instanceof RangeError)) throw error;
+        this.depth = 0;
+        this.visiting.clear();
+      }
+    }
+    // Not remembered: the next look may find more of the chain worked out.
+    return E.NUM;
+  }
+
+  private warming = false;
+
+  private valueOf(s: number, col: number, row: number): Value {
     const cell = this.sheets[s]?.cells.get(keyOf(col, row));
     if (!cell) return null;
     if (cell.f === undefined) return cell.v ?? null;
     const memoKey = s * MAX_ROWS * MAX_COLS + keyOf(col, row);
     const known = this.memo.get(memoKey);
     if (known !== undefined) return known;
-    if (this.visiting.has(memoKey) || this.depth > 1200) return this.depth > 1200 ? E.NUM : E.CIRC;
+    if (this.visiting.has(memoKey)) return E.CIRC;
+    if (this.depth > MAX_CHAIN) throw new TooDeep();
     this.visiting.add(memoKey);
     this.depth++;
     let result: Value;
@@ -149,7 +197,9 @@ export class Workbook {
       if (!tree) {
         try {
           tree = parseFormula(cell.f);
-        } catch {
+        } catch (error) {
+          // Only a formula that does not read is #NAME?; anything else (the stack running out) is not this formula's fault.
+          if (!(error instanceof SyntaxProblem)) throw error;
           tree = E.NAME;
         }
         if (this.ast.size > 50_000) this.ast.clear();
@@ -227,7 +277,27 @@ export class Workbook {
     this.touch();
   }
 
+  /** Runs several changes (a tiled paste, a row of totals) as one step: one Undo takes them all back. */
+  batch(fn: () => void): void {
+    if (this.batching) return fn();
+    this.batching = [];
+    try {
+      fn();
+    } finally {
+      const changes = this.batching;
+      this.batching = null;
+      if (changes.length) this.pushUndo({ kind: 'cells', changes });
+    }
+  }
+
+  private batching: Change[] | null = null;
+
   private pushUndo(entry: UndoEntry): void {
+    if (this.batching && entry.kind === 'cells') {
+      this.batching.push(...entry.changes);
+      this.redoStack = [];
+      return;
+    }
     this.undoStack.push(entry);
     if (this.undoStack.length > MAX_UNDO) this.undoStack.shift();
     this.redoStack = [];
@@ -241,6 +311,10 @@ export class Workbook {
 
   /** Types `input` into a cell. Throws SyntaxProblem (with words for the person) if a formula is wrong. */
   setInput(s: number, col: number, row: number, input: string): void {
+    // Outside the sheet a cell's number would land on another cell (the next row's first), or make a file that will not open.
+    if (!Number.isInteger(col) || !Number.isInteger(row) || col < 0 || row < 0 || col >= MAX_COLS || row >= MAX_ROWS) {
+      throw new SyntaxProblem('That is past the edge of the sheet.');
+    }
     const entry = parseEntry(input);
     const old = this.sheets[s].cells.get(keyOf(col, row));
     let after: Cell | undefined = entry.cell ? { ...entry.cell } : undefined;
@@ -358,7 +432,8 @@ export class Workbook {
           if (!from) { put(col, row, undefined); continue; }
           const after: Cell = { ...from };
           if (after.f !== undefined) after.f = shiftFormula(after.f, 0, row - srcRow);
-          else if (series && typeof after.v === 'number') after.v = clean(nums[nums.length - 1] + step * offset);
+          // Filled upward the series runs back from its first number (1, 2 filled up gives 0, -1), downward on from its last.
+          else if (series && typeof after.v === 'number') after.v = clean((offset < 0 ? nums[0] : nums[nums.length - 1]) + step * offset);
           put(col, row, after);
         }
       }
@@ -380,7 +455,7 @@ export class Workbook {
           if (!from) { put(col, row, undefined); continue; }
           const after: Cell = { ...from };
           if (after.f !== undefined) after.f = shiftFormula(after.f, col - srcCol, 0);
-          else if (series && typeof after.v === 'number') after.v = clean(nums[nums.length - 1] + step * offset);
+          else if (series && typeof after.v === 'number') after.v = clean((offset < 0 ? nums[0] : nums[nums.length - 1]) + step * offset);
           put(col, row, after);
         }
       }

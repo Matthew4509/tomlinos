@@ -134,10 +134,13 @@ function ai_cost_micro(string $model, int $in, int $out, int $cacheWrite = 0, in
     return (int) ceil($in * $p['in'] + $out * $p['out'] + $cacheWrite * $p['in'] * 1.25 + $cacheRead * $p['in'] * 0.1);
 }
 
-/** The most a request could cost: input counted generously (a token is about 4 letters; 3 is assumed) plus a full answer. */
-function ai_worst_micro(string $model, int $inputChars): int
+/**
+ * The most a request could cost: input counted generously, a token for every 2 bytes (English runs about 4 letters a
+ * token; Chinese, Japanese and Korean about one letter, 3 bytes, a token), plus a full answer.
+ */
+function ai_worst_micro(string $model, int $inputBytes): int
 {
-    return ai_cost_micro($model, intdiv($inputChars, 3) + 200, AI_MAX_OUTPUT);
+    return ai_cost_micro($model, intdiv($inputBytes, 2) + 200, AI_MAX_OUTPUT);
 }
 
 function ai_month(?int $now = null): string

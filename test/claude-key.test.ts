@@ -79,12 +79,14 @@ test('costs are Anthropic list prices in whole millionths of a dollar', { skip: 
   'opus' => ai_cost_micro('claude-opus-5', 1000000, 1000000),
   'sonnet' => ai_cost_micro('claude-sonnet-5', 2000, 500),
   'haiku_cache' => ai_cost_micro('claude-haiku-4-5', 0, 0, 1000000, 1000000),
-  'worst_opus_1000_letters' => ai_worst_micro('claude-opus-5', 1000),
+  'worst_opus_1000_bytes' => ai_worst_micro('claude-opus-5', 1000),
+  'worst_opus_cjk' => ai_worst_micro('claude-opus-5', 3000), // 1,000 Chinese letters are 3,000 bytes
 ]);`);
   assert.equal(r.opus, 30_000_000, '$5 + $25');
   assert.equal(r.sonnet, 9_000, '2,000 in at $2/M + 500 out at $10/M = $0.009');
   assert.equal(r.haiku_cache, 1_350_000, 'cache write 1.25x + cache read 0.1x of $1');
-  assert.equal(r.worst_opus_1000_letters, (333 + 200) * 5 + 8000 * 25, 'generous input + a full answer');
+  assert.equal(r.worst_opus_1000_bytes, (500 + 200) * 5 + 8000 * 25, 'generous input (a token per 2 bytes) + a full answer');
+  assert.equal(r.worst_opus_cjk, (1500 + 200) * 5 + 8000 * 25, '1,000 Chinese letters reserve 1,500 tokens: more than the ~1,000 they use');
 });
 
 test('the cap: the most a request could cost is set aside; over the cap is refused; booking releases the rest', { skip: !hasPhp && 'no PHP' }, () => {

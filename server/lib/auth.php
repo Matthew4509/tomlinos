@@ -132,18 +132,45 @@ function auth_find_user(array $users, string $name): ?array
 function auth_pepper(string $dataDir): string
 {
     $path = auth_dir($dataDir) . '/pepper';
-    $pepper = @file_get_contents($path);
-    if ($pepper !== false && strlen($pepper) === 64) {
-        return (string) hex2bin($pepper);
+    // The file as kept, or null when there is none yet. One that is there but cannot be read, or is not 64 hex digits
+    // (a line ending added by an editor is allowed), is an error: making a new one would make every PIN, recovery code
+    // and recovery key stop working for good.
+    $read = static function () use ($path): ?string {
+        clearstatcache(true, $path);
+        if (!file_exists($path)) {
+            return null;
+        }
+        $raw = @file_get_contents($path);
+        if ($raw === false) {
+            throw new RuntimeException('the accounts pepper (data/accounts/pepper) cannot be read: check its permissions. It must never be replaced: every PIN and recovery code depends on it');
+        }
+        $hex = trim($raw);
+        if (!preg_match('/^[0-9a-fA-F]{64}$/D', $hex)) {
+            throw new RuntimeException('the accounts pepper (data/accounts/pepper) is damaged: put back the copy from a backup. It must never be replaced: every PIN and recovery code depends on it');
+        }
+
+        return (string) hex2bin($hex);
+    };
+    $pepper = $read();
+    if ($pepper !== null) {
+        return $pepper;
     }
 
-    return auth_locked($dataDir, static function () use ($path): string {
-        $again = @file_get_contents($path);
-        if ($again !== false && strlen($again) === 64) {
-            return (string) hex2bin($again);
+    return auth_locked($dataDir, static function () use ($path, $read): string {
+        $again = $read();
+        if ($again !== null) {
+            return $again;
         }
+        // Made only where there is none ('x' never opens a file that exists), whole or not at all.
         $fresh = random_bytes(32);
-        if (file_put_contents($path, bin2hex($fresh), LOCK_EX) !== 64) {
+        $fh = @fopen($path, 'x');
+        if ($fh === false) {
+            throw new RuntimeException('the accounts pepper cannot be written');
+        }
+        $ok = fwrite($fh, bin2hex($fresh)) === 64 && fflush($fh);
+        fclose($fh);
+        if (!$ok) {
+            @unlink($path);
             throw new RuntimeException('the accounts pepper cannot be written');
         }
 
@@ -288,6 +315,27 @@ function auth_totp_check(string $secret, string $code, int $lastStep, ?int $now 
 function auth_totp_uri(string $secret, string $name, string $issuer): string
 {
     return 'otpauth://totp/' . rawurlencode($issuer) . ':' . rawurlencode($name) . '?secret=' . $secret . '&issuer=' . rawurlencode($issuer) . '&algorithm=SHA1&digits=6&period=30';
+}
+
+/**
+ * A new person's id: 16 hex digits, never all of them numbers (about 1 in 2,000 would be). An id of digits only turns
+ * into a number when PHP reads users.json, and then no longer equals itself as text.
+ */
+function auth_new_user_id(): string
+{
+    do {
+        $id = bin2hex(random_bytes(8));
+    } while (ctype_digit($id));
+
+    return $id;
+}
+
+/** A recovery code as typed ("K7M2 9XQ4 BD", "k7m29xq4bd") in the form it was made and stored in ("k7m2-9xq4-bd"). */
+function auth_recovery_form(string $typed): string
+{
+    $bare = strtolower((string) preg_replace('/[^A-Za-z0-9]/', '', $typed));
+
+    return strlen($bare) === 10 ? substr($bare, 0, 4) . '-' . substr($bare, 4, 4) . '-' . substr($bare, 8, 2) : strtolower(trim($typed));
 }
 
 /** Ten one-time codes like "k7m2-9xq4-bd". Returns [shown once, stored]. */
@@ -533,7 +581,7 @@ function auth_throttle_wait(string $dataDir, string $ip, string $name): int
     }
     $n = $t['name'][auth_throttle_key($name, $ip)] ?? null;
     if ($n) {
-        $wait = max($wait, auth_brake_hold((int) $n['count']) - ($now - (int) $n['last']));
+        $wait = max($wait, auth_brake_hold((int) $n['count']) - ($now - (int) $n['last']), (int) ($n['until'] ?? 0) - $now);
     }
 
     return max(0, $wait);
@@ -544,11 +592,14 @@ function auth_throttle_wait(string $dataDir, string $ip, string $name): int
  * the check before any is counted. Returns the wait in seconds (nothing charged), or 0 after charging this try; a
  * right password then calls auth_throttle_clear for the name.
  */
-function auth_throttle_take(string $dataDir, string $ip, string $name): int
+function auth_throttle_take(string $dataDir, string $ip, string $name, mixed &$before = null): int
 {
-    return auth_locked($dataDir, static function () use ($dataDir, $ip, $name): int {
+    return auth_locked($dataDir, static function () use ($dataDir, $ip, $name, &$before): int {
         $wait = auth_throttle_wait($dataDir, $ip, $name);
         if ($wait === 0) {
+            // The name's count as it was, for a right password to put back (auth_throttle_refund).
+            $t = auth_read_json(auth_dir($dataDir) . '/throttle.json', []);
+            $before = ['key' => auth_throttle_key($name, auth_throttle_ip($ip)), 'entry' => $t['name'][auth_throttle_key($name, auth_throttle_ip($ip))] ?? null];
             auth_throttle_fail($dataDir, $ip, $name);
         }
 
@@ -574,7 +625,16 @@ function auth_throttle_fail(string $dataDir, string $ip, string $name): void
         $key = $name === '' ? '' : auth_throttle_key($name, $ip);
         $prev = $t['name'][$key] ?? ['count' => 0, 'last' => 0];
         // A name left alone for a week starts again (the longest hold is 64 hours, so a hold never outlives its count).
-        $t['name'][$key] = ['count' => ($now - $prev['last'] > AUTH_BRAKE_FORGET ? 0 : $prev['count']) + 1, 'last' => $now];
+        $count = ($now - $prev['last'] > AUTH_BRAKE_FORGET ? 0 : $prev['count']) + 1;
+        $entry = ['count' => $count, 'last' => $now];
+        // The hold is kept as a moment it ends, so a later wrong try (a two-step code, say) can never cut it short: a
+        // hold worked out from the count alone vanished at the very next try, and the count moved past it.
+        $hold = auth_brake_hold($count);
+        $until = max((int) ($prev['until'] ?? 0), $hold > 0 ? $now + $hold : 0);
+        if ($until > $now) {
+            $entry['until'] = $until;
+        }
+        $t['name'][$key] = $entry;
         // Keep the file small: forget addresses and names with nothing recent.
         foreach ($t['ip'] as $k => $v) {
             $recent = array_values(array_filter($v, static fn ($at) => $now - $at < 900));
@@ -605,18 +665,36 @@ function auth_throttle_fail(string $dataDir, string $ip, string $name): void
 
 /** Gives back the try auth_throttle_take charged to this address, when it turned out right: people sharing one
     connection (a household, an office) must not use up each other's tries by signing in correctly. */
-function auth_throttle_refund(string $dataDir, string $ip): void
+function auth_throttle_refund(string $dataDir, string $ip, ?array $before = null): void
 {
     // Tries are booked by auth_throttle_ip (an IPv6 address by its /64), so the refund looks there too.
     $ip = auth_throttle_ip($ip);
-    auth_locked($dataDir, static function () use ($dataDir, $ip): void {
+    auth_locked($dataDir, static function () use ($dataDir, $ip, $before): void {
         $path = auth_dir($dataDir) . '/throttle.json';
         $t = auth_read_json($path, []);
+        $changed = false;
         if (!empty($t['ip'][$ip])) {
             array_pop($t['ip'][$ip]);
             if (!$t['ip'][$ip]) {
                 unset($t['ip'][$ip]);
             }
+            $changed = true;
+        }
+        // $before (from auth_throttle_take): the name's count goes back to what it was, so a right password neither adds
+        // a try nor starts a hold, and (with two-step on) does not clear the wrong tries before it either. Only when
+        // nothing else was counted since.
+        if ($before !== null && isset($t['name'][$before['key']])) {
+            $now = $t['name'][$before['key']];
+            if ((int) $now['count'] === (int) ($before['entry']['count'] ?? 0) + 1) {
+                if ($before['entry'] === null) {
+                    unset($t['name'][$before['key']]);
+                } else {
+                    $t['name'][$before['key']] = $before['entry'];
+                }
+                $changed = true;
+            }
+        }
+        if ($changed) {
             auth_write_json($path, $t);
         }
     });
@@ -826,7 +904,15 @@ function current_session(string $dataDir): ?array
 /** A signed-in, unlocked session, or a refusal the page understands (auth: signin / locked). */
 function require_full(string $dataDir): array
 {
-    $current = current_session($dataDir);
+    try {
+        $current = current_session($dataDir);
+    } catch (RuntimeException $e) {
+        // The accounts could not be read or written just now (a busy disk, a file held open on Windows): said in words,
+        // not as a bare error page.
+        error_log('require_full: ' . $e->getMessage());
+        header('Retry-After: 5');
+        api_fail(503, 'The desktop could not check your sign-in just now. Try again in a moment; nothing was lost.');
+    }
     if ($current === null || $current[1]['stage'] !== 'full') {
         api_fail(401, 'You are signed out. Sign in again to carry on.', ['auth' => 'signin']);
     }

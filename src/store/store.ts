@@ -13,7 +13,9 @@ export type Expect = string;
 
 export type StoreOp =
   | { op: 'put'; key: string; expect: Expect; data: Uint8Array }
-  | { op: 'del'; key: string; expect: Expect };
+  | { op: 'del'; key: string; expect: Expect }
+  /** Writes nothing: the commit only goes ahead if this record is still at that version (a folder a save went through). */
+  | { op: 'check'; key: string; expect: Expect };
 
 export interface StoreRecord {
   version: string;
@@ -72,6 +74,8 @@ export function collapseOps(ops: StoreOp[]): Map<string, StoreOp> {
   for (const o of ops) {
     if (!isStoreKey(o.key)) throw new StoreError('The desktop tried to save to something that is not a store key.');
     const prev = final.get(o.key);
+    // A check never takes the place of a write to the same key.
+    if (prev && o.op === 'check') continue;
     final.set(o.key, prev ? { ...o, expect: prev.expect } : o);
   }
   return final;

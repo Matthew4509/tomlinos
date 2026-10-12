@@ -20,10 +20,23 @@ $root = rtrim((string) $config['data_dir'], '/\\');
 $owner = !empty($user['admin']);
 $op = (string) ($_GET['op'] ?? '');
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
-// The web root is the folder above this door (public_html/api/update.php).
-$webRoot = dirname((string) ($_SERVER['SCRIPT_FILENAME'] ?? ''), 2);
+// The web root: the site's document root (public_html on the host, out/ on the local test server, whose script is the
+// router in server/, so the folder above the script would be the source folder itself).
+$webRoot = rtrim((string) ($_SERVER['DOCUMENT_ROOT'] ?? ''), '/\\');
+if ($webRoot === '' || !is_dir($webRoot)) {
+    $webRoot = dirname((string) ($_SERVER['SCRIPT_FILENAME'] ?? ''), 2);
+}
 
 if ($op === 'check' && $method === 'GET') {
+    // An install or Go back cut off part-way is put right before the versions are read (otherwise "Up to date" could be
+    // said over a half-installed site). One running now holds the lock: then nothing is touched.
+    if (update_operation(update_dir()) !== null) {
+        try {
+            update_locked(static fn (string $dir) => update_recover($dir));
+        } catch (RuntimeException) {
+            // Running now, or could not be put right: the install and Go back buttons say which.
+        }
+    }
     $current = update_current_version();
     $out = ['current' => $current, 'owner' => $owner, 'back' => update_backup_version(), 'latest' => null, 'newer' => false, 'error' => null];
     try {

@@ -43,7 +43,8 @@ try {
     if ($method === 'POST' && ($_GET['op'] ?? '') === 'commit') {
         // The smaller of our own limit and PHP's: above post_max_size PHP throws the body away without a word, which
         // would otherwise reach the person as "could not read the request".
-        $max = min((int) $config['max_commit_bytes'], store_ini_bytes((string) ini_get('post_max_size')) ?: PHP_INT_MAX);
+        // A config.php without the line (an older one, say) gets the example's 256 MB, not 0 (which refused every save).
+        $max = min((int) ($config['max_commit_bytes'] ?? 256 * 1024 * 1024) ?: 256 * 1024 * 1024, store_ini_bytes((string) ini_get('post_max_size')) ?: PHP_INT_MAX);
         $length = (int) ($_SERVER['CONTENT_LENGTH'] ?? 0);
         if ($length > $max) {
             api_fail(413, sprintf('That save is %.1f MB; this server takes up to %.1f MB at once. Split it into smaller files, or the owner can raise post_max_size in the host PHP settings (see tomlinos/tools/server-check.php).', $length / 1048576, $max / 1048576));

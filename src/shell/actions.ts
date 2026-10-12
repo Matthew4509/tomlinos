@@ -90,13 +90,15 @@ export class FileActions {
 
   // ---- Deleting (to the Recycle Bin) ---------------------------------------------------------------------------
 
-  async deleteToBin(paths: string[]): Promise<void> {
+  /** Returns what happened, for a caller that reports it in words of its own (the Terminal). */
+  async deleteToBin(paths: string[]): Promise<{ binned: number; gone: number; kept: number }> {
+    const done = { binned: 0, gone: 0, kept: paths.length };
     const blocked = paths.map(p => ({ path: p, reason: protectedReason(p) })).filter(p => p.reason);
     const allowed = paths.filter(p => !protectedReason(p));
     if (blocked.length) {
       await this.failed('Some items cannot be deleted', blocked.map(b => ({ name: baseName(b.path), reason: b.reason! })));
     }
-    if (!allowed.length) return;
+    if (!allowed.length) return done;
     try {
       const { toBin, over } = await this.splitByLimit(allowed);
       if (over.length) {
@@ -111,10 +113,14 @@ export class FileActions {
         if (ok) {
           await this.shell.fs.remove(over.map(o => o.path));
           this.shell.toast(`Deleted ${plural(over.length, 'item')} for good.`);
+          done.gone = over.length;
+          done.kept -= over.length;
         }
       }
-      if (!toBin.length) return;
+      if (!toBin.length) return done;
       const { slots, failures } = await this.shell.bin.put(toBin);
+      done.binned = slots.length;
+      done.kept -= slots.length;
       if (slots.length) {
         // The one that went: not allowed[0], which may have been too big for the Bin, nor one that failed to move.
         const moved = slots.length === 1 ? (toBin.find(p => !failures.some(f => f.name === baseName(p))) ?? toBin[0]) : '';
@@ -127,6 +133,7 @@ export class FileActions {
     } catch (error) {
       await this.shell.report('Could not delete', error);
     }
+    return done;
   }
 
   /** Total bytes in a file, or in everything inside a folder. */
@@ -215,7 +222,13 @@ export class FileActions {
           await fs.rename(path, finalName);
           source = joinPath(parentPath(path), finalName);
         }
-        await fs.move([source], destFolder);
+        try {
+          await fs.move([source], destFolder);
+        } catch (error) {
+          // Not moved: it keeps its own name where it was, rather than " (2)".
+          if (source !== path) await fs.rename(source, name).catch(() => undefined);
+          throw error;
+        }
       } catch (error) {
         failures.push({ name, reason: describeError(error) });
       }

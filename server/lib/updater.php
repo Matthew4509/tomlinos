@@ -13,6 +13,8 @@
 // public_html directly, so there is no second folder to switch to in one step.
 declare(strict_types=1);
 
+require_once __DIR__ . '/download.php';
+
 const UPDATE_DEFAULT_SOURCE = 'https://raw.githubusercontent.com/Matthew4509/tomlinos/main/releases/latest.json';
 const UPDATE_MAX_ZIP = 96 * 1024 * 1024;
 
@@ -93,12 +95,18 @@ function update_target(string $name, string $webRoot, ?string $priv = null): ?st
     if ($name === '' || str_contains($name, '..') || str_contains($name, '\\') || str_contains($name, "\0") || str_ends_with($name, '/')) {
         return null;
     }
+    // Only one spelling of each path: "tomlinos//config.php", "tomlinos/./data/x" or a ":" (a Windows drive or stream)
+    // would otherwise reach the very files the list below keeps out of every update.
+    if (str_contains($name, '//') || str_contains($name, ':') || preg_match('#(^|/)\.(/|$)#', $name)) {
+        return null;
+    }
     if (str_starts_with($name, 'public_html/')) {
         return $webRoot . '/' . substr($name, strlen('public_html/'));
     }
     if (str_starts_with($name, 'tomlinos/')) {
         $rest = substr($name, strlen('tomlinos/'));
-        if ($rest === 'config.php' || preg_match('#^(data|models|apps|update)/#', $rest)) {
+        // Compared without case: on a disk that ignores it (Windows, macOS), Data/ is data/.
+        if (strtolower($rest) === 'config.php' || preg_match('#^(data|models|apps|update)/#i', $rest)) {
             return null;
         }
 
@@ -295,10 +303,9 @@ function update_install(array $release, string $webRoot): string
             throw new RuntimeException("An earlier update was cut off part-way, so $back was put back first. Press Install again.");
         }
         $zipPath = $dir . '/download-' . bin2hex(random_bytes(4)) . '.zip';
-        // A GitHub release file answers with a redirect to GitHub's file host: followed, and the signed fingerprint below
-        // decides what is kept, wherever the bytes came from.
-        $ctx = stream_context_create(['http' => ['timeout' => 60, 'follow_location' => 1, 'max_redirects' => 5, 'header' => "User-Agent: TomlinOS\r\n"], 'ssl' => ['verify_peer' => true, 'verify_peer_name' => true]]);
-        $in = @fopen($release['zip'], 'rb', false, $ctx);
+        // A GitHub release file answers with a redirect to GitHub's file host: followed (on https only), and the signed
+        // fingerprint below decides what is kept, wherever the bytes came from.
+        $in = download_open((string) $release['zip']);
         if ($in === false) {
             throw new RuntimeException('The update could not be downloaded. Try again in a minute.');
         }

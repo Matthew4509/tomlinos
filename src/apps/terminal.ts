@@ -33,8 +33,14 @@ export const terminalApp: AppDef = {
       virtual: { '/etc/os-release': OS_RELEASE, '/etc/hostname': 'tomlinos\n' },
       protectedReason,
       async trash(paths) {
-        await shell.actions.deleteToBin(paths);
-        return `Moved to the Recycle Bin (restore from there, or Undo on the notice).`;
+        // Said as it happened: some may have been too big for the Recycle Bin, kept by the person, or refused.
+        const { binned, gone, kept } = await shell.actions.deleteToBin(paths);
+        const n = (k: number) => (k === 1 ? '1 item' : `${k} items`);
+        const said: string[] = [];
+        if (binned) said.push(`Moved ${n(binned)} to the Recycle Bin (restore from there, or Undo on the notice).`);
+        if (gone) said.push(`Deleted ${n(gone)} for good (too big for the Recycle Bin).`);
+        if (kept) said.push(`${n(kept)} not deleted.`);
+        return said.join('\n');
       },
       open: path => shell.openPath(path),
     };

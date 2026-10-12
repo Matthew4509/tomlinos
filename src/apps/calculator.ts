@@ -26,7 +26,9 @@ export const calculatorApp: AppDef = {
     app.root.classList.add('calc');
     const calc = new Calculator();
     let data: SheetData = emptySheet();
-    let savedJson = JSON.stringify(data);
+    // What counts as a change: everything but the row count, which follows the window's height (opening or Extend is not an edit).
+    const content = () => JSON.stringify({ ...data, rows: 0 });
+    let savedJson = content();
     let path: string | null = null;
     let loadedId = '';
     let selected: string | null = null;
@@ -58,7 +60,7 @@ export const calculatorApp: AppDef = {
     app.root.append(pad, sheet);
 
     const cells = new Map<string, HTMLElement>();
-    const dirty = () => JSON.stringify(data) !== savedJson;
+    const dirty = () => content() !== savedJson;
     const title = () => {
       app.setTitle(path ? `${baseName(path)} - Calculator` : 'Calculator');
       app.setDirty(dirty());
@@ -298,7 +300,7 @@ export const calculatorApp: AppDef = {
 
     // ---- Files ----
     // What a save writes, taken when the save starts: a change made while it is on its way stays unsaved.
-    const snapshot = () => ({ json: JSON.stringify(data), bytes: new TextEncoder().encode(JSON.stringify(data, null, 1)) });
+    const snapshot = () => ({ json: content(), bytes: new TextEncoder().encode(JSON.stringify(data, null, 1)) });
     const markSaved = (id: string, snap: { json: string }) => {
       loadedId = id;
       savedJson = snap.json;
@@ -359,7 +361,7 @@ export const calculatorApp: AppDef = {
         data = parseSheet(new TextDecoder().decode(await shell.fs.readFile(arg)));
         path = arg;
         loadedId = entry.id;
-        savedJson = JSON.stringify(data);
+        savedJson = content();
       } catch (error) {
         await shell.dialogs.alert('Could not open the sheet', error instanceof SyntaxError
           ? 'This file is not a Calculator sheet, or it is damaged. It is safe where it is; a new sheet was started instead.'

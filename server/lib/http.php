@@ -64,9 +64,28 @@ function api_guard(bool $updating = false): void
     // answered now, it could run half old and half new code. update.php itself passes $updating to keep answering.
     $op = dirname(__DIR__) . '/update/operation.json';
     if (!$updating && is_file($op) && ($lock = @fopen(dirname($op) . '/.lock', 'c'))) {
-        $busy = !flock($lock, LOCK_SH | LOCK_NB);
-        fclose($lock);
-        if ($busy) {
+        // Nobody holds the lock but the operation file is there: an install or Go back was cut off (a time limit, a
+        // restart) and the site may be half one version, half the other. The first request to see it puts the earlier
+        // version back whole before anything else runs; the rest wait for it.
+        if (flock($lock, LOCK_EX | LOCK_NB)) {
+            try {
+                require_once __DIR__ . '/updater.php';
+                if (is_file($op)) {
+                    @set_time_limit(300);
+                    update_recover(dirname($op));
+                }
+            } catch (Throwable $e) {
+                error_log('api_guard: finishing a cut-off update failed: ' . $e->getMessage());
+            } finally {
+                flock($lock, LOCK_UN);
+                fclose($lock);
+            }
+            if (is_file($op)) {
+                header('Retry-After: 30');
+                api_fail(503, 'An update was cut off part-way and could not be put right. The owner can run  php tomlinos/tools/rollback-update.php  from the host\'s Terminal.');
+            }
+        } else {
+            fclose($lock);
             header('Retry-After: 30');
             api_fail(503, 'TOMLIN OS is installing an update. Try again in a minute; nothing you had open was lost.');
         }

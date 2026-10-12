@@ -427,7 +427,10 @@ export async function startDesktop(root: HTMLElement, store: Store, account: Acc
   });
   if (channel) {
     channel.onmessage = event => {
-      if (Array.isArray(event.data) && event.data.every((p: unknown) => typeof p === 'string')) shell.changes.emit(event.data);
+      if (!Array.isArray(event.data) || !event.data.every((p: unknown) => typeof p === 'string')) return;
+      // This tab's remembered folders may be out of date now: read afresh rather than find out at the next save.
+      shell.fs.forgetAll();
+      shell.changes.emit(event.data);
     };
   }
 

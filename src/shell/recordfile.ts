@@ -4,7 +4,7 @@
 import type { Bus } from '../core/bus.ts';
 import { formatSize } from '../core/format.ts';
 import type { FileSystem } from '../fs/fs.ts';
-import { FsError } from '../fs/fs.ts';
+import { FileChanged, FsError } from '../fs/fs.ts';
 import { nameKey, parentPath } from '../fs/names.ts';
 
 export const MAX_RECORD_FILE = 4 * 1024 * 1024;
@@ -20,22 +20,34 @@ export interface RecordFile<T> {
 }
 
 export function recordFile<T>(fs: FileSystem, path: string, parse: (text: string) => T[], write: (list: T[]) => string): RecordFile<T> {
-  const load = async (): Promise<T[]> => {
+  /** The records and the id of the copy they came from ('' when there is no file yet). */
+  const read = async (): Promise<{ list: T[]; id: string }> => {
     const entry = await fs.stat(path);
-    if (!entry) return [];
+    if (!entry) return { list: [], id: '' };
     if (entry.kind !== 'file') throw new FsError(`“${entry.name}” is a folder, not a file.`);
     if (entry.size > MAX_RECORD_FILE) {
       throw new FsError(`“${entry.name}” is ${formatSize(entry.size)}; this app opens files up to ${formatSize(MAX_RECORD_FILE)}. It is safe where it is.`);
     }
-    return parse(await fs.readText(path));
+    return { list: parse(await fs.readText(path)), id: entry.id };
   };
+  const load = async (): Promise<T[]> => (await read()).list;
   return {
     path,
     load,
     async change(apply) {
-      const next = apply(await load());
-      await fs.writeText(path, write(next));
-      return next;
+      // Written only over the copy the change was made from: if another window or device saved in between, its
+      // version is read and the change made again on top of it, so neither undoes the other.
+      for (let attempt = 1; ; attempt++) {
+        const { list, id } = await read();
+        const next = apply(list);
+        try {
+          await fs.writeText(path, write(next), id ? { replacing: id } : { mustBeNew: true });
+          return next;
+        } catch (error) {
+          const raced = error instanceof FileChanged || (!id && error instanceof FsError && (await fs.stat(path)) !== null);
+          if (!raced || attempt >= 5) throw error;
+        }
+      }
     },
     watch(changes, signal, onList) {
       const folder = nameKey(parentPath(path));

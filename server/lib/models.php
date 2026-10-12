@@ -223,6 +223,27 @@ function models_index_write(string $modelsDir, array $index): void
     models_write_atomic($modelsDir . '/models.json', json_encode($index, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");
 }
 
+/**
+ * Reads models.json, lets $fn change it, writes it: one at a time for the whole folder (models.lock), so two models
+ * finishing or being removed at the same moment never write over each other's line.
+ */
+function models_index_change(string $modelsDir, callable $fn): void
+{
+    if (!is_dir($modelsDir) && !@mkdir($modelsDir, 0775, true) && !is_dir($modelsDir)) {
+        throw new RuntimeException('The folder for the model files could not be made. Check that the server may write to it.');
+    }
+    $lock = @fopen($modelsDir . '/models.lock', 'c');
+    if ($lock === false || !flock($lock, LOCK_EX)) {
+        throw new RuntimeException('The list of saved models is busy. Try again in a moment.');
+    }
+    try {
+        models_index_write($modelsDir, $fn(models_index_read($modelsDir)));
+    } finally {
+        flock($lock, LOCK_UN);
+        fclose($lock);
+    }
+}
+
 /** A file path from Hugging Face's list, safe to use inside the model's folder. */
 function models_safe_path(string $path): bool
 {
@@ -439,7 +460,10 @@ function models_download(string $url, string $part, ?int $from, int $length, str
             $url = $next;
             continue;
         }
-        if ($written > 0 && ($ran !== false || $error === CURLE_WRITE_ERROR)) {
+        // Part of the piece arrived before the line slowed or dropped (a 16 MB piece takes over 2 minutes below about
+        // 140 KB/s): that part is kept and counted, and the next piece carries on from it, rather than "interrupted" each
+        // time. The file's size and SHA-256 are still checked at the end.
+        if ($written > 0 && ($ran !== false || in_array($error, [CURLE_WRITE_ERROR, CURLE_OPERATION_TIMEDOUT, CURLE_PARTIAL_FILE, CURLE_RECV_ERROR], true))) {
             return $written;
         }
         if ($error !== 0) {
@@ -471,17 +495,19 @@ function models_remove(string $modelsDir, string $id): void
         }
         rmdir($folder);
     }
-    $index = models_index_read($modelsDir);
-    // The program's name from the catalog, or (a retired model) from what the index kept when it was saved.
-    $kept = array_values(array_filter($index['models'], static fn ($m) => ($m['id'] ?? '') === $id))[0] ?? [];
-    $index['models'] = array_values(array_filter($index['models'], static fn ($m) => ($m['id'] ?? '') !== $id));
-    $lib = basename((string) (MODEL_CATALOG[$id]['lib'] ?? $kept['lib'] ?? ''));
-    $shared = array_filter($index['models'], static fn ($m) => ($m['lib'] ?? '') === $lib);
-    if (!$shared && $lib !== '') {
-        @unlink($modelsDir . '/libs/' . $lib);
-        @unlink($modelsDir . '/libs/' . $lib . '.part');
-    }
-    models_index_write($modelsDir, $index);
+    models_index_change($modelsDir, static function (array $index) use ($modelsDir, $id): array {
+        // The program's name from the catalog, or (a retired model) from what the index kept when it was saved.
+        $kept = array_values(array_filter($index['models'], static fn ($m) => ($m['id'] ?? '') === $id))[0] ?? [];
+        $index['models'] = array_values(array_filter($index['models'], static fn ($m) => ($m['id'] ?? '') !== $id));
+        $lib = basename((string) (MODEL_CATALOG[$id]['lib'] ?? $kept['lib'] ?? ''));
+        $shared = array_filter($index['models'], static fn ($m) => ($m['lib'] ?? '') === $lib);
+        if (!$shared && $lib !== '') {
+            @unlink($modelsDir . '/libs/' . $lib);
+            @unlink($modelsDir . '/libs/' . $lib . '.part');
+        }
+
+        return $index;
+    });
 }
 
 /** When each model was last removed (data/models/removed.json), for the wait before it can be saved again. */
@@ -534,10 +560,13 @@ function models_index_add(string $modelsDir, string $id, array $plan): void
         }
     }
     $c = MODEL_CATALOG[$id];
-    $index = models_index_read($modelsDir);
-    $index['models'] = array_values(array_filter($index['models'], static fn ($m) => ($m['id'] ?? '') !== $id));
     $lib = array_values(array_filter($plan['files'], static fn ($f) => $f['kind'] === 'lib'))[0] ?? [];
-    $index['models'][] = ['id' => $id, 'lib' => basename($c['lib']), 'bytes' => $bytes, 'vram' => $c['vram'], 'context' => $c['overrides']['context_window_size'] ?? null, 'overrides' => $c['overrides'],
+    $line = ['id' => $id, 'lib' => basename($c['lib']), 'bytes' => $bytes, 'vram' => $c['vram'], 'context' => $c['overrides']['context_window_size'] ?? null, 'overrides' => $c['overrides'],
         'rev' => (string) ($plan['rev'] ?? ''), 'libSha256' => (string) ($lib['sha256'] ?? '')];
-    models_index_write($modelsDir, $index);
+    models_index_change($modelsDir, static function (array $index) use ($id, $line): array {
+        $index['models'] = array_values(array_filter($index['models'], static fn ($m) => ($m['id'] ?? '') !== $id));
+        $index['models'][] = $line;
+
+        return $index;
+    });
 }

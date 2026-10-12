@@ -75,7 +75,8 @@ export class LockScreen {
     const active = () => {
       if (this.phase === 'open') this.lastActive = Date.now();
     };
-    for (const type of ['pointerdown', 'pointermove', 'keydown', 'wheel', 'touchstart']) on(window, type, active, signal, { capture: true, passive: true });
+    // tomlinos-activity: what an app's own frame passes on (reading in the Reader happens inside its frame).
+    for (const type of ['pointerdown', 'pointermove', 'keydown', 'wheel', 'touchstart', 'tomlinos-activity']) on(window, type, active, signal, { capture: true, passive: true });
     const timer = window.setInterval(() => {
       const { idle } = this.o.settings();
       if (this.phase === 'open' && idle > 0 && Date.now() - this.lastActive >= idle * 60000) void this.show(false);
@@ -113,7 +114,18 @@ export class LockScreen {
         else if (status.locked || (status.user && (await lockPending(status.user.id)))) void this.show(true);
       }).catch(() => undefined);
     }, signal);
+
+    // A lock made in another window of this browser reaches this one at once, even while it stays in view.
+    if ('BroadcastChannel' in window) {
+      this.channel = new BroadcastChannel('tomlinos-lock');
+      this.channel.onmessage = event => {
+        if (event.data === 'locked' && this.phase === 'open' && this.canLock) this.lockedByServer();
+      };
+      signal.addEventListener('abort', () => this.channel?.close(), { once: true });
+    }
   }
+
+  private channel: BroadcastChannel | null = null;
 
   /**
    * Shows the screensaver. `lock` forces the lock on (Lock now, the panic key); otherwise the person's setting decides.
@@ -166,6 +178,7 @@ export class LockScreen {
     this.stopRetry();
     const user = this.o.user();
     if (user) void markLockPending(user.id, false);
+    this.channel?.postMessage('locked');
     return 'locked';
   }
 
@@ -205,6 +218,16 @@ export class LockScreen {
   /** The server said the session is locked (a request got 423): show the lock screen at once. */
   lockedByServer(): void {
     if (this.phase === 'prompt') return;
+    // A Preview that a real lock (from another tab) cut into is a real lock now: no "Close preview" way out.
+    const wasPreview = this.previewing;
+    this.previewing = false;
+    // A locking screensaver already showing (the disguise, say) stays: a background request turned down must not swap
+    // the spreadsheet for the lock screen. Waking it asks for the PIN as it always does.
+    if (this.phase === 'saver' && this.saverLocks && !wasPreview && !this.layer.hidden) {
+      this.serverLocked = true;
+      this.stopRetry();
+      return;
+    }
     if (this.phase === 'open') {
       this.phase = 'saver';
       this.hideDesktop(true);
@@ -278,8 +301,12 @@ export class LockScreen {
     return s.look === 'custom' ? s.words : plain;
   }
 
+  /** Whether the screensaver showing asks for the PIN when woken (a plain screensaver just goes away). */
+  private saverLocks = false;
+
   private drawSaver(kind: LockSettings['saver'], locking: boolean): void {
     const signal = this.newView();
+    this.saverLocks = locking;
     const wake = () => {
       if (this.phase !== 'saver') return;
       if (locking) this.drawPrompt('');

@@ -69,6 +69,7 @@ export class BrowserStore implements Store {
           return;
         }
         for (const o of final.values()) {
+          if (o.op === 'check') continue;
           if (o.op === 'del') {
             table.delete(o.key);
             versions[o.key] = '';

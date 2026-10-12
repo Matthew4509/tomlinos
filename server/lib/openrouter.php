@@ -142,10 +142,13 @@ function or_cost_micro(array $model, int $in, int $out): int
     return (int) ceil($in * $model['in'] + $out * $model['out']);
 }
 
-/** The most a request could cost: input counted generously (3 letters a token) plus a full answer. */
-function or_worst_micro(array $model, int $inputChars): int
+/**
+ * The most a request could cost: input counted generously, a token for every 2 bytes (Chinese, Japanese and Korean run
+ * to about one letter, 3 bytes, a token), plus a full answer.
+ */
+function or_worst_micro(array $model, int $inputBytes): int
 {
-    return or_cost_micro($model, intdiv($inputChars, 3) + 200, OR_MAX_OUTPUT);
+    return or_cost_micro($model, intdiv($inputBytes, 2) + 200, OR_MAX_OUTPUT);
 }
 
 /** Plain words for an OpenRouter refusal. Never includes the key or the raw reply. */

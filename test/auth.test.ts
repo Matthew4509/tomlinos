@@ -232,6 +232,8 @@ test('two-step sign-in: set up with a real code, then needed at sign-in; codes c
 });
 
 test('five wrong codes stop the sign-in', async () => {
+  // A clean count: a wrong code from the test before counts on the name's brake too, and would bring the hold one code early.
+  rmSync(join(data, 'accounts', 'throttle.json'), { force: true });
   const c = new Client();
   await c.call('login', { name: 'alex', password: OWNER_PASS });
   let last;

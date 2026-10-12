@@ -234,6 +234,8 @@ export class WindowManager {
   }
 
   focus(win: Win): void {
+    // A window already closed (held by the window switcher or a taskbar menu opened before it closed) stays closed.
+    if (!this.wins.has(win.id)) return;
     if (win.state === 'min') {
       win.state = 'normal';
       this.applyState(win);
@@ -259,7 +261,7 @@ export class WindowManager {
   }
 
   minimise(win: Win): void {
-    if (win.fixed) return;
+    if (win.fixed || !this.wins.has(win.id)) return;
     win.state = 'min';
     this.applyState(win);
     win.el.classList.remove('active');
@@ -269,7 +271,7 @@ export class WindowManager {
   }
 
   toggleMax(win: Win): void {
-    if (win.fixed) return;
+    if (win.fixed || !this.wins.has(win.id)) return;
     win.state = win.state === 'max' ? 'normal' : 'max';
     this.applyState(win);
     this.changed.emit();

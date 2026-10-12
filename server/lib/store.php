@@ -19,6 +19,8 @@ const STORE_KEY_RE = '/^(\/|[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{
 const STORE_VERSION_LEN = 32;
 const STORE_OP_PUT = 1;
 const STORE_OP_DEL = 2;
+// Writes nothing: the commit goes ahead only if that record is still at the version given (a folder a save went through).
+const STORE_OP_CHECK = 3;
 // Far above any real change (a folder copy of thousands of files), far below a flood of empty records meant to use up
 // the disk's file slots, which the byte quota alone would not stop.
 const STORE_MAX_OPS = 10000;
@@ -161,7 +163,7 @@ function store_count_unconverted(string $dataDir, bool $sealed): int
  * Runs $fn holding the store's lock shared: no commit is moving records into place meanwhile (any number of readers at
  * once). A commit cut off part-way is finished first. A store with no folder yet has nothing to wait for.
  */
-function store_reading(string $dataDir, callable $fn): mixed
+function store_reading(string $dataDir, callable $fn, bool $finish = true): mixed
 {
     if (!is_dir($dataDir)) {
         return $fn();
@@ -171,7 +173,8 @@ function store_reading(string $dataDir, callable $fn): mixed
         throw new RuntimeException('the store lock cannot be taken');
     }
     try {
-        if (is_file($dataDir . '/.journal')) {
+        // $finish false: look only (tools/store-check.php without --repair changes nothing, a cut-off commit included).
+        if ($finish && is_file($dataDir . '/.journal')) {
             // Finishing it needs the lock to itself: let go, take it whole, finish, and go back to sharing it.
             flock($lock, LOCK_UN);
             flock($lock, LOCK_EX);
@@ -301,7 +304,7 @@ function store_parse_commit(string $body): array
         }
         if ($op === STORE_OP_PUT) {
             $data = $take(unpack('V', $take(4))[1]);
-        } elseif ($op === STORE_OP_DEL) {
+        } elseif ($op === STORE_OP_DEL || $op === STORE_OP_CHECK) {
             $data = '';
         } else {
             throw new InvalidArgumentException('commit has an unknown operation');
@@ -333,6 +336,9 @@ function store_commit(string $dataDir, array $ops, int $quotaBytes = 0, int $max
     $final = [];
     foreach ($ops as $o) {
         $prev = $final[$o['key']] ?? null;
+        if ($prev !== null && $o['op'] === STORE_OP_CHECK) {
+            continue; // a check never takes the place of a write to the same key
+        }
         $final[$o['key']] = $prev === null ? $o : array_merge($o, ['expect' => $prev['expect']]);
     }
     // Every new record is written to a temporary file before the lock is taken, so readers wait only for the moves.
@@ -343,6 +349,9 @@ function store_commit(string $dataDir, array $ops, int $quotaBytes = 0, int $max
     try {
         foreach ($final as $key => $o) {
             $path = store_path($dataDir, $key);
+            if ($o['op'] === STORE_OP_CHECK) {
+                continue;
+            }
             if ($o['op'] === STORE_OP_DEL) {
                 $renames[] = [null, $path];
                 $versions[$key] = '';
@@ -398,6 +407,9 @@ function store_publish(string $dataDir, array $final, int $quotaBytes, int $maxF
     $delta = 0;
     $added = 0;
     foreach ($final as $key => $o) {
+        if ($o['op'] === STORE_OP_CHECK) {
+            continue;
+        }
         $exists = is_file(store_path($dataDir, $key));
         $old = store_charge($exists ? (@filesize(store_path($dataDir, $key)) ?: 0) : 0);
         $delta += ($o['op'] === STORE_OP_DEL ? 0 : store_charge(STORE_VERSION_LEN + strlen($o['data']))) - $old;
@@ -474,9 +486,12 @@ function store_apply_journal(string $dataDir): void
  */
 function store_check(string $dataDir, bool $repair = false): array
 {
-    $run = static function () use ($dataDir, $repair): array {
-        $report = ['journal' => is_file($dataDir . '/.journal'), 'temps' => 0, 'damaged' => [], 'missing' => [], 'unreached' => [], 'encrypted' => false];
-        if ($repair && $report['journal']) {
+    // Seen before any lock is taken: taking the lock to repair finishes a cut-off commit at once, so looking for its
+    // journal afterwards would never find one to report.
+    $journal = is_file($dataDir . '/.journal');
+    $run = static function () use ($dataDir, $repair, $journal): array {
+        $report = ['journal' => $journal, 'temps' => 0, 'damaged' => [], 'missing' => [], 'unreached' => [], 'encrypted' => false];
+        if ($repair && is_file($dataDir . '/.journal')) {
             store_apply_journal($dataDir);
         }
         $usage = 0;
@@ -546,7 +561,7 @@ function store_check(string $dataDir, bool $repair = false): array
         return $report;
     };
 
-    return $repair ? store_locked($dataDir, $run) : store_reading($dataDir, $run);
+    return $repair ? store_locked($dataDir, $run) : store_reading($dataDir, $run, false);
 }
 
 /** Writes a total whole (a temporary file renamed into place), so a reader never sees half a number. */

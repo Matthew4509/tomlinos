@@ -8,6 +8,8 @@
 // Used by server/api/books.php (signed-in people only) and labs/serve-printer.php (local, no accounts).
 declare(strict_types=1);
 
+require_once __DIR__ . '/download.php';
+
 const GUTENBERG_MAX_BYTES = 25_000_000;
 /** The most the kept books may take on the server; past it, the books read longest ago go first. */
 const GUTENBERG_CACHE_BYTES = 500_000_000;
@@ -89,8 +91,19 @@ function gutenberg_serve(string $rest, string $booksDir, string $cacheDir): bool
             gutenberg_fail(502, "Project Gutenberg did not send book $id. It may be busy; try again in a minute.");
             return true;
         }
-        file_put_contents($cached, $text);
-        gutenberg_trim($cacheDir, GUTENBERG_CACHE_BYTES);
+        // Whole or not at all: a reader opening the same book at that moment (or a write cut off) must never find, and
+        // the cache keep for good, half a book.
+        $tmp = $cached . '.' . bin2hex(random_bytes(4)) . '.tmp';
+        if (@file_put_contents($tmp, $text) === strlen($text) && @rename($tmp, $cached)) {
+            gutenberg_trim($cacheDir, GUTENBERG_CACHE_BYTES);
+        } else {
+            @unlink($tmp);
+            header('Content-Type: text/plain; charset=utf-8');
+            header('Cache-Control: private, max-age=86400');
+            header('Content-Length: ' . strlen($text));
+            echo $text;
+            return true;
+        }
     }
     // Read again: it counts as recent, so the cache lets the least-read books go first.
     @touch($cached);
@@ -103,16 +116,18 @@ function gutenberg_serve(string $rest, string $booksDir, string $cacheDir): bool
 
 function gutenberg_fetch(string $url): ?string
 {
-    $headers = "User-Agent: TomlinOS Reader (one book, opened by a reader)\r\n";
-    $context = stream_context_create(['http' => ['timeout' => 40, 'header' => $headers, 'ignore_errors' => true]]);
-    $body = @file_get_contents($url, false, $context, 0, GUTENBERG_MAX_BYTES);
-    // PHP 8.4+ has the function; 8.2 and 8.3 only fill $http_response_header (deprecated from 8.5, so not read there).
-    $got = function_exists('http_get_last_response_headers') ? (http_get_last_response_headers() ?? []) : ($http_response_header ?? []);
-    // After redirects the last status line is the one that counts.
-    $lines = array_values(array_filter($got, fn ($l) => str_starts_with($l, 'HTTP/')));
-    $last = end($lines) ?: '';
-    $status = preg_match('#\s(\d{3})(\s|$)#', $last, $s) ? (int) $s[1] : 0;
-    if ($body === false || $status !== 200 || $body === '') {
+    // Redirects followed on https only; a book larger than the limit is refused, not cut short (and kept so for good).
+    try {
+        $in = download_open($url, 40, 'TomlinOS Reader (one book, opened by a reader)');
+    } catch (RuntimeException) {
+        return null;
+    }
+    if ($in === false) {
+        return null;
+    }
+    $body = stream_get_contents($in, GUTENBERG_MAX_BYTES + 1);
+    fclose($in);
+    if ($body === false || $body === '' || strlen($body) > GUTENBERG_MAX_BYTES) {
         return null;
     }
     // A book, not an error page: Gutenberg's texts all carry its start marker.

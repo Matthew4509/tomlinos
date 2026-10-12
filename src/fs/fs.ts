@@ -36,7 +36,9 @@ export { FileChanged, FsError };
 export const STANDARD_FOLDERS = ['Desktop', 'Documents', 'Pictures', 'Videos', 'Music'];
 export const SYSTEM_FOLDER = 'System';
 
-const MAX_TRIES = 3;
+// A change another window beat to it is read again and redone, after a short random wait that grows each time, so
+// several windows changing one folder at the same moment take turns instead of colliding again.
+const MAX_TRIES = 6;
 const utf8 = new TextEncoder();
 const fromUtf8 = new TextDecoder();
 
@@ -145,6 +147,16 @@ class Change {
     return this.fs.readRecord(entry.id, entry.name);
   }
 
+  /**
+   * What is committed: the writes, and a check on every folder this change only read (the folders a path went
+   * through). Without the checks, a save into a folder that another window or device had moved or put in the Recycle
+   * Bin would land there, unseen, because the folder's own record had not changed, only its place.
+   */
+  commitOps(): StoreOp[] {
+    const checks: StoreOp[] = [...this.read].map(([key, seen]) => ({ op: 'check', key, expect: seen.version }));
+    return [...this.ops, ...checks];
+  }
+
   commitCache(versions: Record<string, string>): void {
     for (const [key, version] of Object.entries(versions)) {
       const folder = this.written.get(key);
@@ -175,6 +187,11 @@ export class FileSystem {
 
   forget(key: string): void {
     this.cache.delete(key);
+  }
+
+  /** Forgets every remembered folder (another tab changed something). */
+  forgetAll(): void {
+    this.cache.clear();
   }
 
   async loadFolder(key: string, fresh = false): Promise<{ version: string; folder: FolderRecord }> {
@@ -238,13 +255,14 @@ export class FileSystem {
       const c = new Change(this);
       const { result, changed } = await plan(c);
       try {
-        c.commitCache(await this.store.commit(c.ops));
+        c.commitCache(await this.store.commit(c.commitOps()));
       } catch (error) {
         if (!(error instanceof StoreConflict)) throw error;
         this.cache.clear();
         if (attempt >= MAX_TRIES) {
           throw new FsError('Another window or device kept changing these files at the same time, so nothing was changed. Try again.');
         }
+        await new Promise(resolve => setTimeout(resolve, Math.random() * 30 * attempt));
         continue;
       }
       for (const listener of this.listeners) listener(changed);
@@ -333,7 +351,7 @@ export class FileSystem {
     });
   }
 
-  async writeText(path: string, text: string, options?: { hidden?: boolean }): Promise<Entry> {
+  async writeText(path: string, text: string, options?: { hidden?: boolean; mustBeNew?: boolean; replacing?: string }): Promise<Entry> {
     return this.writeFile(path, utf8.encode(text), options);
   }
 
