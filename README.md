@@ -23,8 +23,8 @@ desktop: they are saved on your server.
   on your own graphics chip (WebGPU): nothing you type leaves your device. Chat › Agents also does Summarise, Rewrite and
   Ask about a file. Optionally, each person can add their own Claude or OpenRouter key (Settings › AI), each with a
   monthly spending cap. The built-in models are pinned to fixed versions and checked (SHA-256) before use; the model's
-  program is checked in the browser before it runs. If Hugging Face or GitHub ever drops a pinned version, the owner's
-  "Save to this TOMLIN OS" can fetch it from a model mirror the owner names in config.php ('model_mirror') instead.
+  program is checked in the browser before it runs. If Hugging Face or GitHub ever drops a pinned version, a model
+  already saved on the server keeps working; otherwise Find AI models searches Hugging Face for another one to use.
 - **Reader:** Sherlock Holmes built in; signed-in people also get the Project Gutenberg library (60,000-odd free
   books, searched on your server) and can save books to their own files.
 - **Games and toys:** a RISC-V Studio with its own RV32I processor and example games.

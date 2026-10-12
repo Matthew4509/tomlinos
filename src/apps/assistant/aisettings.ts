@@ -53,7 +53,7 @@ export function aiSettings(shell: Shell, signal: AbortSignal): HTMLElement {
     // Saving on the server is for the built-in models; one a person added always comes from Hugging Face.
     ownerBox.hidden = !owner || !m || !!m.mine;
     const saving = savingId !== null;
-    // Removed less than a day ago: it can be saved again only then (a mirror's bandwidth is shared).
+    // Removed less than a day ago: it can be saved again only then (gigabytes are not pulled again and again).
     const wait = !saving && m && !m.saved && !m.saving ? (m.resaveWait ?? 0) : 0;
     saveBtn.hidden = !m || m.saved || saving || wait > 0;
     saveBtn.textContent = m?.saving ? 'Carry on saving' : 'Save to this TOMLIN OS';

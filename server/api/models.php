@@ -5,7 +5,7 @@
 //                   running it), and how long until a removed one can be saved again
 //   POST op=piece   {id}  the owner: fetch the next piece (16 MB at most) of a model onto this TOMLIN OS. The page asks
 //                   again until the answer says saved; a stopped save carries on where it stopped. A file Hugging Face
-//                   or GitHub no longer has comes from the model mirror instead
+//                   or GitHub no longer has stops the save, with the reason
 //   POST op=remove  {id}  the owner: delete a saved model (and a save in progress) to free the space; also a retired
 //                   one (MODEL_RETIRED) still saved here. It can be saved again a day later
 // Signed-in people only; saving and removing are the owner's.
@@ -172,12 +172,9 @@ switch ("$method $op") {
                 models_write_atomic(models_plan_path($root, $id), json_encode($plan));
                 auth_history_add($root, (string) $user['id'], 'Started saving the AI model ' . MODEL_CATALOG[$id]['name'] . ' to this TOMLIN OS');
             }
-            $step = models_save_step($dir, $id, $plan, models_mirror_url($config));
+            $step = models_save_step($dir, $id, $plan);
             if ($step['changed']) {
                 models_write_atomic(models_plan_path($root, $id), json_encode($plan));
-            }
-            if ($step['mirror'] !== null) {
-                auth_history_add($root, (string) $user['id'], 'Fetching part of ' . MODEL_CATALOG[$id]['name'] . ' from the model mirror (config.php): ' . $step['mirror']);
             }
             if (!$step['done']) {
                 api_json(['saved' => false] + $progress($id, $plan));

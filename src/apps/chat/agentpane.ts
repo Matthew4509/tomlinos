@@ -562,7 +562,11 @@ export function agentPane(app: AppHandle): { el: HTMLElement; shown: (want?: Clo
     const offline = !connected || connected !== agent;
     if (agent && offline && pick.querySelector(`option[value="${CSS.escape(agent)}"]:not([disabled])`)) buttons.push({ label: 'Start again', value: 'start', primary: true });
     if (agent && t.question && t.kind !== 'start') buttons.push({ label: 'Try a shorter version', value: 'short', primary: !buttons.length });
-    buttons.push({ label: 'Choose another model', value: 'pick' }, { label: 'Close', value: 'close' });
+    // A file that would not download may be gone from Hugging Face for good: Find AI models searches it for another.
+    const notDownloaded = t.kind === 'start' && /did not download/.test(t.words);
+    buttons.push({ label: 'Choose another model', value: 'pick' });
+    if (notDownloaded) buttons.push({ label: 'Find another model', value: 'find' });
+    buttons.push({ label: 'Close', value: 'close' });
     const choice = await shell.dialogs.ask<string>({
       title: t.kind === 'start' ? 'The AI could not start' : t.kind === 'empty' ? 'No answer came back' : 'The AI stopped',
       text: what,
@@ -574,6 +578,10 @@ export function agentPane(app: AppHandle): { el: HTMLElement; shown: (want?: Clo
     if (signal.aborted) return;
     if (choice === 'pick') {
       pick.focus();
+      return;
+    }
+    if (choice === 'find') {
+      void shell.openApp('aimodels');
       return;
     }
     if ((choice === 'start' || choice === 'short') && agent) {

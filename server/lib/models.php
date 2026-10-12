@@ -9,22 +9,19 @@
 // upstream is never used. The files land in the private models folder (models/ here; tomlinos/models live, beside data/,
 // outside the web root), and reach browsers only through api/modelfile.php, for signed-in people.
 //
-// When Hugging Face or GitHub no longer has a pinned file (removed, or refused), the save can fetch it from a model
-// mirror the owner names (config 'model_mirror'; none by default; a mirror's own door is mirror/index.php). Browsers never
-// fetch from a mirror: only a TOMLIN OS server does, and the mirror limits how much each server takes a day.
+// When Hugging Face or GitHub no longer has a pinned file (removed, or refused), the save stops and says so: people can
+// pick another model in Find AI models.
 //
 // Only the models in MODEL_CATALOG can be saved (never an address from a request), and only from https addresses on
-// Hugging Face, GitHub and the mirror, checked at every redirect.
+// Hugging Face and GitHub, checked at every redirect.
 declare(strict_types=1);
 
 const MODEL_PIECE_BYTES = 16 * 1024 * 1024;
-/** Where a TOMLIN OS server fetches a pinned file that Hugging Face or GitHub no longer has. */
-const MODEL_MIRROR_DEFAULT = '';
-/** After the owner removes a model, it can be saved again only after this long (a mirror's bandwidth is shared). */
+/** After the owner removes a model, it can be saved again only after this long (gigabytes are not pulled again and again). */
 const MODEL_RESAVE_WAIT = 86400;
 const MODEL_LIBS_REPO = 'mlc-ai/binary-mlc-llm-libs';
 
-/** The pinned file could not come from where it was asked for (gone, refused, or not the pinned bytes): try the mirror. */
+/** The pinned file could not come from where it was asked for (gone, refused, or not the pinned bytes). */
 class ModelSourceGone extends RuntimeException
 {
     /** $refused: the source answered that it does not have it (or will not give it), rather than sending other bytes. */
@@ -132,38 +129,9 @@ function models_browser_from(string $id): array
     return ['model' => 'https://huggingface.co/' . MODEL_CATALOG[$id]['repo'] . '/resolve/' . models_pins()['models'][$id]['rev'] . '/', 'lib' => models_lib_url($id)];
 }
 
-/**
- * The mirror's address: config 'model_mirror' ('' switches it off), else MODEL_MIRROR_DEFAULT; https only. The tests
- * point it at a stand-in on this computer (DESKTOP_MODELS_TEST_MIRROR, an environment variable only).
- */
-function models_mirror_url(array $config): string
+/** A redirect may only lead to Hugging Face's or GitHub's file servers, over https (or back to the test stand-in). */
+function models_host_allowed(string $url): bool
 {
-    $test = (string) getenv('DESKTOP_MODELS_TEST_MIRROR');
-    if (preg_match('#^http://127\.0\.0\.1:\d{2,5}/[A-Za-z0-9/._-]*$#D', $test)) {
-        return $test;
-    }
-    $url = (string) ($config['model_mirror'] ?? MODEL_MIRROR_DEFAULT);
-    $parts = parse_url($url);
-
-    return is_array($parts) && ($parts['scheme'] ?? '') === 'https' && !empty($parts['host']) && !isset($parts['user']) && !isset($parts['port']) ? $url : '';
-}
-
-/**
- * A redirect may only lead to Hugging Face's or GitHub's file servers, over https (or back to the test stand-in); a
- * download from the mirror only to the mirror's own host.
- */
-function models_host_allowed(string $url, string $mirror = ''): bool
-{
-    if ($mirror !== '') {
-        $test = preg_match('#^(http://127\.0\.0\.1:\d+/)#', $mirror, $m) ? $m[1] : null;
-        if ($test !== null) {
-            return str_starts_with($url, $test);
-        }
-        $parts = parse_url($url);
-
-        return ($parts['scheme'] ?? '') === 'https' && !isset($parts['port']) && !isset($parts['user'])
-            && strtolower((string) ($parts['host'] ?? '')) === strtolower((string) parse_url($mirror, PHP_URL_HOST));
-    }
     $test = models_test_base();
     if ($test !== null && str_starts_with($url, $test . '/')) {
         return true;
@@ -267,9 +235,8 @@ function models_have(string $target): int
 }
 
 /**
- * The save plan: the model's pinned files and its pinned program, each with size and SHA-256, and where each comes
- * from ('upstream' until Hugging Face or GitHub fails it, then 'mirror'). Throws RuntimeException with words for the
- * owner.
+ * The save plan: the model's pinned files and its pinned program, each with size and SHA-256. Throws RuntimeException
+ * with words for the owner.
  */
 function models_make_plan(string $id): array
 {
@@ -285,24 +252,16 @@ function models_make_plan(string $id): array
         if (!models_safe_path($path) || !preg_match('/^[0-9a-f]{64}$/D', (string) ($f['sha256'] ?? ''))) {
             throw new RuntimeException('This TOMLIN OS\'s list of model versions is damaged (' . substr($path, 0, 60) . '). Upload the zip again.');
         }
-        $files[] = ['kind' => 'model', 'path' => $path, 'size' => (int) $f['size'], 'sha256' => (string) $f['sha256'], 'from' => 'upstream'];
+        $files[] = ['kind' => 'model', 'path' => $path, 'size' => (int) $f['size'], 'sha256' => (string) $f['sha256']];
     }
-    $files[] = ['kind' => 'lib', 'path' => $lib, 'size' => (int) $libPin['size'], 'sha256' => (string) $libPin['sha256'], 'from' => 'upstream'];
+    $files[] = ['kind' => 'lib', 'path' => $lib, 'size' => (int) $libPin['size'], 'sha256' => (string) $libPin['sha256']];
 
     return ['id' => $id, 'rev' => (string) $pin['rev'], 'made' => time(), 'files' => $files];
 }
 
-/** The address of one planned file: upstream (Hugging Face at the pinned commit, or GitHub), or the mirror's door. */
-function models_file_url(string $id, array $file, string $mirror = ''): string
+/** The address of one planned file: Hugging Face at the pinned commit, or GitHub for the program. */
+function models_file_url(string $id, array $file): string
 {
-    if (($file['from'] ?? 'upstream') === 'mirror') {
-        $pins = models_pins();
-        $query = $file['kind'] === 'lib'
-            ? ['lib' => $file['path'], 'rev' => (string) $pins['libsCommit']]
-            : ['id' => $id, 'rev' => (string) $pins['models'][$id]['rev'], 'file' => $file['path']];
-
-        return $mirror . (str_contains($mirror, '?') ? '&' : '?') . http_build_query($query);
-    }
     if ($file['kind'] === 'lib') {
         return models_lib_url($id);
     }
@@ -316,7 +275,7 @@ function models_file_url(string $id, array $file, string $mirror = ''): string
  * each checked. When the file is complete its size and SHA-256 are checked and it takes its real name. Returns the
  * bytes now held and whether the file is done.
  */
-function models_fetch_piece(string $modelsDir, string $id, array $file, string $mirror = ''): array
+function models_fetch_piece(string $modelsDir, string $id, array $file): array
 {
     $target = models_target($modelsDir, $id, $file);
     if (is_file($target)) {
@@ -330,20 +289,18 @@ function models_fetch_piece(string $modelsDir, string $id, array $file, string $
     }
     $part = $target . '.part';
     $size = (int) $file['size'];
-    $fromMirror = ($file['from'] ?? 'upstream') === 'mirror';
     if (($have = models_have($target)) < $size) {
-        models_download(models_file_url($id, $file, $mirror), $part, $have, min(MODEL_PIECE_BYTES, $size - $have), $fromMirror ? $mirror : '');
+        models_download(models_file_url($id, $file), $part, $have, min(MODEL_PIECE_BYTES, $size - $have));
     }
     $have = models_have($target);
     if ($have < $size) {
         return ['have' => $have, 'done' => false];
     }
-    $where = $fromMirror ? 'the model mirror' : ($file['kind'] === 'lib' ? 'GitHub' : 'Hugging Face');
+    $where = $file['kind'] === 'lib' ? 'GitHub' : 'Hugging Face';
     if ($have !== $size || !hash_equals((string) $file['sha256'], (string) hash_file('sha256', $part))) {
-        // Not the pinned bytes: never kept. From upstream, the mirror is tried next (the caller decides).
+        // Not the pinned bytes: never kept (the caller tries once more, then stops).
         @unlink($part);
-        $words = 'A model file from ' . $where . ' was not the pinned version (' . $file['path'] . '), so it was thrown away.';
-        throw $fromMirror ? new RuntimeException($words . ' Try again later.') : new ModelSourceGone($words);
+        throw new ModelSourceGone('A model file from ' . $where . ' was not the pinned version (' . $file['path'] . '), so it was thrown away.');
     }
     if (!rename($part, $target)) {
         throw new RuntimeException('A finished model file could not be given its name. The server may be out of space.');
@@ -354,55 +311,51 @@ function models_fetch_piece(string $modelsDir, string $id, array $file, string $
 
 /**
  * One request's share of a save: fetches the next piece, or several small files, and says whether the model is
- * complete. A file Hugging Face or GitHub refuses goes to the mirror at once; one that arrived as other bytes than the
- * pinned version is tried upstream once more (a damaged download), then from the mirror. $plan is updated in place;
- * 'changed' says the caller must keep it, 'mirror' names a file just sent to the mirror (for the owner's history).
+ * complete. A file Hugging Face or GitHub refuses stops the save at once; one that arrived as other bytes than the
+ * pinned version is tried once more (a damaged download), then stops it. $plan is updated in place; 'changed' says the
+ * caller must keep it.
  */
-function models_save_step(string $modelsDir, string $id, array &$plan, string $mirror): array
+function models_save_step(string $modelsDir, string $id, array &$plan): array
 {
     foreach ($plan['files'] as $i => $f) {
         if (is_file(models_target($modelsDir, $id, $f))) {
             continue; // finished in an earlier request
         }
         try {
-            $r = models_fetch_piece($modelsDir, $id, $f, $mirror);
+            $r = models_fetch_piece($modelsDir, $id, $f);
         } catch (ModelSourceGone $gone) {
             $f['misses'] = (int) ($f['misses'] ?? 0) + 1;
-            $toMirror = $gone->refused || $f['misses'] >= 2;
-            if ($toMirror && $mirror === '') {
-                throw new RuntimeException($gone->getMessage() . ' That version is no longer where it was published, and no model mirror is set (config.php, model_mirror), so it cannot be saved.');
-            }
-            if ($toMirror) {
-                $f['from'] = 'mirror';
+            if ($gone->refused || $f['misses'] >= 2) {
+                throw new RuntimeException($gone->getMessage() . ' That version is no longer where it was published, so it cannot be saved. Find AI models (Start > Accessories) searches Hugging Face for another model to use instead.');
             }
             $plan['files'][$i] = $f;
 
-            return ['done' => false, 'changed' => true, 'mirror' => $toMirror ? $f['path'] . ' (' . $gone->getMessage() . ')' : null];
+            return ['done' => false, 'changed' => true];
         }
         if (!$r['done']) {
-            return ['done' => false, 'changed' => false, 'mirror' => null];
+            return ['done' => false, 'changed' => false];
         }
         // A finished file: carry on with the next in the same request only when it is small, else answer so the page
         // can show progress and no request runs long.
         if ((int) $f['size'] > 4 * 1024 * 1024 && array_filter($plan['files'], static fn ($g) => !is_file(models_target($modelsDir, $id, $g)))) {
-            return ['done' => false, 'changed' => false, 'mirror' => null];
+            return ['done' => false, 'changed' => false];
         }
     }
 
-    return ['done' => true, 'changed' => false, 'mirror' => null];
+    return ['done' => true, 'changed' => false];
 }
 
 /**
  * GETs $url (from byte $from for $length bytes when $from is not null), appending the body to $part. Redirects are
  * followed by hand so each address is checked. Returns the bytes written.
  */
-function models_download(string $url, string $part, ?int $from, int $length, string $mirror = ''): int
+function models_download(string $url, string $part, ?int $from, int $length): int
 {
     $cafile = (string) (ini_get('curl.cainfo') ?: ini_get('openssl.cafile'));
-    $test = models_test_base() !== null || str_starts_with($mirror, 'http://127.0.0.1:');
-    $who = $mirror !== '' ? 'The model mirror' : 'Hugging Face';
+    $test = models_test_base() !== null;
+    $who = 'Hugging Face';
     for ($hop = 0; $hop <= 5; $hop++) {
-        if (!models_host_allowed($url, $mirror)) {
+        if (!models_host_allowed($url)) {
             throw new RuntimeException($who . ' sent the download somewhere this server will not fetch from, so it stopped.');
         }
         $fh = fopen($part, 'ab');
@@ -417,7 +370,6 @@ function models_download(string $url, string $part, ?int $from, int $length, str
             CURLOPT_PROTOCOLS => $test ? CURLPROTO_HTTP | CURLPROTO_HTTPS : CURLPROTO_HTTPS,
             CURLOPT_CONNECTTIMEOUT => 15,
             CURLOPT_TIMEOUT => 120,
-            // The mirror serves only TOMLIN OS servers, which it tells from browsers by this name.
             CURLOPT_USERAGENT => 'TomlinOS',
             CURLOPT_SSL_VERIFYPEER => true,
             CURLOPT_SSL_VERIFYHOST => 2,
@@ -469,11 +421,7 @@ function models_download(string $url, string $part, ?int $from, int $length, str
         if ($error !== 0) {
             throw new RuntimeException('The download was interrupted (' . curl_strerror($error) . '). Press Save again: it carries on where it stopped.');
         }
-        if ($mirror !== '' && $status > 0) {
-            // The mirror explains itself (its daily share used, a version it does not hold): its own words, cut short.
-            throw new RuntimeException('The model mirror answered ' . $status . ' for a model file' . ($status === 429 ? ': this server has used its share for today. Press Save again tomorrow.' : '. Try again later.'));
-        }
-        if ($mirror === '' && in_array($status, [401, 403, 404, 410, 451], true)) {
+        if (in_array($status, [401, 403, 404, 410, 451], true)) {
             // Gone or refused upstream (Hugging Face answers 401 for a repository that no longer exists).
             throw new ModelSourceGone('Hugging Face answered ' . $status . ' for a model file.', true);
         }

@@ -270,11 +270,17 @@ await step('a model that cannot start: a short line with "What happened?", and a
   await box.locator('summary', { hasText: 'Details' }).click();
   ok((await box.locator('.dialog-detail').innerText()).includes('Hugging Face'), 'and are there when asked for');
   ok((await box.innerText()).includes('Close other tabs and programs'), 'the ways out');
-  for (const b of ['Start again', 'Choose another model', 'Close']) ok(await box.getByRole('button', { name: b }).count(), b);
+  for (const b of ['Start again', 'Choose another model', 'Find another model', 'Close']) ok(await box.getByRole('button', { name: b }).count(), b);
   eq(await box.getByRole('button', { name: 'Try a shorter version' }).count(), 0, 'no question was lost, so no shorter version');
   await shot('aichat-what-happened');
   await box.getByRole('button', { name: 'Choose another model' }).click();
   await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Agent', null, { timeout: 5000 });
+  // A model gone from Hugging Face: "Find another model" opens Find AI models to search for one.
+  await note.getByRole('button', { name: /What happened\?/ }).click();
+  await box.getByRole('button', { name: 'Find another model' }).click();
+  await page.locator('.win', { has: page.locator('.aim') }).waitFor({ timeout: 10000 });
+  await page.locator('.aim-query').waitFor({ timeout: 10000 });
+  ok(await page.locator('.aim-query').isVisible(), 'Find AI models opened, with its search box');
   await closeAll();
 });
 

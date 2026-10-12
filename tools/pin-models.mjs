@@ -3,7 +3,7 @@
 // WebGPU program (the part that runs as code) to one commit of the MLC team's GitHub folder (each program's SHA-256).
 //   node tools/pin-models.mjs            asks Hugging Face and GitHub for the newest commits and pins those
 //   node tools/pin-models.mjs --keep     keeps the commits already pinned; only fills in what is missing
-// Writes server/lib/model-pins.json (read by the server, the mirror and tools/fetch-model.mjs) and rewrites the program
+// Writes server/lib/model-pins.json (read by the server and tools/fetch-model.mjs) and rewrites the program
 // addresses and checksums in src/apps/assistant/modellibs.ts. Downloads each program once (about 60 small files) and
 // each model's small files; the large weight files are not downloaded: Hugging Face publishes their SHA-256.
 import { createHash } from 'node:crypto';

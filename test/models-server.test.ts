@@ -2,16 +2,14 @@
 // on this computer: the plan is the pinned files (the tests' own pins), pieces of at most 16 MB are fetched through a
 // redirect (as Hugging Face sends them to its file servers), a stopped save carries on, a file that is not the pinned
 // version is thrown away, a server that ignores the range asked for cannot append twice, and a redirect anywhere else
-// is refused. Then the model mirror (mirror/index.php, run by PHP's own server): filled from the stand-in, it serves a
-// TOMLIN OS server whose Hugging Face copy is gone, refuses browsers and other versions, and stops at the daily share.
+// is refused, and a file gone upstream stops the save with the reason and the way out (Find AI models).
 // Also: the built-in list still matches the WebLLM this TOMLIN OS ships, and the real pins cover it. Skipped without PHP.
 // Run: npm test
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFile, spawn, type ChildProcess } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { createServer, request, type Server } from 'node:http';
-import { createServer as netServer } from 'node:net';
+import { createServer, type Server } from 'node:http';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -131,7 +129,7 @@ models_index_add($m, '${ID}', $plan);
 echo json_encode(['plan' => $plan, 'steps' => $steps, 'index' => models_index_read($m)]);`);
     assert.deepEqual(r.plan.files.map((f: { path: string }) => f.path), ['mlc-chat-config.json', 'params_shard_0.bin', LIB], 'the pinned files, then the program');
     assert.equal(r.plan.rev, REV);
-    assert.ok(r.plan.files.every((f: { sha256: string; from: string }) => /^[0-9a-f]{64}$/.test(f.sha256) && f.from === 'upstream'), 'every file has its checksum');
+    assert.ok(r.plan.files.every((f: { sha256: string }) => /^[0-9a-f]{64}$/.test(f.sha256)), 'every file has its checksum');
     const shardSteps = r.steps.filter((s: [string]) => s[0] === 'params_shard_0.bin').map((s: [string, { have: number; done: boolean }]) => s[1]);
     assert.deepEqual(shardSteps, [{ have: 16 * 1024 * 1024, done: false }, { have: shard.length, done: true }], 'two pieces of at most 16 MB');
     assert.deepEqual(mode.ranges.filter(x => x.includes('params')), [`/cdn/params_shard_0.bin bytes=0-${16 * 1024 * 1024 - 1}`, `/cdn/params_shard_0.bin bytes=${16 * 1024 * 1024}-${shard.length - 1}`]);
@@ -196,121 +194,29 @@ test('only Hugging Face and GitHub file servers over https are fetched from', { 
   'https://evil.hf.co.example.com/x', 'https://user@huggingface.co/x', 'https://127.0.0.1/x', 'file:///etc/passwd',
 ]));`);
   assert.deepEqual(Object.values(r), [true, true, true, true, false, false, false, false, false, false]);
-  const m = await php('', dir, `echo json_encode(array_map(fn ($u) => models_host_allowed($u, 'https://mirror.example/aimodels/'), [
-  'https://mirror.example/aimodels/?id=x', 'https://MIRROR.example/other', 'https://huggingface.co/x', 'http://mirror.example/aimodels/', 'https://mirror.example:8443/x', 'https://mirror.example.evil.example/x',
-]));`);
-  assert.deepEqual(Object.values(m), [true, true, false, false, false, false], 'from the mirror: its own host over https only');
-  const urls = await php('', dir, `echo json_encode([models_mirror_url([]), models_mirror_url(['model_mirror' => '']), models_mirror_url(['model_mirror' => 'http://mirror.example/aimodels/']), models_mirror_url(['model_mirror' => 'https://other.example/m/'])]);`);
-  assert.deepEqual(Object.values(urls), ['', '', '', 'https://other.example/m/'], 'none by default, switched off, http refused, one set');
 });
 
-/** A free port on this computer. */
-const freePort = () => new Promise<number>(resolve => {
-  const s = netServer().listen(0, '127.0.0.1', () => {
-    const port = (s.address() as { port: number }).port;
-    s.close(() => resolve(port));
-  });
-});
-
-/** The mirror's door, run by PHP's own server, with its files in `files`. */
-async function mirrorDoor(base: string, files: string): Promise<{ proc: ChildProcess; url: string }> {
-  const port = await freePort();
-  const proc = spawn(PHP, [...ext, '-S', `127.0.0.1:${port}`, join(root, 'mirror', 'index.php')], { env: testEnv(base, { DESKTOP_MIRROR_FILES: files }), stdio: 'ignore' });
-  for (let i = 0; i < 50; i++) {
-    const up = await new Promise<boolean>(resolve => request({ host: '127.0.0.1', port, path: '/' }, res => resolve(!!res.resume())).on('error', () => resolve(false)).end());
-    if (up) break;
-    await new Promise(r => setTimeout(r, 100));
-  }
-  return { proc, url: `http://127.0.0.1:${port}/` };
-}
-
-/** A GET with the headers asked for (a browser's, or none): status and body. */
-const fetchRaw = (url: string, headers: Record<string, string>) => new Promise<{ status: number; body: Buffer }>((resolve, reject) => {
-  const u = new URL(url);
-  request({ host: u.hostname, port: u.port, path: u.pathname + u.search, headers }, res => {
-    const parts: Buffer[] = [];
-    res.on('data', c => parts.push(c)).on('end', () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(parts) }));
-  }).on('error', reject).end();
-});
-
-test('the mirror: filled from Hugging Face and checked, it serves a TOMLIN OS server whose Hugging Face copy is gone, and nobody else', { skip: noPhp }, async () => {
-  const good = await standIn({ ranges: [] });
-  const goneMode: Mode = { gone: true, ranges: [] };
-  const gone = await standIn(goneMode);
-  const files = tempDir('tomlinos-mirror-');
-  const dir = tempDir('tomlinos-models-');
-  let door: { proc: ChildProcess; url: string } | null = null;
-  try {
-    // Run without blocking: the stand-in answers from this same process.
-    const cli = (...args: string[]) => new Promise<{ code: number; stdout: string; stderr: string }>(resolve => execFile(PHP, [...ext, join(root, 'mirror', 'index.php'), ...args], { env: testEnv(good.base, { DESKTOP_MIRROR_FILES: files }), encoding: 'utf8' }, (error, stdout, stderr) => resolve({ code: error ? Number(error.code ?? 1) : 0, stdout, stderr })));
-    const fill = await cli('fill', ID);
-    assert.equal(fill.code, 0, fill.stderr);
-    assert.match(fill.stdout, /checked and kept/);
-    assert.ok(readFileSync(join(files, ID, 'resolve', 'main', 'params_shard_0.bin')).equals(shard), 'the mirror holds the pinned shard');
-    const status = await cli('status');
-    assert.match(status.stdout, /held \(3 of 3 files\)/);
-
-    door = await mirrorDoor(good.base, files);
-    const ask = `${door.url}?id=${ID}&rev=${REV}&file=params_shard_0.bin`;
-    const server = { 'User-Agent': 'TomlinOS', Range: 'bytes=0-99' };
-    const piece = await fetchRaw(ask, server);
-    assert.equal(piece.status, 206);
-    assert.ok(piece.body.equals(shard.subarray(0, 100)));
-    // Browsers are refused, however they ask: a page's fetch, an address typed into a tab, anything not TOMLIN OS.
-    assert.equal((await fetchRaw(ask, { ...server, 'Sec-Fetch-Mode': 'cors', 'Sec-Fetch-Site': 'cross-site', Origin: 'https://someone.example' })).status, 403);
-    assert.equal((await fetchRaw(ask, { ...server, 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Site': 'none', 'Sec-Fetch-Dest': 'document' })).status, 403);
-    assert.equal((await fetchRaw(ask, { 'User-Agent': 'Mozilla/5.0' })).status, 403);
-    assert.equal((await fetchRaw(`${door.url}?id=${ID}&rev=${'c'.repeat(40)}&file=params_shard_0.bin`, server)).status, 404, 'another version');
-    assert.equal((await fetchRaw(`${door.url}?id=${ID}&rev=${REV}&file=../../secret`, server)).status, 404, 'only pinned files');
-    assert.equal((await fetchRaw(`${door.url}?lib=${LIB}&rev=${LIBS_REV}`, server)).body.toString(), wasm.toString(), 'the program');
-
-    // A TOMLIN OS server whose Hugging Face copy of the shard is gone: the save goes on from the mirror.
-    const save = await php(gone.base, dir, `$plan = models_make_plan('${ID}');
-$steps = [];
-for ($i = 0; $i < 12; $i++) {
-  $r = step(function () use (&$plan, $m) { return models_save_step($m, '${ID}', $plan, '${door.url}'); });
-  $steps[] = $r;
-  if (isset($r['error']) || $r['done']) break;
-}
-echo json_encode(['steps' => $steps, 'from' => array_column($plan['files'], 'from')]);`, { DESKTOP_MODELS_TEST_MIRROR: door.url });
-    assert.deepEqual(save.from, ['upstream', 'mirror', 'upstream'], 'only the gone file went to the mirror');
-    assert.match(save.steps.find((s: { mirror: string | null }) => s.mirror)?.mirror ?? '', /params_shard_0\.bin \(Hugging Face answered 404/);
-    assert.equal(save.steps.at(-1).done, true, JSON.stringify(save.steps));
-    assert.ok(readFileSync(join(dir, 'models', ID, 'resolve', 'main', 'params_shard_0.bin')).equals(shard), 'the shard arrived whole, from the mirror');
-
-    // The daily share: this address has nearly used it, so the next piece is refused.
-    const usage = JSON.parse(readFileSync(join(files, '.usage.json'), 'utf8'));
-    usage.by['127.0.0.1'] = 8 * 1024 ** 3 - 50;
-    writeFileSync(join(files, '.usage.json'), JSON.stringify(usage));
-    const held = await fetchRaw(ask, server);
-    assert.equal(held.status, 429);
-    assert.match(held.body.toString(), /share .* today/);
-  } finally {
-    door?.proc.kill();
-    good.server.close();
-    gone.server.close();
-  }
-});
-
-test('without a mirror, a file gone upstream stops the save with the reason; other bytes are tried upstream once more', { skip: noPhp }, async () => {
+test('a file gone upstream stops the save with the reason and Find AI models; other bytes are tried once more', { skip: noPhp }, async () => {
   const gone = await standIn({ gone: true, ranges: [] });
   const wrongMode: Mode = { wrongBytes: true, ranges: [] };
   const wrong = await standIn(wrongMode);
   const dir = tempDir('tomlinos-models-');
   try {
-    const run = (base: string, mirror: string) => php(base, dir, `$plan = models_make_plan('${ID}');
+    const run = (base: string) => php(base, dir, `$plan = models_make_plan('${ID}');
 $steps = [];
 for ($i = 0; $i < 6; $i++) {
-  $r = step(function () use (&$plan, $m) { return models_save_step($m, '${ID}', $plan, '${mirror}'); });
+  $r = step(function () use (&$plan, $m) { return models_save_step($m, '${ID}', $plan); });
   $steps[] = $r;
   if (isset($r['error']) || $r['done']) break;
 }
-echo json_encode(['steps' => $steps, 'from' => array_column($plan['files'], 'from')]);`);
-    const stopped = await run(gone.base, '');
-    assert.match(stopped.steps.at(-1).error, /answered 404 .* no model mirror is set/);
-    const twice = await run(wrong.base, 'http://127.0.0.1:9/');
-    assert.deepEqual(twice.steps.filter((s: { changed: boolean }) => s.changed).map((s: { mirror: string | null }) => !!s.mirror), [false, true], 'the first miss retries upstream, the second goes to the mirror');
-    assert.deepEqual(twice.from, ['upstream', 'mirror', 'upstream']);
+echo json_encode(['steps' => $steps]);`);
+    const stopped = await run(gone.base);
+    assert.match(stopped.steps.at(-1).error, /answered 404 .* no longer where it was published, so it cannot be saved\. Find AI models/);
+    assert.doesNotMatch(stopped.steps.at(-1).error, /mirror/);
+    const twice = await run(wrong.base);
+    assert.equal(twice.steps.filter((s: { changed?: boolean }) => s.changed).length, 1, 'the first miss is tried again');
+    assert.match(twice.steps.at(-1).error, /was not the pinned version .* Find AI models/, 'the second stops the save');
+    assert.equal(wrongMode.ranges.filter(x => x.includes('params')).length, 4, 'fetched twice (two pieces each), no more');
   } finally {
     gone.server.close();
     wrong.server.close();

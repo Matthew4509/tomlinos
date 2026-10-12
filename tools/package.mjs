@@ -4,7 +4,6 @@
 //   tomlinos/                 the real PHP (api/, lib/), config.example.php, tools/, and data/ (files + accounts)
 // Nothing in tomlinos/ can be fetched from the web: it sits beside public_html, not inside it.
 // Left out on purpose: authenticator.* (the 2FA test page), server/dev-router.php, server/config.php (the local one).
-// Also builds dist/tomlinos-aimodels-<version>.zip: the model mirror's folder (mirror/index.php), for a site's aimodels/.
 // Run from the repository folder:  npm run package
 import { execFileSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -147,9 +146,8 @@ from Hugging Face in 16 MB pieces into tomlinos/models/. That folder is outside 
 to this desktop can fetch the files. "Remove from this TOMLIN OS" frees the space again; a removed model can be saved
 again a day later.
 Every model file is pinned to one version and checked against its SHA-256 (tomlinos/lib/model-pins.json), so a file
-changed upstream is never used. If Hugging Face or GitHub no longer has that version, Save can fetch it from a TOMLIN OS
-model mirror instead: put its https address in 'model_mirror' in tomlinos/config.php (none is set at first). Browsers
-never fetch from the mirror, only your server does.
+changed upstream is never used. If Hugging Face or GitHub no longer has that version, a model already saved here keeps
+working; otherwise Find AI models (Start > Accessories) searches Hugging Face for another model to use.
 (Or on your own computer run node tools/fetch-model.mjs and upload the models/ folder into tomlinos/.)
 `);
 
@@ -172,37 +170,3 @@ if (existsSync(join(priv, 'config.php'))) throw new Error('tomlinos/config.php m
 
 writeZip(stage, zip);
 console.log(`Packaged ${webFiles.length} web files into ${relative(process.cwd(), zip)}`);
-
-// The model mirror's folder: its door, the model code it shares with TOMLIN OS, and the pins. Unzipped in the web root of
-// the site that serves it, it lands as aimodels/. The model files themselves are never in it (php index.php fill).
-const mirrorZip = join(dist, `tomlinos-aimodels-${version}.zip`);
-const mirrorStage = join(dist, 'stage-aimodels');
-const door = join(mirrorStage, 'aimodels');
-rmSync(mirrorStage, { recursive: true, force: true });
-rmSync(mirrorZip, { force: true });
-mkdirSync(join(door, 'lib'), { recursive: true });
-cpSync(join(root, 'mirror', 'index.php'), join(door, 'index.php'));
-cpSync(join(root, 'mirror', '.htaccess'), join(door, '.htaccess'));
-cpSync(join(root, 'server', 'lib', 'models.php'), join(door, 'lib', 'models.php'));
-cpSync(join(root, 'server', 'lib', 'model-pins.json'), join(door, 'lib', 'model-pins.json'));
-writeFileSync(join(door, 'lib', '.htaccess'), 'Require all denied\n');
-writeFileSync(join(mirrorStage, 'AIMODELS-INSTALL.txt'), `TOMLIN OS model mirror ${version}
-
-What it is: copies of the three built-in AI models (about 4.3 GB), at exactly the versions TOMLIN OS ${version} is
-pinned to. Any TOMLIN OS server whose owner presses "Save to this TOMLIN OS" after Hugging Face or GitHub has removed or
-changed that version fetches it from here instead. Browsers are refused: only TOMLIN OS servers are served, and each
-server address may take 8 GB a day (all servers together 100 GB a day). Past that: "press Save again tomorrow".
-
-1. In cPanel File Manager, open the web root of your site (the folder its pages are in) and extract this zip there.
-   It adds a folder aimodels/ (the address becomes https://<your site>/aimodels/: the address a TOMLIN OS owner puts in
-   'model_mirror' in tomlinos/config.php).
-2. In cPanel > Terminal, go to that folder and run:   php index.php fill
-   It fetches the three models from Hugging Face into a folder aimodels-files beside the web root (outside it), each
-   file checked against its pinned SHA-256. About 4.3 GB of disk. If it stops, run it again: it carries on.
-3. Check:   php index.php status   (all three "held", and today's use).
-4. Optional: aimodels/config.php returning ['files' => folder, 'per_address_gb' => 8, 'total_gb' => 100] changes the
-   files folder or the daily limits.
-When a new TOMLIN OS version pins newer models, extract its mirror zip the same way and run fill again.
-`);
-writeZip(mirrorStage, mirrorZip);
-console.log(`Packaged the model mirror into ${relative(process.cwd(), mirrorZip)}`);

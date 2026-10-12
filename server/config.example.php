@@ -37,10 +37,6 @@ return [
     // 'no-reply@example.com'. Empty: the host's own default sender.
     'mail_from' => '',
 
-    // Where "Save to this TOMLIN OS" fetches a pinned AI model file that Hugging Face or GitHub no longer has: the https
-    // address of a TOMLIN OS model mirror someone runs (its aimodels/ folder; browsers never fetch from it). '' = no mirror.
-    'model_mirror' => '',
-
     // The most people this desktop holds (the owner adds them; there is no open sign-up).
     'max_users' => 10,
 
