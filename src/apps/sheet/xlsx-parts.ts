@@ -8,7 +8,7 @@ import { cleanPage, defaultPage, PAPERS, type PageSetup, type Paper } from './pr
 import { addressOf, colName, MAX_COLS, MAX_ROWS } from './refs.ts';
 import { cleanValidation, type DvType, type Validation } from './validate.ts';
 import type { Range, Sheet, Workbook } from './workbook.ts';
-import { child, children, escapeXml, tag, type XmlEl } from './xml.ts';
+import { child, children, escapeXml, tag, type XmlEl } from '../../core/xml.ts';
 import { applyTint, fromExcelFormula, parseRange, rangeText, readColour, toExcelFormula } from './xlsx.ts';
 
 /** Things in the file that could not be kept, counted while reading. */

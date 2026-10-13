@@ -9,7 +9,7 @@ import { readZip } from '../src/apps/archive/read.ts';
 import { Workbook } from '../src/apps/sheet/workbook.ts';
 import { parseCellRef } from '../src/apps/sheet/refs.ts';
 import { fromExcelFormula, openXlsx, saveXlsx, toExcelFormula } from '../src/apps/sheet/xlsx.ts';
-import { parseXml, XmlProblem } from '../src/apps/sheet/xml.ts';
+import { parseXml, XmlProblem } from '../src/core/xml.ts';
 
 const MAIN = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
 const at = (wb: Workbook, addr: string, s = 0): string => {

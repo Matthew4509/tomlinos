@@ -15,7 +15,7 @@ import { codeProblem, isDateCode } from './numfmt.ts';
 import { addressOf, colName, MAX_COLS, MAX_ROWS, parseCellRef, shiftFormula, SyntaxProblem, tokenize, type Tok } from './refs.ts';
 import { CellError, type CellStyle, type Line, type Value } from './values.ts';
 import { cleanFilterRule, colOfKey, FILE_FORMAT, keyOf, MAX_CELLS, rowOfKey, type Filter, type FilterRule, type Range, type Workbook } from './workbook.ts';
-import { allText, child, children, escapeXml, parseXml, tag, XML_HEAD, XmlProblem, type XmlEl } from './xml.ts';
+import { allText, child, children, escapeXml, parseXml, tag, XML_HEAD, XmlProblem, type XmlEl } from '../../core/xml.ts';
 import {
   anchorOf, chartXml, drawingXml, dxfXml, finishChart, newPartsReport, printNames, readCf, readChartPart, readDv, readDxfs, readPage, readPrintNames,
   writeCf, writeDv, writePage,

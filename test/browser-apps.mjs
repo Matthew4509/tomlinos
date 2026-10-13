@@ -401,6 +401,51 @@ await step('Pictures > Edit opens Photo Editor; rotate right makes it 200 × 300
   await page.locator('.win', { has: page.locator('.photos') }).getByRole('button', { name: 'Close' }).click();
 });
 
+await step('Photo Editor layers: a new layer painted, a selection cleared, saved as .ora, reopened with its layers', async () => {
+  await closeAll();
+  await openApp('photo editor');
+  const w = page.locator('.win', { has: page.locator('.pe') });
+  await w.getByRole('button', { name: 'New...' }).click();
+  await page.locator('.dialog input[aria-label="Width"]').fill('200');
+  await page.locator('.dialog input[aria-label="Height"]').fill('100');
+  await page.locator('.dialog').getByRole('button', { name: 'Create' }).click();
+  await w.getByRole('button', { name: 'New layer' }).click();
+  eq(await w.locator('.pe-layer-name').allInnerTexts(), ['Layer 2', 'Background'], 'two layers, top first');
+  const box = await w.locator('.pe-over').boundingBox();
+  const at = (x, y) => [box.x + (x / 200) * box.width, box.y + (y / 100) * box.height];
+  const screen = (x, y) => page.evaluate(([x, y]) => [...document.querySelector('.pe-doc').getContext('2d').getImageData(x, y, 1, 1).data], [x, y]);
+  await page.mouse.move(...at(10, 50));
+  await page.mouse.down();
+  await page.mouse.move(...at(190, 50), { steps: 8 });
+  await page.mouse.up();
+  ok((await screen(100, 50))[0] > 200 && (await screen(100, 50))[1] < 80, 'red stroke on screen');
+  await w.locator('.pe-tools').getByRole('button', { name: 'Select a rectangle', exact: true }).click();
+  await page.mouse.move(...at(80, 20));
+  await page.mouse.down();
+  await page.mouse.move(...at(120, 80), { steps: 4 });
+  await page.mouse.up();
+  await page.keyboard.press('Delete');
+  eq(await screen(100, 50), [255, 255, 255, 255], 'cleared inside the selection, white Background shows');
+  ok((await screen(30, 50))[0] > 200 && (await screen(30, 50))[1] < 80, 'kept outside');
+  await page.keyboard.press('Control+s');
+  const name = page.locator('.dialog input[aria-label="File name"]');
+  eq(await name.inputValue(), 'Untitled.ora', 'layers suggest .ora');
+  await name.fill('layers.ora');
+  await page.locator('.dialog').getByRole('button', { name: 'Save' }).click();
+  await w.locator('.pe-status:not(:has-text("not saved"))', { hasText: 'layers.ora' }).waitFor({ timeout: 10000 });
+  await w.getByRole('button', { name: 'Close' }).click();
+  await page.keyboard.press('Control+Alt+e');
+  const x = front();
+  await x.locator('.item', { hasText: 'Pictures' }).first().dblclick();
+  await x.locator('.item', { hasText: 'layers' }).first().dblclick();
+  await w.locator('.pe-status', { hasText: 'layers.ora' }).waitFor({ timeout: 10000 });
+  eq(await w.locator('.pe-layer-name').allInnerTexts(), ['Layer 2', 'Background'], 'layers back from the file');
+  eq(await screen(100, 50), [255, 255, 255, 255], 'the cleared part is still clear');
+  await w.getByRole('button', { name: 'Hide “Layer 2”' }).click();
+  eq(await screen(30, 50), [255, 255, 255, 255], 'the stroke was on its own layer');
+  await closeAll();
+});
+
 await step('About TOMLIN OS shows the version and credits every bundled package, with its licence text', async () => {
   // About sits in the Start menu's bottom row, not in a group.
   await page.locator('.start-btn').click();

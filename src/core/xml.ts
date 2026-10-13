@@ -1,4 +1,4 @@
-// A small XML reader and writer for the parts of an .xlsx file. Our own code (no browser needed, so it can be tested).
+// A small XML reader and writer (the parts of an .xlsx file, an OpenRaster stack). Our own code (no browser needed, so it can be tested).
 // Nothing in a file is trusted: a DOCTYPE (where "entity" tricks live) is refused, only the five standard entities and
 // numbered characters are read, and the reader never calls itself, so a deeply nested file cannot run out of stack.
 

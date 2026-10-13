@@ -11,6 +11,8 @@ export interface FileType {
 
 const TEXT: FileType = { label: 'Text document', icon: 'text', apps: ['editor', 'notepadpro'] };
 const IMAGE: FileType = { label: 'Picture', icon: 'image', apps: ['photos', 'photoedit'] };
+/** OpenRaster: a zip of layers (GIMP, Krita and MyPaint use it). Only Photo Editor reads it; Photos does not list it. */
+const LAYERED: FileType = { label: 'Layered picture', icon: 'image', apps: ['photoedit'] };
 const VIDEO: FileType = { label: 'Video', icon: 'video', apps: ['player'] };
 const AUDIO: FileType = { label: 'Music', icon: 'music', apps: ['player'] };
 const SHEET: FileType = { label: 'Spreadsheet', icon: 'sheet', apps: ['sheet'] };
@@ -35,6 +37,7 @@ const GROUPS: Array<[FileType, string[]]> = [
   [CODE, ['json', 'xml', 'html', 'htm', 'js', 'css', 'ts', 'php', 'py', 'yml', 'yaml']],
   [ARCHIVE, ['zip', '7z', 'rar', 'tar', 'gz', 'tgz']],
   [IMAGE, ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 'svg', 'ico']],
+  [LAYERED, ['ora']],
   [VIDEO, ['mp4', 'webm', 'm4v', 'mov', 'ogv']],
   [AUDIO, ['mp3', 'wav', 'ogg', 'oga', 'm4a', 'flac', 'aac', 'opus']],
   [ASM, ['s', 'asm']],

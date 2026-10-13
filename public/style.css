@@ -1336,6 +1336,50 @@ textarea.field { resize: vertical; font: inherit; }
 .pe-form label { display: flex; align-items: center; gap: 6px; font-size: 13px; }
 .pe-slider span:first-child { width: 80px; }
 .pe-slider input { flex: 1; }
+.pe-tools { display: grid; grid-template-columns: repeat(2, 34px); grid-auto-rows: 32px; align-content: start; }
+.pe-tool { width: 34px; height: 32px; color: var(--ink); }
+.pe-stage[data-tool="rselect"] .pe-over, .pe-stage[data-tool="eselect"] .pe-over, .pe-stage[data-tool="lasso"] .pe-over, .pe-stage[data-tool="wand"] .pe-over,
+.pe-stage[data-tool="gradient"] .pe-over, .pe-stage[data-tool="clone"] .pe-over, .pe-stage[data-tool="heal"] .pe-over, .pe-stage[data-tool="smudge"] .pe-over,
+.pe-stage[data-tool="dodge"] .pe-over, .pe-stage[data-tool="blur"] .pe-over { cursor: crosshair; }
+.pe-stage[data-tool="move"] .pe-over { cursor: move; }
+.pe-hint { font-size: 12px; color: var(--ink-soft); }
+.pe-options select.field { width: auto; min-height: 26px; padding: 1px 4px; }
+.pe-options .field.num { width: 64px; }
+.pe-layers { flex: none; width: 230px; display: flex; flex-direction: column; background: var(--face); border-left: 1px solid var(--line); min-height: 0; }
+.pe-layers[hidden] { display: none; }
+.pe-layers-head { padding: 4px 8px; font-weight: 700; font-size: 13px; border-bottom: 1px solid var(--line); }
+.pe-layer-props { display: flex; flex-wrap: wrap; gap: 4px 8px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+.pe-layer-props select.field { width: 130px; min-height: 26px; padding: 1px 4px; }
+.pe-layer-props input[type="range"] { width: 90px; }
+.pe-layer-list { flex: 1; min-height: 60px; overflow-y: auto; background: var(--paper); }
+.pe-layer { display: flex; align-items: center; gap: 6px; padding: 3px 6px; border-bottom: 1px solid var(--face); cursor: pointer; color: var(--ink); }
+.pe-layer:hover { background: var(--sel-soft); }
+.pe-layer.on { background: var(--sel); color: #fff; }
+.pe-layer.on .pe-badges { color: #e8eefc; }
+.pe-layer.hidden-layer .pe-thumb { opacity: .4; }
+.pe-layer.dragging { opacity: .5; }
+.pe-layer.drop-above { box-shadow: inset 0 3px 0 #2f6db8; }
+.pe-layer.drop-below { box-shadow: inset 0 -3px 0 #2f6db8; }
+.pe-eye { flex: none; width: 24px; height: 24px; border: 1px solid var(--line); border-radius: 4px; background: #fff; color: #16202e; font-size: 12px; cursor: pointer; }
+.pe-eye[aria-pressed="false"] { color: #8a94a6; }
+.pe-thumb { flex: none; width: 48px; height: 36px; border: 1px solid var(--line); background-color: #fff; background-image: linear-gradient(45deg, #ccc 25%, transparent 25%), linear-gradient(-45deg, #ccc 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #ccc 75%), linear-gradient(-45deg, transparent 75%, #ccc 75%); background-size: 8px 8px; background-position: 0 0, 0 4px, 4px -4px, -4px 0; }
+.pe-layer-text { min-width: 0; display: flex; flex-direction: column; font-size: 13px; }
+.pe-layer-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pe-badges { font-size: 12px; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pe-layer-btns { display: flex; flex-wrap: wrap; gap: 3px; padding: 4px 6px; border-top: 1px solid var(--line); }
+.pe-layer-btns .tool { min-width: 30px; }
+.pe-hist, .pe-curve { display: block; width: 256px; max-width: 100%; border: 1px solid var(--line); background: #fff; }
+.pe-curve { height: 256px; touch-action: none; cursor: crosshair; }
+.pe-row3 { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; }
+.pe-row3 .field.num { width: 72px; }
+.pe-textarea { min-height: 80px; resize: vertical; font: inherit; }
+.pe-anchor { display: grid; grid-template-columns: repeat(3, 28px); gap: 3px; }
+.pe-anchor button { width: 28px; height: 28px; border: 1px solid var(--line); border-radius: 4px; background: #fff; color: #16202e; cursor: pointer; }
+.pe-anchor button[aria-checked="true"] { background: #cfe0f5; border-color: #2f6db8; }
+.pe-over { touch-action: none; }
+@media (max-width: 700px) {
+  .pe-layers { width: 180px; }
+}
 
 /* ---- About TOMLIN OS (src/apps/about.ts) ---- */
 .about { overflow: auto; padding: 16px 20px; background: #fff; color: var(--ink); font-size: 14px; }
