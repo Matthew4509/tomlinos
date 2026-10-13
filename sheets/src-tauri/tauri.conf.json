@@ -1,0 +1,104 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/1.x/tooling/cli/schema.json",
+  "package": {
+    "productName": "TOMLIN Sheets",
+    "version": "1.0.0"
+  },
+  "build": {
+    "distDir": "../web",
+    "devPath": "../web",
+    "withGlobalTauri": true
+  },
+  "tauri": {
+    "allowlist": {
+      "all": false,
+      "dialog": {
+        "open": true,
+        "save": true
+      },
+      "window": {
+        "create": true,
+        "close": true,
+        "show": true,
+        "setTitle": true,
+        "setFocus": true,
+        "maximize": true,
+        "unmaximize": true,
+        "unminimize": true,
+        "setSize": true,
+        "setPosition": true,
+        "center": true
+      },
+      "process": {
+        "relaunch": true,
+        "exit": true
+      },
+      "shell": {
+        "open": "^https://github\\.com/Matthew4509/tomlinos(/.*)?$"
+      }
+    },
+    "bundle": {
+      "active": true,
+      "targets": [
+        "nsis",
+        "updater"
+      ],
+      "identifier": "com.tomlin.sheets",
+      "publisher": "TOMLIN OS",
+      "copyright": "© 2026 TOMLIN OS",
+      "category": "Productivity",
+      "shortDescription": "Spreadsheets for Windows",
+      "longDescription": "TOMLIN Sheets opens, edits and saves Excel workbooks (.xlsx), CSV files and its own .sheet files: formulas, tables, PivotTables, charts, conditional formatting, printing and PDF.",
+      "icon": [
+        "icons/32x32.png",
+        "icons/128x128.png",
+        "icons/128x128@2x.png",
+        "icons/icon.ico"
+      ],
+      "windows": {
+        "webviewInstallMode": {
+          "type": "downloadBootstrapper",
+          "silent": true
+        },
+        "nsis": {
+          "installMode": "currentUser",
+          "installerIcon": "icons/icon.ico",
+          "headerImage": "installer/header.bmp",
+          "sidebarImage": "installer/sidebar.bmp",
+          "license": "installer/LICENSE.txt",
+          "displayLanguageSelector": false,
+          "template": "installer/installer.nsi"
+        }
+      }
+    },
+    "updater": {
+      "active": true,
+      "dialog": false,
+      "endpoints": [
+        "https://raw.githubusercontent.com/Matthew4509/tomlinos/main/sheets/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFGOTY5QzQ4OTFBQjkyRjQKUldUMGtxdVJTSnlXcjhwUzFTWjg4Z1grZ0NQSUNzTWFuUERWM2c1Y3djTkRaaXloeTRhUDRtMzgK",
+      "windows": {
+        "installMode": "passive"
+      }
+    },
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ipc: https://ipc.localhost; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'",
+      "dangerousDisableAssetCspModification": false
+    },
+    "windows": [
+      {
+        "label": "main",
+        "title": "TOMLIN Sheets",
+        "url": "index.html",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 640,
+        "minHeight": 420,
+        "center": true,
+        "visible": false,
+        "fileDropEnabled": true
+      }
+    ]
+  }
+}

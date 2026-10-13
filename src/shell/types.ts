@@ -88,6 +88,8 @@ export interface Shell {
   readonly lockChanged: Bus<boolean>;
   /** null when files are kept in this browser (no accounts there). */
   readonly account: Account | null;
+  /** Set only when an app runs as a program on its own, outside the desktop (src/shell/native.ts). */
+  readonly native?: import('./native.ts').NativeHost;
   readonly lock: LockScreen;
   /** The area icons are placed on; drags onto it drop into the Desktop folder. */
   registerApp(app: AppDef): void;

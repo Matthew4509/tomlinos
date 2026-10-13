@@ -1,0 +1,8 @@
+# Built output: made by tools/build-web.mjs and tools/release.mjs.
+/web/
+/dist/
+/src-tauri/target/
+/src-tauri/gen/
+*.log
+# This PC only.
+release.local.json

@@ -1,0 +1,81 @@
+/* TOMLIN Sheets: the spreadsheet's own styles (style.css, shared with TOMLIN OS) dressed as a Windows 11 program:
+   Segoe UI, flat light surfaces, rounded menus and dialogs with a quiet shadow, one green accent. Loaded after
+   style.css; only looks change here, never layout the spreadsheet depends on. Text stays at 12px or larger. */
+:root {
+  --font: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --ink: #1b1b1b;
+  --ink-soft: #5c5c5c;
+  --face: #f9f9f9;
+  --face-hi: #ffffff;
+  --line: #d1d1d1;
+  --accent: #1e7a45;
+  --sel: #1e7a45;
+  --sel-soft: rgba(30, 122, 69, .16);
+  --focus: #1e7a45;
+  --taskbar: 0px;
+}
+body { background: #f3f3f3; font: 13px/1.4 var(--font); user-select: none; -webkit-user-select: none; }
+input, textarea, [contenteditable="true"], .dialog-text, .update-notes, .about { user-select: text; -webkit-user-select: text; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+#app { position: fixed; inset: 0; }
+#app > .sheet { height: 100%; }
+#boot { color: var(--ink-soft); }
+
+/* Ribbon and bars: the program's own font. */
+.formula-input, .name-box, .grid-editor, .fmt-list { font-family: var(--font); }
+.ribbon-tabs { background: #f3f3f3; border-bottom-color: #e0e0e0; padding-top: 6px; }
+.ribbon { background: #fbfbfb; border-bottom-color: #e0e0e0; }
+.ribbon-tab[aria-selected="true"] { background: #fbfbfb; border-color: #e0e0e0; border-bottom-color: #fbfbfb; }
+.file-tab { border-radius: 4px 4px 0 0; }
+.tabs-bar { background: #f3f3f3; border-top-color: #e0e0e0; }
+.statusbar.sheet-status { background: #f3f3f3; border-top: 1px solid #e0e0e0; color: #444; }
+
+/* Buttons and fields, flat. */
+.btn { min-height: 32px; padding: 4px 16px; border: 1px solid #d0d0d0; border-bottom-color: #bcbcbc; border-radius: 4px; background: #fdfdfd; color: var(--ink); }
+.btn:hover:not(:disabled) { background: #f5f5f5; border-color: #c4c4c4; }
+.btn:active:not(:disabled) { background: #efefef; color: #555; }
+.btn.primary { background: var(--accent); border-color: #17643a; color: #fff; box-shadow: none; }
+.btn.primary:hover:not(:disabled) { background: #1a6c3d; border-color: #135631; }
+.btn.danger { background: #c42b1c; border-color: #a52416; color: #fff; }
+.btn.danger:hover:not(:disabled) { background: #b02718; }
+.field, .rb-select, .rb-size, .rb-name { border: 1px solid #d0d0d0; border-bottom-color: #8a8a8a; border-radius: 4px; background: #fff; }
+.field:focus, .rb-size:focus, .rb-name:focus { border-bottom: 2px solid var(--accent); outline: none; }
+
+/* Menus: rounded, roomy, a soft shadow; the highlight is a light tint, not a solid bar. */
+.menu { padding: 4px; border: 1px solid #e3e3e3; border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, .14), 0 2px 6px rgba(0, 0, 0, .08); }
+.menu-item { min-height: 30px; padding: 5px 12px 5px 6px; border-radius: 4px; }
+.menu-item:hover, .menu-item:focus { background: #f0f0f0; color: var(--ink); }
+.menu-item.danger:hover, .menu-item.danger:focus { background: #fde7e9; color: #a4262c; }
+.menu-hint { opacity: .6; }
+.menu-sep { background: #e5e5e5; margin: 4px 6px; }
+
+/* Dialogs: a Windows 11 content dialog. */
+.backdrop { background: rgba(0, 0, 0, .28); }
+.dialog { background: #fff; border: 1px solid #e0e0e0; border-radius: 8px; box-shadow: 0 16px 48px rgba(0, 0, 0, .22), 0 4px 12px rgba(0, 0, 0, .1); }
+.dialog-title { padding: 18px 24px 4px; color: var(--ink); font-size: 18px; font-weight: 600; text-shadow: none; background: none; }
+.dialog-body { padding: 8px 24px 16px; }
+.dialog-buttons { padding: 16px 24px; background: #f3f3f3; border-top: 1px solid #e5e5e5; border-radius: 0 0 8px 8px; }
+.dialog-buttons .btn { min-width: 96px; }
+
+/* Toasts sit above the status bar. */
+#layer-toasts { padding-bottom: 44px; }
+.toast { background: #2b2b2b; border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, .25); }
+
+/* About and update boxes. */
+.about { width: min(420px, 80vw); }
+.about-head { display: flex; align-items: center; gap: 14px; margin-bottom: 12px; }
+.about-logo { flex: none; }
+.about-name { margin: 0; font-size: 20px; font-weight: 600; }
+.about-version { margin: 2px 0 0; color: var(--ink-soft); }
+.update-offer { width: min(440px, 80vw); }
+.update-notes { margin: 10px 0 0; padding: 8px 12px; max-height: 30vh; overflow: auto; background: #f7f7f7; border: 1px solid #e5e5e5; border-radius: 6px; }
+.update-notes p { margin: 2px 0; }
+.dialog:has(.about, .update-offer) { width: auto; }
+
+/* The ribbon scrolls sideways with arrows at its ends (host/ribbon.ts), not a scroll bar. */
+.ribbon { scrollbar-width: none; }
+.ribbon::-webkit-scrollbar { display: none; }
+.ribbon-arrow { position: absolute; z-index: 6; width: 22px; padding: 0; border: 0; font-size: 20px; line-height: 1; color: #444; background: rgba(251, 251, 251, .96); cursor: pointer; }
+.ribbon-arrow.left { left: 0; border-right: 1px solid #e0e0e0; }
+.ribbon-arrow.right { right: 0; border-left: 1px solid #e0e0e0; }
+.ribbon-arrow:hover { background: #ebebeb; color: var(--accent); }

@@ -1,0 +1,11 @@
+{
+  "version": "1.0.0",
+  "notes": "- First release of TOMLIN Sheets for Windows 10 and 11.\n- Opens and saves Excel workbooks (.xlsx), opens .xlsm (without macros), CSV and tab-separated files.\n- 268 functions, named ranges, LET, tables, PivotTables, charts, conditional formatting, data validation, notes.\n- Printing, page setup and PDF export.\n- Recent files, one window per workbook, files dropped on the window open, and updates from within the program.",
+  "pub_date": "2026-10-13T08:16:52Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUMGtxdVJTSnlXcjBEK3g0ZXdidmx3bDFhazQwRkFoSzdFUnl3WSs5N01xc0x4VzRpZ2Z0RUQ5R1RpS1I2bHpqaVBkU1VtT3o4WW5DcUJYMUpReUxKMXc0THllSFp0dFFzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxODc4OTM0CWZpbGU6VE9NTElOIFNoZWV0c18xLjAuMF94NjQtc2V0dXAubnNpcy56aXAKZ3VhdXJid1M5c3JmM01raW02UTR4Y1FNYlpzOVROeVJHUVoxV1RrWjBCMW9jdEgrSjRVdER0R3lOdnZsRmpFSUR2Y0FBd1A3V3k0QWVKZ3U4RU9IRGc9PQo=",
+      "url": "https://github.com/Matthew4509/tomlinos/releases/download/sheets-v1.0.0/TOMLIN-Sheets-1.0.0-x64.nsis.zip"
+    }
+  }
+}

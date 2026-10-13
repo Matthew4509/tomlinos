@@ -8,6 +8,7 @@ import { formatSize } from '../core/format.ts';
 import { baseName, joinPath, nameProblem, parentPath, splitExtension, uniqueName } from '../fs/names.ts';
 import type { MenuItem } from '../shell/menu.ts';
 import type { AppDef } from '../shell/types.ts';
+import type { NativeHost } from '../shell/native.ts';
 import { longDateCode, shortDateCode, type DateOrder } from './sheet/dates.ts';
 import { createGrid } from './sheet/grid.ts';
 import { codeProblem, formatCode, isDateCode } from './sheet/numfmt.ts';
@@ -111,7 +112,7 @@ export const sheetApp: AppDef = {
     let path: string | null = null;
     let loadedId = '';
     let savedVersion = wb.version;
-    let label = 'Untitled';
+    let label = shell.native?.untitled ?? 'Untitled';
     /** How the file at `path` is saved: our own format, or as an Excel workbook. */
     let kind: 'sheet' | 'xlsx' = 'sheet';
     /** What opening an Excel file left out; saving over that file asks first while this is set. */
@@ -153,6 +154,7 @@ export const sheetApp: AppDef = {
         }
         // An opened file starts clean, with nothing to undo.
         wb.load(JSON.parse(wb.serialize()));
+        shell.native?.remember(arg);
       } catch (error) {
         const why = error instanceof SyntaxProblem ? error.message : 'This file could not be opened.';
         if (!(error instanceof SyntaxProblem)) await shell.report('Could not open the spreadsheet', error);
@@ -1394,6 +1396,7 @@ export const sheetApp: AppDef = {
         savedVersion = version;
         lost = null;
         refresh();
+        shell.native?.remember(path);
         shell.toast(`Saved “${entry.name}”.`);
         return true;
       } catch (error) {
@@ -1404,6 +1407,7 @@ export const sheetApp: AppDef = {
 
     async function saveAs(): Promise<boolean> {
       if (!grid.commit()) return false;
+      if (shell.native) return saveAsNative(shell.native);
       const folder = path ? parentPath(path) : '/Documents';
       let taken: string[] = [];
       try {
@@ -1441,6 +1445,38 @@ export const sheetApp: AppDef = {
         await shell.report('Could not save', error);
         return false;
       }
+    }
+
+    /** Save as through the computer's own Save box: it asks before replacing a file, so the write may replace one. */
+    async function saveAsNative(native: NativeHost): Promise<boolean> {
+      const asExcel = kind === 'xlsx' || /\.xls[xm]?$/i.test(label);
+      const name = `${baseLabel()}.${asExcel ? 'xlsx' : 'sheet'}`;
+      const chosen = await native.pickSave(path ? joinPath(parentPath(path), name) : name, asExcel ? 'xlsx' : 'sheet');
+      if (chosen === null) return false;
+      const as = /\.xlsx$/i.test(chosen) ? 'xlsx' : 'sheet';
+      try {
+        const version = wb.version;
+        const entry = await shell.fs.writeFile(chosen, await fileBytes(as));
+        path = chosen;
+        label = entry.name;
+        loadedId = entry.id;
+        savedVersion = version;
+        kind = as;
+        lost = null;
+        refresh();
+        native.remember(chosen);
+        shell.toast(`Saved “${entry.name}”.`);
+        return true;
+      } catch (error) {
+        await shell.report('Could not save', error);
+        return false;
+      }
+    }
+
+    /** Any workbook from the computer (.xlsx, .xlsm, .sheet, .csv...), through its own Open box. */
+    async function openNative(native: NativeHost): Promise<void> {
+      const chosen = await native.pickOpen();
+      if (chosen !== null) await shell.openPath(chosen);
     }
 
     function baseLabel(): string {
@@ -1529,6 +1565,30 @@ export const sheetApp: AppDef = {
     const fileBtn = h('button', { type: 'button', class: 'file-tab', 'aria-haspopup': 'true' }, 'File');
     on(fileBtn, 'click', () => {
       const r = fileBtn.getBoundingClientRect();
+      const dates: MenuItem = { label: 'Read typed dates as', submenu: (['dmy', 'mdy', 'ymd'] as const).map(o => ({ label: ORDER_LABEL[o], checked: wb.dateOrder === o, action: () => void setDateOrder(o) })) };
+      const native = shell.native;
+      if (native) {
+        // A program of its own: the computer's Open and Save boxes, and Export in place of Download.
+        const extra = native.fileMenu();
+        shell.menus.show([
+          { label: 'New', hint: 'Ctrl+N', action: () => native.newWindow() },
+          { label: 'Open...', hint: 'Ctrl+O', action: () => void openNative(native) },
+          ...extra.top,
+          { separator: true },
+          { label: 'Save', hint: 'Ctrl+S', action: () => void save() },
+          { label: 'Save as...', hint: 'F12', action: () => void saveAs() },
+          { label: 'Import CSV into this sheet...', action: importFromComputer },
+          { label: 'Export as CSV...', action: exportCsv },
+          { label: 'Export as PDF...', action: () => void downloadPdf(ctx) },
+          { separator: true },
+          { label: 'Print...', hint: 'Ctrl+P', action: () => void printPreview(ctx) },
+          { label: 'Page setup...', action: () => void pageSetupDialog(ctx) },
+          { separator: true },
+          dates,
+          ...extra.bottom,
+        ], r.left, r.bottom, { returnFocus: fileBtn });
+        return;
+      }
       shell.menus.show([
         { label: 'Save', hint: 'Ctrl+S', action: () => void save() },
         { label: 'Save as...', hint: 'Ctrl+Shift+S', action: () => void saveAs() },
@@ -1543,7 +1603,7 @@ export const sheetApp: AppDef = {
         { label: 'Download as PDF', action: () => void downloadPdf(ctx) },
         { label: 'Save as PDF in Documents', action: () => void savePdfInDocuments(ctx) },
         { separator: true },
-        { label: 'Read typed dates as', submenu: (['dmy', 'mdy', 'ymd'] as const).map(o => ({ label: ORDER_LABEL[o], checked: wb.dateOrder === o, action: () => void setDateOrder(o) })) },
+        dates,
       ], r.left, r.bottom, { returnFocus: fileBtn });
     }, app.signal);
     const tabsRow = h('div', { class: 'ribbon-tabs', role: 'tablist', 'aria-label': 'Toolbar' }, fileBtn, ...tabButtons);
@@ -1724,6 +1784,15 @@ export const sheetApp: AppDef = {
       if (ctrl && k === 's') {
         event.preventDefault();
         void (event.shiftKey ? saveAs() : save());
+      } else if (shell.native && event.key === 'F12' && !ctrl && !event.shiftKey) {
+        event.preventDefault();
+        void saveAs();
+      } else if (shell.native && ctrl && !event.shiftKey && k === 'n') {
+        event.preventDefault();
+        shell.native.newWindow();
+      } else if (shell.native && ctrl && !event.shiftKey && k === 'o') {
+        event.preventDefault();
+        void openNative(shell.native);
       } else if (ctrl && !event.shiftKey && (k === 'f' || k === 'h')) {
         event.preventDefault();
         openFind(k === 'h');
@@ -1776,6 +1845,20 @@ export const sheetApp: AppDef = {
     on(document, 'pointerdown', (event: PointerEvent) => {
       if (palette && event.target instanceof Node && !palette.contains(event.target) && !(event.target as Element).closest?.('.wide-rb')) closePalette();
     }, app.signal);
+    // A program of its own asks as a desktop spreadsheet does when its window closes with unsaved changes.
+    if (shell.native) {
+      app.onClose(async () => {
+        if (wb.version === savedVersion) return true;
+        const answer = await shell.dialogs.ask<'save' | 'drop' | null>({
+          title: shell.native!.product,
+          text: `Do you want to save the changes you made to “${label}”?`,
+          buttons: [{ label: 'Save', value: 'save', primary: true }, { label: 'Don’t save', value: 'drop' }, { label: 'Cancel', value: null }],
+          cancel: null,
+        });
+        if (answer === 'save') return save();
+        return answer === 'drop';
+      });
+    }
     void addressOf;
     grid.focus();
   },

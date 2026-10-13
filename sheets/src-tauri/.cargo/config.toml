@@ -1,0 +1,4 @@
+# The C runtime is built into the program: a fresh Windows has no Visual C++ runtime, and without this the program
+# would not start there (it needs vcruntime140.dll otherwise).
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

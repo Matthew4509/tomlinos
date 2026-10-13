@@ -1,0 +1,35 @@
+[package]
+name = "tomlin-sheets"
+version = "1.0.0"
+description = "TOMLIN Sheets"
+license-file = "../../LICENSE"
+edition = "2021"
+publish = false
+
+[build-dependencies]
+tauri-build = { version = "1.5", features = [] }
+
+[dependencies]
+tauri = { version = "1.8", features = ["dialog-open", "dialog-save", "window-create", "window-close", "window-show", "window-set-title", "window-set-focus", "window-maximize", "window-unmaximize", "window-set-size", "window-set-position", "window-center", "window-unminimize", "updater", "process-relaunch", "process-exit", "shell-open"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.21"
+minisign-verify = "0.2"
+semver = "1"
+zip = { version = "0.6", default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.19.1"
+windows = "0.39.0"
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+# A build for trying an update on this computer: updates come from TOMLIN_SHEETS_TEST_FEED, set when building.
+test-feed = []
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
