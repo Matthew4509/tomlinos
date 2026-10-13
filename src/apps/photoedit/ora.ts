@@ -3,8 +3,8 @@
 // whole picture as "mergedimage.png" and a small "Thumbnails/thumbnail.png" (256 pixels at most).
 // A file from outside is untrusted: entries, sizes and pixels are capped BEFORE anything is decoded.
 import { zipStore } from '../../core/zip.ts';
-import { child, escapeXml, parseXml, XmlProblem, type XmlEl } from '../../core/xml.ts';
-import { ArchiveError, readZip, type ArchiveEntry } from '../archive/read.ts';
+import { child, escapeAttr, parseXml, XmlProblem, type XmlEl } from '../../core/xml.ts';
+import { ArchiveError, readZip, safeParts, type ArchiveEntry } from '../archive/read.ts';
 import { imageSize, MAX_PICTURE_PIXELS } from '../../core/imagesize.ts';
 import { blendFromOra, blendInfo, LAYER_BUDGET, MAX_LAYERS, type BlendMode } from './layers.ts';
 
@@ -14,6 +14,8 @@ const MAX_STACK_XML = 1024 * 1024;
 const MAX_ENTRIES = 1000;
 /** One packed layer PNG may be at most this big. */
 const MAX_LAYER_FILE = 100 * 1024 * 1024;
+/** The longest side Photo Editor makes or opens (some browsers cannot draw a canvas past 32,767 pixels on a side). */
+export const MAX_SIDE = 20000;
 
 export class OraProblem extends Error {}
 
@@ -61,7 +63,7 @@ export function writeStack(s: OraStack): string {
     ];
     if (l.locked) attrs.push(['edit-locked', 'true']);
     if (l.text) attrs.push(['tomlinos:text', JSON.stringify(l.text)]);
-    return `  <layer ${attrs.map(([k, v]) => `${k}="${escapeXml(v)}"`).join(' ')}/>`;
+    return `  <layer ${attrs.map(([k, v]) => `${k}="${escapeAttr(v)}"`).join(' ')}/>`;
   });
   return `<?xml version="1.0" encoding="UTF-8"?>\n<image version="0.0.5" w="${s.width}" h="${s.height}" xmlns:tomlinos="${NS}">\n <stack>\n${layers.join('\n')}\n </stack>\n</image>\n`;
 }
@@ -193,7 +195,8 @@ export async function openOra(bytes: Uint8Array): Promise<OraOpened> {
   if (entries.length > MAX_ENTRIES) throw new OraProblem(`It holds more than ${MAX_ENTRIES} parts, far more than a layered picture needs.`);
   const byPath = new Map(entries.filter(e => !e.folder).map(e => [e.parts.join('/'), e]));
   const read = async (path: string, max: number): Promise<Uint8Array> => {
-    const e = byPath.get(path.replace(/^\/+/, '').replace(/\\/g, '/'));
+    // Looked up the way the zip's own names were cleaned ("./data/a.png", "data/a:b.png", accents spelt two ways).
+    const e = byPath.get(safeParts(path).join('/'));
     if (!e) throw new OraProblem(`A part it lists (${path.slice(0, 80)}) is missing from the file.`);
     if (e.size > max) throw new OraProblem(`A part (${path.slice(0, 80)}) unpacks to more than ${Math.round(max / 1024 / 1024)} MB, which is not opened.`);
     try {
@@ -206,8 +209,8 @@ export async function openOra(bytes: Uint8Array): Promise<OraOpened> {
   const mime = byPath.get('mimetype');
   if (mime && new TextDecoder().decode(await read('mimetype', 100)).trim() !== ORA_TYPE) throw new OraProblem('It says it is not an OpenRaster picture.');
   const { stack, notes } = readStack(new TextDecoder('utf-8').decode(await read('stack.xml', MAX_STACK_XML)));
-  if (stack.width * stack.height > MAX_PICTURE_PIXELS) {
-    throw new OraProblem(`It says it is ${stack.width.toLocaleString()} × ${stack.height.toLocaleString()} pixels, more than the ${MAX_PICTURE_PIXELS / 1e6} million Photo Editor opens.`);
+  if (stack.width * stack.height > MAX_PICTURE_PIXELS || stack.width > MAX_SIDE || stack.height > MAX_SIDE) {
+    throw new OraProblem(`It says it is ${stack.width.toLocaleString()} × ${stack.height.toLocaleString()} pixels, more than Photo Editor opens (${MAX_PICTURE_PIXELS / 1e6} million pixels, ${MAX_SIDE.toLocaleString()} on a side).`);
   }
   if (stack.layers.length * stack.width * stack.height > LAYER_BUDGET) {
     throw new OraProblem(`It has ${stack.layers.length} layers at ${stack.width.toLocaleString()} × ${stack.height.toLocaleString()}, more than this browser can hold safely.`);

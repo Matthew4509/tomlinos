@@ -16,16 +16,16 @@ import { mediaTypeOf } from './media.ts';
 import { MAX_PICTURE_PIXELS, pictureTooBig } from '../core/imagesize.ts';
 import { APPS } from './catalog.ts';
 import { saveOver } from '../shell/savefile.ts';
-import { BLUR, convolve3, floodFill, greyscale, hexToRgba, invert, keepShape, rgbToHex, sepia, SHARPEN } from './photoedit/pixels.ts';
+import { BLUR, convolve3, floodFill, greyscale, hexToRgba, invert, keepShape, mixPixel, rgbToHex, sepia, SHARPEN } from './photoedit/pixels.ts';
 import { Doc, makeCanvas, makeLayer, paintText, surfaceOf, textBounds, type Layer } from './photoedit/doc.ts';
 import { clipRect, group, PixelPatch, TILE, unionRect, type Rect } from './photoedit/history.ts';
-import { combine, cropMask, ellipseMask, feather, invertMask, polygonMask, rectMask, wandMask, type Combine, type Mask, type Point } from './photoedit/selection.ts';
-import { blurSharpenDab, cloneDab, DabPath, dabRect, dodgeBurnDab, healDab, makeCarry, smudgeDab, type Carry, type Dab } from './photoedit/retouch.ts';
+import { combine, cropMask, ellipseMask, feather, flipMaskIn, invertMask, polygonMask, rectMask, wandMask, type Combine, type Mask, type Point } from './photoedit/selection.ts';
+import { blurSharpenDab, cloneDab, DabPath, dabRect, dodgeBurnDab, healDab, makeCarry, makeStroke, smudgeDab, type Carry, type Dab, type StrokeState } from './photoedit/retouch.ts';
 import { blendInfo, copyName, moveItem, nextName, noRoomForLayer } from './photoedit/layers.ts';
-import { buildOra, openOra, OraProblem, thumbSize, type OraLayer, type TextSpec } from './photoedit/ora.ts';
+import { buildOra, MAX_SIDE, openOra, OraProblem, thumbSize, type OraLayer, type TextSpec } from './photoedit/ora.ts';
 import { boxBounds, corners, dragBox, HANDLES, handlePoint, hitHandle, isIdentity, type Box, type Handle } from './photoedit/transform.ts';
 import { FONT_FAMILIES } from './photoedit/text.ts';
-import { adjust, type AdjustKind } from './photoedit/adjust-ui.ts';
+import { adjust, ADJUST_TITLES, type AdjustKind } from './photoedit/adjust-ui.ts';
 import { layersPanel } from './photoedit/layers-ui.ts';
 
 const MAX_FILE = 60 * 1024 * 1024;
@@ -63,8 +63,9 @@ export const photoEditApp: AppDef = {
   launch: (app, arg) => run(app, arg),
 };
 
-/** What the clipboard holds when it was copied here (the system clipboard may also have it as a PNG). */
-let internalClip: { canvas: HTMLCanvasElement; x: number; y: number; at: number } | null = null;
+/** What the clipboard holds when it was copied here, with where it came from. `png` is the size of the PNG put on the
+ *  system clipboard too, so a paste can tell it is our own copy and put it back in the same place. */
+let internalClip: { canvas: HTMLCanvasElement; x: number; y: number; png: number } | null = null;
 
 async function run(app: AppHandle, arg: string | undefined): Promise<void> {
   const shell = app.shell;
@@ -102,7 +103,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
   const layerMenu = menuBtn('Layer', 'Add, copy, merge and change layers');
   const selectMenu = menuBtn('Select', 'Select all, none, invert, soften the edge');
   const colourMenu = menuBtn('Colours', 'Levels, curves, hue and saturation...');
-  const filterBtn = menuBtn('Filters', 'Greyscale, sepia, invert, blur, sharpen');
+  const filterBtn = menuBtn('Filters', 'Greyscale, sepia, blur, sharpen');
   const helpMenu = menuBtn('Help', 'What Photo Editor does and leaves out');
   const rotL = tool$('⟲', 'Rotate the picture left', { 'aria-label': 'Rotate left' });
   const rotR = tool$('⟳', 'Rotate the picture right', { 'aria-label': 'Rotate right' });
@@ -196,7 +197,10 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       settle();
       doc.setMeta('Blend mode', layer, { mode });
     },
-    setLocked: (layer, locked) => doc.setMeta(locked ? 'Lock layer' : 'Unlock layer', layer, { locked }),
+    setLocked: (layer, locked) => {
+      settle();
+      doc.setMeta(locked ? 'Lock layer' : 'Unlock layer', layer, { locked });
+    },
     moveTo: (layer, index) => {
       settle();
       const from = doc.indexOf(layer);
@@ -246,10 +250,12 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     undoBtn.title = doc.history.undoList.length ? `Undo ${doc.history.undoList[doc.history.undoList.length - 1].label} (Ctrl+Z)` : 'Undo (Ctrl+Z)';
     redoBtn.title = doc.history.redoList.length ? `Redo ${doc.history.redoList[doc.history.redoList.length - 1].label} (Ctrl+Y)` : 'Redo (Ctrl+Y)';
     const name = path ? baseName(path) : 'Untitled.png';
-    app.setTitle(`${name}${dirty ? ' *' : ''} - Photo Editor`);
-    app.setDirty(dirty);
+    // A move not yet applied is a change too (closing the window asks first).
+    const unsaved = dirty || !!xf;
+    app.setTitle(`${name}${unsaved ? ' *' : ''} - Photo Editor`);
+    app.setDirty(unsaved);
     const layers = doc.layers.length > 1 ? `  ·  ${doc.layers.length} layers, on “${doc.active.name}”` : '';
-    status.textContent = `${name}  ·  ${doc.width} × ${doc.height} pixels${layers}  ·  ${Math.round(zoom * 100)}%${dirty ? '  ·  not saved' : ''}`;
+    status.textContent = `${name}  ·  ${doc.width} × ${doc.height} pixels${layers}  ·  ${Math.round(zoom * 100)}%${unsaved ? '  ·  not saved' : ''}`;
   }
   function note(text: string) {
     hint.textContent = text;
@@ -265,8 +271,13 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       over.width = doc.width;
       over.height = doc.height;
       [strokeCanvas, strokeCtx] = makeCanvas(doc.width, doc.height);
+      // Anything drawn over the picture belonged to the old size (a crop box, a lasso): gone, before the redraw.
       cropBox = null;
       cropBar.hidden = true;
+      if (!xf) xfBar.hidden = true;
+      lasso = null;
+      selBox = null;
+      preview = (tool === 'clone' || tool === 'heal') && cloneSrc ? cloneMarker : null;
       antsPath = null;
       fit();
       panel.refresh();
@@ -321,6 +332,8 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
   function undo() {
     if (xf) return cancelTransform();
     if (lasso) return endLasso();
+    // A stroke or drag still under the pointer is finished first, so Undo takes back that (not the step before it).
+    finishGesture();
     doc.cancelPending();
     if (doc.history.undo()) changed();
   }
@@ -421,9 +434,10 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
         const img = await decode(bytes, entry.name);
         const w = img.width || 300;
         const hgt = img.height || 150;
-        if (w * hgt > MAX_PIXELS) {
+        if (w * hgt > MAX_PIXELS || w > MAX_SIDE || hgt > MAX_SIDE) {
           closeImage(img);
-          await shell.dialogs.alert('Too many pixels', `This picture is ${w} × ${hgt} pixels. Photo Editor opens pictures up to ${MAX_PIXELS / 1e6} million pixels, so it does not run out of memory. It is safe where it is.`);
+          await shell.dialogs.alert('Too many pixels', `This picture is ${w} × ${hgt} pixels. Photo Editor opens pictures up to ${MAX_PIXELS / 1e6} million pixels and ${MAX_SIDE.toLocaleString()} on a side, so it does not run out of memory. It is safe where it is.`);
+          refresh();
           return false;
         }
         const layer = makeLayer(w, hgt, 'Background');
@@ -453,6 +467,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
   const toPng = async (c: HTMLCanvasElement, type = 'image/png', quality?: number): Promise<Uint8Array> => {
     const blob = await new Promise<Blob | null>(resolve => c.toBlob(resolve, type, quality));
     if (!blob) throw new Error('The picture could not be turned into a file (it may be too big for this browser).');
+    if (blob.type && blob.type !== type) throw new Error(`This browser cannot write ${type.replace('image/', '').toUpperCase()} pictures. Save it as .png or .jpg instead.`);
     return new Uint8Array(await blob.arrayBuffer());
   };
 
@@ -521,7 +536,11 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
   }
 
   /** `how`: 'new' = the name must be free; 'any' = replace whatever is there; 'opened' = replace only the copy opened. */
+  /** True while a save is on its way (a second Ctrl+S then does nothing, rather than racing the first). */
+  let saving = false;
   async function write(dest: string, how: 'new' | 'any' | 'opened'): Promise<boolean> {
+    if (saving) return false;
+    saving = true;
     try {
       const before = edits;
       const data = await encode(extensionOf(dest));
@@ -538,13 +557,15 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     } catch (error) {
       await shell.report('Could not save the picture', error);
       return false;
+    } finally {
+      saving = false;
     }
   }
 
   async function save(): Promise<boolean> {
     settle();
     if (!path || !SAVE_TYPES[extensionOf(path)]) {
-      if (path) await shell.dialogs.alert('Saved as a new file', `Photo Editor saves PNG, JPEG, WebP and OpenRaster (.ora). “${baseName(path)}” stays as it is; choose a name for the edited copy.`);
+      if (path) await shell.dialogs.alert('Save as a new file', `Photo Editor saves PNG, JPEG, WebP and OpenRaster (.ora). “${baseName(path)}” stays as it is; choose a name for the edited copy next.`);
       return saveAs();
     }
     const flat = await flatOk(path);
@@ -764,10 +785,14 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     c.stroke();
   };
   let cloneOffset: Point | null = null;
-  let retouch: { work: ImageData; source: { data: Uint8ClampedArray; width: number; height: number } | null; patch: PixelPatch; path: DabPath; carry: Carry | null; radius: number } | null = null;
+  let retouch: {
+    kind: Tool; label: string; layer: Layer; work: ImageData; source: { data: Uint8ClampedArray; width: number; height: number } | null;
+    stroke: StrokeState | undefined; patch: PixelPatch; path: DabPath; carry: Carry | null; radius: number;
+  } | null = null;
   function retouchTo(p: Point, pressure: number) {
     if (!retouch) return;
     const rt = retouch;
+    const kind = rt.kind;
     const pix = { data: rt.work.data, width: rt.work.width, height: rt.work.height };
     let dirty: Rect | null = null;
     const mask = doc.selection;
@@ -776,18 +801,18 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       const r = dabRect(d, doc.width, doc.height);
       if (!r) continue;
       rt.patch.touch(r);
-      if (tool === 'clone' && rt.source && cloneOffset) cloneDab(pix, rt.source, cloneOffset.x, cloneOffset.y, d, mask);
-      else if (tool === 'heal' && rt.source && cloneOffset) healDab(pix, rt.source, cloneOffset.x, cloneOffset.y, d, mask);
-      else if (tool === 'smudge' && rt.carry) smudgeDab(pix, rt.carry, d, mask);
-      else if (tool === 'dodge') dodgeBurnDab(pix, d, dodgeMode.value as 'dodge' | 'burn', mask);
-      else if (tool === 'blur') blurSharpenDab(pix, d, blurMode.value as 'blur' | 'sharpen', mask);
+      if (kind === 'clone' && rt.source && cloneOffset) cloneDab(pix, rt.source, cloneOffset.x, cloneOffset.y, d, mask, rt.stroke);
+      else if (kind === 'heal' && rt.source && cloneOffset) healDab(pix, rt.source, cloneOffset.x, cloneOffset.y, d, mask, rt.stroke);
+      else if (kind === 'smudge' && rt.carry) smudgeDab(pix, rt.carry, d, mask);
+      else if (kind === 'dodge') dodgeBurnDab(pix, d, dodgeMode.value as 'dodge' | 'burn', mask, rt.stroke);
+      else if (kind === 'blur') blurSharpenDab(pix, d, blurMode.value as 'blur' | 'sharpen', mask);
       dirty = unionRect(dirty, r);
     }
     if (dirty) {
-      doc.active.ctx.putImageData(rt.work, 0, 0, dirty.x, dirty.y, dirty.w, dirty.h);
+      rt.layer.ctx.putImageData(rt.work, 0, 0, dirty.x, dirty.y, dirty.w, dirty.h);
       queueRender(dirty);
     }
-    if (tool === 'clone' || tool === 'heal') drawOverlay();
+    if (kind === 'clone' || kind === 'heal') drawOverlay();
   }
 
   // ---- Selections ----
@@ -832,13 +857,20 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
 
   // ---- Crop (the whole picture, every layer) ----
   let cropBox: { x: number; y: number; w: number; h: number } | null = null;
+  /** The crop box with both corners kept inside the picture (dragged past an edge, it stops at that edge). */
   const normal = (b: { x: number; y: number; w: number; h: number }) => {
-    const x = Math.max(0, Math.min(b.x, b.x + b.w)), y = Math.max(0, Math.min(b.y, b.y + b.h));
-    return { x: Math.round(x), y: Math.round(y), w: Math.round(Math.min(doc.width - x, Math.abs(b.w))), h: Math.round(Math.min(doc.height - y, Math.abs(b.h))) };
+    const side = (a: number, len: number, max: number) => {
+      const lo = Math.round(Math.min(max, Math.max(0, Math.min(a, a + len))));
+      const hi = Math.round(Math.min(max, Math.max(0, Math.max(a, a + len))));
+      return [lo, hi - lo];
+    };
+    const [x, w] = side(b.x, b.w, doc.width), [y, hh] = side(b.y, b.h, doc.height);
+    return { x, y, w, h: hh };
   };
   function showCrop() {
     preview = cropBox ? (c, px) => {
-      const { x, y, w, h: hh } = normal(cropBox!);
+      if (!cropBox) return;
+      const { x, y, w, h: hh } = normal(cropBox);
       c.fillStyle = 'rgba(0, 0, 0, 0.45)';
       c.fillRect(0, 0, over.width, y);
       c.fillRect(0, y + hh, over.width, over.height - y - hh);
@@ -927,6 +959,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     }
     xfBar.hidden = false;
     showTransform();
+    refresh();
     return true;
   }
   function drawTransformed(c: CanvasRenderingContext2D, src: HTMLCanvasElement, b: Box) {
@@ -984,6 +1017,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       c.restore();
       doc.render(x.from);
       drawOverlay();
+      refresh();
       return;
     }
     const touchedRect = unionRect(x.from, boxBounds(x.box))!;
@@ -1023,10 +1057,12 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     c.restore();
     doc.render();
     drawOverlay();
+    refresh();
   }
 
-  /** Finishes whatever is half done (a move, a lasso) before another command. */
+  /** Finishes whatever is half done (a stroke or drag under the pointer, a move, a lasso) before another command. */
   function settle() {
+    finishGesture();
     if (xf) commitTransform();
     if (lasso) endLasso();
     if (doc.pending) doc.cancelPending();
@@ -1055,6 +1091,16 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     if (!ok) return null;
     return { ...t, text: words.value.slice(0, 10000), family: family.value, size: Math.round(Number(sizeIn.value)), colour: col.value, bold: bold.checked, italic: italic.checked, align: align.value as TextSpec['align'] };
   }
+  /** Changes the words of this text layer (Layer > Change the text, or a click on its words). */
+  async function editText(layer: Layer) {
+    settle();
+    if (!layer.text) return;
+    if (layer.locked) return void editable(layer);
+    const spec = await askText(layer.text, { x: layer.text.x, y: layer.text.y });
+    if (!spec || !doc.layers.includes(layer)) return;
+    doc.active = layer;
+    doc.setMeta('Change text', layer, { text: spec, name: spec.text.split('\n')[0].slice(0, 40) || layer.name });
+  }
   async function textAt(p: Point) {
     settle();
     // On the words of a text layer: change them. Else a new text layer.
@@ -1062,14 +1108,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       const b = l.visible && l.text ? textBounds(l) : null;
       return b && p.x >= b.x - 4 && p.x <= b.x + b.w + 4 && p.y >= b.y - 4 && p.y <= b.y + b.h + 4;
     });
-    if (hit) {
-      if (hit.locked) return void editable(hit);
-      const spec = await askText(hit.text, p);
-      if (!spec) return;
-      doc.active = hit;
-      doc.setMeta('Change text', hit, { text: spec, name: spec.text.split('\n')[0].slice(0, 40) || hit.name });
-      return;
-    }
+    if (hit) return editText(hit);
     const why = noRoomForLayer(doc.width, doc.height, doc.layers.length);
     if (why) return void (await shell.dialogs.alert('No room for another layer', why));
     const spec = await askText(null, p);
@@ -1081,17 +1120,20 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
   }
 
   // ---- Pointer ----
-  let drag: { start: Point; last: Point; moved: boolean; scroll?: { x: number; y: number; cx: number; cy: number } } | null = null;
+  /** A press being dragged; `kind` is the tool it started with (a key can change the tool before it ends). */
+  let drag: { kind: Tool; start: Point; last: Point; moved: boolean; scroll?: { x: number; y: number; cx: number; cy: number } } | null = null;
   let spaceHeld = false;
 
   on(over, 'pointerdown', async (e: PointerEvent) => {
     if (e.button !== 0) return;
     // A canvas cannot take the keyboard itself; the picture area does, so the tool keys work after a click.
     stage.focus({ preventScroll: true });
+    // A press that never got its release (the pointer went elsewhere) ends here first.
+    finishGesture();
     const p = toImage(e);
     const t = spaceHeld ? 'hand' : tool;
     if (t === 'hand') {
-      drag = { start: p, last: p, moved: false, scroll: { x: stage.scrollLeft, y: stage.scrollTop, cx: e.clientX, cy: e.clientY } };
+      drag = { kind: 'hand', start: p, last: p, moved: false, scroll: { x: stage.scrollLeft, y: stage.scrollTop, cx: e.clientX, cy: e.clientY } };
       over.setPointerCapture(e.pointerId);
       return;
     }
@@ -1109,7 +1151,13 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       doc.changePixels('Fill', px => {
         const before = alpha < 1 ? px.data.slice() : null;
         const n = floodFill(px, p.x - r.x, p.y - r.y, [fr, fg, fb, 255], tolerance.value);
-        if (n && before) for (let i = 0; i < px.data.length; i++) px.data[i] = before[i] + (px.data[i] - before[i]) * alpha;
+        if (!n || !before) return;
+        // Less than full opacity: mix the fill over what was there, counting colour by how solid it was.
+        const after = px.data.slice();
+        px.data.set(before);
+        for (let i = 0; i < after.length; i += 4) {
+          if (after[i] !== before[i] || after[i + 1] !== before[i + 1] || after[i + 2] !== before[i + 2] || after[i + 3] !== before[i + 3]) mixPixel(px.data, i, fr, fg, fb, 255, alpha);
+        }
       }, r);
       return;
     }
@@ -1150,15 +1198,15 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       over.setPointerCapture(e.pointerId);
       return;
     }
+    if (t === 'rselect' || t === 'eselect') settle();
     over.setPointerCapture(e.pointerId);
-    drag = { start: p, last: p, moved: false };
+    drag = { kind: t, start: p, last: p, moved: false };
     if (t === 'crop') {
       cropBox = { x: p.x, y: p.y, w: 0, h: 0 };
       cropBar.hidden = true;
       return;
     }
     if (t === 'rselect' || t === 'eselect') {
-      settle();
       selBox = { a: p, b: p, how: howOf(e) };
       return;
     }
@@ -1188,10 +1236,15 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       if ((t === 'clone' || t === 'heal') && cloneSrc && !cloneOffset) cloneOffset = { x: cloneSrc.x - p.x, y: cloneSrc.y - p.y };
       const work = doc.active.ctx.getImageData(0, 0, doc.width, doc.height);
       const pix = { data: work.data, width: work.width, height: work.height };
+      // Clone, heal and dodge / burn remember the layer as the stroke began, so overlapping dabs never go past the
+      // strength; clone and heal copy from that same starting picture.
+      const memory = t === 'clone' || t === 'heal' || t === 'dodge' ? makeStroke(pix) : undefined;
+      const names: Partial<Record<Tool, string>> = { clone: 'Clone', heal: 'Heal', smudge: 'Smudge', dodge: dodgeMode.value === 'dodge' ? 'Dodge' : 'Burn', blur: blurMode.value === 'blur' ? 'Blur brush' : 'Sharpen brush' };
       retouch = {
-        work, patch: new PixelPatch(surfaceOf(doc.active.ctx)), path: new DabPath(Math.max(0.5, (size.value * spacing.value) / 100)),
-        source: t === 'clone' || t === 'heal' ? { data: work.data.slice(), width: work.width, height: work.height } : null,
-        carry: t === 'smudge' ? makeCarry(pix, p.x, p.y, size.value / 2) : null, radius: size.value / 2,
+        kind: t, label: names[t] ?? 'Retouch', layer: doc.active, work, patch: new PixelPatch(surfaceOf(doc.active.ctx)),
+        path: new DabPath(Math.max(0.5, (size.value * spacing.value) / 100)),
+        source: memory && (t === 'clone' || t === 'heal') ? { data: memory.base, width: work.width, height: work.height } : null,
+        stroke: memory, carry: t === 'smudge' ? makeCarry(pix, p.x, p.y, size.value / 2) : null, radius: size.value / 2,
       };
       retouchTo(p, pressureOf(e));
     }
@@ -1234,7 +1287,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     }
     if (!drag) return;
     if (Math.hypot(p.x - drag.start.x, p.y - drag.start.y) * zoom > 2) drag.moved = true;
-    const t = drag.scroll ? 'hand' : tool;
+    const t = drag.kind;
     if (t === 'hand' && drag.scroll) {
       stage.scrollLeft = drag.scroll.x - (e.clientX - drag.scroll.cx);
       stage.scrollTop = drag.scroll.y - (e.clientY - drag.scroll.cy);
@@ -1267,13 +1320,14 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       const prev = pend.bounds;
       if (prev) strokeCtx.clearRect(prev.x, prev.y, prev.w, prev.h);
       if (t === 'gradient') {
-        drawGradient(strokeCtx, drag.start, p);
+        const a = drag.start;
+        drawGradient(strokeCtx, a, p);
         pend.bounds = doc.full;
         preview = (c, px) => {
           c.strokeStyle = '#ffffff';
           c.lineWidth = 2 * px;
           c.beginPath();
-          c.moveTo(drag!.start.x, drag!.start.y);
+          c.moveTo(a.x, a.y);
           c.lineTo(p.x, p.y);
           c.stroke();
         };
@@ -1283,6 +1337,69 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     }
     drag.last = p;
   }, app.signal);
+
+  /**
+   * Ends whatever press is under way, as if it were let go: a stroke, shape, gradient or retouch becomes its undo step,
+   * a text drag or selection box is finished. Called when the press ends, and before any other command (a shortcut
+   * pressed while the button is still down), so nothing is left half done or pointing at a layer that has changed.
+   */
+  function finishGesture() {
+    if (textDrag) {
+      const t = textDrag;
+      textDrag = null;
+      const moved = t.layer.text;
+      t.layer.text = t.spec;
+      paintText(t.layer);
+      if (moved && doc.layers.includes(t.layer) && (moved.x !== t.spec.x || moved.y !== t.spec.y)) doc.setMeta('Move text', t.layer, { text: moved });
+      else doc.render();
+      return;
+    }
+    if (xf?.drag) {
+      xf.drag = null;
+      return;
+    }
+    if (retouch) {
+      const rt = retouch;
+      retouch = null;
+      doc.pushPixels(rt.label, rt.layer, rt.patch);
+    }
+    if (!drag) return;
+    const d = drag;
+    drag = null;
+    const t = d.kind;
+    if ((t === 'brush' || t === 'eraser') && stroke) {
+      stroke = null;
+      doc.commitPending(t === 'eraser' ? 'Eraser' : 'Brush', touched);
+    } else if (SHAPES.includes(t)) {
+      if (doc.pending && d.moved) {
+        const b = doc.pending.bounds;
+        if (b) markTouched(b);
+        doc.commitPending(t === 'line' ? 'Line' : t === 'arrow' ? 'Arrow' : t === 'rect' ? 'Rectangle' : 'Ellipse', touched);
+      } else doc.cancelPending();
+    } else if (t === 'gradient') {
+      preview = null;
+      if (doc.pending && d.moved) {
+        markTouched(doc.full);
+        doc.commitPending('Gradient', touched);
+      } else doc.cancelPending();
+      drawOverlay();
+    } else if (t === 'crop') {
+      cropBar.hidden = !cropBox || Math.abs(cropBox.w) < 2 || Math.abs(cropBox.h) < 2;
+      if (cropBar.hidden) endCrop();
+    } else if ((t === 'rselect' || t === 'eselect') && selBox) {
+      const sb = selBox;
+      selBox = null;
+      preview = null;
+      if (!d.moved) {
+        // A click without a drag lets go of the selection (as in GIMP).
+        if (sb.how === 'replace') doc.setSelection('Select none', null);
+        drawOverlay();
+      } else {
+        const r = { x: Math.min(sb.a.x, sb.b.x), y: Math.min(sb.a.y, sb.b.y), w: Math.abs(sb.b.x - sb.a.x), h: Math.abs(sb.b.y - sb.a.y) };
+        finishSelection(t === 'eselect' ? ellipseMask(doc.width, doc.height, r) : rectMask(doc.width, doc.height, r), sb.how, t === 'eselect' ? 'Ellipse selection' : 'Rectangle selection');
+      }
+    }
+  }
 
   const endDrag = (e: PointerEvent) => {
     const p = toImage(e);
@@ -1297,60 +1414,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       }
       return;
     }
-    if (textDrag) {
-      const t = textDrag;
-      textDrag = null;
-      const moved = t.layer.text!;
-      t.layer.text = t.spec;
-      paintText(t.layer);
-      if (moved.x !== t.spec.x || moved.y !== t.spec.y) doc.setMeta('Move text', t.layer, { text: moved });
-      else doc.render();
-      return;
-    }
-    if (xf?.drag) {
-      xf.drag = null;
-      return;
-    }
-    if (!drag) return;
-    const t = drag.scroll ? 'hand' : tool;
-    if ((t === 'brush' || t === 'eraser') && stroke) {
-      stroke = null;
-      doc.commitPending(t === 'eraser' ? 'Eraser' : 'Brush', touched);
-    } else if (SHAPES.includes(t) && doc.pending) {
-      if (drag.moved) {
-        const b = doc.pending.bounds;
-        if (b) markTouched(b);
-        doc.commitPending(t === 'line' ? 'Line' : t === 'arrow' ? 'Arrow' : t === 'rect' ? 'Rectangle' : 'Ellipse', touched);
-      } else doc.cancelPending();
-    } else if (t === 'gradient' && doc.pending) {
-      preview = null;
-      if (drag.moved) {
-        markTouched(doc.full);
-        doc.commitPending('Gradient', touched);
-      } else doc.cancelPending();
-      drawOverlay();
-    } else if (RETOUCH.includes(t) && retouch) {
-      const rt = retouch;
-      retouch = null;
-      const names: Record<string, string> = { clone: 'Clone', heal: 'Heal', smudge: 'Smudge', dodge: dodgeMode.value === 'dodge' ? 'Dodge' : 'Burn', blur: blurMode.value === 'blur' ? 'Blur brush' : 'Sharpen brush' };
-      doc.pushPixels(names[t], doc.active, rt.patch);
-    } else if (t === 'crop') {
-      cropBar.hidden = !cropBox || Math.abs(cropBox.w) < 2 || Math.abs(cropBox.h) < 2;
-      if (cropBar.hidden) endCrop();
-    } else if ((t === 'rselect' || t === 'eselect') && selBox) {
-      const sb = selBox;
-      selBox = null;
-      preview = null;
-      if (!drag.moved) {
-        // A click without a drag lets go of the selection (as in GIMP).
-        if (sb.how === 'replace') doc.setSelection('Select none', null);
-        drawOverlay();
-      } else {
-        const r = { x: Math.min(sb.a.x, sb.b.x), y: Math.min(sb.a.y, sb.b.y), w: Math.abs(sb.b.x - sb.a.x), h: Math.abs(sb.b.y - sb.a.y) };
-        finishSelection(t === 'eselect' ? ellipseMask(doc.width, doc.height, r) : rectMask(doc.width, doc.height, r), sb.how, t === 'eselect' ? 'Ellipse selection' : 'Rectangle selection');
-      }
-    }
-    drag = null;
+    finishGesture();
     refresh();
   };
   on(over, 'pointerup', endDrag, app.signal);
@@ -1362,6 +1426,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
   // ---- Whole-picture changes (every layer) ----
   function everyLayer(label: string, w: number, hgt: number, draw: (c: CanvasRenderingContext2D, src: HTMLCanvasElement) => void, sel: Mask | null = null) {
     settle();
+    const hadText = doc.layers.filter(l => l.text).length;
     const canvases = new Map<Layer, HTMLCanvasElement>();
     const texts = new Map<Layer, TextSpec | null>();
     for (const l of doc.layers) {
@@ -1373,6 +1438,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       texts.set(l, null);
     }
     doc.replaceCanvases(label, w, hgt, canvases, sel, texts);
+    if (hadText) shell.toast(`${hadText === 1 ? 'The text layer is' : `The ${hadText} text layers are`} now pixels: words can no longer be edited (Undo brings that back).`);
   }
   const rotate = (dir: 1 | -1) => everyLayer(dir > 0 ? 'Rotate right' : 'Rotate left', doc.height, doc.width, (c, src) => {
     c.translate(dir > 0 ? src.height : 0, dir > 0 ? 0 : src.width);
@@ -1387,18 +1453,31 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
 
   // ---- Dialogs: new, resize, canvas size ----
   async function askNew() {
+    settle();
     if (!(await guard())) return;
     const w = h('input', { type: 'number', class: 'field num', min: 1, max: 10000, value: 800, 'aria-label': 'Width' });
     const hh = h('input', { type: 'number', class: 'field num', min: 1, max: 10000, value: 600, 'aria-label': 'Height' });
     const white = h('input', { type: 'checkbox', checked: true });
+    const why = h('p', { class: 'hint' });
+    const sizeOk = () => [w, hh].every(i => Number(i.value) >= 1 && Number(i.value) <= 10000) && Number(w.value) * Number(hh.value) <= MAX_PIXELS;
+    const say = () => {
+      const n = Number(w.value) * Number(hh.value);
+      why.textContent = n > MAX_PIXELS
+        ? `That is ${Math.round(n / 1e6)} million pixels. Photo Editor holds up to ${MAX_PIXELS / 1e6} million (for example 8,000 × 6,000), so a picture it makes can always be opened again.`
+        : 'Up to 10,000 pixels on a side.';
+    };
+    const ab = new AbortController();
+    for (const i of [w, hh]) i.addEventListener('input', say, { signal: ab.signal });
+    say();
     const ok = await shell.dialogs.ask({
       title: 'New picture',
-      body: h('div', { class: 'pe-form' }, h('label', {}, 'Width (pixels) ', w), h('label', {}, 'Height (pixels) ', hh), h('label', {}, white, ' White background (untick for see-through)')),
+      body: h('div', { class: 'pe-form' }, h('label', {}, 'Width (pixels) ', w), h('label', {}, 'Height (pixels) ', hh), why, h('label', {}, white, ' White background (untick for see-through)')),
       buttons: [{ label: 'Create', value: true, primary: true }, { label: 'Cancel', value: false }],
       cancel: false,
-      primaryEnabled: () => [w, hh].every(i => Number(i.value) >= 1 && Number(i.value) <= 10000),
+      primaryEnabled: sizeOk,
     });
-    if (ok) blank(Math.round(Number(w.value)), Math.round(Number(hh.value)), white.checked);
+    ab.abort();
+    if (ok && sizeOk()) blank(Math.round(Number(w.value)), Math.round(Number(hh.value)), white.checked);
   }
 
   async function askResize() {
@@ -1532,17 +1611,23 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     if (i <= 0) return void shell.toast('There is no layer below this one to merge into.');
     const top = doc.active, below = doc.layers[i - 1];
     if (below.locked) return void editable(below);
-    // The merged layer keeps the lower layer's settings, as in GIMP.
-    const merged = makeLayer(doc.width, doc.height, below.name, { visible: below.visible, opacity: below.opacity, mode: below.mode });
-    merged.ctx.drawImage(below.canvas, 0, 0);
-    if (top.visible) {
-      merged.ctx.globalAlpha = top.opacity;
-      merged.ctx.globalCompositeOperation = blendInfo(top.mode).canvas;
-      merged.ctx.drawImage(top.canvas, 0, 0);
-      merged.ctx.globalAlpha = 1;
-      merged.ctx.globalCompositeOperation = 'source-over';
-    }
+    // Merging joins what is seen: a hidden layer would either vanish or suddenly show, so it is asked about first.
+    const hidden = [top, below].find(l => !l.visible);
+    if (hidden) return void shell.dialogs.alert('Show the layer first', `“${hidden.name}” is hidden. Merge down joins the two layers as they look, so show it first (or delete it if it is not wanted).`);
+    // Each layer goes in at its own see-through amount, so the picture looks the same after; the merged layer is then
+    // fully solid and Normal (as in GIMP). A lower layer with its own blend mode cannot keep that look for the upper
+    // layer's pixels too, so it is said.
+    const merged = makeLayer(doc.width, doc.height, below.name);
+    const c = merged.ctx;
+    c.globalAlpha = below.opacity;
+    c.drawImage(below.canvas, 0, 0);
+    c.globalAlpha = top.opacity;
+    c.globalCompositeOperation = blendInfo(top.mode).canvas;
+    c.drawImage(top.canvas, 0, 0);
+    c.globalAlpha = 1;
+    c.globalCompositeOperation = 'source-over';
     doc.setLayers('Merge down', [...doc.layers.slice(0, i - 1), merged, ...doc.layers.slice(i + 1)], merged);
+    if (below.mode !== 'normal') shell.toast(`“${below.name}” used ${blendInfo(below.mode).label}; the merged layer is Normal, so it may look different. Undo puts both layers back.`);
   }
   function flattenAll() {
     settle();
@@ -1559,13 +1644,37 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     settle();
     if (!editable()) return;
     const l = doc.active;
+    const label = horizontal ? 'Flip layer' : 'Flip layer upside down';
+    const sel = doc.selectionCanvas();
+    const r = doc.selBounds;
+    if (!sel || !r || !doc.selection) {
+      const [, x] = makeCanvas(doc.width, doc.height);
+      x.translate(horizontal ? doc.width : 0, horizontal ? 0 : doc.height);
+      x.scale(horizontal ? -1 : 1, horizontal ? 1 : -1);
+      x.drawImage(l.canvas, 0, 0);
+      doc.changePixels(label, p => {
+        p.data.set(x.getImageData(0, 0, doc.width, doc.height).data);
+      }, doc.full);
+      return;
+    }
+    // The selected pixels are lifted out, mirrored inside the selection's box and put back; the rest stays.
+    const part = doc.selectedPixels(l)!.canvas;
     const [, x] = makeCanvas(doc.width, doc.height);
-    x.translate(horizontal ? doc.width : 0, horizontal ? 0 : doc.height);
-    x.scale(horizontal ? -1 : 1, horizontal ? 1 : -1);
     x.drawImage(l.canvas, 0, 0);
-    doc.changePixels(horizontal ? 'Flip layer' : 'Flip layer upside down', p => {
-      p.data.set(x.getImageData(0, 0, doc.width, doc.height).data);
-    }, doc.full);
+    x.globalCompositeOperation = 'destination-out';
+    x.drawImage(sel, 0, 0);
+    x.globalCompositeOperation = 'source-over';
+    x.translate(horizontal ? 2 * r.x + r.w : 0, horizontal ? 0 : 2 * r.y + r.h);
+    x.scale(horizontal ? -1 : 1, horizontal ? 1 : -1);
+    x.drawImage(part, r.x, r.y);
+    const patch = new PixelPatch(surfaceOf(l.ctx));
+    patch.touch(r);
+    l.ctx.putImageData(x.getImageData(r.x, r.y, r.w, r.h), r.x, r.y);
+    const steps = [doc.pixelStep(label, l, patch), doc.selectionStep(flipMaskIn(doc.selection, doc.width, r, horizontal))];
+    steps[1].redo();
+    doc.push(group(label, steps));
+    doc.render(r);
+    doc.onChange('pixels', r);
   }
 
   // ---- Edit: clipboard, delete, fill ----
@@ -1573,11 +1682,15 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     settle();
     const got = doc.selectedPixels();
     if (!got) return;
-    internalClip = { ...got, at: Date.now() };
+    const clip = { ...got, png: -1 };
+    internalClip = clip;
     void (async () => {
       try {
         const blob = await new Promise<Blob | null>(res => got.canvas.toBlob(res, 'image/png'));
-        if (blob && navigator.clipboard && 'ClipboardItem' in window) await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+        if (blob && navigator.clipboard && 'ClipboardItem' in window) {
+          await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+          clip.png = blob.size;
+        }
       } catch {
         // The system clipboard said no (no permission, or not focused): pasting here still works from our own copy.
       }
@@ -1606,7 +1719,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     const w = source.width, hgt = source.height;
     if (asNew) {
       if (!(await guard())) return;
-      if (w * hgt > MAX_PIXELS) return void shell.dialogs.alert('Too many pixels', `The pasted picture is ${w} × ${hgt} pixels, more than Photo Editor holds.`);
+      if (w * hgt > MAX_PIXELS || w > MAX_SIDE || hgt > MAX_SIDE) return void shell.dialogs.alert('Too many pixels', `The pasted picture is ${w} × ${hgt} pixels, more than Photo Editor holds.`);
       const layer = makeLayer(w, hgt, 'Background');
       layer.ctx.drawImage(source, 0, 0);
       xf = null;
@@ -1614,13 +1727,16 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       path = null;
       loadedId = '';
       dirty = true;
+      flatAgreed.clear();
       panel.refresh();
       fit();
       return;
     }
+    // Making room, the new layer and letting go of the selection are one step: one Undo takes the paste back.
+    const mark = doc.history.pushes;
     if (w > doc.width || hgt > doc.height) {
       const nw = Math.max(w, doc.width), nh = Math.max(hgt, doc.height);
-      const grow = nw * nh <= MAX_PIXELS && !noRoomForLayer(nw, nh, doc.layers.length) && await shell.dialogs.ask({
+      const grow = nw * nh <= MAX_PIXELS && nw <= MAX_SIDE && nh <= MAX_SIDE && !noRoomForLayer(nw, nh, doc.layers.length) && await shell.dialogs.ask({
         title: 'The pasted picture is bigger',
         text: `It is ${w} × ${hgt} pixels; this picture is ${doc.width} × ${doc.height}. Make this picture ${nw} × ${nh} so all of it fits?`,
         buttons: [{ label: 'Make it bigger', value: true, primary: true }, { label: 'Keep the size', value: false }],
@@ -1628,53 +1744,64 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       });
       if (grow) resizeCanvas('Make room to paste', nw, nh, 0, 0);
     }
-    const layer = addLayer('Pasted');
-    if (!layer) return;
+    const why = noRoomForLayer(doc.width, doc.height, doc.layers.length);
+    if (why) {
+      doc.history.squash(mark, 'Paste');
+      return void shell.dialogs.alert('No room for another layer', why);
+    }
+    // The pixels go in before the layer is added, so the step holds the pasted layer as it is.
+    const layer = makeLayer(doc.width, doc.height, 'Pasted');
     const x = at ? at.x : Math.round((doc.width - w) / 2), y = at ? at.y : Math.round((doc.height - hgt) / 2);
     layer.ctx.drawImage(source, Math.max(Math.min(x, doc.width - 1), 1 - w), Math.max(Math.min(y, doc.height - 1), 1 - hgt));
-    doc.render();
-    panel.refresh();
+    const where = doc.indexOf(doc.active) + 1;
+    doc.setLayers('Paste', [...doc.layers.slice(0, where), layer, ...doc.layers.slice(where)], layer);
     if (doc.selection) doc.setSelection('Select none', null);
+    doc.history.squash(mark, 'Paste');
+    refresh();
     setTool('move');
     shell.toast('Pasted as a new layer. Drag to place it; Enter when done.');
   }
   async function pasteFromSystem(asNew: boolean) {
+    let blob: Blob | null = null;
     try {
-      const items = await navigator.clipboard.read();
-      for (const item of items) {
+      for (const item of await navigator.clipboard.read()) {
         const type = item.types.find(t => t.startsWith('image/'));
-        if (!type) continue;
-        const blob = await item.getType(type);
-        const img = await createImageBitmap(blob);
-        await pasteImage(img, null, asNew);
-        img.close();
-        return;
+        if (type) {
+          blob = await item.getType(type);
+          break;
+        }
       }
     } catch {
       // No permission to read the clipboard, or nothing there: fall back to our own copy.
     }
+    if (blob) return pasteBlob(blob, asNew);
     if (internalClip) return pasteImage(internalClip.canvas, asNew ? null : { x: internalClip.x, y: internalClip.y }, asNew);
     await shell.dialogs.alert('Nothing to paste', 'There is no picture on the clipboard. Copy a picture first (in Photo Editor, or a screenshot or a picture in another program), then paste. If the browser asked about the clipboard and you said no, Ctrl+V still works.');
+  }
+  /** A picture from the system clipboard: checked for size first; our own copy goes back where it came from. */
+  async function pasteBlob(blob: Blob, asNew: boolean) {
+    if (blob.size > MAX_FILE) return void shell.dialogs.alert('Too big to paste', `The picture on the clipboard is ${formatSize(blob.size)}; Photo Editor takes up to ${formatSize(MAX_FILE)}.`);
+    const tooBig = pictureTooBig(new Uint8Array(await blob.arrayBuffer()));
+    if (tooBig) return void shell.dialogs.alert('Too many pixels', tooBig);
+    if (!asNew && internalClip && internalClip.png === blob.size) return pasteImage(internalClip.canvas, { x: internalClip.x, y: internalClip.y }, false);
+    let img: ImageBitmap;
+    try {
+      img = await createImageBitmap(blob);
+    } catch {
+      return void shell.dialogs.alert('Could not paste that', 'The picture on the clipboard could not be read. Try copying it again, or save it as a file and open it.');
+    }
+    try {
+      await pasteImage(img, null, asNew);
+    } finally {
+      img.close();
+    }
   }
   on(app.root, 'paste', async (e: ClipboardEvent) => {
     const target = e.target as HTMLElement;
     if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
     const file = [...(e.clipboardData?.items ?? [])].find(i => i.kind === 'file' && i.type.startsWith('image/'))?.getAsFile();
     e.preventDefault();
-    if (file) {
-      if (file.size > MAX_FILE) return void shell.dialogs.alert('Too big to paste', `The picture on the clipboard is ${formatSize(file.size)}; Photo Editor takes up to ${formatSize(MAX_FILE)}.`);
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      const tooBig = pictureTooBig(bytes);
-      if (tooBig) return void shell.dialogs.alert('Too many pixels', tooBig);
-      try {
-        const img = await createImageBitmap(file);
-        await pasteImage(img, null, false);
-        img.close();
-      } catch {
-        await shell.dialogs.alert('Could not paste that', 'The picture on the clipboard could not be read. Try copying it again, or save it as a file and open it.');
-      }
-      return;
-    }
+    if (file) return pasteBlob(file, false);
     if (internalClip) await pasteImage(internalClip.canvas, { x: internalClip.x, y: internalClip.y }, false);
     else await shell.dialogs.alert('Nothing to paste', 'There is no picture on the clipboard. Copy a picture first, then press Ctrl+V here.');
   }, app.signal);
@@ -1706,14 +1833,24 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
   };
 
   // ---- Menus ----
-  const applyFilter = (label: string, fn: Parameters<Doc['changePixels']>[1]) => {
+  const applyFilter = (label: string, fn: Parameters<Doc['changePixels']>[1], reach = 0) => {
     settle();
-    if (editable()) doc.changePixels(label, fn);
+    if (!editable()) return;
+    // A filter that reads neighbours (blur, sharpen) gets the pixels just outside the selection's box to read; the
+    // selection still keeps the change inside it.
+    const b = doc.selBounds;
+    doc.changePixels(label, fn, b && reach ? { x: b.x - reach, y: b.y - reach, w: b.w + 2 * reach, h: b.h + 2 * reach } : undefined);
   };
   const runAdjust = async (kind: AdjustKind) => {
     settle();
-    if (!editable()) return;
-    await adjust(shell, doc, kind);
+    // Only the lock is checked now: a text layer becomes pixels only if the change is applied (Cancel keeps the words).
+    if (!editable(doc.active, true)) return;
+    const mark = doc.history.pushes;
+    const layer = doc.active;
+    await adjust(shell, doc, kind, () => {
+      if (layer.text) editable(layer);
+    });
+    doc.history.squash(mark, ADJUST_TITLES[kind]);
     refresh();
   };
   const showMenu = (btn: HTMLElement, items: MenuItem[]) => {
@@ -1756,7 +1893,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     { label: 'Flatten picture', disabled: doc.layers.length < 2, action: flattenAll },
     { separator: true },
     { label: 'Rename layer...', action: () => void renameLayer(doc.active) },
-    { label: 'Change the text...', disabled: !doc.active.text, action: () => void textAt({ x: doc.active.text!.x, y: doc.active.text!.y }) },
+    { label: 'Change the text...', disabled: !doc.active.text, action: () => void editText(doc.active) },
     { label: 'Text to pixels', disabled: !doc.active.text, action: () => doc.setMeta('Text to pixels', doc.active, { text: null }) },
     { separator: true },
     { label: 'Flip layer left to right', action: () => flipLayer(true) },
@@ -1785,10 +1922,9 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
   on(filterBtn, 'click', () => showMenu(filterBtn, [
     { label: 'Greyscale', action: () => applyFilter('Greyscale', greyscale) },
     { label: 'Sepia', action: () => applyFilter('Sepia', sepia) },
-    { label: 'Invert colours', action: () => applyFilter('Invert colours', invert) },
     { separator: true },
-    { label: 'Blur', action: () => applyFilter('Blur', p => convolve3(p, BLUR)) },
-    { label: 'Sharpen', action: () => applyFilter('Sharpen', p => convolve3(p, SHARPEN)) },
+    { label: 'Blur', action: () => applyFilter('Blur', p => convolve3(p, BLUR), 1) },
+    { label: 'Sharpen', action: () => applyFilter('Sharpen', p => convolve3(p, SHARPEN), 1) },
   ]), app.signal);
   on(helpMenu, 'click', () => showMenu(helpMenu, [
     { label: 'What Photo Editor does and leaves out', action: () => void showHelp() },
@@ -1797,14 +1933,14 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
 
   async function showHelp() {
     await shell.dialogs.alert('Photo Editor', [
-      'Layers: add, copy, delete, rename, drag to reorder, hide, see-through amount, 16 blend modes, lock, merge down, flatten. Text layers stay editable until merged or turned into pixels.',
+      'Layers: add, copy, delete, rename, drag to reorder, hide, see-through amount, 16 blend modes, lock, merge down, flatten. Text layers stay editable until merged, turned into pixels, painted on or changed with a colour window or filter, or turned, flipped or resized with the whole picture (each says so, and Undo brings the words back).',
       'Selections: rectangle, ellipse, lasso, magic wand; add (Shift), take away (Alt); invert; soft edges. Painting, fills, filters and colour changes stay inside the selection.',
       'Painting: brush and eraser (size, hardness, opacity, spacing, pen pressure), line, arrow, rectangle, ellipse, fill, gradient. Retouching: clone, heal, smudge, dodge / burn, blur / sharpen.',
-      'Colour: brightness and contrast, levels, curves, hue and saturation, colour balance, threshold, posterise, desaturate. Filters: greyscale, sepia, invert, blur, sharpen.',
+      'Colour: brightness and contrast, levels, curves, hue and saturation, colour balance, threshold, posterise, desaturate, invert. Filters: greyscale, sepia, blur, sharpen.',
       'Move, stretch and turn a layer or a selection; crop, resize, canvas size, rotate, flip.',
       'Files: opens PNG, JPEG, GIF (first frame), WebP, AVIF, BMP, SVG, ICO and OpenRaster (.ora). Saves PNG, JPEG and WebP as one flat picture, and .ora with the layers (GIMP and Krita open it).',
       'Left out: opening GIMP .xcf or Photoshop .psd files with their layers (flatten them elsewhere first, or save as .ora in GIMP); layer masks; layer groups (an .ora with groups opens as one list); paths and Bézier curves; perspective and warp; camera RAW, CMYK, 16-bit colour and colour profiles; most of GIMP\'s filters; scripts, plug-ins and batch work; animation.',
-      `Limits: pictures up to ${MAX_PIXELS / 1e6} million pixels; all layers together up to about 150 million pixels (for example 12 layers of 12 megapixels), and 100 layers at most. Undo keeps the most recent steps up to about 256 MB.`,
+      `Limits: pictures up to ${MAX_PIXELS / 1e6} million pixels and ${MAX_SIDE.toLocaleString()} on a side; all layers together up to about 150 million pixels (for example 12 layers of 12 megapixels), and 100 layers at most. Undo keeps the most recent steps up to about 256 MB.`,
     ].join('\n\n'));
   }
   async function showKeys() {
@@ -1862,17 +1998,20 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
   on(app.root, 'keydown', (e: KeyboardEvent) => {
     const t = e.target;
     const typing = (t instanceof HTMLInputElement && !['range', 'checkbox', 'color', 'radio'].includes(t.type)) || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement;
+    // A focused button, tick box or slider keeps Enter, Space, Delete and Backspace for itself.
+    const control = t instanceof HTMLButtonElement || t instanceof HTMLInputElement || t instanceof HTMLSelectElement || t instanceof HTMLTextAreaElement;
     const ctrl = e.ctrlKey || e.metaKey;
     const k = e.key.toLowerCase();
     const act = (fn: () => void) => {
       e.preventDefault();
       fn();
     };
-    if (ctrl && k === 's') return act(() => void (e.shiftKey ? saveAs() : save()));
-    if (ctrl && k === 'o') return act(() => void openPicked());
+    if (ctrl && k === 's') return act(() => void (e.repeat ? undefined : e.shiftKey ? saveAs() : save()));
+    if (ctrl && k === 'o') return act(() => void (e.repeat ? undefined : openPicked()));
+    // In a box being typed in, Ctrl+Z undoes the typing, not the picture.
+    if (typing) return;
     if (ctrl && k === 'z') return act(() => (e.shiftKey ? redo() : undo()));
     if (ctrl && k === 'y') return act(redo);
-    if (typing) return;
     if (ctrl && k === 'a') return act(e.shiftKey ? selectNone : selectAll);
     if (ctrl && k === 'd') return act(selectNone);
     if (ctrl && k === 'i') return act(selectInvert);
@@ -1884,7 +2023,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     if (ctrl && k === 'u') return act(() => void runAdjust('hue'));
     if (e.key === 'F7') return act(() => showPanel(panel.el.hidden === true));
     if (ctrl || e.altKey) return;
-    if (e.key === 'Enter') {
+    if (e.key === 'Enter' && !control) {
       if (cropBox) return act(applyCrop);
       if (xf) return act(commitTransform);
       if (lasso) return act(closeLasso);
@@ -1894,8 +2033,8 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       if (xf) return act(cancelTransform);
       if (lasso) return act(endLasso);
     }
-    if ((e.key === 'Delete' || e.key === 'Backspace') && !(t instanceof HTMLButtonElement)) return act(clearSelected);
-    if (e.key === ' ' && !spaceHeld) {
+    if ((e.key === 'Delete' || e.key === 'Backspace') && !control) return act(clearSelected);
+    if (e.key === ' ' && !spaceHeld && !control) {
       spaceHeld = true;
       stage.dataset.tool = 'hand';
       return act(() => undefined);
@@ -1909,13 +2048,18 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     const hit = TOOLS.find(([, , , key]) => key === (e.shiftKey ? e.key.toUpperCase() : e.key.toLowerCase()) && (e.shiftKey === (key !== key.toLowerCase())));
     if (hit) act(() => setTool(hit[0]));
   }, app.signal);
-  on(app.root, 'keyup', (e: KeyboardEvent) => {
-    if (e.key === ' ') {
-      spaceHeld = false;
-      stage.dataset.tool = tool;
-    }
-  }, app.signal);
-  new ResizeObserver(() => autoFit && fit()).observe(stage);
+  // Space let go anywhere (another window, the taskbar) ends the hand, or every click after would pan.
+  const letGoOfSpace = () => {
+    if (!spaceHeld) return;
+    spaceHeld = false;
+    stage.dataset.tool = tool;
+  };
+  on(document, 'keyup', (e: KeyboardEvent) => e.key === ' ' && letGoOfSpace(), app.signal);
+  on(window, 'blur', letGoOfSpace, app.signal);
+  on(app.root, 'focusout', (e: FocusEvent) => !app.root.contains(e.relatedTarget as Node | null) && letGoOfSpace(), app.signal);
+  const sizeWatch = new ResizeObserver(() => autoFit && fit());
+  sizeWatch.observe(stage);
+  app.signal.addEventListener('abort', () => sizeWatch.disconnect());
 
   setTool('brush');
   blank(800, 600, true);

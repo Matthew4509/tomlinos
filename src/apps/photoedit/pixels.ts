@@ -57,7 +57,9 @@ export function invert(p: Pixels): void {
   }
 }
 
-/** A 3 x 3 filter (blur, sharpen). Edge pixels use their nearest neighbour; transparency is kept. */
+/** A 3 x 3 filter (blur, sharpen). Edge pixels use their nearest neighbour. Colours are weighted by how solid each
+ *  pixel is, so a see-through neighbour does not count as black (no dark fringe); the see-through amount is filtered
+ *  too, so a blurred edge also fades. */
 export function convolve3(p: Pixels, k: number[]): void {
   const { width: w, height: h } = p;
   const src = p.data.slice();
@@ -65,30 +67,52 @@ export function convolve3(p: Pixels, k: number[]): void {
   const sum = k.reduce((a, b) => a + b, 0) || 1;
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
-      let r = 0, g = 0, b = 0;
+      let r = 0, g = 0, b = 0, a = 0;
       for (let ky = -1; ky <= 1; ky++) {
         const yy = Math.min(h - 1, Math.max(0, y + ky));
         for (let kx = -1; kx <= 1; kx++) {
           const xx = Math.min(w - 1, Math.max(0, x + kx));
-          const wgt = k[(ky + 1) * 3 + kx + 1];
           const j = (yy * w + xx) * 4;
-          r += src[j] * wgt;
-          g += src[j + 1] * wgt;
-          b += src[j + 2] * wgt;
+          const wa = k[(ky + 1) * 3 + kx + 1] * src[j + 3];
+          r += src[j] * wa;
+          g += src[j + 1] * wa;
+          b += src[j + 2] * wa;
+          a += wa;
         }
       }
       const i = (y * w + x) * 4;
-      d[i] = clamp(r / sum);
-      d[i + 1] = clamp(g / sum);
-      d[i + 2] = clamp(b / sum);
+      if (a <= 0) {
+        d[i + 3] = 0;
+        continue;
+      }
+      d[i] = clamp(r / a);
+      d[i + 1] = clamp(g / a);
+      d[i + 2] = clamp(b / a);
+      d[i + 3] = clamp(a / sum);
     }
   }
+}
+
+/** Mixes colour (r, g, b, a) into pixel i of `d` by `wgt` (0-1), counting each side's colour by how solid it is. */
+export function mixPixel(d: Uint8ClampedArray, i: number, r: number, g: number, b: number, a: number, wgt: number): void {
+  const a0 = d[i + 3];
+  const na = a0 + (a - a0) * wgt;
+  if (na <= 0) {
+    d[i + 3] = 0;
+    return;
+  }
+  const k0 = (a0 * (1 - wgt)) / na, k1 = (a * wgt) / na;
+  d[i] = d[i] * k0 + r * k1;
+  d[i + 1] = d[i + 1] * k0 + g * k1;
+  d[i + 2] = d[i + 2] * k0 + b * k1;
+  d[i + 3] = na;
 }
 
 export const BLUR = [1, 2, 1, 2, 4, 2, 1, 2, 1];
 export const SHARPEN = [0, -1, 0, -1, 5, -1, 0, -1, 0];
 
-/** Paint-bucket fill: every pixel joined to (x, y) whose colour is within `tolerance` (0-255) becomes `rgba`. */
+/** Paint-bucket fill: every pixel joined to (x, y) whose colour is within `tolerance` (0-255) becomes `rgba`.
+ *  Returns how many pixels changed (clicking a patch already that colour still fills its near-matching edges). */
 export function floodFill(p: Pixels, x: number, y: number, rgba: [number, number, number, number], tolerance = 32): number {
   const { width: w, height: h, data: d } = p;
   x = Math.floor(x);
@@ -96,7 +120,6 @@ export function floodFill(p: Pixels, x: number, y: number, rgba: [number, number
   if (x < 0 || y < 0 || x >= w || y >= h) return 0;
   const at = (y * w + x) * 4;
   const target = [d[at], d[at + 1], d[at + 2], d[at + 3]];
-  if (target.every((v, i) => v === rgba[i])) return 0;
   const near = (i: number) => Math.abs(d[i] - target[0]) <= tolerance && Math.abs(d[i + 1] - target[1]) <= tolerance
     && Math.abs(d[i + 2] - target[2]) <= tolerance && Math.abs(d[i + 3] - target[3]) <= tolerance;
   const seen = new Uint8Array(w * h);
@@ -113,8 +136,11 @@ export function floodFill(p: Pixels, x: number, y: number, rgba: [number, number
       const n = py * w + px;
       if (seen[n] || !near(n * 4)) break;
       seen[n] = 1;
-      d.set(rgba, n * 4);
-      count++;
+      const i = n * 4;
+      if (d[i] !== rgba[0] || d[i + 1] !== rgba[1] || d[i + 2] !== rgba[2] || d[i + 3] !== rgba[3]) {
+        d.set(rgba, i);
+        count++;
+      }
       if (py > 0) {
         const ok = !seen[n - w] && near((n - w) * 4);
         if (ok && !up) stack.push(px, py - 1);

@@ -32,18 +32,47 @@ const localName = (n: string): string => {
   return i < 0 ? n : n.slice(i + 1);
 };
 
-const ATTR = /([^\s=/]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+const isSpace = (c: number) => c === 32 || c === 9 || c === 10 || c === 13;
 
+/** Reads name="value" pairs in one pass over the text (a pattern match here could take minutes on a long hostile tag). */
 function readAttrs(src: string): Record<string, string> {
   const out: Record<string, string> = {};
   if (!src.includes('=')) return out;
-  ATTR.lastIndex = 0;
-  let m: RegExpExecArray | null;
-  while ((m = ATTR.exec(src))) {
-    const v = unescapeXml(m[2] ?? m[3] ?? '');
-    out[m[1]] = v;
-    const local = localName(m[1]);
-    if (local !== m[1] && !(local in out)) out[local] = v;
+  const n = src.length;
+  let i = 0;
+  while (i < n) {
+    while (i < n && isSpace(src.charCodeAt(i))) i++;
+    const start = i;
+    while (i < n) {
+      const c = src.charCodeAt(i);
+      if (isSpace(c) || c === 61 /* = */ || c === 47 /* / */) break;
+      i++;
+    }
+    if (i === start) {
+      i++;
+      continue;
+    }
+    const name = src.slice(start, i);
+    let j = i;
+    while (j < n && isSpace(src.charCodeAt(j))) j++;
+    if (src.charCodeAt(j) !== 61) {
+      i = j;
+      continue;
+    }
+    j++;
+    while (j < n && isSpace(src.charCodeAt(j))) j++;
+    const q = src.charCodeAt(j);
+    if (q !== 34 && q !== 39) {
+      i = j;
+      continue;
+    }
+    const end = src.indexOf(q === 34 ? '"' : "'", j + 1);
+    if (end < 0) break;
+    const v = unescapeXml(src.slice(j + 1, end));
+    out[name] = v;
+    const local = localName(name);
+    if (local !== name && !(local in out)) out[local] = v;
+    i = end + 1;
   }
   return out;
 }
@@ -143,10 +172,15 @@ export function escapeXml(s: string): string {
   return s.replace(NOT_XML, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+/** For an attribute value: as escapeXml, and tabs and line breaks as numbers too (XML readers turn raw ones into spaces). */
+export function escapeAttr(s: string): string {
+  return escapeXml(s).replace(/\t/g, '&#9;').replace(/\n/g, '&#10;').replace(/\r/g, '&#13;');
+}
+
 /** An element as text: `attrs` with undefined values left out; `inner` is already-escaped XML (or nothing). */
 export function tag(name: string, attrs: Record<string, string | number | undefined> = {}, inner?: string): string {
   let out = `<${name}`;
-  for (const [k, v] of Object.entries(attrs)) if (v !== undefined) out += ` ${k}="${escapeXml(String(v))}"`;
+  for (const [k, v] of Object.entries(attrs)) if (v !== undefined) out += ` ${k}="${escapeAttr(String(v))}"`;
   return inner === undefined || inner === '' ? `${out}/>` : `${out}>${inner}</${name}>`;
 }
 

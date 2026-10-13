@@ -75,7 +75,7 @@ export function layersPanel(doc: Doc, cmd: LayerCommands, signal: AbortSignal) {
       thumbs.set(layer, thumb);
       const name = h('span', { class: 'pe-layer-name' }, layer.name);
       const badges = h('span', { class: 'pe-badges' }, layer.text ? 'T' : null, layer.locked ? ' 🔒' : null, layer.mode !== 'normal' ? ` ${BLEND_MODES.find(b => b.id === layer.mode)?.label ?? ''}` : null, layer.opacity < 1 ? ` ${Math.round(layer.opacity * 100)}%` : null);
-      const row = h('div', { class: `pe-layer${active ? ' on' : ''}${layer.visible ? '' : ' hidden-layer'}`, role: 'option', 'aria-selected': String(active), tabindex: active ? '0' : '-1', draggable: 'true', title: 'Click to work on this layer; double-click the name to rename; drag to move' }, eye, thumb, h('span', { class: 'pe-layer-text' }, name, badges));
+      const row = h('div', { class: `pe-layer${active ? ' on' : ''}${layer.visible ? '' : ' hidden-layer'}`, role: 'option', 'aria-selected': String(active), tabindex: active ? '0' : '-1', draggable: 'true', title: 'Click to work on this layer; double-click the name (or F2) to rename; drag to move' }, eye, thumb, h('span', { class: 'pe-layer-text' }, name, badges));
       on(eye, 'click', e => {
         e.stopPropagation();
         cmd.setVisible(layer, !layer.visible);
@@ -86,8 +86,10 @@ export function layersPanel(doc: Doc, cmd: LayerCommands, signal: AbortSignal) {
         cmd.rename(layer);
       }, signal);
       on(row, 'keydown', (e: KeyboardEvent) => {
+        // Keys a row answers stop here, so they do not also reach the picture (Enter there applies a crop).
         if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
           e.preventDefault();
+          e.stopPropagation();
           const next = doc.layers[index + (e.key === 'ArrowUp' ? 1 : -1)];
           if (next) {
             cmd.activate(next);
@@ -95,6 +97,7 @@ export function layersPanel(doc: Doc, cmd: LayerCommands, signal: AbortSignal) {
           }
         } else if (e.key === 'F2' || e.key === 'Enter') {
           e.preventDefault();
+          e.stopPropagation();
           cmd.rename(layer);
         }
       }, signal);

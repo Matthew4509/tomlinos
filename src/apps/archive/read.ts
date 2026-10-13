@@ -110,7 +110,11 @@ export function readZip(b: Uint8Array): ArchiveEntry[] {
       const start = local + 30 + u16(b, local + 26) + u16(b, local + 28);
       const data = b.subarray(start, start + packed);
       if (data.length < packed) throw new ArchiveError(`“${parts.join('/')}” is cut short in this .zip.`);
-      if (method === 0) return data.slice();
+      if (method === 0) {
+        // Stored as it is: the two sizes must agree, or a size check made on the listed size would mean nothing.
+        if (packed !== size) throw new ArchiveError(`“${parts.join('/')}” is not the size the .zip says. It may be damaged.`);
+        return data.slice();
+      }
       if (method === 8) {
         const out = await unpack(data, 'deflate-raw', Math.min(MAX_ENTRY, size));
         if (out.length !== size) throw new ArchiveError(`“${parts.join('/')}” did not unpack to the size the .zip says. It may be damaged.`);

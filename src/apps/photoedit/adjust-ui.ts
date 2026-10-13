@@ -6,7 +6,7 @@ import type { Shell } from '../../shell/types.ts';
 import type { Doc } from './doc.ts';
 import { clipRect } from './history.ts';
 import { brightnessContrast, saturation, type Pixels } from './pixels.ts';
-import { maskMix } from './selection.ts';
+import { maskMix, selectedOnly } from './selection.ts';
 import {
   applyTable, autoLevels, colourBalance, curveTable, desaturate, histogram, hueSaturation, levelsTable, LEVELS_NONE, posterise, threshold,
   type Balance, type Channel, type GreyMode, type Histogram, type Levels,
@@ -39,6 +39,7 @@ function numberBox(label: string, min: number, max: number, value: number, step 
 const plainLevels = (l: Levels) => l.inLow === 0 && l.inHigh === 255 && l.gamma === 1 && l.outLow === 0 && l.outHigh === 255;
 
 const CHANNELS: Array<[Channel, string]> = [['rgb', 'All (brightness)'], ['r', 'Red'], ['g', 'Green'], ['b', 'Blue']];
+const APPLY_ORDER: Channel[] = ['r', 'g', 'b', 'rgb'];
 
 function drawHistogram(c: HTMLCanvasElement, hist: Histogram, ch: Channel, marks: number[] = []) {
   const x = c.getContext('2d')!;
@@ -64,12 +65,14 @@ function drawHistogram(c: HTMLCanvasElement, hist: Histogram, ch: Channel, marks
 }
 
 /** Opens one colour window. Resolves when it closes (applied or not). */
-export async function adjust(shell: Shell, doc: Doc, kind: AdjustKind): Promise<boolean> {
+/** `beforeApply` runs just before the change is made (a text layer becomes pixels only then, not on Cancel). */
+export async function adjust(shell: Shell, doc: Doc, kind: AdjustKind, beforeApply: () => void = () => undefined): Promise<boolean> {
   const layer = doc.active;
   const r = clipRect(doc.selBounds ?? doc.full, doc.width, doc.height);
   if (!r) return false;
   const original = layer.ctx.getImageData(r.x, r.y, r.w, r.h);
-  const sample = { data: original.data, width: r.w, height: r.h };
+  // What the histograms count: only the selected pixels when the selection is not a plain rectangle.
+  const sample = doc.selection ? selectedOnly({ data: original.data, width: r.w, height: r.h }, doc.selection, r, doc.width) : { data: original.data, width: r.w, height: r.h };
   let fn: (p: Pixels) => void = () => undefined;
   let body: HTMLElement;
   /** True when the settings change nothing (Apply then does nothing). */
@@ -103,7 +106,10 @@ export async function adjust(shell: Shell, doc: Doc, kind: AdjustKind): Promise<
       drawHistogram(graph, hist, ch(), [l.inLow, l.inHigh]);
     };
     const read = () => {
-      const num = (i: HTMLInputElement, lo: number, hi: number, d: number) => Math.min(hi, Math.max(lo, Number(i.value) || d));
+      const num = (i: HTMLInputElement, lo: number, hi: number, d: number) => {
+        const v = i.value.trim() === '' ? NaN : Number(i.value);
+        return Math.min(hi, Math.max(lo, Number.isFinite(v) ? v : d));
+      };
       const l: Levels = { inLow: num(inLow, 0, 254, 0), gamma: num(gamma, 0.1, 10, 1), inHigh: num(inHigh, 1, 255, 255), outLow: num(outLow, 0, 255, 0), outHigh: num(outHigh, 0, 255, 255) };
       if (l.inHigh <= l.inLow) l.inHigh = l.inLow + 1;
       levels[ch()] = l;
@@ -130,7 +136,8 @@ export async function adjust(shell: Shell, doc: Doc, kind: AdjustKind): Promise<
       h('div', { class: 'pe-row3' }, auto, reset));
     show();
     fn = p => {
-      for (const [c] of CHANNELS) {
+      // One colour first, then All (as GIMP does).
+      for (const c of APPLY_ORDER) {
         const l = levels[c];
         if (!plainLevels(l)) applyTable(p, levelsTable(l), c);
       }
@@ -181,9 +188,17 @@ export async function adjust(shell: Shell, doc: Doc, kind: AdjustKind): Promise<
       const list = pts[ch()];
       dragging = list.findIndex(([px, py]) => Math.abs(px - x) <= 8 && Math.abs(py - y) <= 8);
       if (dragging < 0) {
-        list.push([Math.min(255, Math.max(0, x)), Math.min(255, Math.max(0, y))]);
-        list.sort((a, b) => a[0] - b[0]);
-        dragging = list.findIndex(p => p[0] === Math.min(255, Math.max(0, x)));
+        const px = Math.min(255, Math.max(0, x)), py = Math.min(255, Math.max(0, y));
+        // A click straight above or below a point moves that point (two points cannot share a place across).
+        const same = list.findIndex(p => p[0] === px);
+        if (same >= 0) {
+          list[same] = [px, py];
+          dragging = same;
+        } else {
+          list.push([px, py]);
+          list.sort((a, b) => a[0] - b[0]);
+          dragging = list.findIndex(p => p[0] === px);
+        }
       }
       graph.setPointerCapture(e.pointerId);
       draw();
@@ -228,8 +243,8 @@ export async function adjust(shell: Shell, doc: Doc, kind: AdjustKind): Promise<
     body = h('div', { class: 'pe-form' }, h('label', {}, 'Channel ', chSel), graph, h('p', { class: 'hint' }, 'Click to add a point; drag it; double-click a point to remove it.'), h('div', { class: 'pe-row3' }, reset));
     draw();
     const plain = (l: Array<[number, number]>) => l.length === 2 && l[0][0] === 0 && l[0][1] === 0 && l[1][0] === 255 && l[1][1] === 255;
-    fn = p => {
-      for (const [c] of CHANNELS) if (!plain(pts[c])) applyTable(p, curveTable(pts[c]), c);
+      fn = p => {
+      for (const c of APPLY_ORDER) if (!plain(pts[c])) applyTable(p, curveTable(pts[c]), c);
     };
     isNone = () => CHANNELS.every(([c]) => plain(pts[c]));
   } else if (kind === 'hue') {
@@ -274,12 +289,14 @@ export async function adjust(shell: Shell, doc: Doc, kind: AdjustKind): Promise<
 
   // ---- Live preview on the layer (put back when the window closes; Apply then makes it one undo step) ----
   let queued = false;
+  // One work copy for the whole window (a new 48 MB copy per slider move on a big photo was slow).
+  const copy = new Uint8ClampedArray(original.data.length);
   const preview = () => {
     if (queued) return;
     queued = true;
     requestAnimationFrame(() => {
       queued = false;
-      const copy = new Uint8ClampedArray(original.data);
+      copy.set(original.data);
       fn({ data: copy, width: r.w, height: r.h });
       if (doc.selection) maskMix(original.data, copy, doc.selection, r, doc.width);
       layer.ctx.putImageData(new ImageData(copy, r.w, r.h), r.x, r.y);
@@ -299,5 +316,11 @@ export async function adjust(shell: Shell, doc: Doc, kind: AdjustKind): Promise<
   layer.ctx.putImageData(original, r.x, r.y);
   doc.render(r);
   if (!ok || isNone()) return false;
+  // Settings that change no pixel here (gamma on pure colours, say) do nothing, and leave a text layer as text.
+  copy.set(original.data);
+  fn({ data: copy, width: r.w, height: r.h });
+  if (doc.selection) maskMix(original.data, copy, doc.selection, r, doc.width);
+  if (copy.every((v, i) => v === original.data[i])) return false;
+  beforeApply();
   return doc.changePixels(ADJUST_TITLES[kind], fn, r, layer);
 }

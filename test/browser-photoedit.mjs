@@ -354,6 +354,211 @@ await step('stretch and turn: a corner handle makes the selected part 100 × 80,
   await page.keyboard.press('Control+Shift+a');
 });
 
+// ---- Faults found in an audit, each driven the way a person would hit it ----
+const status = async () => (await W().locator('.pe-status').innerText()).split('\n')[0];
+async function freshPicture(w, hgt) {
+  await page.keyboard.press('Escape');
+  await W().getByRole('button', { name: 'New...' }).click();
+  const lose = page.locator('.dialog', { hasText: 'Not saved' });
+  if (await lose.isVisible().catch(() => false)) await lose.getByRole('button', { name: 'Lose the changes' }).click();
+  await page.locator('.dialog input[aria-label="Width"]').fill(String(w));
+  await page.locator('.dialog input[aria-label="Height"]').fill(String(hgt));
+  await page.locator('.dialog').getByRole('button', { name: 'Create' }).click();
+}
+const colourIs = hex => W().locator('input[aria-label="Colour"]').evaluate((el, v) => {
+  el.value = v;
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+}, hex);
+async function saveAsName(name) {
+  await page.keyboard.press('Control+Shift+s');
+  await page.locator('.dialog input[aria-label="File name"]').fill(name);
+  await page.locator('.dialog').getByRole('button', { name: 'Save' }).click();
+  await page.locator('.toast', { hasText: `Saved “${name}”` }).waitFor();
+}
+
+await step('a crop box on screen, then Rotate: no error, one undo step, "not saved"; then Ctrl+O opens the right file', async () => {
+  await freshPicture(400, 300);
+  await tool('Brush');
+  await dragPic([20, 20], [100, 20]);
+  await saveAsName('audit-red.png');
+  await tool('Crop');
+  await dragPic([50, 50], [150, 120]);
+  await menu('Image', 'Rotate right');
+  ok((await status()).includes('300 × 400'), 'turned: ' + (await status()));
+  ok((await status()).includes('not saved'), 'marked not saved');
+  ok((await W().getByRole('button', { name: 'Undo' }).getAttribute('title')).startsWith('Undo Rotate right'), 'one Rotate step');
+  await page.keyboard.press('Control+z');
+  ok((await status()).includes('400 × 300'), 'undo turns it back');
+  // Another file, then a crop box, then Ctrl+O: the opened picture is named and saved as itself.
+  await freshPicture(200, 100);
+  await tool('Fill (paint bucket)');
+  await colourIs('#0000ff');
+  await clickPic(5, 5);
+  await saveAsName('audit-blue.png');
+  await tool('Crop');
+  await dragPic([20, 20], [120, 80]);
+  await page.keyboard.press('Control+o');
+  await page.locator('.pick-row[data-path$="audit-red.png"]').dblclick();
+  await W().locator('.pe-status', { hasText: 'audit-red.png' }).waitFor({ timeout: 10000 });
+  ok(!(await page.locator('.dialog', { hasText: 'could not be read' }).count()), 'no false "damaged" message');
+  ok((await status()).includes('400 × 300'), 'the red picture: ' + (await status()));
+});
+
+await step('Layer > Flip with a selection mirrors the selected part in place; the rest stays', async () => {
+  await freshPicture(400, 300);
+  await tool('Select a rectangle');
+  await dragPic([0, 0], [199, 299]);
+  await colourIs('#ff0000');
+  await menu('Edit', 'Fill with the colour');
+  await page.keyboard.press('Control+Shift+a');
+  await dragPic([0, 0], [99, 299]);
+  await colourIs('#0000ff');
+  await menu('Edit', 'Fill with the colour');
+  // Left quarter blue, next quarter red, right half white. Select the left half and flip it.
+  await page.keyboard.press('Control+Shift+a');
+  await dragPic([0, 0], [199, 299]);
+  await menu('Layer', 'Flip layer left to right');
+  eq((await pixel(20, 150)).slice(0, 3), [255, 0, 0], 'red now on the left');
+  eq((await pixel(180, 150)).slice(0, 3), [0, 0, 255], 'blue now on the right of the half');
+  eq((await pixel(350, 150)).slice(0, 3), [255, 255, 255], 'outside untouched');
+  await page.keyboard.press('Control+z');
+  eq((await pixel(20, 150)).slice(0, 3), [0, 0, 255], 'one undo');
+  await page.keyboard.press('Control+Shift+a');
+});
+
+await step('crop box dragged past the left edge stops at it; Enter on the Cancel button cancels', async () => {
+  await freshPicture(400, 300);
+  await tool('Crop');
+  const p = await at(30, 100), q = await at(0, 200);
+  const box = await W().locator('.pe-over').boundingBox();
+  await page.mouse.move(p.x, p.y);
+  await page.mouse.down();
+  await page.mouse.move(box.x - 60, q.y, { steps: 8 });
+  await page.mouse.up();
+  await W().getByRole('button', { name: 'Cancel', exact: true }).first().focus();
+  await page.keyboard.press('Enter');
+  ok((await status()).includes('400 × 300'), 'Enter on Cancel did not crop: ' + (await status()));
+  const b2 = await W().locator('.pe-over').boundingBox();
+  await page.mouse.move((await at(30, 100)).x, (await at(30, 100)).y);
+  await page.mouse.down();
+  await page.mouse.move(b2.x - 60, (await at(0, 200)).y, { steps: 8 });
+  await page.mouse.up();
+  await page.locator('.pe-stage').focus();
+  await page.keyboard.press('Enter');
+  ok(/· 3[01] × 10[01] pixels/.test(await status()), 'about 30 × 100: ' + (await status()));
+});
+
+await step('Merge down onto a 50% layer looks the same after; a hidden layer is asked about', async () => {
+  await freshPicture(400, 300);
+  await W().getByRole('button', { name: 'New layer' }).click();
+  await W().locator('input[aria-label="Layer opacity"]').fill('50');
+  await W().locator('input[aria-label="Layer opacity"]').dispatchEvent('change');
+  await W().getByRole('button', { name: 'New layer' }).click();
+  await tool('Fill (paint bucket)');
+  await colourIs('#0000ff');
+  await clickPic(10, 10);
+  const before = await pixel(100, 100);
+  await page.keyboard.press('Control+e');
+  eq(await pixel(100, 100), before, 'same after merging');
+  await W().getByRole('button', { name: 'Hide “Layer 2”' }).click();
+  await W().getByRole('button', { name: 'New layer' }).click();
+  await page.keyboard.press('Control+e');
+  const d = page.locator('.dialog', { hasText: 'Show the layer first' });
+  await d.waitFor();
+  await d.getByRole('button', { name: 'OK' }).click();
+});
+
+await step('Change the text on a hidden text layer edits it; Cancel in Levels keeps the words editable', async () => {
+  await freshPicture(400, 300);
+  await tool('Text');
+  await clickPic(40, 100);
+  await page.locator('.dialog textarea[aria-label="Words"]').fill('Hidden words');
+  await page.locator('.dialog').getByRole('button', { name: 'Add' }).click();
+  await W().getByRole('button', { name: 'Hide “Hidden words”' }).click();
+  await menu('Layer', 'Change the text...');
+  eq(await page.locator('.dialog textarea[aria-label="Words"]').inputValue(), 'Hidden words', 'the words of that layer');
+  await page.locator('.dialog').getByRole('button', { name: 'Cancel' }).click();
+  eq((await layerNames()).length, 2, 'no extra layer');
+  await W().getByRole('button', { name: 'Show “Hidden words”' }).click();
+  await page.locator('.pe-stage').focus();
+  await page.keyboard.press('Control+l');
+  await page.locator('.dialog').getByRole('button', { name: 'Cancel' }).click();
+  ok((await W().locator('.pe-layer').first().innerText()).includes('T'), 'still a text layer after Cancel');
+  // Applied, it becomes pixels, and one Undo brings the words back.
+  await page.keyboard.press('Control+l');
+  // (Gamma would not change pure blue words at all, and then they stay text: that is checked too.)
+  await page.locator('.dialog input[aria-label="Middle (gamma)"]').fill('1.6');
+  await page.locator('.dialog').getByRole('button', { name: 'Apply' }).click();
+  await page.waitForTimeout(300);
+  ok((await W().locator('.pe-layer').first().innerText()).includes('T'), 'no change, still text');
+  await page.keyboard.press('Control+l');
+  await page.locator('.dialog input[aria-label="Output light"]').fill('128');
+  await page.locator('.dialog').getByRole('button', { name: 'Apply' }).click();
+  // The change lands a frame after the window closes.
+  await W().locator('.pe-layer').first().locator('.pe-badges', { hasText: 'T' }).waitFor({ state: 'detached', timeout: 5000 });
+  const lv = await W().getByRole('button', { name: 'Undo' }).getAttribute('title');
+  ok(lv.startsWith('Undo Levels'), 'one Levels step: ' + lv);
+  await page.keyboard.press('Control+z');
+  await W().locator('.pe-layer').first().locator('.pe-badges', { hasText: 'T' }).waitFor({ timeout: 5000 });
+});
+
+await step('a shortcut during a gradient drag finishes it cleanly; Ctrl+Z in the Soft edge box is the box\'s own', async () => {
+  await freshPicture(400, 300);
+  await tool('Gradient');
+  const a = await at(50, 50), b = await at(300, 200);
+  await page.mouse.move(a.x, a.y);
+  await page.mouse.down();
+  await page.mouse.move(b.x, b.y, { steps: 5 });
+  await page.keyboard.press('Control+a');
+  await page.mouse.up();
+  ok((await W().getByRole('button', { name: 'Undo' }).getAttribute('title')).startsWith('Undo Select all'), 'select all after the gradient');
+  await page.keyboard.press('Control+z');
+  ok((await W().getByRole('button', { name: 'Undo' }).getAttribute('title')).startsWith('Undo Gradient'), 'the gradient is its own step');
+  await page.keyboard.press('Control+Shift+a');
+  await W().getByRole('button', { name: 'Zoom in' }).click();
+  await tool('Brush');
+  await dragPic([20, 150], [380, 150]);
+  await tool('Select a rectangle');
+  const box = W().locator('input[aria-label="Soft edge (pixels)"]');
+  await box.click();
+  await box.fill('25');
+  await page.keyboard.press('Control+z');
+  ok(!near(await pixel(200, 150), [255, 255, 255, 255]), 'the stroke is still there');
+  await page.locator('.pe-stage').focus();
+  await box.fill('0');
+});
+
+await step('New picture over 50 million pixels is refused with the reason; one Undo takes a paste back', async () => {
+  await W().getByRole('button', { name: 'New...' }).click();
+  const lose = page.locator('.dialog', { hasText: 'Not saved' });
+  if (await lose.isVisible().catch(() => false)) await lose.getByRole('button', { name: 'Lose the changes' }).click();
+  await page.locator('.dialog input[aria-label="Width"]').fill('10000');
+  await page.locator('.dialog input[aria-label="Height"]').fill('10000');
+  ok((await page.locator('.dialog').innerText()).includes('100 million pixels'), 'says why');
+  ok(await page.locator('.dialog').getByRole('button', { name: 'Create' }).isDisabled(), 'Create waits');
+  await page.locator('.dialog').getByRole('button', { name: 'Cancel' }).click();
+  await freshPicture(400, 300);
+  await tool('Select a rectangle');
+  await dragPic([30, 25], [70, 55]);
+  await page.locator('.pe-stage').focus();
+  await page.keyboard.press('Control+c');
+  const n = (await layerNames()).length;
+  await page.keyboard.press('Control+v');
+  await W().locator('.pe-layer-name', { hasText: 'Pasted' }).waitFor({ timeout: 5000 });
+  await page.keyboard.press('Enter');
+  ok((await W().getByRole('button', { name: 'Undo' }).getAttribute('title')).startsWith('Undo Paste'), 'one Paste step');
+  await page.keyboard.press('Control+z');
+  eq((await layerNames()).length, n, 'one undo removes the pasted layer');
+  // Enter on a focused layer row renames it and does not also apply a crop box on screen.
+  await tool('Crop');
+  await dragPic([20, 20], [120, 80]);
+  await W().locator('.pe-layer.on').focus();
+  await page.keyboard.press('Enter');
+  await page.locator('.dialog', { hasText: 'Rename layer' }).getByRole('button', { name: 'Cancel' }).click();
+  ok((await status()).includes('400 × 300'), 'not cropped: ' + (await status()));
+  await page.keyboard.press('Escape');
+});
+
 await step('phone width: the editor fits 390 pixels with no sideways scroll of the page', async () => {
   await page.setViewportSize({ width: 390, height: 800 });
   await page.waitForTimeout(500);
@@ -389,5 +594,6 @@ await step('no errors in the page', async () => {
 });
 
 console.log(`\n${passed} passed, ${failures.length} failed`);
-await browser.close();
+// Closing Chrome after the big-picture step can hang on Windows: give it five seconds, then leave anyway.
+await Promise.race([browser.close(), new Promise(res => setTimeout(res, 5000))]);
 process.exit(failures.length ? 1 : 0);

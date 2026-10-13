@@ -196,7 +196,7 @@ test('an .ora from outside is checked before decoding: missing parts, huge layer
   await assert.rejects(big.layerPng(big.stack.layers[0]), /8,000 × 8,000/);
   const notPng = await openOra(make(one, { 'data/a.png': enc.encode('hello') }));
   await assert.rejects(notPng.layerPng(notPng.stack.layers[0]), /not a PNG/);
-  await assert.rejects(openOra(make('<image w="20000" h="20000"><stack><layer src="a.png"/></stack></image>')), /more than the 50 million/);
+  await assert.rejects(openOra(make('<image w="20000" h="20000"><stack><layer src="a.png"/></stack></image>')), /more than Photo Editor opens \(50 million pixels/);
   const heavy = `<image w="5000" h="5000"><stack>${'<layer src="a.png"/>'.repeat(7)}</stack></image>`;
   await assert.rejects(openOra(make(heavy)), /more than this browser can hold safely/);
   await assert.rejects(openOra(make(one, {}, 'image/png')), /not an OpenRaster/);

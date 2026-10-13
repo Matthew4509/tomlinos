@@ -30,13 +30,15 @@ export function ellipseMask(w: number, h: number, r: Rect): Mask {
   const cx = left + rx, cy = top + ry;
   const y0 = Math.max(0, Math.floor(top)), y1 = Math.min(h, Math.ceil(top + 2 * ry));
   const x0 = Math.max(0, Math.floor(left)), x1 = Math.min(w, Math.ceil(left + 2 * rx));
-  const small = Math.min(rx, ry);
   for (let y = y0; y < y1; y++) {
     const dy = (y + 0.5 - cy) / ry;
     for (let x = x0; x < x1; x++) {
       const dx = (x + 0.5 - cx) / rx;
-      // Distance outside the edge, in pixels (roughly): negative inside.
-      const out = (Math.sqrt(dx * dx + dy * dy) - 1) * small;
+      // Distance outside the edge in pixels, negative inside: how far past 1 the ellipse's sum is, divided by how fast
+      // that sum grows here (so a long thin ellipse gets a one-pixel rim at its ends too, not a long fade).
+      const f = Math.sqrt(dx * dx + dy * dy);
+      const grow = f > 1e-9 ? Math.sqrt((dx * dx) / (rx * rx) + (dy * dy) / (ry * ry)) / f : 1 / Math.min(rx, ry);
+      const out = (f - 1) / grow;
       const v = out <= -0.5 ? 255 : out >= 0.5 ? 0 : Math.round((0.5 - out) * 255);
       if (v) m[y * w + x] = v;
     }
@@ -135,12 +137,49 @@ export function invertMask(m: Mask | null, size: number): Mask | null {
   return isEmpty(out) ? null : out;
 }
 
-/** Softens the edge over about `radius` pixels (three box blurs in a row look like a gaussian). */
+/** The widths of three box blurs that together look like a gaussian of this spread (odd widths, 1 = no blur). */
+export function boxWidths(sigma: number): [number, number, number] {
+  const ideal = Math.sqrt((12 * sigma * sigma) / 3 + 1);
+  let lo = Math.floor(ideal);
+  if (lo % 2 === 0) lo--;
+  lo = Math.max(1, lo);
+  const m = Math.round((12 * sigma * sigma - 3 * lo * lo - 12 * lo - 9) / (-4 * lo - 4));
+  const out = [0, 1, 2].map(i => (i < m ? lo : lo + 2)) as [number, number, number];
+  if (out.every(v => v === 1)) out[2] = 3;
+  return out;
+}
+
+/** Softens the edge over about `radius` pixels (three box blurs in a row look like a gaussian; a small radius uses a
+ *  true gaussian, as boxes are too coarse there and sizes 1 to 4 came out the same). */
 export function feather(m: Mask, w: number, h: number, radius: number): Mask {
   if (radius < 1) return m;
-  const r = Math.max(1, Math.round(radius / 3));
+  const sigma = radius / 2.5;
   const a = Float32Array.from(m);
   const b = new Float32Array(a.length);
+  if (sigma < 2) {
+    const R = Math.ceil(sigma * 3);
+    const k = Array.from({ length: 2 * R + 1 }, (_, i) => Math.exp(-((i - R) ** 2) / (2 * sigma * sigma)));
+    const total = k.reduce((s, v) => s + v, 0);
+    const blur = (src: Float32Array, dst: Float32Array, horizontal: boolean) => {
+      const len = horizontal ? w : h, lines = horizontal ? h : w;
+      const step = horizontal ? 1 : w, lineStep = horizontal ? w : 1;
+      for (let l = 0; l < lines; l++) {
+        const base = l * lineStep;
+        for (let i = 0; i < len; i++) {
+          let sum = 0;
+          for (let j = -R; j <= R; j++) sum += src[base + Math.min(len - 1, Math.max(0, i + j)) * step] * k[j + R];
+          dst[base + i * step] = sum / total;
+        }
+      }
+    };
+    blur(a, b, true);
+    blur(b, a, false);
+    const out = new Uint8Array(m.length);
+    for (let i = 0; i < out.length; i++) out[i] = Math.round(a[i]);
+    return out;
+  }
+  const widths = boxWidths(sigma);
+  let r = 1;
   const pass = (src: Float32Array, dst: Float32Array, horizontal: boolean) => {
     const len = horizontal ? w : h, lines = horizontal ? h : w;
     const step = horizontal ? 1 : w, lineStep = horizontal ? w : 1;
@@ -157,6 +196,8 @@ export function feather(m: Mask, w: number, h: number, radius: number): Mask {
     }
   };
   for (let k = 0; k < 3; k++) {
+    r = (widths[k] - 1) / 2;
+    if (!r) continue;
     pass(a, b, true);
     pass(b, a, false);
   }
@@ -254,6 +295,37 @@ export function shiftMask(m: Mask, w: number, h: number, dx: number, dy: number)
     }
   }
   return isEmpty(out) ? null : out;
+}
+
+/** The mask with the part inside `r` mirrored within `r` (Layer > Flip with a selection: the selection follows). */
+export function flipMaskIn(m: Mask, w: number, r: Rect, horizontal: boolean): Mask {
+  const out = m.slice();
+  for (let y = 0; y < r.h; y++) {
+    for (let x = 0; x < r.w; x++) {
+      const sx = horizontal ? r.w - 1 - x : x, sy = horizontal ? y : r.h - 1 - y;
+      out[(r.y + y) * w + r.x + x] = m[(r.y + sy) * w + r.x + sx];
+    }
+  }
+  return out;
+}
+
+/** Only the selected pixels' colours (a mask 128 or more), as one row: what a histogram of a shaped selection counts. */
+export function selectedOnly(p: Pixels, m: Mask, r: Rect, maskWidth: number): Pixels {
+  let n = 0;
+  for (let y = 0; y < r.h; y++) for (let x = 0; x < r.w; x++) if (m[(r.y + y) * maskWidth + r.x + x] >= 128) n++;
+  const out = new Uint8ClampedArray(n * 4);
+  let k = 0;
+  for (let y = 0; y < r.h; y++) {
+    for (let x = 0; x < r.w; x++) {
+      if (m[(r.y + y) * maskWidth + r.x + x] < 128) continue;
+      const i = (y * r.w + x) * 4;
+      out[k++] = p.data[i];
+      out[k++] = p.data[i + 1];
+      out[k++] = p.data[i + 2];
+      out[k++] = p.data[i + 3];
+    }
+  }
+  return { data: out, width: n, height: 1 };
 }
 
 /** The part of a mask inside a rectangle, as a new smaller mask (for crop to selection, canvas size). */

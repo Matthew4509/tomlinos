@@ -131,7 +131,11 @@ export class History {
     return [...this.undoList, ...this.redoList].reduce((n, s) => n + s.bytes, 0);
   }
 
+  /** Steps pushed so far (for squash). */
+  pushes = 0;
+
   push(step: Step): void {
+    this.pushes++;
     this.undoList.push(step);
     this.redoList.length = 0;
     // The newest step is always kept, even alone over the cap: the person just did it.
@@ -157,6 +161,13 @@ export class History {
   clear(): void {
     this.undoList.length = 0;
     this.redoList.length = 0;
+  }
+
+  /** Joins every step pushed since `mark` (an earlier value of `pushes`) into one, so one Undo takes them all back. */
+  squash(mark: number, label: string): void {
+    const k = Math.min(this.pushes - mark, this.undoList.length);
+    if (k < 2) return;
+    this.undoList.push(group(label, this.undoList.splice(-k)));
   }
 }
 
