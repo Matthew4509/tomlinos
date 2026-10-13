@@ -1,10 +1,10 @@
 {
   "version": "1.0.0",
-  "notes": "- First release of TOMLIN Sheets for Windows 10 and 11.\n- Opens and saves Excel workbooks (.xlsx), opens .xlsm (without macros), CSV and tab-separated files.\n- 268 functions, named ranges, LET, tables, PivotTables, charts, conditional formatting, data validation, notes.\n- Printing, page setup and PDF export.\n- Recent files, one window per workbook, files dropped on the window open, and updates from within the program.",
-  "pub_date": "2026-10-13T09:26:45Z",
+  "notes": "- First release of TOMLIN Sheets for Windows 10 and 11.\n- Opens and saves Excel workbooks (.xlsx), opens .xlsm (without macros), CSV and tab-separated files.\n- 268 functions, named ranges, LET, tables, PivotTables, charts, conditional formatting, data validation, notes.\n- Printing, page setup and PDF export.\n- Two looks, under View: Modern (the ribbon) and Classic (a menu bar and two rows of small buttons).\n- Recent files, one window per workbook, files dropped on the window open, and updates from within the program.",
+  "pub_date": "2026-10-13T10:08:52Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUMGtxdVJTSnlXcjNtait0YlhRa3NLM2ZMZnZNa0QwMHV2TjZvNzJGUU1UWkVOYlVwS3FPOTJTUWxWVjFSdm9mYWd0K3FYcFU5dEhBZ2R0SkJxMjNFOUFLZUt1bTFrMEFrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxODgzNjA0CWZpbGU6VE9NTElOIFNoZWV0c18xLjAuMF94NjQtc2V0dXAubnNpcy56aXAKc3FaQmJIQmw5ZlNaR3VvTWxQRkN4djVhNTRJT29ueklBN0JseDhtN0hZd0FCWE95aWNoNEFBY2pXd3dJUVdLbjB3djBHSHpqYVpRQWtWTmZjcThTRFE9PQo=",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUMGtxdVJTSnlXcjQ4U3hVOTlzdmhXQ1VudDNHNnVZS2p4ZHRJK0NtZHBidTV6c1VvMS9iODJ0NFJlYmRxYkFsMll1MDRQSUUxMlg5bkI2ZkJDeG5RNEFLcXAwNnA4c3dZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxODg2MTMyCWZpbGU6VE9NTElOIFNoZWV0c18xLjAuMF94NjQtc2V0dXAubnNpcy56aXAKbFV4MUZPZGFNYlh2TElkRTJnZkJrckNzVlZlcGxYZEU1MG45bUpBbUV3azZRVjdnYVQzdENBQUkwTUpzUnUwWGk2QnorT1FKZXhYb2hDbDhQelpBRFE9PQo=",
       "url": "https://github.com/Matthew4509/tomlinos/releases/download/sheets-v1.0.0/TOMLIN-Sheets-1.0.0-x64.nsis.zip"
     }
   }

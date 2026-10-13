@@ -112,8 +112,9 @@ export function totalChoices(ctx: SheetContext, col: number, row: number): { ite
 }
 
 /** The Table Design tab's buttons (rebuilt each time the active table changes). */
-export function tableDesign(ctx: SheetContext, t: Table, btn: (text: string, title: string, run: () => void, cls?: string) => HTMLButtonElement, group: (name: string, ...kids: Node[]) => HTMLElement, tools: { pivot(): void; dups(): void }): HTMLElement[] {
-  const { wb, shell, grid } = ctx;
+/** What the Table Design tab and the Classic look's Table menu both do to the table the active cell is in. */
+function tableActions(ctx: SheetContext, t: Table) {
+  const { wb, shell } = ctx;
   const s = wb.active;
   const run = (fn: () => void) => () => {
     try {
@@ -123,6 +124,39 @@ export function tableDesign(ctx: SheetContext, t: Table, btn: (text: string, tit
       void ctx.report(error);
     }
   };
+  const resize = async () => {
+    const answer = await shell.dialogs.prompt({
+      title: 'Resize table',
+      label: `The new range for the table (it starts at ${addressOf(t.range.c0, t.range.r0)}, its top-left cell)`,
+      value: rangeText(t.range),
+      ok: 'OK',
+      check: v => (readRanges(v)?.length === 1 ? null : 'Type one block of cells, such as A1:D40.'),
+    });
+    if (answer === null) return;
+    run(() => wb.resizeTable(s, t, readRanges(answer)![0]))();
+  };
+  const convert = () => {
+    void shell.dialogs.confirm({ title: `Convert “${t.name}” to a range?`, text: 'The cells keep their look, but are no longer a table: no banding as rows are added, no filter buttons, and formulas that used the table\'s name use cell addresses instead. Ctrl+Z takes this back.', ok: 'Convert' })
+      .then(yes => {
+        if (yes) run(() => wb.convertTable(s, t))();
+      });
+  };
+  const filterOn = t.filter && wb.isTableFilter(s, t);
+  const options: Array<{ label: string; title: string; on: boolean; flip: () => void }> = [
+    { label: 'Header row', title: 'Show the header row (the column names)', on: t.header, flip: run(() => wb.setHeader(s, t, !t.header)) },
+    { label: 'Total row', title: 'Show a total row under the table', on: t.totals, flip: run(() => wb.setTotals(s, t, !t.totals)) },
+    { label: 'Banded rows', title: 'Every other row shaded', on: t.bandRows, flip: run(() => wb.setTableOptions(s, t, { bandRows: !t.bandRows })) },
+    { label: 'First column', title: 'The first column in bold', on: t.firstCol, flip: run(() => wb.setTableOptions(s, t, { firstCol: !t.firstCol })) },
+    { label: 'Last column', title: 'The last column in bold', on: t.lastCol, flip: run(() => wb.setTableOptions(s, t, { lastCol: !t.lastCol })) },
+    { label: 'Banded columns', title: 'Every other column shaded', on: t.bandCols, flip: run(() => wb.setTableOptions(s, t, { bandCols: !t.bandCols })) },
+    { label: 'Filter button', title: 'Filter buttons on the header row', on: filterOn, flip: run(() => wb.setTableOptions(s, t, { filter: !(t.filter && wb.isTableFilter(s, t)) })) },
+  ];
+  return { resize, convert, options };
+}
+
+export function tableDesign(ctx: SheetContext, t: Table, btn: (text: string, title: string, run: () => void, cls?: string) => HTMLButtonElement, group: (name: string, ...kids: Node[]) => HTMLElement, tools: { pivot(): void; dups(): void }): HTMLElement[] {
+  const { wb, shell, grid } = ctx;
+  const act = tableActions(ctx, t);
   const nameIn = h('input', { type: 'text', class: 'rb-name', value: t.name, 'aria-label': 'Table name', title: 'Table name (formulas use it, such as SUM(Table1[Amount]))', autocomplete: 'off', spellcheck: false });
   const rename = () => {
     if (nameIn.value.trim() === t.name) return;
@@ -146,46 +180,50 @@ export function tableDesign(ctx: SheetContext, t: Table, btn: (text: string, tit
     }
     event.stopPropagation();
   }, ctx.signal);
-  const resize = async () => {
-    const answer = await shell.dialogs.prompt({
-      title: 'Resize table',
-      label: `The new range for the table (it starts at ${addressOf(t.range.c0, t.range.r0)}, its top-left cell)`,
-      value: rangeText(t.range),
-      ok: 'OK',
-      check: v => (readRanges(v)?.length === 1 ? null : 'Type one block of cells, such as A1:D40.'),
-    });
-    if (answer === null) return;
-    run(() => wb.resizeTable(s, t, readRanges(answer)![0]))();
-  };
-  const toggle = (label: string, title: string, on: boolean, flip: () => void) => {
-    const b = btn(label, title, run(flip), 'text-rb');
-    b.setAttribute('aria-pressed', String(on));
-    return b;
-  };
   const styleBtn = btn(`Style: ${styleLabel(t.style)} ▾`, 'Table styles', () => {
     const r = styleBtn.getBoundingClientRect();
     shell.menus.show(formatAsTableMenu(ctx), r.left, r.bottom, { returnFocus: styleBtn });
   }, 'text-rb');
   return [
-    group('Properties', nameIn, btn('Resize table', 'Resize table: take in more rows or columns, or fewer', () => void resize(), 'text-rb')),
+    group('Properties', nameIn, btn('Resize table', 'Resize table: take in more rows or columns, or fewer', () => void act.resize(), 'text-rb')),
     group('Tools',
       btn('Summarize with PivotTable', 'Summarize the table in a PivotTable', tools.pivot, 'text-rb'),
       btn('Remove duplicates', 'Take out rows that repeat an earlier row of the table', tools.dups, 'text-rb'),
-      btn('Convert to range', 'Convert to range: the table becomes plain cells, keeping its look', () => {
-      void shell.dialogs.confirm({ title: `Convert “${t.name}” to a range?`, text: 'The cells keep their look, but are no longer a table: no banding as rows are added, no filter buttons, and formulas that used the table\'s name use cell addresses instead. Ctrl+Z takes this back.', ok: 'Convert' })
-        .then(yes => {
-          if (yes) run(() => wb.convertTable(s, t))();
-        });
-    }, 'text-rb')),
-    group('Style options',
-      toggle('Header row', 'Show the header row (the column names)', t.header, () => wb.setHeader(s, t, !t.header)),
-      toggle('Total row', 'Show a total row under the table', t.totals, () => wb.setTotals(s, t, !t.totals)),
-      toggle('Banded rows', 'Every other row shaded', t.bandRows, () => wb.setTableOptions(s, t, { bandRows: !t.bandRows })),
-      toggle('First column', 'The first column in bold', t.firstCol, () => wb.setTableOptions(s, t, { firstCol: !t.firstCol })),
-      toggle('Last column', 'The last column in bold', t.lastCol, () => wb.setTableOptions(s, t, { lastCol: !t.lastCol })),
-      toggle('Banded columns', 'Every other column shaded', t.bandCols, () => wb.setTableOptions(s, t, { bandCols: !t.bandCols })),
-      toggle('Filter button', 'Filter buttons on the header row', t.filter && wb.isTableFilter(s, t), () => wb.setTableOptions(s, t, { filter: !(t.filter && wb.isTableFilter(s, t)) }))),
+      btn('Convert to range', 'Convert to range: the table becomes plain cells, keeping its look', act.convert, 'text-rb')),
+    group('Style options', ...act.options.map(o => {
+      const b = btn(o.label, o.title, o.flip, 'text-rb');
+      b.setAttribute('aria-pressed', String(o.on));
+      return b;
+    })),
     group('Table styles', styleBtn),
+  ];
+}
+
+/** The Classic look's Table Design menu: the Table Design tab as a menu, shown while the active cell is in a table. */
+export function tableMenu(ctx: SheetContext, t: Table, tools: { pivot(): void; dups(): void }): MenuItem[] {
+  const { wb, shell } = ctx;
+  const act = tableActions(ctx, t);
+  const rename = async () => {
+    const name = await shell.dialogs.prompt({ title: 'Rename table', label: 'Table name (formulas use it, such as SUM(Table1[Amount]))', value: t.name, ok: 'Rename', check: v => (v.trim() ? null : 'Type a name for the table.') });
+    if (name === null || name.trim() === t.name) return;
+    try {
+      wb.renameTable(t, name);
+      ctx.onChange();
+    } catch (error) {
+      void ctx.report(error);
+    }
+  };
+  return [
+    { label: `Rename “${t.name}”...`, action: () => void rename() },
+    { label: 'Resize table...', action: () => void act.resize() },
+    { separator: true },
+    ...act.options.map(o => ({ label: o.label, checked: o.on, action: o.flip })),
+    { separator: true },
+    { label: `Table style (${styleLabel(t.style)})`, submenu: formatAsTableMenu(ctx) },
+    { separator: true },
+    { label: 'Summarize with PivotTable...', action: tools.pivot },
+    { label: 'Remove duplicates...', action: tools.dups },
+    { label: 'Convert to range...', action: act.convert },
   ];
 }
 

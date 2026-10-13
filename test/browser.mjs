@@ -1469,6 +1469,107 @@ await step('Spreadsheet: a chart, conditional formatting, a drop-down list, prin
   await sw().getByRole('button', { name: 'Close' }).click();
 });
 
+await step('Spreadsheet: View > Classic swaps the ribbon for a menu bar and two toolbars; menus, toolbars and keys work; it is kept; View > Modern brings the ribbon back', async () => {
+  await closeAll();
+  const openSheet = async () => {
+    await page.locator('.start-btn').click();
+    await page.locator('.start-filter').fill('spreadsheet');
+    await page.locator('.start-item', { hasText: 'Spreadsheet' }).click();
+    await page.locator('.sheet .grid-scroll').waitFor();
+  };
+  await openSheet();
+  const sw = () => page.locator('.win', { has: page.locator('.sheet') });
+  const bar = () => page.locator('.sheet .menubar');
+  const title = name => bar().getByRole('menuitem', { name, exact: true });
+  const tool = (toolbar, name) => page.locator(`.sheet .toolbar[aria-label="${toolbar}"]`).getByRole('button', { name, exact: true });
+  const menuRow = label => page.locator('.menu .menu-item', { has: page.locator('.menu-label', { hasText: new RegExp('^' + label.replace(/[().]/g, '\\$&') + '$') }) }).last();
+  const expanded = async () => (await bar().locator('.menubar-item[aria-expanded="true"]').allInnerTexts()).join();
+  // New desktops start in the Modern look: the ribbon, no menu bar.
+  ok(await page.locator('.sheet .ribbon').isVisible(), 'the ribbon shows at first');
+  ok(!(await page.locator('.sheet .classic-bar').isVisible()), 'no menu bar at first');
+  await goTo('A1');
+  await typeRow(['Item', 'Amount']);
+  await typeRow(['Pens', '4']);
+  await typeRow(['Ink', '9']);
+  await typeRow(['Cups', '2']);
+
+  await page.locator('.sheet .ribbon-tab', { hasText: /^View$/ }).click();
+  await page.locator('.sheet .ribbon').getByRole('button', { name: /^Classic:/ }).click();
+  await page.locator('.toast', { hasText: 'View > Modern brings the ribbon back' }).waitFor();
+  ok(await page.locator('.sheet .classic-bar').isVisible(), 'the menu bar and toolbars show');
+  ok(!(await page.locator('.sheet .ribbon').isVisible()) && !(await page.locator('.sheet .ribbon-tabs').isVisible()), 'the ribbon and its tabs are gone');
+  eq(await bar().locator('.menubar-item:visible').allInnerTexts(), ['File', 'Edit', 'View', 'Insert', 'Format', 'Tools', 'Data'], 'the menus (no Help inside the desktop)');
+  // Standard: New, Open, Save, Print, Cut, Copy, Paste, Format painter, Undo, Redo, Sort A-Z, Z-A, AutoSum, Chart (14);
+  // Formatting: B, I, U, left, centre, right, Merge, currency, %, comma, decimals +/-, borders, fill, text colour (15).
+  eq(await page.locator('.sheet .toolbar .rb.tb').count(), 29, 'small buttons on the two toolbars');
+  eq(await page.locator('.sheet .toolbar .rb.tb:not(:has(svg.tb-icon))').count(), 0, 'every small button has its picture');
+  eq(await page.locator('.sheet .toolbar .rb.tb:not([aria-label])').count(), 0, 'every small button has a name');
+
+  // A toolbar button: Bold on B2, shown pressed, and ticked in Format > Font.
+  await goTo('B2');
+  await tool('Formatting', 'Bold (Ctrl+B)').click();
+  eq(await tool('Formatting', 'Bold (Ctrl+B)').getAttribute('aria-pressed'), 'true', 'Bold shows pressed');
+  await title('Format').click();
+  await menuRow('Font').hover();
+  eq(await menuRow('Bold').getAttribute('aria-checked'), 'true', 'Format > Font > Bold is ticked');
+  // Along the bar with the pointer while a menu is open; a second click on the open one closes it.
+  await title('Insert').hover();
+  eq(await expanded(), 'Insert', 'pointing at Insert opened its menu');
+  await title('Insert').click();
+  eq(await page.locator('.menu').count(), 0, 'a second click closed it');
+
+  // Keys: Alt+D opens Data, Enter takes its first item (Sort A to Z); Left and Right walk the bar; Escape goes back to the grid.
+  await goTo('A2');
+  await page.keyboard.press('Alt+D');
+  eq(await expanded(), 'Data', 'Alt+D opened Data');
+  await page.keyboard.press('Enter');
+  eq(await cell('A2'), 'Cups', 'Data > Sort A to Z sorted the block under its heading');
+  await page.keyboard.press('Alt+D');
+  await page.keyboard.press('ArrowRight');
+  eq(await expanded(), 'File', 'Right from Data goes round to File (no Table Design or PivotTable Analyze menu outside them)');
+  await page.keyboard.press('ArrowLeft');
+  eq(await expanded(), 'Data', 'Left goes back');
+  await page.keyboard.press('Escape');
+  eq(await page.locator('.menu').count(), 0, 'Escape closed it');
+  ok(await page.locator('.sheet .grid-scroll').evaluate(el => el === document.activeElement), 'the grid has the keys again');
+
+  // In a table, a Table Design menu: the Table Design tab as a menu.
+  await goTo('A2');
+  await page.keyboard.press('Control+L');
+  await page.locator('.dialog').getByRole('button', { name: 'OK' }).click();
+  await title('Table Design').waitFor();
+  await title('Table Design').click();
+  await menuRow('Total row').click();
+  await title('Table Design').click();
+  eq(await menuRow('Total row').getAttribute('aria-checked'), 'true', 'Table > Total row is on');
+  await page.keyboard.press('Escape');
+  eq(await cell('A5'), 'Total', 'the total row is there');
+  await goTo('D10');
+  ok(!(await title('Table Design').isVisible()), 'the Table Design menu goes outside the table');
+
+  // The zoom box.
+  await page.locator('.sheet .tb-zoom').selectOption('1.5');
+  eq(await page.locator('.sheet .zoom-label').textContent(), '150%', 'zoomed to 150%');
+  await page.locator('.sheet .tb-zoom').selectOption('1');
+
+  // Kept for next time: a new window opens in the Classic look.
+  await sw().getByRole('button', { name: 'Close' }).click();
+  await page.locator('.dialog').getByRole('button', { name: 'Close without saving' }).click();
+  await openSheet();
+  ok(await page.locator('.sheet .classic-bar').isVisible(), 'the next window is Classic too');
+  if (process.env.SHOTS) await sw().screenshot({ path: `${process.env.SHOTS}/sheet-classic.png` });
+
+  // View > Modern: the ribbon is back, and stays back.
+  await title('View').click();
+  await menuRow('Modern (the ribbon)').click();
+  ok(await page.locator('.sheet .ribbon').isVisible(), 'the ribbon is back');
+  ok(!(await page.locator('.sheet .classic-bar').isVisible()), 'the menu bar is gone');
+  await sw().getByRole('button', { name: 'Close' }).click();
+  await openSheet();
+  ok(await page.locator('.sheet .ribbon').isVisible(), 'the next window is Modern again');
+  await sw().getByRole('button', { name: 'Close' }).click();
+});
+
 await step('phone size: windows fill the screen, taskbar is bigger, nothing scrolls sideways', async () => {
   await closeAll();
   await page.setViewportSize({ width: 390, height: 800 });

@@ -2,7 +2,8 @@
 
 The TOMLIN OS spreadsheet as a Windows 10 and 11 program of its own: an installer with Start menu and desktop
 shortcuts, an uninstaller in Settings > Apps, one window per workbook, Windows' own Open and Save boxes, recent
-files, printing, and updates from within the program.
+files, printing, two looks (View > Modern, the ribbon, or View > Classic, a menu bar and small toolbars), and updates
+from within the program.
 
 It is built from the same spreadsheet files TOMLIN OS uses (`src/apps/sheet.ts`, `src/apps/sheet/`); only the
 host around it is its own:

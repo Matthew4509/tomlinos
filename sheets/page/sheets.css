@@ -29,6 +29,11 @@ input, textarea, [contenteditable="true"], .dialog-text, .update-notes, .about {
 .file-tab { border-radius: 4px 4px 0 0; }
 .tabs-bar { background: #f3f3f3; border-top-color: #e0e0e0; }
 .statusbar.sheet-status { background: #f3f3f3; border-top: 1px solid #e0e0e0; color: #444; }
+.classic-bar { background: #f9f9f9; border-bottom-color: #e0e0e0; }
+.menubar-item { border-radius: 4px; }
+.menubar-item:hover, .menubar-item[aria-expanded="true"] { background: #ebebeb; border-color: transparent; }
+.toolbar { border-top-color: #ececec; }
+.tb-sep { background: #e0e0e0; }
 
 /* Buttons and fields, flat. */
 .btn { min-height: 32px; padding: 4px 16px; border: 1px solid #d0d0d0; border-bottom-color: #bcbcbc; border-radius: 4px; background: #fdfdfd; color: var(--ink); }

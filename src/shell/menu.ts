@@ -18,7 +18,7 @@ export class MenuLayer {
   /** When a menu last opened (performance.now()); the click that ends a long press is ignored for a moment. */
   openedAt = -10000;
   private host: HTMLElement;
-  private open: { root: HTMLElement; levels: HTMLElement[]; abort: AbortController; returnFocus: HTMLElement | null } | null = null;
+  private open: { root: HTMLElement; levels: HTMLElement[]; abort: AbortController; returnFocus: HTMLElement | null; onSide: ((step: 1 | -1) => void) | null; onClose: (() => void) | null } | null = null;
 
   constructor(host: HTMLElement) {
     this.host = host;
@@ -30,14 +30,19 @@ export class MenuLayer {
 
   close(restoreFocus = true): void {
     if (!this.open) return;
-    const { root, abort, returnFocus } = this.open;
+    const { root, abort, returnFocus, onClose } = this.open;
     this.open = null;
     abort.abort();
     root.remove();
+    onClose?.();
     if (restoreFocus && returnFocus && returnFocus.isConnected) returnFocus.focus({ preventScroll: true });
   }
 
-  show(items: MenuItem[], x: number, y: number, options: { returnFocus?: HTMLElement | null; fromKeyboard?: boolean; anchor?: Element | null } = {}): void {
+  /**
+   * Opens a menu at x, y. `onSide` is for a menu bar: Left on the top level, or Right on an item with no submenu,
+   * asks for the menu beside this one instead. `onClose` is told when this menu closes, however it closes.
+   */
+  show(items: MenuItem[], x: number, y: number, options: { returnFocus?: HTMLElement | null; fromKeyboard?: boolean; anchor?: Element | null; onSide?: (step: 1 | -1) => void; onClose?: () => void } = {}): void {
     this.close(false);
     this.openedAt = performance.now();
     const usable = items.filter((item, i) => !(item.separator && (i === 0 || i === items.length - 1 || items[i - 1].separator)));
@@ -45,7 +50,7 @@ export class MenuLayer {
     const abort = new AbortController();
     const root = h('div', { class: 'menu-root' });
     this.host.append(root);
-    this.open = { root, levels: [], abort, returnFocus: options.returnFocus ?? null };
+    this.open = { root, levels: [], abort, returnFocus: options.returnFocus ?? null, onSide: options.onSide ?? null, onClose: options.onClose ?? null };
     const first = this.level(usable, x, y, 0);
     on(document, 'pointerdown', (event: PointerEvent) => {
       if (!(event.target instanceof Node) || !root.contains(event.target)) this.close(false);
@@ -149,12 +154,26 @@ export class MenuLayer {
       case 'Enter':
       case ' ':
       case 'ArrowRight':
-        if (event.key === 'ArrowRight' && document.activeElement?.getAttribute('aria-haspopup') !== 'menu') break;
+        if (event.key === 'ArrowRight' && document.activeElement?.getAttribute('aria-haspopup') !== 'menu') {
+          const side = this.open?.onSide;
+          if (side) {
+            stop();
+            side(1);
+          }
+          break;
+        }
         stop();
         (document.activeElement as HTMLElement | null)?.click();
         break;
       case 'ArrowLeft':
-        if (depth === 0) break;
+        if (depth === 0) {
+          const side = this.open?.onSide;
+          if (side) {
+            stop();
+            side(-1);
+          }
+          break;
+        }
         stop();
         this.open!.levels.pop()!.remove();
         this.rows(this.open!.levels[depth - 1]).find(r => r.getAttribute('aria-haspopup') === 'menu' && r.matches(':hover, :focus'))?.focus();

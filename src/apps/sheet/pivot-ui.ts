@@ -315,7 +315,8 @@ export function mountPivotPane(ctx: SheetContext, host: HTMLElement): { sync(): 
 }
 
 /** The PivotTable Analyze tab. */
-export function pivotAnalyze(ctx: SheetContext, p: Pivot, btn: (text: string, title: string, run: () => void, cls?: string) => HTMLButtonElement, group: (name: string, ...kids: Node[]) => HTMLElement, toggleList: () => void): HTMLElement[] {
+/** What the PivotTable Analyze tab and the Classic look's PivotTable menu both do to the PivotTable the active cell is in. */
+function pivotActions(ctx: SheetContext, p: Pivot) {
   const { wb, shell } = ctx;
   const s = wb.active;
   const run = (fn: () => void) => () => {
@@ -326,22 +327,16 @@ export function pivotAnalyze(ctx: SheetContext, p: Pivot, btn: (text: string, ti
       void ctx.report(error);
     }
   };
-  const totalsBtn = btn('Grand totals ▾', 'Grand totals: for rows, columns, both, or none', () => {
-    const r = totalsBtn.getBoundingClientRect();
-    shell.menus.show([
-      { label: 'On for rows and columns', checked: p.grandRows && p.grandCols, action: run(() => wb.setPivot(s, p, { grandRows: true, grandCols: true })) },
-      { label: 'On for rows only', checked: p.grandRows && !p.grandCols, action: run(() => wb.setPivot(s, p, { grandRows: true, grandCols: false })) },
-      { label: 'On for columns only', checked: !p.grandRows && p.grandCols, action: run(() => wb.setPivot(s, p, { grandRows: false, grandCols: true })) },
-      { label: 'Off for rows and columns', checked: !p.grandRows && !p.grandCols, action: run(() => wb.setPivot(s, p, { grandRows: false, grandCols: false })) },
-    ], r.left, r.bottom, { returnFocus: totalsBtn });
-  }, 'text-rb');
-  const subBtn = btn('Subtotals ▾', 'Subtotals: on each outer row item, or not', () => {
-    const r = subBtn.getBoundingClientRect();
-    shell.menus.show([
-      { label: 'Show subtotals', checked: p.subtotals, action: run(() => wb.setPivot(s, p, { subtotals: true })) },
-      { label: 'Do not show subtotals', checked: !p.subtotals, action: run(() => wb.setPivot(s, p, { subtotals: false })) },
-    ], r.left, r.bottom, { returnFocus: subBtn });
-  }, 'text-rb');
+  const totals: MenuItem[] = [
+    { label: 'On for rows and columns', checked: p.grandRows && p.grandCols, action: run(() => wb.setPivot(s, p, { grandRows: true, grandCols: true })) },
+    { label: 'On for rows only', checked: p.grandRows && !p.grandCols, action: run(() => wb.setPivot(s, p, { grandRows: true, grandCols: false })) },
+    { label: 'On for columns only', checked: !p.grandRows && p.grandCols, action: run(() => wb.setPivot(s, p, { grandRows: false, grandCols: true })) },
+    { label: 'Off for rows and columns', checked: !p.grandRows && !p.grandCols, action: run(() => wb.setPivot(s, p, { grandRows: false, grandCols: false })) },
+  ];
+  const subtotals: MenuItem[] = [
+    { label: 'Show subtotals', checked: p.subtotals, action: run(() => wb.setPivot(s, p, { subtotals: true })) },
+    { label: 'Do not show subtotals', checked: !p.subtotals, action: run(() => wb.setPivot(s, p, { subtotals: false })) },
+  ];
   const changeSource = async () => {
     const v = await shell.dialogs.prompt({ title: 'Change PivotTable data source', label: 'The data: a table, or cells with a header row', value: p.source, ok: 'OK', check: x => (x.trim() ? null : 'Type the data\'s cells or table.') });
     if (v === null) return;
@@ -350,21 +345,59 @@ export function pivotAnalyze(ctx: SheetContext, p: Pivot, btn: (text: string, ti
       wb.setPivot(s, p, { source: v.trim().replace(/^=/, '') });
     })();
   };
-  return [
-    group(p.name, btn('Field list', 'Show or hide the PivotTable Fields pane', toggleList, 'text-rb')),
-    group('Data', btn('Refresh', 'Work the report out again from its data', run(() => wb.refreshPivot(s, p)), 'text-rb'),
-      btn('Refresh all', 'Work every PivotTable of the workbook out again', () => {
-        const failed = wb.refreshAll();
-        ctx.onChange();
-        if (failed.length) void shell.dialogs.alert('Some PivotTables could not be refreshed', failed.join('\n'));
-      }, 'text-rb'),
-      btn('Change data source', 'Change the data the PivotTable reads', () => void changeSource(), 'text-rb')),
-    group('Layout', totalsBtn, subBtn),
-    group('Actions', btn('Delete', 'Delete this PivotTable and its report', () => {
+  return {
+    totals,
+    subtotals,
+    refresh: run(() => wb.refreshPivot(s, p)),
+    refreshAll: () => {
+      const failed = wb.refreshAll();
+      ctx.onChange();
+      if (failed.length) void shell.dialogs.alert('Some PivotTables could not be refreshed', failed.join('\n'));
+    },
+    changeSource: () => void changeSource(),
+    remove: () => {
       void shell.dialogs.confirm({ title: `Delete “${p.name}”?`, text: 'Its report\'s cells are cleared. The data it read is not touched. Ctrl+Z takes this back.', ok: 'Delete', danger: true })
         .then(yes => {
           if (yes) run(() => wb.deletePivot(s, p))();
         });
-    }, 'text-rb')),
+    },
+  };
+}
+
+export function pivotAnalyze(ctx: SheetContext, p: Pivot, btn: (text: string, title: string, run: () => void, cls?: string) => HTMLButtonElement, group: (name: string, ...kids: Node[]) => HTMLElement, toggleList: () => void): HTMLElement[] {
+  const { shell } = ctx;
+  const act = pivotActions(ctx, p);
+  const totalsBtn = btn('Grand totals ▾', 'Grand totals: for rows, columns, both, or none', () => {
+    const r = totalsBtn.getBoundingClientRect();
+    shell.menus.show(act.totals, r.left, r.bottom, { returnFocus: totalsBtn });
+  }, 'text-rb');
+  const subBtn = btn('Subtotals ▾', 'Subtotals: on each outer row item, or not', () => {
+    const r = subBtn.getBoundingClientRect();
+    shell.menus.show(act.subtotals, r.left, r.bottom, { returnFocus: subBtn });
+  }, 'text-rb');
+  return [
+    group(p.name, btn('Field list', 'Show or hide the PivotTable Fields pane', toggleList, 'text-rb')),
+    group('Data', btn('Refresh', 'Work the report out again from its data', act.refresh, 'text-rb'),
+      btn('Refresh all', 'Work every PivotTable of the workbook out again', act.refreshAll, 'text-rb'),
+      btn('Change data source', 'Change the data the PivotTable reads', act.changeSource, 'text-rb')),
+    group('Layout', totalsBtn, subBtn),
+    group('Actions', btn('Delete', 'Delete this PivotTable and its report', act.remove, 'text-rb')),
+  ];
+}
+
+/** The Classic look's PivotTable Analyze menu: the PivotTable Analyze tab as a menu, shown while in a PivotTable. */
+export function pivotMenu(ctx: SheetContext, p: Pivot, toggleList: () => void): MenuItem[] {
+  const act = pivotActions(ctx, p);
+  return [
+    { label: 'Field list', action: toggleList },
+    { separator: true },
+    { label: 'Refresh', action: act.refresh },
+    { label: 'Refresh all', action: act.refreshAll },
+    { label: 'Change data source...', action: act.changeSource },
+    { separator: true },
+    { label: 'Grand totals', submenu: act.totals },
+    { label: 'Subtotals', submenu: act.subtotals },
+    { separator: true },
+    { label: `Delete “${p.name}”...`, danger: true, action: act.remove },
   ];
 }

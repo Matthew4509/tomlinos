@@ -1,5 +1,6 @@
 // Spreadsheet: the window around the grid. A File menu, a ribbon laid out like a familiar spreadsheet's (Home: clipboard,
 // font, alignment, number, styles, editing, view; Insert: charts; Page Layout: printing; Data: sort, filter, validation),
+// or, in the Classic look (View > Classic), a menu bar and two toolbars of small pictures that reach the same commands;
 // the formula bar, sheet tabs, and a status bar that shows the sum, average and count of whatever is selected. Opens
 // .sheet files (our own format), Excel workbooks (.xlsx, saved back as .xlsx) and .csv/.tsv (as a new, unsaved workbook).
 // Find and Replace is a panel over the grid; the filter's ▾ opens a list of values; charts float over the cells.
@@ -24,11 +25,13 @@ import { conditionalMenu, validationDialog } from './sheet/rules-ui.ts';
 import { autoSumMenu, createFromSelection, functionMenu, insertFunctionDialog, nameDialog, nameManager, useInFormulaMenu } from './sheet/formulas-ui.ts';
 import { APPS } from './catalog.ts';
 import { FONT_FACES, FONT_SIZES, STANDARD_SIZE, stepSize } from './sheet/fonts.ts';
-import { activeTable, formatAsTableMenu, insertTableDialog, tableDesign, tableSummary, totalChoices } from './sheet/tables-ui.ts';
+import { activeTable, formatAsTableMenu, insertTableDialog, tableDesign, tableMenu, tableSummary, totalChoices } from './sheet/tables-ui.ts';
 import { dataRows as tableData } from './sheet/tables.ts';
 import { formatCellsDialog } from './sheet/format-ui.ts';
 import { filterRuleMenu, removeDuplicatesDialog, sortDialog, textToColumnsDialog } from './sheet/data-ui.ts';
-import { activePivot, insertPivotDialog, mountPivotPane, pivotAnalyze } from './sheet/pivot-ui.ts';
+import { activePivot, insertPivotDialog, mountPivotPane, pivotAnalyze, pivotMenu } from './sheet/pivot-ui.ts';
+import { classicIcon, type ClassicIcon } from './sheet/classic-icons.ts';
+import { menuBar } from './sheet/classic-ui.ts';
 
 /** Excel's ready-made cell styles (Home > Cell styles): a look each, with its colours as Excel has them. */
 const CELL_STYLES: Array<{ label: string; look: CellStyle }> = [
@@ -69,8 +72,17 @@ const PALETTE: Array<[string, string]> = [
   ['Dark blue', '#1b3f7a'], ['Light purple', '#dcc6ee'], ['Purple', '#7a3fa0'], ['Pink', '#f5b8d8'],
 ];
 
-/** This person's spreadsheet settings: which way round typed dates are read. */
+/** This person's spreadsheet settings: which way round typed dates are read, and the look (Classic or Modern). */
 const SETTINGS_PATH = '/System/spreadsheet.json';
+/**
+ * Modern: the ribbon. Classic: a menu bar and two rows of small buttons, as desktop spreadsheets looked before the
+ * ribbon. New installs start Modern.
+ */
+type Look = 'modern' | 'classic';
+/** Told to every spreadsheet window on this page when one changes the look, so they all follow. */
+const LOOK_EVENT = 'sheet-look';
+/** The zoom steps offered on the Classic toolbar and in View > Zoom. */
+const ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 const ORDER_LABEL: Record<DateOrder, string> = { dmy: 'Day first (13/10/2026)', mdy: 'Month first (10/13/2026)', ymd: 'Year first (2026-10-13)' };
 
 /** Format codes offered in More number formats, as Excel lists them. */
@@ -103,12 +115,25 @@ export const sheetApp: AppDef = {
     app.root.classList.add('sheet');
     const wb = new Workbook();
     // Read before any file is opened: a CSV's dates are read this way round.
+    let look: Look = 'modern';
     try {
-      const saved = JSON.parse(await shell.fs.readText(SETTINGS_PATH)) as { dateOrder?: unknown };
+      const saved = JSON.parse(await shell.fs.readText(SETTINGS_PATH)) as { dateOrder?: unknown; look?: unknown };
       if (saved.dateOrder === 'dmy' || saved.dateOrder === 'mdy' || saved.dateOrder === 'ymd') wb.dateOrder = saved.dateOrder;
+      if (saved.look === 'classic') look = 'classic';
     } catch {
-      // Nothing saved yet: the order this computer's browser writes dates in.
+      // Nothing saved yet: the order this computer's browser writes dates in, and the Modern look.
     }
+    /** Keeps one setting for next time, leaving the others in the file as they are. */
+    const keepSetting = async (patch: Record<string, string>): Promise<void> => {
+      let saved: Record<string, unknown> = {};
+      try {
+        const old: unknown = JSON.parse(await shell.fs.readText(SETTINGS_PATH));
+        if (old && typeof old === 'object' && !Array.isArray(old)) saved = old as Record<string, unknown>;
+      } catch {
+        // Nothing kept yet.
+      }
+      await shell.fs.writeText(SETTINGS_PATH, JSON.stringify({ ...saved, ...patch }), { hidden: true });
+    };
     let path: string | null = null;
     let loadedId = '';
     let savedVersion = wb.version;
@@ -195,7 +220,7 @@ export const sheetApp: AppDef = {
 
     // ---- Small helpers ---------------------------------------------------------------------------------------------
 
-    const btn = (text: string, title: string, run: () => void, cls = ''): HTMLButtonElement => {
+    const btn = (text: string | Node, title: string, run: () => void, cls = ''): HTMLButtonElement => {
       const b = h('button', { type: 'button', class: `rb ${cls}`.trim(), title, 'aria-label': title }, text);
       on(b, 'click', () => {
         run();
@@ -238,61 +263,76 @@ export const sheetApp: AppDef = {
 
     // ---- Toolbar ---------------------------------------------------------------------------------------------------
 
-    const undoBtn = btn('↶', 'Undo (Ctrl+Z)', () => {
+    const undo = () => {
       if (grid.commit()) {
         wb.undo();
         onChange();
       }
-    });
-    const redoBtn = btn('↷', 'Redo (Ctrl+Y)', () => {
+    };
+    const redo = () => {
       if (grid.commit()) {
         wb.redo();
         onChange();
       }
-    });
+    };
+    const undoBtn = btn('↶', 'Undo (Ctrl+Z)', undo);
+    const redoBtn = btn('↷', 'Redo (Ctrl+Y)', redo);
     const boldBtn = btn('B', 'Bold (Ctrl+B)', () => doStyle(s => ({ ...s, b: !activeStyle().b })), 'bold');
     const italicBtn = btn('I', 'Italic (Ctrl+I)', () => doStyle(s => ({ ...s, i: !activeStyle().i })), 'italic');
     const underBtn = btn('U', 'Underline (Ctrl+U)', () => doStyle(s => ({ ...s, u: !activeStyle().u })), 'under');
     const alignBtns = (['l', 'c', 'r'] as const).map(al => btn(al === 'l' ? '⇤' : al === 'c' ? '↔' : '⇥', `Align ${al === 'l' ? 'left' : al === 'c' ? 'centre' : 'right'}`, () => doStyle(s => ({ ...s, al: activeStyle().al === al ? undefined : al }))));
     const strikeBtn = btn('S', 'Strikethrough (Ctrl+5)', () => doStyle(s => ({ ...s, st: activeStyle().st ? undefined : true })), 'strike');
-    // Typeface and size (Home > Font): Standard is this spreadsheet's own font, saved to Excel as Calibri 11.
-    const otherFace = h('option', { value: '', hidden: true });
-    const faceSelect = h('select', { class: 'rb-select font-face', 'aria-label': 'Font', title: 'Font (typeface)' },
-      h('option', { value: '' }, 'Standard'), ...FONT_FACES.map(f => h('option', { value: f.name }, f.name)), otherFace);
-    on(faceSelect, 'change', () => {
-      const face = faceSelect.value || undefined;
-      doStyle(s => ({ ...s, ff: face }));
-      grid.focus();
-    }, app.signal);
-    const sizeList = h('datalist', { id: `fs-${Math.random().toString(36).slice(2)}` }, ...FONT_SIZES.map(n => h('option', { value: String(n) })));
-    const sizeBox = h('input', { type: 'text', class: 'rb-size', 'aria-label': 'Font size', title: 'Font size in points (11 is the standard)', list: sizeList.id, inputmode: 'decimal', autocomplete: 'off', spellcheck: false });
+    // Typeface and size (Home > Font): Standard is this spreadsheet's own font, saved to Excel as Calibri 11. Each
+    // look has its own pair of boxes (the ribbon's and the Classic toolbar's); both show the active cell's font.
+    const faceBoxes: Array<{ select: HTMLSelectElement; other: HTMLOptionElement }> = [];
+    const sizeBoxes: HTMLInputElement[] = [];
+    const fontFace = (): HTMLSelectElement => {
+      const other = h('option', { value: '', hidden: true });
+      const select = h('select', { class: 'rb-select font-face', 'aria-label': 'Font', title: 'Font (typeface)' },
+        h('option', { value: '' }, 'Standard'), ...FONT_FACES.map(f => h('option', { value: f.name }, f.name)), other);
+      on(select, 'change', () => {
+        const face = select.value || undefined;
+        doStyle(s => ({ ...s, ff: face }));
+        grid.focus();
+      }, app.signal);
+      faceBoxes.push({ select, other });
+      return select;
+    };
     const setSize = (n: number) => {
       const v = Math.round(n * 2) / 2;
       doStyle(s => ({ ...s, fs: v === STANDARD_SIZE ? undefined : v }));
     };
-    const applySize = () => {
-      const n = Number(sizeBox.value.trim().replace(',', '.'));
-      if (sizeBox.value.trim() === String(activeStyle().fs ?? STANDARD_SIZE)) return;
-      if (!Number.isFinite(n) || n < 1 || n > 409) {
-        void shell.dialogs.alert('That is not a font size', 'Type a size from 1 to 409 points. 11 is the standard size.');
-        syncToolbar();
-        return;
-      }
-      setSize(n);
+    const fontSize = (): [HTMLInputElement, HTMLDataListElement] => {
+      const list = h('datalist', { id: `fs-${Math.random().toString(36).slice(2)}` }, ...FONT_SIZES.map(n => h('option', { value: String(n) })));
+      const box = h('input', { type: 'text', class: 'rb-size', 'aria-label': 'Font size', title: 'Font size in points (11 is the standard)', list: list.id, inputmode: 'decimal', autocomplete: 'off', spellcheck: false });
+      const apply = () => {
+        const n = Number(box.value.trim().replace(',', '.'));
+        if (box.value.trim() === String(activeStyle().fs ?? STANDARD_SIZE)) return;
+        if (!Number.isFinite(n) || n < 1 || n > 409) {
+          void shell.dialogs.alert('That is not a font size', 'Type a size from 1 to 409 points. 11 is the standard size.');
+          syncToolbar();
+          return;
+        }
+        setSize(n);
+      };
+      on(box, 'change', apply, app.signal);
+      on(box, 'keydown', (event: KeyboardEvent) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          apply();
+          grid.focus();
+        } else if (event.key === 'Escape') {
+          event.preventDefault();
+          syncToolbar();
+          grid.focus();
+        }
+        event.stopPropagation();
+      }, app.signal);
+      sizeBoxes.push(box);
+      return [box, list];
     };
-    on(sizeBox, 'change', applySize, app.signal);
-    on(sizeBox, 'keydown', (event: KeyboardEvent) => {
-      if (event.key === 'Enter') {
-        event.preventDefault();
-        applySize();
-        grid.focus();
-      } else if (event.key === 'Escape') {
-        event.preventDefault();
-        syncToolbar();
-        grid.focus();
-      }
-      event.stopPropagation();
-    }, app.signal);
+    const faceSelect = fontFace();
+    const [sizeBox, sizeList] = fontSize();
     const growBtn = btn('A+', 'Increase font size (Ctrl+Shift+>)', () => setSize(stepSize(activeStyle().fs, true)), 'grow');
     const shrinkBtn = btn('A-', 'Decrease font size (Ctrl+Shift+<)', () => setSize(stepSize(activeStyle().fs, false)), 'shrink');
     // Up and down the cell, and the indent.
@@ -302,30 +342,37 @@ export const sheetApp: AppDef = {
 
     // Format Painter: the look of the selected cells, brushed onto the next cells selected (double-click: until Esc).
     let painter: { sheet: number; range: Range; sticky: boolean } | null = null;
-    const painterBtn = h('button', { type: 'button', class: 'rb text-rb', title: 'Format painter: copy the look of these cells onto others. Double-click to keep painting; Esc stops.', 'aria-label': 'Format painter' }, 'Format painter');
+    const painterBtns: HTMLButtonElement[] = [];
+    const painted = (on: boolean) => {
+      grid.el.classList.toggle('painting', on);
+      for (const b of painterBtns) b.setAttribute('aria-pressed', String(on));
+    };
     const stopPainting = () => {
       painter = null;
-      grid.el.classList.remove('painting');
-      painterBtn.setAttribute('aria-pressed', 'false');
+      painted(false);
     };
-    on(painterBtn, 'click', () => {
-      if (!grid.commit()) return;
-      if (painter) {
-        stopPainting();
-        return;
-      }
-      painter = { sheet: wb.active, range: grid.sel(), sticky: false };
-      grid.el.classList.add('painting');
-      painterBtn.setAttribute('aria-pressed', 'true');
-      grid.focus();
-    }, app.signal);
-    on(painterBtn, 'dblclick', () => {
-      if (!grid.commit()) return;
-      painter = { sheet: wb.active, range: painter?.range ?? grid.sel(), sticky: true };
-      grid.el.classList.add('painting');
-      painterBtn.setAttribute('aria-pressed', 'true');
-      grid.focus();
-    }, app.signal);
+    const painterButton = (content: string | Node, cls: string): HTMLButtonElement => {
+      const b = h('button', { type: 'button', class: `rb ${cls}`, title: 'Format painter: copy the look of these cells onto others. Double-click to keep painting; Esc stops.', 'aria-label': 'Format painter' }, content);
+      on(b, 'click', () => {
+        if (!grid.commit()) return;
+        if (painter) {
+          stopPainting();
+          return;
+        }
+        painter = { sheet: wb.active, range: grid.sel(), sticky: false };
+        painted(true);
+        grid.focus();
+      }, app.signal);
+      on(b, 'dblclick', () => {
+        if (!grid.commit()) return;
+        painter = { sheet: wb.active, range: painter?.range ?? grid.sel(), sticky: true };
+        painted(true);
+        grid.focus();
+      }, app.signal);
+      painterBtns.push(b);
+      return b;
+    };
+    const painterBtn = painterButton('Format painter', 'text-rb');
     on(grid.el, 'pointerup', () => {
       if (!painter) return;
       // After the selection is made: the next frame, when the grid has taken the click.
@@ -342,8 +389,18 @@ export const sheetApp: AppDef = {
       });
     }, app.signal);
 
-    const clearBtn = btn('Clear ▾', 'Clear: contents, formats, or both', () => {
-      const r = clearBtn.getBoundingClientRect();
+    /** A button that opens a menu under itself (the ribbon's words, or a Classic toolbar's picture and ▾). */
+    const menuBtn = (text: string | Node[], title: string, items: () => MenuItem[], cls = 'text-rb'): HTMLButtonElement => {
+      const b = h('button', { type: 'button', class: `rb ${cls}`, title, 'aria-label': title, 'aria-haspopup': 'true' }, ...(typeof text === 'string' ? [text] : text));
+      on(b, 'click', () => {
+        if (!grid.commit()) return;
+        const r = b.getBoundingClientRect();
+        shell.menus.show(items(), r.left, r.bottom, { returnFocus: b });
+      }, app.signal);
+      return b;
+    };
+
+    const clearItems = (): MenuItem[] => {
       const run = (fn: () => void) => () => {
         if (!grid.commit()) return;
         try {
@@ -354,7 +411,7 @@ export const sheetApp: AppDef = {
           void report(error);
         }
       };
-      shell.menus.show([
+      return [
         { label: 'Clear all', action: run(() => {
           wb.clearContents(wb.active, grid.sel());
           wb.clearFormats(wb.active, grid.sel());
@@ -363,17 +420,17 @@ export const sheetApp: AppDef = {
         { label: 'Clear formats', action: run(() => wb.clearFormats(wb.active, grid.sel())) },
         { label: 'Clear contents', hint: 'Del', action: run(() => wb.clearContents(wb.active, grid.sel())) },
         { label: 'Clear notes', action: run(() => wb.clearNotes(wb.active, grid.sel())) },
-      ], r.left, r.bottom, { returnFocus: clearBtn });
-    }, 'text-rb');
+      ];
+    };
+    const clearBtn = menuBtn('Clear ▾', 'Clear: contents, formats, or both', clearItems);
 
-    const pasteMenuBtn = btn('Paste special ▾', 'Paste special: values, formulas, formatting, or turned on its side', () => {
-      const r = pasteMenuBtn.getBoundingClientRect();
+    const pasteItems = (): MenuItem[] => {
       const none = !grid.hasClip();
       const p = (what: Parameters<typeof grid.pasteSpecial>[0], transpose = false) => () => {
         if (grid.commit()) grid.pasteSpecial(what, transpose);
         onChange();
       };
-      shell.menus.show([
+      return [
         { label: 'Paste', hint: 'Ctrl+V', disabled: none, action: p('all') },
         { label: 'Values', hint: 'Ctrl+Shift+V', disabled: none, action: p('values') },
         { label: 'Formulas', disabled: none, action: p('formulas') },
@@ -390,30 +447,29 @@ export const sheetApp: AppDef = {
           }
           onChange();
         } },
-      ], r.left, r.bottom, { returnFocus: pasteMenuBtn });
-    }, 'text-rb');
+      ];
+    };
+    const pasteMenuBtn = menuBtn('Paste special ▾', 'Paste special: values, formulas, formatting, or turned on its side', pasteItems);
 
-    const cellStylesBtn = btn('Cell styles ▾', 'Cell styles: Good, Bad, Neutral, headings, totals, accents', () => {
-      const r = cellStylesBtn.getBoundingClientRect();
-      shell.menus.show([
-        { label: 'Normal (no formatting)', action: () => {
-          if (!grid.commit()) return;
-          try {
-            wb.clearFormats(wb.active, grid.sel());
-            grid.fitRows();
-            onChange();
-          } catch (error) {
-            void report(error);
-          }
-        } },
-        { separator: true },
-        ...CELL_STYLES.map(cs => ({
-          label: cs.label,
-          // The style's look over the cell's own, keeping its number format and alignment.
-          action: () => doStyle(s => ({ fmt: s.fmt, code: s.code, dec: s.dec, al: s.al, va: s.va, wrap: s.wrap, ind: s.ind, ...cs.look })),
-        })),
-      ], r.left, r.bottom, { returnFocus: cellStylesBtn });
-    }, 'text-rb');
+    const cellStyleItems = (): MenuItem[] => [
+      { label: 'Normal (no formatting)', action: () => {
+        if (!grid.commit()) return;
+        try {
+          wb.clearFormats(wb.active, grid.sel());
+          grid.fitRows();
+          onChange();
+        } catch (error) {
+          void report(error);
+        }
+      } },
+      { separator: true },
+      ...CELL_STYLES.map(cs => ({
+        label: cs.label,
+        // The style's look over the cell's own, keeping its number format and alignment.
+        action: () => doStyle(s => ({ fmt: s.fmt, code: s.code, dec: s.dec, al: s.al, va: s.va, wrap: s.wrap, ind: s.ind, ...cs.look })),
+      })),
+    ];
+    const cellStylesBtn = menuBtn('Cell styles ▾', 'Cell styles: Good, Bad, Neutral, headings, totals, accents', cellStyleItems);
 
     const wrapBtn = btn('Wrap Text', 'Wrap text: show long text and line breaks on several lines (Alt+Enter starts a new line while typing)', () => doStyle(s => ({ ...s, wrap: activeStyle().wrap ? undefined : true })), 'text-rb');
 
@@ -422,8 +478,8 @@ export const sheetApp: AppDef = {
       palette?.remove();
       palette = null;
     };
-    const paletteButton = (text: string, title: string, key: 'fill' | 'color', swatch: string): HTMLButtonElement => {
-      const b = h('button', { type: 'button', class: 'rb wide-rb', title, 'aria-label': title, 'aria-haspopup': 'true' }, h('span', { class: 'rb-a' }, text), h('span', { class: 'rb-swatch', 'data-colour': swatch }), h('span', { class: 'rb-caret', 'aria-hidden': 'true' }, '▾'));
+    const paletteButton = (face: string | Node, title: string, key: 'fill' | 'color', swatch: string, cls = ''): HTMLButtonElement => {
+      const b = h('button', { type: 'button', class: `rb wide-rb ${cls}`.trim(), title, 'aria-label': title, 'aria-haspopup': 'true' }, typeof face === 'string' ? h('span', { class: 'rb-a' }, face) : face, h('span', { class: 'rb-swatch', 'data-colour': swatch }), h('span', { class: 'rb-caret', 'aria-hidden': 'true' }, '▾'));
       css(b.querySelector<HTMLElement>('.rb-swatch')!, { background: swatch });
       on(b, 'click', () => {
         if (palette) {
@@ -463,6 +519,12 @@ export const sheetApp: AppDef = {
     };
     const fillBtn = paletteButton('A', 'Fill colour', 'fill', '#ffd400');
     const colorBtn = paletteButton('A', 'Text colour', 'color', '#d13438');
+    /** The same colours as a menu (Format > Fill colour, Format > Font > Text colour). */
+    const colourItems = (key: 'fill' | 'color'): MenuItem[] => [
+      { label: key === 'fill' ? 'No fill' : 'Automatic (black)', checked: !activeStyle()[key], action: () => doStyle(s => ({ ...s, [key]: undefined })) },
+      { separator: true },
+      ...PALETTE.map(([name, hex]) => ({ label: name, checked: activeStyle()[key] === hex, action: () => doStyle(s => ({ ...s, [key]: hex })) })),
+    ];
 
     /** A style change that depends on where each cell is in the selection (its outer edges): borders. One Undo. */
     const edgeStyle = (fn: (s: CellStyle, edge: { t: boolean; b: boolean; l: boolean; r: boolean }) => CellStyle) => {
@@ -482,9 +544,7 @@ export const sheetApp: AppDef = {
         void report(error);
       }
     };
-    const bordersBtn = h('button', { type: 'button', class: 'rb wide-rb', title: 'Borders', 'aria-label': 'Borders', 'aria-haspopup': 'true' }, h('span', { class: 'rb-a' }, '▦'), h('span', { class: 'rb-caret', 'aria-hidden': 'true' }, '▾'));
-    on(bordersBtn, 'click', () => {
-      const r = bordersBtn.getBoundingClientRect();
+    const borderItems = (): MenuItem[] => {
       const set = edgeStyle;
       // Every line drawn takes the border colour chosen below (black when Automatic).
       const pen = (s: CellStyle): CellStyle => ({ ...s, bc: penColour });
@@ -496,7 +556,7 @@ export const sheetApp: AppDef = {
         if (which.includes('r') && e.r) out.br = line;
         return out;
       });
-      const items: MenuItem[] = [
+      return [
         { label: 'Bottom border', action: () => edges(true, ['b']) },
         { label: 'Top border', action: () => edges(true, ['t']) },
         { label: 'Left border', action: () => edges(true, ['l']) },
@@ -521,49 +581,51 @@ export const sheetApp: AppDef = {
           ],
         },
       ];
-      shell.menus.show(items, r.left, r.bottom, { returnFocus: bordersBtn });
-    }, app.signal);
+    };
     let penColour: string | undefined;
+    const bordersBtn = menuBtn([h('span', { class: 'rb-a' }, '▦'), h('span', { class: 'rb-caret', 'aria-hidden': 'true' }, '▾')], 'Borders', borderItems, 'wide-rb');
 
     // Merge: one cell made of several. Only the top-left value is kept, so the person is asked when others would go.
-    const mergeBtn = btn('Merge ▾', 'Merge cells into one (Merge & Center, Merge across, Unmerge)', () => {
-      const r = mergeBtn.getBoundingClientRect();
-      const doMerge = async (how: 'center' | 'all' | 'across') => {
-        if (!grid.commit()) return;
-        const range = grid.sel();
-        if (range.c0 === range.c1 && (how === 'across' || range.r0 === range.r1)) {
-          await shell.dialogs.alert('Select more than one cell', how === 'across' ? 'Merge across joins the cells of each selected row: select two or more columns.' : 'Select the cells to join into one, then choose Merge again.');
-          return;
-        }
-        if (wb.mergeWouldLose(wb.active, range, how === 'across')) {
-          const ok = await shell.dialogs.confirm({ title: 'Merge these cells?', text: 'Merging keeps only the value in the top-left cell; the others are cleared. You can undo this with Ctrl+Z.', ok: 'Merge' });
-          if (!ok) return;
-        }
-        try {
-          wb.merge(wb.active, range, how);
-          grid.select(wb.growToMerges(wb.active, range), { col: range.c0, row: range.r0 });
-          onChange();
-        } catch (error) {
-          void report(error);
-        }
-        grid.focus();
-      };
+    const doMerge = async (how: 'center' | 'all' | 'across') => {
+      if (!grid.commit()) return;
+      const range = grid.sel();
+      if (range.c0 === range.c1 && (how === 'across' || range.r0 === range.r1)) {
+        await shell.dialogs.alert('Select more than one cell', how === 'across' ? 'Merge across joins the cells of each selected row: select two or more columns.' : 'Select the cells to join into one, then choose Merge again.');
+        return;
+      }
+      if (wb.mergeWouldLose(wb.active, range, how === 'across')) {
+        const ok = await shell.dialogs.confirm({ title: 'Merge these cells?', text: 'Merging keeps only the value in the top-left cell; the others are cleared. You can undo this with Ctrl+Z.', ok: 'Merge' });
+        if (!ok) return;
+      }
+      try {
+        wb.merge(wb.active, range, how);
+        grid.select(wb.growToMerges(wb.active, range), { col: range.c0, row: range.r0 });
+        onChange();
+      } catch (error) {
+        void report(error);
+      }
+      grid.focus();
+    };
+    /** Whether any merged cells overlap the selection. */
+    const anyMerged = () => {
       const s = grid.sel();
-      const anyMerged = wb.sheets[wb.active].merges.some(m => m.c0 <= s.c1 && m.c1 >= s.c0 && m.r0 <= s.r1 && m.r1 >= s.r0);
-      shell.menus.show([
-        { label: 'Merge & Center', action: () => void doMerge('center') },
-        { label: 'Merge across (each row)', action: () => void doMerge('across') },
-        { label: 'Merge cells', action: () => void doMerge('all') },
-        { label: 'Unmerge cells', disabled: !anyMerged, action: () => {
-          wb.unmerge(wb.active, grid.sel());
-          onChange();
-        } },
-      ], r.left, r.bottom, { returnFocus: mergeBtn });
-    }, 'text-rb');
+      return wb.sheets[wb.active].merges.some(m => m.c0 <= s.c1 && m.c1 >= s.c0 && m.r0 <= s.r1 && m.r1 >= s.r0);
+    };
+    const unmerge = () => {
+      if (!grid.commit()) return;
+      wb.unmerge(wb.active, grid.sel());
+      onChange();
+    };
+    const mergeItems = (): MenuItem[] => [
+      { label: 'Merge & Center', action: () => void doMerge('center') },
+      { label: 'Merge across (each row)', action: () => void doMerge('across') },
+      { label: 'Merge cells', action: () => void doMerge('all') },
+      { label: 'Unmerge cells', disabled: !anyMerged(), action: unmerge },
+    ];
+    const mergeBtn = menuBtn('Merge ▾', 'Merge cells into one (Merge & Center, Merge across, Unmerge)', mergeItems);
 
     // Freeze panes: rows above and columns left of the active cell stay in view while the rest scrolls.
-    const freezeBtn = btn('Freeze ▾', 'Freeze panes: keep rows and columns in view while the rest scrolls', () => {
-      const r = freezeBtn.getBoundingClientRect();
+    const freezeItems = (): MenuItem[] => {
       const f = wb.sheets[wb.active].freeze;
       const set = (rows: number, cols: number) => {
         if (!grid.commit()) return;
@@ -572,14 +634,15 @@ export const sheetApp: AppDef = {
         onChange();
       };
       const a = grid.active();
-      shell.menus.show([
+      return [
         { label: a.row || a.col ? `Freeze panes (above row ${a.row + 1}${a.col ? `, left of column ${colName(a.col)}` : ''})` : 'Freeze panes (select the cell below and right of what to keep)', disabled: !a.row && !a.col, action: () => set(a.row, a.col) },
         { label: 'Freeze top row', action: () => set(1, 0) },
         { label: 'Freeze first column', action: () => set(0, 1) },
         { separator: true },
         { label: 'Unfreeze panes', disabled: !f.rows && !f.cols, action: () => set(0, 0) },
-      ], r.left, r.bottom, { returnFocus: freezeBtn });
-    }, 'text-rb');
+      ];
+    };
+    const freezeBtn = menuBtn('Freeze ▾', 'Freeze panes: keep rows and columns in view while the rest scrolls', freezeItems);
 
     // Ready-made formats that are format codes underneath (the short and long date follow this computer's order).
     const presetCodes: Record<string, string> = {
@@ -592,6 +655,11 @@ export const sheetApp: AppDef = {
       h('option', { value: 'shortdate' }, 'Short date'), h('option', { value: 'longdate' }, 'Long date'), h('option', { value: 'time' }, 'Time'),
       h('option', { value: 'scientific' }, 'Scientific'), h('option', { value: 'fraction' }, 'Fraction'), h('option', { value: 'text' }, 'Text'),
       customOption, h('option', { value: 'more' }, 'More formats...'));
+    /** A ready-made number format by its name in the list ('' is General). */
+    const setNumberFormat = (v: string) => {
+      const code = presetCodes[v];
+      doStyle(s => (code ? { ...s, fmt: 'custom', code, dec: undefined } : { ...s, fmt: (v || undefined) as CellStyle['fmt'], code: undefined, dec: undefined }));
+    };
     on(fmtSelect, 'change', () => {
       const v = fmtSelect.value;
       if (v === 'more') {
@@ -600,8 +668,7 @@ export const sheetApp: AppDef = {
         return;
       }
       if (v === 'custom') return;
-      const code = presetCodes[v];
-      doStyle(s => (code ? { ...s, fmt: 'custom', code, dec: undefined } : { ...s, fmt: (v || undefined) as CellStyle['fmt'], code: undefined, dec: undefined }));
+      setNumberFormat(v);
       grid.focus();
     }, app.signal);
     const decimals = (d: number) => doStyle(s => {
@@ -658,22 +725,18 @@ export const sheetApp: AppDef = {
       grid.focus();
     }
 
-    const insertBtn = btn('Insert ▾', 'Insert rows or columns', () => {
-      const r = insertBtn.getBoundingClientRect();
-      shell.menus.show([
-        { label: 'Insert row above', action: () => grid.insert('row') },
-        { label: 'Insert column left', action: () => grid.insert('col') },
-      ], r.left, r.bottom, { returnFocus: insertBtn });
-    }, 'text-rb');
-    const deleteBtn = btn('Delete ▾', 'Delete rows or columns', () => {
-      const r = deleteBtn.getBoundingClientRect();
-      shell.menus.show([
-        { label: 'Delete row', action: () => grid.remove('row') },
-        { label: 'Delete column', action: () => grid.remove('col') },
-        { separator: true },
-        { label: 'Clear contents', hint: 'Del', action: () => grid.deleteContents() },
-      ], r.left, r.bottom, { returnFocus: deleteBtn });
-    }, 'text-rb');
+    const insertItems = (): MenuItem[] => [
+      { label: 'Insert row above', action: () => grid.insert('row') },
+      { label: 'Insert column left', action: () => grid.insert('col') },
+    ];
+    const deleteItems = (): MenuItem[] => [
+      { label: 'Delete row', action: () => grid.remove('row') },
+      { label: 'Delete column', action: () => grid.remove('col') },
+      { separator: true },
+      { label: 'Clear contents', hint: 'Del', action: () => grid.deleteContents() },
+    ];
+    const insertBtn = menuBtn('Insert ▾', 'Insert rows or columns', insertItems);
+    const deleteBtn = menuBtn('Delete ▾', 'Delete rows or columns', deleteItems);
 
     const sortRegion = (ascending: boolean) => {
       if (!grid.commit()) return;
@@ -1011,24 +1074,12 @@ export const sheetApp: AppDef = {
     }
 
     const filterBtn = btn('Filter', 'Filter (Ctrl+Shift+L): ▾ buttons on the table\'s header row, to show only some rows', toggleFilter, 'text-rb');
-    const findBtn = btn('Find ▾', 'Find (Ctrl+F) and Replace (Ctrl+H)', () => {
-      const r = findBtn.getBoundingClientRect();
-      shell.menus.show([
-        { label: 'Find...', hint: 'Ctrl+F', action: () => openFind(false) },
-        { label: 'Replace...', hint: 'Ctrl+H', action: () => openFind(true) },
-      ], r.left, r.bottom, { returnFocus: findBtn });
-    }, 'text-rb');
+    const findItems = (): MenuItem[] => [
+      { label: 'Find...', hint: 'Ctrl+F', action: () => openFind(false) },
+      { label: 'Replace...', hint: 'Ctrl+H', action: () => openFind(true) },
+    ];
+    const findBtn = menuBtn('Find ▾', 'Find (Ctrl+F) and Replace (Ctrl+H)', findItems);
 
-    /** A button that opens a menu under itself. */
-    const menuBtn = (text: string, title: string, items: () => MenuItem[]): HTMLButtonElement => {
-      const b = h('button', { type: 'button', class: 'rb text-rb', title, 'aria-label': title, 'aria-haspopup': 'true' }, text);
-      on(b, 'click', () => {
-        if (!grid.commit()) return;
-        const r = b.getBoundingClientRect();
-        shell.menus.show(items(), r.left, r.bottom, { returnFocus: b });
-      }, app.signal);
-      return b;
-    };
 
     // Home > Styles: conditional formatting.
     const cfBtn = menuBtn('Conditional formatting ▾', 'Conditional formatting: colour cells by their values (highlight rules, top 10, data bars, colour scales)', () => conditionalMenu(ctx));
@@ -1044,19 +1095,19 @@ export const sheetApp: AppDef = {
 
     // Page Layout: how the sheet prints.
     const page = () => pageOf(wb, wb.active);
-    const marginsBtn = menuBtn('Margins ▾', 'Margins', () => [
+    const marginItems = (): MenuItem[] => [
       ...(['normal', 'wide', 'narrow'] as const).map(k => ({ label: `${k[0].toUpperCase()}${k.slice(1)}`, checked: marginName(page().margins) === k, action: () => setPage(ctx, p => ({ ...p, margins: { ...MARGINS[k] } })) })),
       { label: 'Custom margins...', checked: marginName(page().margins) === 'custom', action: () => void pageSetupDialog(ctx) },
-    ]);
-    const orientBtn = menuBtn('Orientation ▾', 'Orientation: portrait (tall) or landscape (wide)', () => (['portrait', 'landscape'] as const).map(o => ({
+    ];
+    const orientItems = (): MenuItem[] => (['portrait', 'landscape'] as const).map(o => ({
       label: o === 'portrait' ? 'Portrait' : 'Landscape', checked: page().orient === o, action: () => setPage(ctx, p => ({ ...p, orient: o })),
-    })));
-    const sizeBtn = menuBtn('Size ▾', 'Paper size', () => (Object.keys(PAPERS) as Paper[]).map(k => ({ label: PAPERS[k].label, checked: page().paper === k, action: () => setPage(ctx, p => ({ ...p, paper: k })) })));
-    const areaBtn = menuBtn('Print area ▾', 'Print area: print only some of the cells', () => [
+    }));
+    const paperItems = (): MenuItem[] => (Object.keys(PAPERS) as Paper[]).map(k => ({ label: PAPERS[k].label, checked: page().paper === k, action: () => setPage(ctx, p => ({ ...p, paper: k })) }));
+    const areaItems = (): MenuItem[] => [
       { label: 'Set print area (the selected cells)', action: () => setPage(ctx, p => ({ ...p, area: grid.sel() })) },
       { label: 'Clear print area', disabled: !page().area, action: () => setPage(ctx, p => ({ ...p, area: null })) },
-    ]);
-    const scaleBtn = menuBtn('Scale ▾', 'Scale to fit: print smaller, to fit fewer pages', () => {
+    ];
+    const scaleItems = (): MenuItem[] => {
       const f = page().fit;
       return [
         { label: 'Actual size', checked: !f && page().scale === 100, action: () => setPage(ctx, p => ({ ...p, fit: null, scale: 100 })) },
@@ -1065,16 +1116,22 @@ export const sheetApp: AppDef = {
         { label: 'Fit the sheet on one page', checked: !!f && f.w === 1 && f.h === 1, action: () => setPage(ctx, p => ({ ...p, fit: { w: 1, h: 1 } })) },
         { label: 'Custom scaling...', action: () => void pageSetupDialog(ctx) },
       ];
-    });
+    };
+    const marginsBtn = menuBtn('Margins ▾', 'Margins', marginItems);
+    const orientBtn = menuBtn('Orientation ▾', 'Orientation: portrait (tall) or landscape (wide)', orientItems);
+    const sizeBtn = menuBtn('Size ▾', 'Paper size', paperItems);
+    const areaBtn = menuBtn('Print area ▾', 'Print area: print only some of the cells', areaItems);
+    const scaleBtn = menuBtn('Scale ▾', 'Scale to fit: print smaller, to fit fewer pages', scaleItems);
     const gridPrintBtn = btn('Gridlines', 'Print gridlines', () => setPage(ctx, p => ({ ...p, gridlines: !p.gridlines })), 'text-rb');
     const headPrintBtn = btn('Headings', 'Print row and column headings (A, B, C and 1, 2, 3)', () => setPage(ctx, p => ({ ...p, headings: !p.headings })), 'text-rb');
 
     // Data: sort and filter again (as Excel has them on both tabs), and data validation.
     const filterBtn2 = btn('Filter', 'Filter (Ctrl+Shift+L): ▾ buttons on the table\'s header row, to show only some rows', toggleFilter, 'text-rb');
-    const dvBtn = menuBtn('Data validation ▾', 'Data validation: what may be typed in the selected cells (a drop-down list, numbers in a range...)', () => [
+    const dvItems = (): MenuItem[] => [
       { label: 'Data validation...', action: () => void validationDialog(ctx) },
       { label: 'Clear validation from the selected cells', action: () => { wb.setValidation(wb.active, grid.sel(), null); onChange(); } },
-    ]);
+    ];
+    const dvBtn = menuBtn('Data validation ▾', 'Data validation: what may be typed in the selected cells (a drop-down list, numbers in a range...)', dvItems);
 
     // Formulas: functions by kind, names, and showing formulas instead of their answers.
     const fnMenu = (label: string, cat: Parameters<typeof functionMenu>[1]) => menuBtn(`${label} ▾`, `${cat} functions`, () => functionMenu(ctx, cat));
@@ -1124,11 +1181,17 @@ export const sheetApp: AppDef = {
       const next = step > 0 ? notes.find(n => at(n) > here) ?? notes[0] : [...notes].reverse().find(n => at(n) < here) ?? notes[notes.length - 1];
       grid.goTo(next.col, next.row);
     };
-    const showNotesBtn = btn('Show all notes', 'Show every note beside its cell', () => {
+    const toggleNotes = () => {
       grid.showNotes = !grid.showNotes;
       syncToolbar();
       grid.redraw();
-    }, 'text-rb');
+    };
+    const showNotesBtn = btn('Show all notes', 'Show every note beside its cell', toggleNotes, 'text-rb');
+    const deleteNotes = () => {
+      if (!grid.commit()) return;
+      wb.clearNotes(wb.active, grid.sel());
+      onChange();
+    };
     // Format Cells (Ctrl+1), and Home > Cells > Format: row height, column width, hiding, and Format Cells.
     const formatCells = (first?: Parameters<typeof formatCellsDialog>[2]) => void formatCellsDialog(ctx, { style: doStyle, edges: edgeStyle, palette: PALETTE }, first);
     grid.onFormatCells = () => formatCells();
@@ -1159,20 +1222,22 @@ export const sheetApp: AppDef = {
       grid.fitRows();
       onChange();
     };
+    const fitRowHeight = () => {
+      const sel = grid.sel();
+      for (let r = sel.r0; r <= Math.min(sel.r1, sel.r0 + 4999); r++) wb.setSize(wb.active, 'row', r, null);
+      grid.fitRows();
+      onChange();
+    };
+    const fitColumnWidth = () => {
+      const sel = grid.sel();
+      grid.fitColumns(sel.c0, sel.c1);
+      onChange();
+    };
     const formatBtn = menuBtn('Format ▾', 'Format: row height, column width, hide and unhide, Format cells', () => [
       { label: 'Row height...', action: () => void sizeDialog('row') },
-      { label: 'AutoFit row height', action: () => {
-        const sel = grid.sel();
-        for (let r = sel.r0; r <= Math.min(sel.r1, sel.r0 + 4999); r++) wb.setSize(wb.active, 'row', r, null);
-        grid.fitRows();
-        onChange();
-      } },
+      { label: 'AutoFit row height', action: fitRowHeight },
       { label: 'Column width...', action: () => void sizeDialog('col') },
-      { label: 'AutoFit column width', action: () => {
-        const sel = grid.sel();
-        grid.fitColumns(sel.c0, sel.c1);
-        onChange();
-      } },
+      { label: 'AutoFit column width', action: fitColumnWidth },
       { separator: true },
       { label: 'Hide and unhide', submenu: [
         { label: 'Hide rows', action: () => grid.hide('row', true) },
@@ -1185,12 +1250,35 @@ export const sheetApp: AppDef = {
     ]);
 
     // View: the same switches as on the Formulas and Review tabs, and the sheet's gridlines on screen.
-    const viewNotesBtn = btn('Notes', 'Show every note beside its cell', () => showNotesBtn.click(), 'text-rb');
+    const viewNotesBtn = btn('Notes', 'Show every note beside its cell', toggleNotes, 'text-rb');
     const viewFormulasBtn = btn('Formulas', 'Show formulas in the cells instead of their answers (Ctrl+`)', () => toggleFormulas(), 'text-rb');
-    const gridlinesBtn = btn('Gridlines', 'Show the lines between cells on this sheet', () => {
+    const toggleGridlines = () => {
       wb.setGridlines(wb.active, !!wb.sheets[wb.active].noGrid);
       onChange();
-    }, 'text-rb');
+    };
+    const gridlinesBtn = btn('Gridlines', 'Show the lines between cells on this sheet', toggleGridlines, 'text-rb');
+    // View > Classic / Modern: the menu bar and small toolbars, or the ribbon.
+    const classicBtn = btn('Classic', 'Classic: a menu bar and two rows of small buttons, as spreadsheets looked before the ribbon', () => void setLook('classic'), 'text-rb');
+    const modernBtn = btn('Modern', 'Modern: the ribbon, with its tabs', () => void setLook('modern'), 'text-rb');
+
+    const insertPivot = () => void insertPivotDialog(ctx, (s, col, row) => {
+      grid.setActiveSheet(s);
+      drawTabs();
+      grid.goTo(col, row);
+    });
+    const tableTools = { pivot: insertPivot, dups: () => void removeDuplicatesDialog(ctx) };
+    const refreshAll = () => {
+      if (!grid.commit()) return;
+      const failed = wb.refreshAll();
+      onChange();
+      if (failed.length) void shell.dialogs.alert('Some PivotTables could not be refreshed', failed.join('\n'));
+      else shell.toast('Every PivotTable is up to date.');
+    };
+    const clearFilters = () => {
+      if (!grid.commit()) return;
+      wb.clearFilters(wb.active);
+      onChange();
+    };
 
     const tabGroups = {
       home: [
@@ -1204,11 +1292,7 @@ export const sheetApp: AppDef = {
         sized(180, group('Editing', btn('Σ AutoSum', 'AutoSum (Alt+=)', () => grid.autoSum(), 'text-rb'), clearBtn, btn('A→Z', 'Sort A to Z (or smallest first)', () => sortRegion(true), 'text-rb'), btn('Z→A', 'Sort Z to A (or largest first)', () => sortRegion(false), 'text-rb'), filterBtn, findBtn)),
       ],
       insert: [group('Tables',
-        btn('PivotTable', 'Insert a PivotTable: sum up a table of data by its items', () => void insertPivotDialog(ctx, (s, col, row) => {
-          grid.setActiveSheet(s);
-          drawTabs();
-          grid.goTo(col, row);
-        }), 'text-rb'),
+        btn('PivotTable', 'Insert a PivotTable: sum up a table of data by its items', insertPivot, 'text-rb'),
         btn('Table', 'Insert a table: column names, banded rows, filter buttons, a total row (Ctrl+T)', () => void insertTableDialog(ctx), 'text-rb')), group('Charts', ...chartButtons)],
       layout: [
         group('Page setup', marginsBtn, orientBtn, sizeBtn, areaBtn, btn('Print titles', 'Print titles: rows (or columns) printed again on every page', () => void pageSetupDialog(ctx), 'text-rb')),
@@ -1231,21 +1315,11 @@ export const sheetApp: AppDef = {
         group('Formula auditing', showFormulasBtn),
       ],
       data: [
-        group('Queries', btn('Refresh all', 'Work every PivotTable of the workbook out again from its data', () => {
-          if (!grid.commit()) return;
-          const failed = wb.refreshAll();
-          onChange();
-          if (failed.length) void shell.dialogs.alert('Some PivotTables could not be refreshed', failed.join('\n'));
-          else shell.toast('Every PivotTable is up to date.');
-        }, 'text-rb')),
+        group('Queries', btn('Refresh all', 'Work every PivotTable of the workbook out again from its data', refreshAll, 'text-rb')),
         group('Sort and filter',
           btn('A→Z', 'Sort A to Z (or smallest first)', () => sortRegion(true), 'text-rb'), btn('Z→A', 'Sort Z to A (or largest first)', () => sortRegion(false), 'text-rb'),
           btn('Sort...', 'Sort by several columns, each A to Z or Z to A', () => void sortDialog(ctx), 'text-rb'), filterBtn2,
-          btn('Clear', 'Clear every column\'s filter (the ▾ buttons stay)', () => {
-            if (!grid.commit()) return;
-            wb.clearFilters(wb.active);
-            onChange();
-          }, 'text-rb')),
+          btn('Clear', 'Clear every column\'s filter (the ▾ buttons stay)', clearFilters, 'text-rb')),
         group('Data tools',
           btn('Text to columns', 'Text to columns: split the text of one column at commas, tabs, spaces...', () => void textToColumnsDialog(ctx), 'text-rb'),
           btn('Remove duplicates', 'Remove duplicates: take out rows that repeat an earlier row', () => void removeDuplicatesDialog(ctx), 'text-rb'),
@@ -1254,16 +1328,13 @@ export const sheetApp: AppDef = {
       review: [
         group('Notes',
           btn('New note', 'New note on the active cell, or edit its note (Shift+F2)', () => editNote(grid.active().col, grid.active().row), 'text-rb'),
-          btn('Delete note', 'Delete the notes in the selected cells', () => {
-            if (!grid.commit()) return;
-            wb.clearNotes(wb.active, grid.sel());
-            onChange();
-          }, 'text-rb'),
+          btn('Delete note', 'Delete the notes in the selected cells', deleteNotes, 'text-rb'),
           btn('Previous', 'Go to the previous note', () => goNote(-1), 'text-rb'),
           btn('Next', 'Go to the next note', () => goNote(1), 'text-rb'),
           showNotesBtn),
       ],
       view: [
+        group('Look', classicBtn, modernBtn),
         group('Show', gridlinesBtn, viewFormulasBtn, viewNotesBtn),
         group('Zoom', btn('100%', 'Zoom to 100%', () => grid.setZoom(1), 'text-rb'), btn('Zoom out', 'Zoom out', () => grid.setZoom(grid.zoom() / 1.1), 'text-rb'), btn('Zoom in', 'Zoom in', () => grid.setZoom(grid.zoom() * 1.1), 'text-rb')),
         group('Window', freezeBtn),
@@ -1276,6 +1347,8 @@ export const sheetApp: AppDef = {
     const TAB_ORDER: Tab[] = [...(Object.keys(tabGroups) as Tab[]), 'table', 'pivot'];
     const TAB_NAMES: Record<Tab, string> = { home: 'Home', insert: 'Insert', layout: 'Page Layout', formulas: 'Formulas', data: 'Data', review: 'Review', view: 'View', help: 'Help', table: 'Table Design', pivot: 'PivotTable Analyze' };
     let tab: Tab = 'home';
+    /** View > Page break preview, in the Classic look (the Modern look shows page breaks on the Page Layout tab). */
+    let breakView = false;
     /** What the Table Design tab was last built for, so it is built again only when the table changes. */
     let tableKey = '';
     const groupsOf = (t: Tab): HTMLElement[] => {
@@ -1285,14 +1358,7 @@ export const sheetApp: AppDef = {
       }
       if (t !== 'table') return tabGroups[t];
       const table = activeTable(ctx);
-      return table ? tableDesign(ctx, table, btn, group, {
-        pivot: () => void insertPivotDialog(ctx, (s, col, row) => {
-          grid.setActiveSheet(s);
-          drawTabs();
-          grid.goTo(col, row);
-        }),
-        dups: () => void removeDuplicatesDialog(ctx),
-      }) : [];
+      return table ? tableDesign(ctx, table, btn, group, tableTools) : [];
     };
     const ribbon = h('div', { class: 'ribbon', role: 'tabpanel', 'data-menus-stay': '' }, ...tabGroups.home);
     const tabButtons = TAB_ORDER.map(t => {
@@ -1330,7 +1396,7 @@ export const sheetApp: AppDef = {
 
     /** On the Page Layout tab, the grid shows where printed pages end (dashed lines), as Excel does. */
     function showBreaks(): void {
-      if (tab !== 'layout') {
+      if (look === 'classic' ? !breakView : tab !== 'layout') {
         if (grid.breaks) {
           grid.breaks = null;
           grid.redraw();
@@ -1359,7 +1425,7 @@ export const sheetApp: AppDef = {
       presetCodes.longdate = longDateCode(order);
       syncToolbar();
       try {
-        await shell.fs.writeText(SETTINGS_PATH, JSON.stringify({ dateOrder: order }), { hidden: true });
+        await keepSetting({ dateOrder: order });
         shell.toast(`Dates you type are now read ${ORDER_LABEL[order].toLowerCase()}. Dates already in cells stay as they are.`);
       } catch (error) {
         await shell.report('This window reads dates that way now, but the choice could not be kept for next time', error);
@@ -1564,15 +1630,15 @@ export const sheetApp: AppDef = {
       input.click();
     }
 
-    const fileBtn = h('button', { type: 'button', class: 'file-tab', 'aria-haspopup': 'true' }, 'File');
-    on(fileBtn, 'click', () => {
-      const r = fileBtn.getBoundingClientRect();
-      const dates: MenuItem = { label: 'Read typed dates as', submenu: (['dmy', 'mdy', 'ymd'] as const).map(o => ({ label: ORDER_LABEL[o], checked: wb.dateOrder === o, action: () => void setDateOrder(o) })) };
+    const datesItem = (): MenuItem => ({ label: 'Read typed dates as', submenu: (['dmy', 'mdy', 'ymd'] as const).map(o => ({ label: ORDER_LABEL[o], checked: wb.dateOrder === o, action: () => void setDateOrder(o) })) });
+    /** The File menu; `printing` goes after Page setup (the Classic look's print area and page layout). */
+    function fileItems(printing: MenuItem[] = []): MenuItem[] {
+      const dates = datesItem();
       const native = shell.native;
       if (native) {
         // A program of its own: the computer's Open and Save boxes, and Export in place of Download.
         const extra = native.fileMenu();
-        shell.menus.show([
+        return [
           { label: 'New', hint: 'Ctrl+N', action: () => native.newWindow() },
           { label: 'Open...', hint: 'Ctrl+O', action: () => void openNative(native) },
           ...extra.top,
@@ -1585,13 +1651,13 @@ export const sheetApp: AppDef = {
           { separator: true },
           { label: 'Print...', hint: 'Ctrl+P', action: () => void printPreview(ctx) },
           { label: 'Page setup...', action: () => void pageSetupDialog(ctx) },
+          ...printing,
           { separator: true },
           dates,
           ...extra.bottom,
-        ], r.left, r.bottom, { returnFocus: fileBtn });
-        return;
+        ];
       }
-      shell.menus.show([
+      return [
         { label: 'Save', hint: 'Ctrl+S', action: () => void save() },
         { label: 'Save as...', hint: 'Ctrl+Shift+S', action: () => void saveAs() },
         { separator: true },
@@ -1602,13 +1668,314 @@ export const sheetApp: AppDef = {
         { separator: true },
         { label: 'Print...', hint: 'Ctrl+P', action: () => void printPreview(ctx) },
         { label: 'Page setup...', action: () => void pageSetupDialog(ctx) },
+        ...printing,
         { label: 'Download as PDF', action: () => void downloadPdf(ctx) },
         { label: 'Save as PDF in Documents', action: () => void savePdfInDocuments(ctx) },
         { separator: true },
         dates,
-      ], r.left, r.bottom, { returnFocus: fileBtn });
+      ];
+    }
+    const fileBtn = h('button', { type: 'button', class: 'file-tab', 'aria-haspopup': 'true' }, 'File');
+    on(fileBtn, 'click', () => {
+      const r = fileBtn.getBoundingClientRect();
+      shell.menus.show(fileItems(), r.left, r.bottom, { returnFocus: fileBtn });
     }, app.signal);
     const tabsRow = h('div', { class: 'ribbon-tabs', role: 'tablist', 'aria-label': 'Toolbar' }, fileBtn, ...tabButtons);
+
+    // ---- Classic look: a menu bar and two toolbars of small buttons --------------------------------------------------
+
+    /** Buttons whose pressed look follows the active cell (bold, alignment...): checked on every toolbar update. */
+    const pressers: Array<[HTMLElement, () => boolean]> = [];
+    const tb = (icon: ClassicIcon, title: string, run: () => void, pressed?: () => boolean): HTMLButtonElement => {
+      const b = btn(classicIcon(icon), title, run, 'tb');
+      if (pressed) pressers.push([b, pressed]);
+      return b;
+    };
+    const caret = () => h('span', { class: 'rb-caret', 'aria-hidden': 'true' }, '▾');
+    const tbSep = () => h('span', { class: 'tb-sep', role: 'separator', 'aria-orientation': 'vertical' });
+    const isMerged = () => {
+      const a = grid.active();
+      return wb.sheets[wb.active].merges.some(m => a.col >= m.c0 && a.col <= m.c1 && a.row >= m.r0 && a.row <= m.r1);
+    };
+    const chartItems = (): MenuItem[] => CHART_TYPES.map(t => ({ label: CHART_LABEL[t], action: () => charts.insert(t) }));
+    const zoomBox = h('select', { class: 'rb-select tb-zoom', 'aria-label': 'Zoom', title: 'Zoom' }, ...ZOOMS.map(z => h('option', { value: String(z) }, `${z * 100}%`)), h('option', { value: '', hidden: true }));
+    on(zoomBox, 'change', () => {
+      if (zoomBox.value) grid.setZoom(Number(zoomBox.value));
+      grid.focus();
+    }, app.signal);
+    const classicFace = fontFace();
+    const [classicSize, classicSizeList] = fontSize();
+    const classicPainter = painterButton(classicIcon('painter'), 'tb');
+    const undoTb = tb('undo', 'Undo (Ctrl+Z)', undo);
+    const redoTb = tb('redo', 'Redo (Ctrl+Y)', redo);
+    const standardBar = h('div', { class: 'toolbar', role: 'toolbar', 'aria-label': 'Standard' },
+      tb('new', shell.native ? 'New (Ctrl+N)' : 'New: a new spreadsheet in Documents, opened in a window of its own', () => (shell.native ? shell.native.newWindow() : void newInDocuments())),
+      tb('open', shell.native ? 'Open (Ctrl+O)' : 'Open: shows the folder in File Explorer, where a double-click opens a spreadsheet', () => (shell.native ? void openNative(shell.native) : void shell.openApp('explorer', path ? parentPath(path) : '/Documents'))),
+      tb('save', 'Save (Ctrl+S)', () => void save()),
+      tbSep(),
+      tb('print', 'Print, with a preview of each page (Ctrl+P)', () => void printPreview(ctx)),
+      tbSep(),
+      tb('cut', 'Cut (Ctrl+X)', () => grid.copy(true)),
+      tb('copy', 'Copy (Ctrl+C)', () => grid.copy(false)),
+      tb('paste', 'Paste (Ctrl+V)', () => grid.paste()),
+      classicPainter,
+      tbSep(),
+      undoTb, redoTb,
+      tbSep(),
+      tb('sortAZ', 'Sort A to Z (or smallest first)', () => sortRegion(true)),
+      tb('sortZA', 'Sort Z to A (or largest first)', () => sortRegion(false)),
+      tb('autoSum', 'AutoSum (Alt+=)', () => grid.autoSum()),
+      menuBtn([classicIcon('chart'), caret()], 'Chart: insert a chart of the selected cells', chartItems, 'tb tb-drop'),
+      tbSep(),
+      zoomBox);
+    const formattingBar = h('div', { class: 'toolbar', role: 'toolbar', 'aria-label': 'Formatting' },
+      classicFace, classicSize, classicSizeList,
+      tbSep(),
+      tb('bold', 'Bold (Ctrl+B)', () => boldBtn.click(), () => !!activeStyle().b),
+      tb('italic', 'Italic (Ctrl+I)', () => italicBtn.click(), () => !!activeStyle().i),
+      tb('underline', 'Underline (Ctrl+U)', () => underBtn.click(), () => !!activeStyle().u),
+      tbSep(),
+      tb('alignLeft', 'Align left', () => alignBtns[0].click(), () => activeStyle().al === 'l'),
+      tb('alignCentre', 'Align centre', () => alignBtns[1].click(), () => activeStyle().al === 'c'),
+      tb('alignRight', 'Align right', () => alignBtns[2].click(), () => activeStyle().al === 'r'),
+      tb('merge', 'Merge & Center (again on merged cells: unmerge)', () => (anyMerged() ? unmerge() : void doMerge('center')), isMerged),
+      tbSep(),
+      tb('currency', 'Currency format', () => doStyle(s => ({ ...s, fmt: 'currency', dec: 2 }))),
+      tb('percent', 'Percent format', () => doStyle(s => ({ ...s, fmt: 'percent', dec: 0 }))),
+      tb('comma', 'Comma format', () => doStyle(s => ({ ...s, fmt: 'comma', dec: 2 }))),
+      tb('decimalsMore', 'More decimal places', () => decimals(1)),
+      tb('decimalsFewer', 'Fewer decimal places', () => decimals(-1)),
+      tbSep(),
+      menuBtn([classicIcon('borders'), caret()], 'Borders', borderItems, 'tb tb-drop'),
+      paletteButton(classicIcon('fill'), 'Fill colour', 'fill', '#ffd400', 'tb tb-drop'),
+      paletteButton(classicIcon('fontColour'), 'Text colour', 'color', '#d13438', 'tb tb-drop'));
+
+    const NUMBER_FORMATS: Array<[string, string]> = [
+      ['', 'General'], ['number', 'Number'], ['currency', 'Currency'], ['comma', 'Comma'], ['percent', 'Percent'], ['shortdate', 'Short date'],
+      ['longdate', 'Long date'], ['time', 'Time'], ['scientific', 'Scientific'], ['fraction', 'Fraction'], ['text', 'Text'],
+    ];
+    const hideItems = (axis: 'row' | 'col'): MenuItem[] => [
+      { label: 'Hide', action: () => grid.hide(axis, true) },
+      { label: 'Unhide', action: () => grid.hide(axis, false) },
+    ];
+    const editMenu = (): MenuItem[] => [
+      { label: 'Undo', hint: 'Ctrl+Z', disabled: !wb.canUndo, action: undo },
+      { label: 'Redo', hint: 'Ctrl+Y', disabled: !wb.canRedo, action: redo },
+      { separator: true },
+      { label: 'Cut', hint: 'Ctrl+X', action: () => grid.copy(true) },
+      { label: 'Copy', hint: 'Ctrl+C', action: () => grid.copy(false) },
+      { label: 'Paste', hint: 'Ctrl+V', action: () => grid.paste() },
+      { label: 'Paste special', submenu: pasteItems() },
+      // The toolbar's brush: the next cells selected take the look of these.
+      { label: 'Format painter', checked: !!painter, action: () => classicPainter.click() },
+      { separator: true },
+      { label: 'Clear', submenu: clearItems() },
+      { label: 'Delete', submenu: deleteItems() },
+      { label: 'Delete sheet', disabled: wb.sheets.length <= 1, danger: true, action: () => void remove(wb.active) },
+      { separator: true },
+      { label: 'Find...', hint: 'Ctrl+F', action: () => openFind(false) },
+      { label: 'Replace...', hint: 'Ctrl+H', action: () => openFind(true) },
+    ];
+    const viewMenu = (): MenuItem[] => [
+      { label: 'Normal', checked: !breakView, action: () => { breakView = false; showBreaks(); } },
+      { label: 'Page break preview', checked: breakView, action: () => { breakView = true; showBreaks(); } },
+      { separator: true },
+      { label: 'Gridlines', checked: !wb.sheets[wb.active].noGrid, action: toggleGridlines },
+      { label: 'Formulas', hint: 'Ctrl+`', checked: grid.showFormulas, action: toggleFormulas },
+      { label: 'Notes', checked: grid.showNotes, action: toggleNotes },
+      { separator: true },
+      { label: 'Zoom', submenu: [
+        ...ZOOMS.map(z => ({ label: `${z * 100}%`, checked: Math.abs(grid.zoom() - z) < 0.005, action: () => grid.setZoom(z) })),
+        { separator: true },
+        { label: 'Zoom in', action: () => grid.setZoom(grid.zoom() * 1.1) },
+        { label: 'Zoom out', action: () => grid.setZoom(grid.zoom() / 1.1) },
+      ] },
+      { label: 'Freeze panes', submenu: freezeItems() },
+      { separator: true },
+      { label: 'Classic (menus and small buttons)', checked: true, action: () => void setLook('classic') },
+      { label: 'Modern (the ribbon)', checked: false, action: () => void setLook('modern') },
+    ];
+    const insertMenu = (): MenuItem[] => [
+      ...insertItems(),
+      { label: 'Worksheet', action: addSheet },
+      { separator: true },
+      { label: 'Chart', submenu: chartItems() },
+      { label: 'PivotTable...', action: insertPivot },
+      { label: 'Table...', hint: 'Ctrl+T', action: () => void insertTableDialog(ctx) },
+      { separator: true },
+      { label: 'Function...', hint: 'Shift+F3', action: () => void insertFunctionDialog(ctx) },
+      { label: 'AutoSum', submenu: autoSumMenu(ctx) },
+      { label: 'Functions by kind', submenu: (['Financial', 'Logical', 'Text', 'Date and time', 'Lookup and reference', 'Maths and trig', 'Statistical', 'Information', 'Engineering', 'Lists'] as const).map(c => ({ label: c, submenu: functionMenu(ctx, c) })) },
+      { label: 'Name', submenu: [
+        { label: 'Define name...', action: () => void nameDialog(ctx) },
+        { label: 'Name manager...', hint: 'Ctrl+F3', action: () => void nameManager(ctx) },
+        { label: 'Create from selection...', action: () => void createFromSelection(ctx) },
+        { label: 'Use in formula', submenu: useInFormulaMenu(ctx) },
+      ] },
+      { separator: true },
+      { label: 'Note...', hint: 'Shift+F2', action: () => void editNote(grid.active().col, grid.active().row) },
+    ];
+    const formatMenu = (): MenuItem[] => {
+      const s = activeStyle();
+      const shown = currentFormat(s);
+      return [
+        { label: 'Cells...', hint: 'Ctrl+1', action: () => formatCells() },
+        { label: 'Row', submenu: [
+          { label: 'Height...', action: () => void sizeDialog('row') },
+          { label: 'AutoFit', action: fitRowHeight },
+          ...hideItems('row'),
+        ] },
+        { label: 'Column', submenu: [
+          { label: 'Width...', action: () => void sizeDialog('col') },
+          { label: 'AutoFit selection', action: fitColumnWidth },
+          ...hideItems('col'),
+        ] },
+        { label: 'Sheet', submenu: [
+          { label: 'Rename...', action: () => void rename(wb.active) },
+          { label: 'Delete', disabled: wb.sheets.length <= 1, danger: true, action: () => void remove(wb.active) },
+        ] },
+        { separator: true },
+        { label: 'Font', submenu: [
+          { label: 'Bold', hint: 'Ctrl+B', checked: !!s.b, action: () => boldBtn.click() },
+          { label: 'Italic', hint: 'Ctrl+I', checked: !!s.i, action: () => italicBtn.click() },
+          { label: 'Underline', hint: 'Ctrl+U', checked: !!s.u, action: () => underBtn.click() },
+          { label: 'Strikethrough', hint: 'Ctrl+5', checked: !!s.st, action: () => strikeBtn.click() },
+          { separator: true },
+          { label: 'Increase font size', hint: 'Ctrl+Shift+>', action: () => growBtn.click() },
+          { label: 'Decrease font size', hint: 'Ctrl+Shift+<', action: () => shrinkBtn.click() },
+          { label: 'Text colour', submenu: colourItems('color') },
+        ] },
+        { label: 'Alignment', submenu: [
+          { label: 'Left', checked: s.al === 'l', action: () => alignBtns[0].click() },
+          { label: 'Centre', checked: s.al === 'c', action: () => alignBtns[1].click() },
+          { label: 'Right', checked: s.al === 'r', action: () => alignBtns[2].click() },
+          { separator: true },
+          { label: 'Top', checked: s.va === 't', action: () => vaBtns[0].click() },
+          { label: 'Middle', checked: s.va === 'm', action: () => vaBtns[1].click() },
+          { label: 'Bottom', checked: !s.va, action: () => vaBtns[2].click() },
+          { separator: true },
+          { label: 'Wrap text', checked: !!s.wrap, action: () => wrapBtn.click() },
+          { label: 'Increase indent', action: () => indentIn.click() },
+          { label: 'Decrease indent', action: () => indentOut.click() },
+        ] },
+        { label: 'Merge', submenu: mergeItems() },
+        { label: 'Borders', submenu: borderItems() },
+        { label: 'Fill colour', submenu: colourItems('fill') },
+        { label: 'Number', submenu: [
+          ...NUMBER_FORMATS.map(([v, name]) => ({ label: name, checked: shown === v, action: () => setNumberFormat(v) })),
+          ...(shown === 'custom' ? [{ label: `Custom: ${(s.code ?? '').slice(0, 24)}`, checked: true, action: () => void moreFormats() }] : []),
+          { separator: true },
+          { label: 'More decimal places', action: () => decimals(1) },
+          { label: 'Fewer decimal places', action: () => decimals(-1) },
+          { label: 'More formats...', action: () => void moreFormats() },
+        ] },
+        { separator: true },
+        { label: 'Conditional formatting', submenu: conditionalMenu(ctx) },
+        { label: 'Format as table', submenu: formatAsTableMenu(ctx) },
+        { label: 'Cell styles', submenu: cellStyleItems() },
+      ];
+    };
+    const toolsMenu = (): MenuItem[] => [
+      { label: 'Formula auditing', submenu: [{ label: 'Show formulas', hint: 'Ctrl+`', checked: grid.showFormulas, action: toggleFormulas }] },
+      { label: 'Notes', submenu: [
+        { label: 'New note', hint: 'Shift+F2', action: () => void editNote(grid.active().col, grid.active().row) },
+        { label: 'Delete notes', action: deleteNotes },
+        { label: 'Previous note', action: () => goNote(-1) },
+        { label: 'Next note', action: () => goNote(1) },
+        { label: 'Show all notes', checked: grid.showNotes, action: toggleNotes },
+      ] },
+      { separator: true },
+      datesItem(),
+    ];
+    const dataMenu = (): MenuItem[] => {
+      const filtering = !!wb.sheets[wb.active].filter;
+      return [
+        { label: 'Sort A to Z', action: () => sortRegion(true) },
+        { label: 'Sort Z to A', action: () => sortRegion(false) },
+        { label: 'Sort...', action: () => void sortDialog(ctx) },
+        { separator: true },
+        { label: 'Filter', hint: 'Ctrl+Shift+L', checked: filtering, action: toggleFilter },
+        { label: 'Clear filters', disabled: !filtering, action: clearFilters },
+        { separator: true },
+        { label: 'Validation', submenu: dvItems() },
+        { label: 'Text to columns...', action: () => void textToColumnsDialog(ctx) },
+        { label: 'Remove duplicates...', action: () => void removeDuplicatesDialog(ctx) },
+        { separator: true },
+        { label: 'PivotTable...', action: insertPivot },
+        { label: 'Refresh all', action: refreshAll },
+      ];
+    };
+    const filePrinting = (): MenuItem[] => [
+      { label: 'Print area', submenu: areaItems() },
+      { label: 'Page layout', submenu: [
+        { label: 'Margins', submenu: marginItems() },
+        { label: 'Orientation', submenu: orientItems() },
+        { label: 'Size', submenu: paperItems() },
+        { label: 'Scale to fit', submenu: scaleItems() },
+        { separator: true },
+        { label: 'Print gridlines', checked: page().gridlines, action: () => setPage(ctx, p => ({ ...p, gridlines: !p.gridlines })) },
+        { label: 'Print headings', checked: page().headings, action: () => setPage(ctx, p => ({ ...p, headings: !p.headings })) },
+        { label: 'Print titles...', action: () => void pageSetupDialog(ctx) },
+      ] },
+    ];
+    const bar = menuBar(shell, app.signal, [
+      { label: 'File', key: 'f', items: () => fileItems(filePrinting()) },
+      { label: 'Edit', key: 'e', items: editMenu },
+      { label: 'View', key: 'v', items: viewMenu },
+      { label: 'Insert', key: 'i', items: insertMenu },
+      { label: 'Format', key: 'o', items: formatMenu },
+      { label: 'Tools', key: 't', items: toolsMenu },
+      { label: 'Data', key: 'd', items: dataMenu },
+      // Shown while the active cell is in a table (a PivotTable), named as the Modern look's tabs are, so a message
+      // that says "Table Design" or "PivotTable Analyze > Delete" is right in both looks.
+      { label: 'Table Design', key: 'a', items: () => {
+        const t = activeTable(ctx);
+        return t ? tableMenu(ctx, t, tableTools) : [];
+      }, shown: () => !!activeTable(ctx) },
+      { label: 'PivotTable Analyze', key: 'p', items: () => {
+        const pv = activePivot(ctx);
+        return pv ? pivotMenu(ctx, pv, () => pivotPane.toggle()) : [];
+      }, shown: () => !!activePivot(ctx) },
+      // A program of its own has a Help menu (About, Licences, updates); inside the desktop it has none.
+      ...(shell.native ? [{ label: 'Help', key: 'h', items: () => shell.native!.help().flatMap(g => g.items.map(i => ({ label: i.label, action: i.run }))) }] : []),
+    ], { before: () => grid.commit(), returnFocus: () => grid.el.querySelector<HTMLElement>('.grid-scroll') });
+    const classicBar = h('div', { class: 'classic-bar' }, bar.el, standardBar, formattingBar);
+
+    /**
+     * Inside the desktop a new spreadsheet is a file, as File Explorer's New > Spreadsheet makes it (the desktop keeps
+     * one window for an unsaved spreadsheet, so a second blank one would only bring that window forward).
+     */
+    async function newInDocuments(): Promise<void> {
+      const entry = await shell.actions.create('sheet', '/Documents');
+      if (!entry) return;
+      shell.toast(`Made “${entry.name}” in Documents.`);
+      await shell.openPath(joinPath('/Documents', entry.name));
+    }
+
+    /** Shows one look or the other in this window. */
+    function applyLook(next: Look): void {
+      look = next;
+      app.root.classList.toggle('sheet-classic', next === 'classic');
+      closePalette();
+      showBreaks();
+      syncToolbar();
+    }
+    /** View > Classic / Modern: this window and every other spreadsheet window here, kept for next time. */
+    async function setLook(next: Look): Promise<void> {
+      if (next === look) return;
+      applyLook(next);
+      window.dispatchEvent(new CustomEvent(LOOK_EVENT, { detail: next }));
+      grid.focus();
+      if (next === 'classic') shell.toast('Classic look: View > Modern brings the ribbon back.');
+      try {
+        await keepSetting({ look: next });
+      } catch (error) {
+        await shell.report('This window shows that look now, but the choice could not be kept for next time', error);
+      }
+    }
+    on(window, LOOK_EVENT, (event: CustomEvent<Look>) => {
+      if (event.detail !== look) applyLook(event.detail);
+    }, app.signal);
 
     // ---- Formula bar, sheet tabs, status ---------------------------------------------------------------------------
 
@@ -1645,19 +2012,21 @@ export const sheetApp: AppDef = {
         nodes.push(b);
       });
       const add = h('button', { type: 'button', class: 'sheet-add', title: 'New sheet', 'aria-label': 'New sheet' }, '+');
-      on(add, 'click', () => {
-        if (!grid.commit()) return;
-        try {
-          const i = wb.addSheet();
-          grid.setActiveSheet(i);
-          onChange();
-        } catch (error) {
-          void report(error);
-        }
-        grid.focus();
-      }, app.signal);
+      on(add, 'click', addSheet, app.signal);
       nodes.push(add);
       tabs.replaceChildren(...nodes);
+    }
+
+    function addSheet(): void {
+      if (!grid.commit()) return;
+      try {
+        const i = wb.addSheet();
+        grid.setActiveSheet(i);
+        onChange();
+      } catch (error) {
+        void report(error);
+      }
+      grid.focus();
     }
 
     async function rename(i: number): Promise<void> {
@@ -1718,11 +2087,13 @@ export const sheetApp: AppDef = {
       (['t', 'm', 'b'] as const).forEach((va, i) => press(vaBtns[i], (s.va ?? 'b') === va));
       // A typeface not in the list (from an Excel file) is shown as it is.
       const listed = !s.ff || FONT_FACES.some(f => f.name.toLowerCase() === s.ff!.toLowerCase());
-      otherFace.hidden = listed;
-      otherFace.value = listed ? '' : s.ff!;
-      otherFace.textContent = listed ? '' : s.ff!;
-      faceSelect.value = s.ff ? (FONT_FACES.find(f => f.name.toLowerCase() === s.ff!.toLowerCase())?.name ?? s.ff) : '';
-      if (document.activeElement !== sizeBox) sizeBox.value = String(s.fs ?? STANDARD_SIZE);
+      for (const box of faceBoxes) {
+        box.other.hidden = listed;
+        box.other.value = listed ? '' : s.ff!;
+        box.other.textContent = listed ? '' : s.ff!;
+        box.select.value = s.ff ? (FONT_FACES.find(f => f.name.toLowerCase() === s.ff!.toLowerCase())?.name ?? s.ff) : '';
+      }
+      for (const box of sizeBoxes) if (document.activeElement !== box) box.value = String(s.fs ?? STANDARD_SIZE);
       (['l', 'c', 'r'] as const).forEach((al, i) => press(alignBtns[i], s.al === al));
       press(wrapBtn, s.wrap);
       press(filterBtn, !!wb.sheets[wb.active].filter);
@@ -1744,16 +2115,31 @@ export const sheetApp: AppDef = {
         const t = activeTable(ctx);
         filterNote.textContent = t ? tableSummary(t) : '';
       }
-      // A format code shows as the ready-made format it is, or as "Custom: <code>".
-      let shownFmt: string = s.fmt ?? '';
-      if (s.fmt === 'custom') shownFmt = Object.keys(presetCodes).find(k => presetCodes[k] === s.code) ?? 'custom';
+      const shownFmt = currentFormat(s);
       customOption.hidden = shownFmt !== 'custom';
       customOption.textContent = shownFmt === 'custom' ? `Custom: ${(s.code ?? '').slice(0, 24)}` : 'Custom';
       fmtSelect.value = shownFmt;
-      undoBtn.disabled = !wb.canUndo;
-      redoBtn.disabled = !wb.canRedo;
+      undoBtn.disabled = undoTb.disabled = !wb.canUndo;
+      redoBtn.disabled = redoTb.disabled = !wb.canRedo;
       zoomLabel.textContent = `${Math.round(grid.zoom() * 100)}%`;
+      // The Classic toolbars and menu bar.
+      for (const [b, pressed] of pressers) press(b, pressed());
+      const z = grid.zoom();
+      const listedZoom = ZOOMS.some(v => Math.abs(v - z) < 0.005);
+      const otherZoom = zoomBox.options[zoomBox.options.length - 1];
+      otherZoom.hidden = listedZoom;
+      otherZoom.textContent = listedZoom ? '' : `${Math.round(z * 100)}%`;
+      zoomBox.value = listedZoom ? String(ZOOMS.find(v => Math.abs(v - z) < 0.005)) : '';
+      press(classicBtn, look === 'classic');
+      press(modernBtn, look === 'modern');
+      bar.sync();
       updateStats();
+    }
+
+    /** The ready-made format a cell's look is (as named in the Number list), or 'custom' for any other format code. */
+    function currentFormat(s: CellStyle): string {
+      if (s.fmt !== 'custom') return s.fmt ?? '';
+      return Object.keys(presetCodes).find(k => presetCodes[k] === s.code) ?? 'custom';
     }
 
     function onChange(): void {
@@ -1775,15 +2161,20 @@ export const sheetApp: AppDef = {
       mode.textContent = editing ? 'Edit' : 'Ready';
     };
 
-    app.root.append(tabsRow, ribbon, formulaBar, main, tabsBar, status);
+    app.root.append(tabsRow, ribbon, classicBar, formulaBar, main, tabsBar, status);
     drawTabs();
-    syncToolbar();
+    applyLook(look);
     refresh();
 
     on(app.root, 'keydown', (event: KeyboardEvent) => {
       const ctrl = event.ctrlKey || event.metaKey;
       const k = event.key.toLowerCase();
-      if (ctrl && k === 's') {
+      if (look === 'classic' && event.altKey && !ctrl && !event.shiftKey && /^[a-z]$/.test(k) && bar.openByKey(k)) {
+        event.preventDefault();
+      } else if (look === 'classic' && event.key === 'F10' && !event.altKey && !ctrl && !event.shiftKey) {
+        event.preventDefault();
+        bar.openFirst();
+      } else if (ctrl && k === 's') {
         event.preventDefault();
         void (event.shiftKey ? saveAs() : save());
       } else if (shell.native && event.key === 'F12' && !ctrl && !event.shiftKey) {

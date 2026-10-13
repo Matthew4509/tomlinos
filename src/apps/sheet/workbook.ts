@@ -924,7 +924,7 @@ export class Workbook {
     const rule = nameRuleProblem(name);
     if (rule) return rule;
     if (this.allTables().some(x => x.t !== except && x.t.name.toLowerCase() === name.toLowerCase())) return `There is already a table called "${name}". Choose another name.`;
-    if (this.names.some(n => n.name.toLowerCase() === name.toLowerCase())) return `"${name}" is already a name in this workbook (Formulas > Name Manager). Choose another.`;
+    if (this.names.some(n => n.name.toLowerCase() === name.toLowerCase())) return `"${name}" is already a name in this workbook (see the Name Manager, Ctrl+F3). Choose another.`;
     return null;
   }
 

@@ -1341,7 +1341,7 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
         return;
       }
       if (grid.wb.names.some(n => n.name.toLowerCase() === typed.toLowerCase())) {
-        void shell.dialogs.alert('That name is not a block of cells', `"${typed}" stands for a value or a formula, so there are no cells to go to. Formulas > Name Manager shows what it stands for.`);
+        void shell.dialogs.alert('That name is not a block of cells', `"${typed}" stands for a value or a formula, so there are no cells to go to. The Name Manager (Ctrl+F3) shows what it stands for.`);
         return;
       }
       const problem = grid.wb.nameProblem(typed);

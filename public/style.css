@@ -470,6 +470,22 @@ body.is-dragging .win-body { pointer-events: none; }
 .rb-a { font-weight: 700; }
 .rb-swatch { position: absolute; left: 6px; right: 14px; bottom: 3px; height: 3px; }
 .rb-select { height: 26px; font-size: 13px; border: 1px solid #bdbdbd; border-radius: 3px; background: #fff; }
+/* The Classic look (View > Classic): a menu bar and two toolbars of 16 px pictures in place of the ribbon. */
+.sheet.sheet-classic > .ribbon-tabs, .sheet.sheet-classic > .ribbon, .sheet.sheet-classic > .ribbon-arrow { display: none; }
+.sheet:not(.sheet-classic) > .classic-bar { display: none; }
+.classic-bar { background: #f3f3f3; border-bottom: 1px solid #c8c8c8; }
+.menubar { display: flex; flex-wrap: wrap; padding: 2px 4px 1px; }
+.menubar-item { padding: 2px 8px; border: 1px solid transparent; border-radius: 3px; background: none; color: #222; font-size: 13px; cursor: default; }
+.menubar-item:hover, .menubar-item[aria-expanded="true"] { background: #e3efe7; border-color: #b7d3c1; }
+.menubar-item[hidden] { display: none; }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 1px; padding: 1px 4px; border-top: 1px solid #e2e2e2; }
+.toolbar .rb.tb { position: relative; min-width: 24px; height: 24px; padding: 0 3px; gap: 1px; }
+.toolbar .rb.tb .rb-swatch { left: 4px; right: auto; width: 14px; bottom: 2px; }
+.tb-icon { display: block; flex: none; }
+.tb-sep { align-self: stretch; width: 1px; margin: 3px; background: #cfcfcf; }
+.toolbar .rb-select, .toolbar .rb-size { height: 22px; font-size: 12px; }
+.toolbar .rb-select.font-face { width: 128px; }
+.toolbar .tb-zoom { width: 64px; }
 .fmt-dialog { width: min(360px, 80vw); }
 .fmt-dialog .dialog-label + .dialog-label { margin-top: 8px; }
 .fmt-list { height: auto; font: 13px "Segoe UI", Arial, sans-serif; }
