@@ -106,8 +106,10 @@ export class PdfPage implements Painter {
 
   text(x: number, y: number, text: string, look: TextLook): void {
     if (!text) return;
-    const font = look.bold ? (look.italic ? 'F4' : 'F2') : look.italic ? 'F3' : 'F1';
-    const width = textWidth(text, look.size, !!look.bold);
+    // F1-F4 Helvetica, F5-F8 Times, F9-F12 Courier: regular, bold, italic, bold italic.
+    const base = look.kind === 'serif' ? 4 : look.kind === 'mono' ? 8 : 0;
+    const font = `F${base + (look.bold ? (look.italic ? 4 : 2) : look.italic ? 3 : 1)}`;
+    const width = textWidth(text, look.size, !!look.bold, look.kind);
     const shift = look.align === 'c' ? width / 2 : look.align === 'r' ? width : 0;
     // The painter's angle turns clockwise on screen; PDF turns anticlockwise.
     const a = (-(look.rotate ?? 0) * Math.PI) / 180;
@@ -121,6 +123,10 @@ export class PdfPage implements Painter {
     if (look.underline && !look.rotate) {
       const uy = py - look.size * 0.12;
       this.ops.push(`${strokeOp(look.colour ?? '#000000')} ${n(look.size * 0.06)} w ${n(px)} ${n(uy)} m ${n(px + width)} ${n(uy)} l S`);
+    }
+    if (look.strike && !look.rotate) {
+      const sy = py + look.size * 0.3;
+      this.ops.push(`${strokeOp(look.colour ?? '#000000')} ${n(look.size * 0.06)} w ${n(px)} ${n(sy)} m ${n(px + width)} ${n(sy)} l S`);
     }
   }
 
@@ -186,17 +192,22 @@ export class PdfDocument {
     };
     void enc;
     put('%PDF-1.4\n%\xe2\xe3\xcf\xd3\n');
-    const fonts = ['Helvetica', 'Helvetica-Bold', 'Helvetica-Oblique', 'Helvetica-BoldOblique'];
-    // 1 catalog, 2 page list, 3-6 fonts, 7 information, then each page and its contents.
-    const first = 8;
+    const fonts = [
+      'Helvetica', 'Helvetica-Bold', 'Helvetica-Oblique', 'Helvetica-BoldOblique', 'Times-Roman', 'Times-Bold', 'Times-Italic', 'Times-BoldItalic',
+      'Courier', 'Courier-Bold', 'Courier-Oblique', 'Courier-BoldOblique',
+    ];
+    // 1 catalog, 2 page list, 3-14 fonts, 15 information, then each page and its contents.
+    const info = 3 + fonts.length;
+    const first = info + 1;
     const kids = this.pages.map((_, i) => `${first + i * 2} 0 R`).join(' ');
     obj(1, '<< /Type /Catalog /Pages 2 0 R >>');
     obj(2, `<< /Type /Pages /Kids [${kids}] /Count ${this.pages.length} >>`);
     fonts.forEach((name, i) => obj(3 + i, `<< /Type /Font /Subtype /Type1 /BaseFont /${name} /Encoding /WinAnsiEncoding >>`));
-    obj(7, `<< /Producer (TOMLIN OS Spreadsheet)${this.title ? ` /Title ${pdfString(this.title.slice(0, 200))}` : ''} >>`);
+    obj(info, `<< /Producer (TOMLIN OS Spreadsheet)${this.title ? ` /Title ${pdfString(this.title.slice(0, 200))}` : ''} >>`);
+    const fontRefs = fonts.map((_, i) => `/F${i + 1} ${3 + i} 0 R`).join(' ');
     for (const [i, page] of this.pages.entries()) {
       const id = first + i * 2;
-      obj(id, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${n(page.w)} ${n(page.h)}] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R /F4 6 0 R >> >> /Contents ${id + 1} 0 R >>`);
+      obj(id, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${n(page.w)} ${n(page.h)}] /Resources << /Font << ${fontRefs} >> >> /Contents ${id + 1} 0 R >>`);
       const raw = latin1(page.content());
       const packed = await deflate(raw);
       if (packed) obj(id + 1, `<< /Length ${packed.length} /Filter /FlateDecode >>`, packed);
@@ -207,7 +218,7 @@ export class PdfDocument {
     let table = `xref\n0 ${count}\n0000000000 65535 f \n`;
     for (let id = 1; id < count; id++) table += `${String(offsets[id] ?? 0).padStart(10, '0')} 00000 n \n`;
     put(table);
-    put(`trailer\n<< /Size ${count} /Root 1 0 R /Info 7 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+    put(`trailer\n<< /Size ${count} /Root 1 0 R /Info ${info} 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
     const out = new Uint8Array(length);
     let at = 0;
     for (const c of chunks) {

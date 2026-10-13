@@ -67,7 +67,7 @@ function formulaAt(wb: Workbook, s: number, v: Validation, f: string, col: numbe
       return new CellError('#REF!');
     }
   }
-  return wb.evalFormula(s, moved);
+  return wb.evalFormula(s, moved, { col, row });
 }
 
 const scalar = (x: Value | Value[][]): Value => (Array.isArray(x) ? x[0]?.[0] ?? null : x);

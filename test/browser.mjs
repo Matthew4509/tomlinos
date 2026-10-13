@@ -1139,7 +1139,7 @@ await step('Spreadsheet: FILTER and SORT fill the cells below them, a typed date
   eq(await cell('A7'), '12/11/2026', 'a date plus 30 days shows as a date');
   await goTo('A6');
   eq(await bar.inputValue(), '13/10/2026', 'edited as a date');
-  eq(await page.locator('.sheet .rb-select').inputValue(), 'shortdate', 'the format box says Short date');
+  eq(await page.locator('.sheet select[aria-label="Number format"]').inputValue(), 'shortdate', 'the format box says Short date');
   // Month first, then back to day first.
   await order(/Month first/);
   await goTo('A8');
@@ -1158,13 +1158,13 @@ await step('Spreadsheet: FILTER and SORT fill the cells below them, a typed date
   await page.keyboard.type('46308');
   await page.keyboard.press('Enter');
   await goTo('B6');
-  await page.locator('.sheet .rb-select').selectOption('longdate');
+  await page.locator('.sheet select[aria-label="Number format"]').selectOption('longdate');
   eq(await cell('B6'), 'Tuesday, 13 October 2026', 'Long date');
   await goTo('C6');
   await page.keyboard.type('-1234.5');
   await page.keyboard.press('Enter');
   await goTo('C6');
-  await page.locator('.sheet .rb-select').selectOption('more');
+  await page.locator('.sheet select[aria-label="Number format"]').selectOption('more');
   const dlg = page.locator('.dialog', { hasText: 'More number formats' });
   await dlg.waitFor();
   await dlg.getByRole('textbox', { name: 'Format code' }).fill('#,##0.00;[Red](#,##0.00)');
@@ -1175,8 +1175,8 @@ await step('Spreadsheet: FILTER and SORT fill the cells below them, a typed date
   await dlg.getByRole('button', { name: 'OK' }).click();
   eq(await cell('C6'), '-1,234.50', 'the code is used');
   await goTo('C6');
-  ok((await page.locator('.sheet .rb-select').inputValue()) === 'custom', 'the box shows a custom format');
-  ok((await page.locator('.sheet .rb-select option[value=custom]').textContent()).includes('#,##0.00'), 'naming the code');
+  ok((await page.locator('.sheet select[aria-label="Number format"]').inputValue()) === 'custom', 'the box shows a custom format');
+  ok((await page.locator('.sheet select[aria-label="Number format"] option[value=custom]').textContent()).includes('#,##0.00'), 'naming the code');
   // The [Red] in the code really colours the text, and the list has its blue outline.
   await goTo('F2');
   await settle(150);
@@ -1214,9 +1214,14 @@ await step('Spreadsheet: freeze, filter, merge, find and replace, then saved as 
   await typeRow(['Cara', 'Paid', '45']);
   await typeRow(['Dan', 'Paid', '300']);
   // Freeze the top row: scrolled far down, a click on the first row still lands on row 1.
+  // Freeze is on the View tab (session 8), as in Excel.
+  const viewTab = () => page.locator('.sheet .ribbon-tab', { hasText: /^View$/ }).click();
+  const homeTab = () => page.locator('.sheet .ribbon-tab', { hasText: /^Home$/ }).click();
+  await viewTab();
   await ribbonBtn(/^Freeze panes/).click();
   await menuPick(['Freeze top row']);
   eq(await ribbonBtn(/^Freeze panes/).getAttribute('aria-pressed'), 'true', 'the Freeze button shows it is on');
+  await homeTab();
   await page.locator('.sheet .grid-scroll').evaluate(el => { el.scrollTop = 3000; });
   await settle(150);
   let g = await gridBox();
@@ -1291,7 +1296,9 @@ await step('Spreadsheet: freeze, filter, merge, find and replace, then saved as 
   ok(!(await page.locator('.dialog', { hasText: 'Opened' }).count()), 'nothing to report: our own .xlsx loses nothing');
   eq(await cell('B4'), 'Settled', 'values kept');
   eq(await page.locator('.sheet .sheet-filter-note').textContent(), '3 of 4 rows shown (filter)', 'the filter and its hidden row kept');
+  await viewTab();
   eq(await ribbonBtn(/^Freeze panes/).getAttribute('aria-pressed'), 'true', 'the frozen row kept');
+  await homeTab();
   await goTo('B7');
   eq(await page.locator('.sheet .name-box').inputValue(), 'A7:C7', 'the merge kept');
   // A file in Excel's old binary kind opens to a message saying how to convert it.

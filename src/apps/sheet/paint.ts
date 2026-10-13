@@ -3,6 +3,7 @@
 // widths (Arial has the same), so a chart lays out the same in the window, on paper and in a PDF.
 // No browser needed here; the SVG painter is the only part that makes elements.
 import { svg } from '../../core/dom.ts';
+import type { FontKind } from './fonts.ts';
 
 export interface TextLook {
   size: number;
@@ -14,6 +15,9 @@ export interface TextLook {
   align?: 'l' | 'c' | 'r';
   /** Turned this many degrees (-90 reads upwards, as a value axis title does). */
   rotate?: number;
+  /** Plain (Helvetica, the default), with serifs (Times) or fixed-width (Courier). */
+  kind?: FontKind;
+  strike?: boolean;
 }
 
 /** y for text is the middle of the line (where a capital letter's middle sits). */
@@ -55,12 +59,13 @@ function widthOf(ch: string, table: number[]): number {
   return code > 0x2e80 ? 1000 : 556;
 }
 
-/** How wide the text is at this size, in the same units as the size. */
-export function textWidth(text: string, size: number, bold = false): number {
+/** How wide the text is at this size, in the same units as the size (Courier is 600 a character; Times a little narrower than Helvetica). */
+export function textWidth(text: string, size: number, bold = false, kind: FontKind = 'sans'): number {
+  if (kind === 'mono') return ([...text].length * 600 * size) / 1000;
   const table = bold ? BOLD : REGULAR;
   let w = 0;
   for (const ch of text) w += widthOf(ch, table);
-  return (w * size) / 1000;
+  return ((kind === 'serif' ? 0.9 : 1) * w * size) / 1000;
 }
 
 /** The text cut to fit `width`, ending in "…" when it was cut. */
@@ -72,19 +77,19 @@ export function fitText(text: string, width: number, size: number, bold = false)
 }
 
 /** Text laid out in lines no wider than `width`, broken between words (a word too long for a line is cut). */
-export function wrapText(text: string, width: number, size: number, bold = false, most = 60): string[] {
+export function wrapText(text: string, width: number, size: number, bold = false, most = 60, kind: FontKind = 'sans'): string[] {
   const out: string[] = [];
   for (const para of text.split(/\r?\n/)) {
     let line = '';
     for (const word of para.split(/(?<= )/)) {
-      if (line === '' || textWidth(line + word, size, bold) <= width) line += word;
+      if (line === '' || textWidth(line + word, size, bold, kind) <= width) line += word;
       else {
         out.push(line.trimEnd());
         line = word;
       }
-      while (textWidth(line, size, bold) > width && line.length > 1) {
+      while (textWidth(line, size, bold, kind) > width && line.length > 1) {
         let cut = line.length - 1;
-        while (cut > 1 && textWidth(line.slice(0, cut), size, bold) > width) cut--;
+        while (cut > 1 && textWidth(line.slice(0, cut), size, bold, kind) > width) cut--;
         out.push(line.slice(0, cut));
         line = line.slice(cut);
         if (out.length >= most) return out;
@@ -98,6 +103,7 @@ export function wrapText(text: string, width: number, size: number, bold = false
 }
 
 const FONT = 'Helvetica, Arial, "Liberation Sans", sans-serif';
+const FAMILY: Record<FontKind, string> = { sans: FONT, serif: '"Times New Roman", Times, "Liberation Serif", serif', mono: '"Courier New", Courier, "Liberation Mono", monospace' };
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
 /** Draws into an <svg> (the chart on the grid, a page in print preview and on paper). */
@@ -140,8 +146,9 @@ export class SvgPainter implements Painter {
 
   text(x: number, y: number, text: string, look: TextLook): void {
     const t = svg('text', {
-      x: r2(x), y: r2(y), 'font-family': FONT, 'font-size': r2(look.size), 'font-weight': look.bold ? 'bold' : undefined,
-      'font-style': look.italic ? 'italic' : undefined, 'text-decoration': look.underline ? 'underline' : undefined,
+      x: r2(x), y: r2(y), 'font-family': FAMILY[look.kind ?? 'sans'], 'font-size': r2(look.size), 'font-weight': look.bold ? 'bold' : undefined,
+      'font-style': look.italic ? 'italic' : undefined,
+      'text-decoration': look.underline || look.strike ? [look.underline ? 'underline' : '', look.strike ? 'line-through' : ''].filter(Boolean).join(' ') : undefined,
       fill: look.colour ?? '#000', 'text-anchor': look.align === 'c' ? 'middle' : look.align === 'r' ? 'end' : 'start',
       'dominant-baseline': 'central', transform: look.rotate ? `rotate(${look.rotate} ${r2(x)} ${r2(y)})` : undefined,
     }, text);

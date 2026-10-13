@@ -45,6 +45,15 @@ export interface CellStyle {
   br?: Line;
   /** The border colour (black when not set). */
   bc?: string;
+  /** Text size in points (11 when not set) and typeface (the standard one when not set). */
+  fs?: number;
+  ff?: string;
+  /** Strikethrough. */
+  st?: boolean;
+  /** Where the text sits up and down the cell: top or middle (the bottom when not set, as in Excel). */
+  va?: 't' | 'm';
+  /** Indent from the side the text is aligned to, in steps of about three characters (1 to 15). */
+  ind?: number;
 }
 
 /** A border line: thin (true), medium, thick or double, as Excel draws them. */

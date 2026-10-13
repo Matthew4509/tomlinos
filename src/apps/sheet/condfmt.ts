@@ -156,7 +156,7 @@ function formulaAt(wb: Workbook, s: number, e: CfEntry, f: string, col: number, 
       return null;
     }
   }
-  const got = wb.evalFormula(s, moved);
+  const got = wb.evalFormula(s, moved, { col, row });
   if (Array.isArray(got)) return got[0]?.[0] ?? null;
   return got;
 }

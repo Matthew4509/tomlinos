@@ -20,7 +20,44 @@ import { chartIcon, mountCharts } from './sheet/charts-ui.ts';
 import { MARGINS, pageOf, PAPERS, planPages, type Paper } from './sheet/print.ts';
 import { downloadPdf, marginName, pageSetupDialog, printPreview, savePdfInDocuments, setPage, type PrintContext } from './sheet/print-ui.ts';
 import { conditionalMenu, validationDialog } from './sheet/rules-ui.ts';
+import { autoSumMenu, createFromSelection, functionMenu, insertFunctionDialog, nameDialog, nameManager, useInFormulaMenu } from './sheet/formulas-ui.ts';
 import { APPS } from './catalog.ts';
+import { FONT_FACES, FONT_SIZES, STANDARD_SIZE, stepSize } from './sheet/fonts.ts';
+import { activeTable, formatAsTableMenu, insertTableDialog, tableDesign, tableSummary, totalChoices } from './sheet/tables-ui.ts';
+import { dataRows as tableData } from './sheet/tables.ts';
+import { formatCellsDialog } from './sheet/format-ui.ts';
+import { filterRuleMenu, removeDuplicatesDialog, sortDialog, textToColumnsDialog } from './sheet/data-ui.ts';
+import { activePivot, insertPivotDialog, mountPivotPane, pivotAnalyze } from './sheet/pivot-ui.ts';
+
+/** Excel's ready-made cell styles (Home > Cell styles): a look each, with its colours as Excel has them. */
+const CELL_STYLES: Array<{ label: string; look: CellStyle }> = [
+  { label: 'Good', look: { fill: '#c6efce', color: '#006100' } },
+  { label: 'Bad', look: { fill: '#ffc7ce', color: '#9c0006' } },
+  { label: 'Neutral', look: { fill: '#ffeb9c', color: '#9c5700' } },
+  { label: 'Calculation', look: { fill: '#f2f2f2', color: '#fa7d00', b: true, bt: true, bb: true, bl: true, br: true, bc: '#7f7f7f' } },
+  { label: 'Check cell', look: { fill: '#a5a5a5', color: '#ffffff', b: true, bt: 'double', bb: 'double', bl: 'double', br: 'double', bc: '#3f3f3f' } },
+  { label: 'Explanatory text', look: { color: '#7f7f7f', i: true } },
+  { label: 'Input', look: { fill: '#ffcc99', color: '#3f3f76', bt: true, bb: true, bl: true, br: true, bc: '#7f7f7f' } },
+  { label: 'Linked cell', look: { color: '#fa7d00', bb: 'double', bc: '#ff8001' } },
+  { label: 'Note', look: { fill: '#ffffcc', bt: true, bb: true, bl: true, br: true, bc: '#b2b2b2' } },
+  { label: 'Output', look: { fill: '#f2f2f2', color: '#3f3f3f', b: true, bt: true, bb: true, bl: true, br: true, bc: '#3f3f3f' } },
+  { label: 'Warning text', look: { color: '#ff0000' } },
+  { label: 'Title', look: { fs: 18, color: '#44546a' } },
+  { label: 'Heading 1', look: { fs: 15, b: true, color: '#44546a', bb: 'thick', bc: '#4472c4' } },
+  { label: 'Heading 2', look: { fs: 13, b: true, color: '#44546a', bb: 'thick', bc: '#a2b8e1' } },
+  { label: 'Heading 3', look: { b: true, color: '#44546a', bb: 'medium', bc: '#8ea9db' } },
+  { label: 'Heading 4', look: { b: true, color: '#44546a' } },
+  { label: 'Total', look: { b: true, bt: true, bb: 'double', bc: '#4472c4' } },
+  { label: 'Accent 1 (blue)', look: { fill: '#4472c4', color: '#ffffff' } },
+  { label: 'Accent 2 (orange)', look: { fill: '#ed7d31', color: '#ffffff' } },
+  { label: 'Accent 3 (grey)', look: { fill: '#a5a5a5', color: '#ffffff' } },
+  { label: 'Accent 4 (gold)', look: { fill: '#ffc000', color: '#ffffff' } },
+  { label: 'Accent 5 (light blue)', look: { fill: '#5b9bd5', color: '#ffffff' } },
+  { label: 'Accent 6 (green)', look: { fill: '#70ad47', color: '#ffffff' } },
+  { label: '20% Accent 1 (pale blue)', look: { fill: '#d9e1f2' } },
+  { label: '20% Accent 2 (pale orange)', look: { fill: '#fce4d6' } },
+  { label: '20% Accent 6 (pale green)', look: { fill: '#e2efda' } },
+];
 import { saveOver } from '../shell/savefile.ts';
 
 const PALETTE: Array<[string, string]> = [
@@ -165,6 +202,11 @@ export const sheetApp: AppDef = {
       return b;
     };
     const group = (name: string, ...kids: Node[]): HTMLElement => h('div', { class: 'rgroup', role: 'group', 'aria-label': name }, h('div', { class: 'rgroup-items' }, ...kids), h('div', { class: 'rgroup-name' }, name));
+    /** A group whose buttons wrap at `width` pixels into rows, as Excel stacks small buttons (the ribbon stays low). */
+    const sized = (width: number, g: HTMLElement): HTMLElement => {
+      css(g.querySelector<HTMLElement>('.rgroup-items')!, { 'max-width': width });
+      return g;
+    };
     const report = async (error: unknown) => {
       if (error instanceof SyntaxProblem) await shell.dialogs.alert('That could not be done', error.message);
       else await shell.report('The spreadsheet could not do that', error);
@@ -172,6 +214,9 @@ export const sheetApp: AppDef = {
     // What the chart, rule and printing screens need from this window.
     const ctx: PrintContext = { shell, wb, grid, root: app.root, signal: app.signal, onChange: () => onChange(), report, fileLabel: () => label };
     const charts = mountCharts(ctx);
+    // The grid, and beside it the PivotTable Fields pane (shown while the active cell is in a PivotTable).
+    const main = h('div', { class: 'sheet-main' }, grid.el);
+    const pivotPane = mountPivotPane(ctx, main);
     const doStyle = (patch: (old: CellStyle) => CellStyle) => {
       if (!grid.commit()) return;
       try {
@@ -207,6 +252,167 @@ export const sheetApp: AppDef = {
     const italicBtn = btn('I', 'Italic (Ctrl+I)', () => doStyle(s => ({ ...s, i: !activeStyle().i })), 'italic');
     const underBtn = btn('U', 'Underline (Ctrl+U)', () => doStyle(s => ({ ...s, u: !activeStyle().u })), 'under');
     const alignBtns = (['l', 'c', 'r'] as const).map(al => btn(al === 'l' ? '⇤' : al === 'c' ? '↔' : '⇥', `Align ${al === 'l' ? 'left' : al === 'c' ? 'centre' : 'right'}`, () => doStyle(s => ({ ...s, al: activeStyle().al === al ? undefined : al }))));
+    const strikeBtn = btn('S', 'Strikethrough (Ctrl+5)', () => doStyle(s => ({ ...s, st: activeStyle().st ? undefined : true })), 'strike');
+    // Typeface and size (Home > Font): Standard is this spreadsheet's own font, saved to Excel as Calibri 11.
+    const otherFace = h('option', { value: '', hidden: true });
+    const faceSelect = h('select', { class: 'rb-select font-face', 'aria-label': 'Font', title: 'Font (typeface)' },
+      h('option', { value: '' }, 'Standard'), ...FONT_FACES.map(f => h('option', { value: f.name }, f.name)), otherFace);
+    on(faceSelect, 'change', () => {
+      const face = faceSelect.value || undefined;
+      doStyle(s => ({ ...s, ff: face }));
+      grid.focus();
+    }, app.signal);
+    const sizeList = h('datalist', { id: `fs-${Math.random().toString(36).slice(2)}` }, ...FONT_SIZES.map(n => h('option', { value: String(n) })));
+    const sizeBox = h('input', { type: 'text', class: 'rb-size', 'aria-label': 'Font size', title: 'Font size in points (11 is the standard)', list: sizeList.id, inputmode: 'decimal', autocomplete: 'off', spellcheck: false });
+    const setSize = (n: number) => {
+      const v = Math.round(n * 2) / 2;
+      doStyle(s => ({ ...s, fs: v === STANDARD_SIZE ? undefined : v }));
+    };
+    const applySize = () => {
+      const n = Number(sizeBox.value.trim().replace(',', '.'));
+      if (sizeBox.value.trim() === String(activeStyle().fs ?? STANDARD_SIZE)) return;
+      if (!Number.isFinite(n) || n < 1 || n > 409) {
+        void shell.dialogs.alert('That is not a font size', 'Type a size from 1 to 409 points. 11 is the standard size.');
+        syncToolbar();
+        return;
+      }
+      setSize(n);
+    };
+    on(sizeBox, 'change', applySize, app.signal);
+    on(sizeBox, 'keydown', (event: KeyboardEvent) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        applySize();
+        grid.focus();
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        syncToolbar();
+        grid.focus();
+      }
+      event.stopPropagation();
+    }, app.signal);
+    const growBtn = btn('A+', 'Increase font size (Ctrl+Shift+>)', () => setSize(stepSize(activeStyle().fs, true)), 'grow');
+    const shrinkBtn = btn('A-', 'Decrease font size (Ctrl+Shift+<)', () => setSize(stepSize(activeStyle().fs, false)), 'shrink');
+    // Up and down the cell, and the indent.
+    const vaBtns = (['t', 'm', 'b'] as const).map(va => btn(va === 't' ? '⤒' : va === 'm' ? '⇕' : '⤓', `${va === 't' ? 'Top' : va === 'm' ? 'Middle' : 'Bottom'} align`, () => doStyle(s => ({ ...s, va: va === 'b' ? undefined : va }))));
+    const indentIn = btn('Indent +', 'Increase indent', () => doStyle(s => ({ ...s, ind: Math.min(15, (s.ind ?? 0) + 1), al: s.al === 'c' ? undefined : s.al })), 'text-rb');
+    const indentOut = btn('Indent -', 'Decrease indent', () => doStyle(s => ({ ...s, ind: s.ind && s.ind > 1 ? s.ind - 1 : undefined })), 'text-rb');
+
+    // Format Painter: the look of the selected cells, brushed onto the next cells selected (double-click: until Esc).
+    let painter: { sheet: number; range: Range; sticky: boolean } | null = null;
+    const painterBtn = h('button', { type: 'button', class: 'rb text-rb', title: 'Format painter: copy the look of these cells onto others. Double-click to keep painting; Esc stops.', 'aria-label': 'Format painter' }, 'Format painter');
+    const stopPainting = () => {
+      painter = null;
+      grid.el.classList.remove('painting');
+      painterBtn.setAttribute('aria-pressed', 'false');
+    };
+    on(painterBtn, 'click', () => {
+      if (!grid.commit()) return;
+      if (painter) {
+        stopPainting();
+        return;
+      }
+      painter = { sheet: wb.active, range: grid.sel(), sticky: false };
+      grid.el.classList.add('painting');
+      painterBtn.setAttribute('aria-pressed', 'true');
+      grid.focus();
+    }, app.signal);
+    on(painterBtn, 'dblclick', () => {
+      if (!grid.commit()) return;
+      painter = { sheet: wb.active, range: painter?.range ?? grid.sel(), sticky: true };
+      grid.el.classList.add('painting');
+      painterBtn.setAttribute('aria-pressed', 'true');
+      grid.focus();
+    }, app.signal);
+    on(grid.el, 'pointerup', () => {
+      if (!painter) return;
+      // After the selection is made: the next frame, when the grid has taken the click.
+      requestAnimationFrame(() => {
+        if (!painter) return;
+        try {
+          wb.paintFormats(painter.sheet, painter.range, wb.active, grid.sel());
+          grid.fitRows();
+          onChange();
+        } catch (error) {
+          void report(error);
+        }
+        if (!painter.sticky) stopPainting();
+      });
+    }, app.signal);
+
+    const clearBtn = btn('Clear ▾', 'Clear: contents, formats, or both', () => {
+      const r = clearBtn.getBoundingClientRect();
+      const run = (fn: () => void) => () => {
+        if (!grid.commit()) return;
+        try {
+          wb.batch(fn);
+          grid.fitRows();
+          onChange();
+        } catch (error) {
+          void report(error);
+        }
+      };
+      shell.menus.show([
+        { label: 'Clear all', action: run(() => {
+          wb.clearContents(wb.active, grid.sel());
+          wb.clearFormats(wb.active, grid.sel());
+          wb.clearNotes(wb.active, grid.sel());
+        }) },
+        { label: 'Clear formats', action: run(() => wb.clearFormats(wb.active, grid.sel())) },
+        { label: 'Clear contents', hint: 'Del', action: run(() => wb.clearContents(wb.active, grid.sel())) },
+        { label: 'Clear notes', action: run(() => wb.clearNotes(wb.active, grid.sel())) },
+      ], r.left, r.bottom, { returnFocus: clearBtn });
+    }, 'text-rb');
+
+    const pasteMenuBtn = btn('Paste special ▾', 'Paste special: values, formulas, formatting, or turned on its side', () => {
+      const r = pasteMenuBtn.getBoundingClientRect();
+      const none = !grid.hasClip();
+      const p = (what: Parameters<typeof grid.pasteSpecial>[0], transpose = false) => () => {
+        if (grid.commit()) grid.pasteSpecial(what, transpose);
+        onChange();
+      };
+      shell.menus.show([
+        { label: 'Paste', hint: 'Ctrl+V', disabled: none, action: p('all') },
+        { label: 'Values', hint: 'Ctrl+Shift+V', disabled: none, action: p('values') },
+        { label: 'Formulas', disabled: none, action: p('formulas') },
+        { label: 'Formatting', disabled: none, action: p('formats') },
+        { label: 'Values and formatting', disabled: none, action: p('valuesFormats') },
+        { label: 'Transpose (rows become columns)', disabled: none, action: p('all', true) },
+        { label: 'Column widths', disabled: none, action: () => {
+          const c = grid.clip();
+          if (!c || !grid.commit()) return;
+          const at = grid.sel().c0;
+          for (let i = 0; i <= c.range.c1 - c.range.c0; i++) {
+            const w = wb.sheets[c.sheet].colW.get(c.range.c0 + i);
+            wb.setSize(wb.active, 'col', at + i, w ?? null);
+          }
+          onChange();
+        } },
+      ], r.left, r.bottom, { returnFocus: pasteMenuBtn });
+    }, 'text-rb');
+
+    const cellStylesBtn = btn('Cell styles ▾', 'Cell styles: Good, Bad, Neutral, headings, totals, accents', () => {
+      const r = cellStylesBtn.getBoundingClientRect();
+      shell.menus.show([
+        { label: 'Normal (no formatting)', action: () => {
+          if (!grid.commit()) return;
+          try {
+            wb.clearFormats(wb.active, grid.sel());
+            grid.fitRows();
+            onChange();
+          } catch (error) {
+            void report(error);
+          }
+        } },
+        { separator: true },
+        ...CELL_STYLES.map(cs => ({
+          label: cs.label,
+          // The style's look over the cell's own, keeping its number format and alignment.
+          action: () => doStyle(s => ({ fmt: s.fmt, code: s.code, dec: s.dec, al: s.al, va: s.va, wrap: s.wrap, ind: s.ind, ...cs.look })),
+        })),
+      ], r.left, r.bottom, { returnFocus: cellStylesBtn });
+    }, 'text-rb');
+
     const wrapBtn = btn('Wrap Text', 'Wrap text: show long text and line breaks on several lines (Alt+Enter starts a new line while typing)', () => doStyle(s => ({ ...s, wrap: activeStyle().wrap ? undefined : true })), 'text-rb');
 
     let palette: HTMLElement | null = null;
@@ -244,10 +450,11 @@ export const sheetApp: AppDef = {
           swatches.append(sw);
         }
         box.append(swatches);
-        ribbon.append(box);
+        // On the window, not in the ribbon (the ribbon scrolls sideways when narrow, and would cut the box off).
+        app.root.append(box);
         const r = b.getBoundingClientRect();
-        const host = ribbon.getBoundingClientRect();
-        css(box, { left: Math.min(r.left - host.left, host.width - 190), top: r.bottom - host.top });
+        const host = app.root.getBoundingClientRect();
+        css(box, { left: Math.max(0, Math.min(r.left - host.left, host.width - 190)), top: r.bottom - host.top });
         palette = box;
       }, app.signal);
       return b;
@@ -255,26 +462,28 @@ export const sheetApp: AppDef = {
     const fillBtn = paletteButton('A', 'Fill colour', 'fill', '#ffd400');
     const colorBtn = paletteButton('A', 'Text colour', 'color', '#d13438');
 
+    /** A style change that depends on where each cell is in the selection (its outer edges): borders. One Undo. */
+    const edgeStyle = (fn: (s: CellStyle, edge: { t: boolean; b: boolean; l: boolean; r: boolean }) => CellStyle) => {
+      if (!grid.commit()) return;
+      const sel = grid.sel();
+      try {
+        // One step: a single Undo takes the whole border back.
+        wb.batch(() => {
+          for (let row = sel.r0; row <= sel.r1; row++) {
+            for (let col = sel.c0; col <= sel.c1; col++) {
+              wb.setStyle(wb.active, { c0: col, r0: row, c1: col, r1: row }, s => fn(s, { t: row === sel.r0, b: row === sel.r1, l: col === sel.c0, r: col === sel.c1 }));
+            }
+          }
+        });
+        onChange();
+      } catch (error) {
+        void report(error);
+      }
+    };
     const bordersBtn = h('button', { type: 'button', class: 'rb wide-rb', title: 'Borders', 'aria-label': 'Borders', 'aria-haspopup': 'true' }, h('span', { class: 'rb-a' }, '▦'), h('span', { class: 'rb-caret', 'aria-hidden': 'true' }, '▾'));
     on(bordersBtn, 'click', () => {
       const r = bordersBtn.getBoundingClientRect();
-      const set = (fn: (s: CellStyle, edge: { t: boolean; b: boolean; l: boolean; r: boolean }) => CellStyle) => {
-        if (!grid.commit()) return;
-        const sel = grid.sel();
-        try {
-          // One step: a single Undo takes the whole border back.
-          wb.batch(() => {
-            for (let row = sel.r0; row <= sel.r1; row++) {
-              for (let col = sel.c0; col <= sel.c1; col++) {
-                wb.setStyle(wb.active, { c0: col, r0: row, c1: col, r1: row }, s => fn(s, { t: row === sel.r0, b: row === sel.r1, l: col === sel.c0, r: col === sel.c1 }));
-              }
-            }
-          });
-          onChange();
-        } catch (error) {
-          void report(error);
-        }
-      };
+      const set = edgeStyle;
       // Every line drawn takes the border colour chosen below (black when Automatic).
       const pen = (s: CellStyle): CellStyle => ({ ...s, bc: penColour });
       const edges = (line: Line, which: Array<'t' | 'b' | 'l' | 'r'>) => set((s, e) => {
@@ -470,6 +679,18 @@ export const sheetApp: AppDef = {
       const a = grid.active();
       let range: Range = s;
       const filled = (c: number, r: number) => wb.value(wb.active, c, r) !== null;
+      const inTable = wb.tableAt(wb.active, a.col, a.row);
+      if (inTable && s.c0 === s.c1 && s.r0 === s.r1) {
+        // In a table: its data rows (the header and total rows stay where they are).
+        const dr = tableData(inTable);
+        try {
+          if (dr.r1 > dr.r0) wb.sortRange(wb.active, { c0: inTable.range.c0, c1: inTable.range.c1, r0: dr.r0, r1: dr.r1 }, a.col, ascending);
+          onChange();
+        } catch (error) {
+          void report(error);
+        }
+        return;
+      }
       if (s.c0 === s.c1 && s.r0 === s.r1) {
         // One cell: sort the block of data around it.
         let { c0, r0, c1, r1 } = s;
@@ -540,6 +761,7 @@ export const sheetApp: AppDef = {
       const heading = wb.display(wb.active, col, f.range.r0) || `Column ${colName(col)}`;
       const values = wb.filterValues(wb.active, col);
       const kept = f.cols.get(col);
+      const ruled = f.rules?.has(col) ?? false;
       const keptSet = kept ? new Set(kept.map(k => k.toLowerCase())) : null;
       const done = new AbortController();
       const close = () => {
@@ -560,7 +782,16 @@ export const sheetApp: AppDef = {
         }, done.signal);
         return b;
       };
-      const clear = h('button', { type: 'button', class: 'filter-action', disabled: !kept }, `Clear filter from “${heading.slice(0, 30)}”`);
+      const clear = h('button', { type: 'button', class: 'filter-action', disabled: !kept && !ruled }, `Clear filter from “${heading.slice(0, 30)}”`);
+      // Number filters or Text filters (by what the column mostly holds): a menu of conditions, each with its own screen.
+      const ruleItems = filterRuleMenu(ctx, col);
+      const numeric = ruleItems.some(it => 'label' in it && it.label === 'Top 10...');
+      const rulesBtn = h('button', { type: 'button', class: 'filter-action', 'aria-haspopup': 'true' }, `${numeric ? 'Number' : 'Text'} filters ▸${ruled ? ' (on)' : ''}`);
+      on(rulesBtn, 'click', () => {
+        const r = rulesBtn.getBoundingClientRect();
+        close();
+        shell.menus.show(ruleItems, r.right, r.top);
+      }, done.signal);
       on(clear, 'click', () => {
         wb.filterBy(wb.active, col, null);
         onChange();
@@ -613,7 +844,7 @@ export const sheetApp: AppDef = {
       }, done.signal);
       on(cancel, 'click', close, done.signal);
       const box = h('div', { class: 'filter-box', role: 'dialog', 'aria-label': `Filter ${heading}` },
-        sortBtn(true), sortBtn(false), clear, search, list, h('div', { class: 'filter-buttons' }, ok, cancel));
+        sortBtn(true), sortBtn(false), clear, rulesBtn, search, list, h('div', { class: 'filter-buttons' }, ok, cancel));
       on(box, 'keydown', (event: KeyboardEvent) => {
         if (event.key === 'Escape') {
           event.preventDefault();
@@ -843,47 +1074,255 @@ export const sheetApp: AppDef = {
       { label: 'Clear validation from the selected cells', action: () => { wb.setValidation(wb.active, grid.sel(), null); onChange(); } },
     ]);
 
+    // Formulas: functions by kind, names, and showing formulas instead of their answers.
+    const fnMenu = (label: string, cat: Parameters<typeof functionMenu>[1]) => menuBtn(`${label} ▾`, `${cat} functions`, () => functionMenu(ctx, cat));
+    const showFormulasBtn = btn('Show formulas', 'Show formulas in the cells instead of their answers (Ctrl+`)', () => toggleFormulas(), 'text-rb');
+    function toggleFormulas(): void {
+      grid.showFormulas = !grid.showFormulas;
+      syncToolbar();
+      grid.redraw();
+    }
+
+    // Review: notes on cells.
+    /** Adds or changes the note on a cell: a box to type it in; an empty box takes the note off. */
+    async function editNote(col: number, row: number): Promise<void> {
+      if (!grid.commit()) return;
+      const old = wb.sheets[wb.active].cells.get(keyOf(col, row))?.n ?? '';
+      const box = h('textarea', { class: 'field note-text', 'aria-label': 'Note', maxlength: 32000 });
+      box.value = old;
+      const done = new AbortController();
+      const answer = await shell.dialogs.ask<boolean>({
+        title: `${old ? 'Edit the note on' : 'New note on'} ${addressOf(col, row)}`,
+        body: h('div', {}, box, h('p', { class: 'dialog-detail' }, 'The note shows when the pointer is over the cell; a red corner marks the cell. Leave it empty to take the note off.')),
+        buttons: [{ label: 'OK', value: true, primary: true }, { label: 'Cancel', value: false }],
+        cancel: false,
+        focus: () => box,
+      });
+      done.abort();
+      if (answer) {
+        try {
+          wb.setNote(wb.active, col, row, box.value.replace(/\s+$/, '') || null);
+          onChange();
+        } catch (error) {
+          void report(error);
+        }
+      }
+      grid.focus();
+    }
+    grid.onNote = (col, row) => void editNote(col, row);
+    const goNote = (step: 1 | -1) => {
+      const notes = wb.notesOf(wb.active);
+      if (!notes.length) {
+        shell.toast('There are no notes on this sheet.');
+        return;
+      }
+      const a = grid.active();
+      const at = (n: { row: number; col: number }) => n.row * 1000 + n.col;
+      const here = a.row * 1000 + a.col;
+      const next = step > 0 ? notes.find(n => at(n) > here) ?? notes[0] : [...notes].reverse().find(n => at(n) < here) ?? notes[notes.length - 1];
+      grid.goTo(next.col, next.row);
+    };
+    const showNotesBtn = btn('Show all notes', 'Show every note beside its cell', () => {
+      grid.showNotes = !grid.showNotes;
+      syncToolbar();
+      grid.redraw();
+    }, 'text-rb');
+    // Format Cells (Ctrl+1), and Home > Cells > Format: row height, column width, hiding, and Format Cells.
+    const formatCells = (first?: Parameters<typeof formatCellsDialog>[2]) => void formatCellsDialog(ctx, { style: doStyle, edges: edgeStyle, palette: PALETTE }, first);
+    grid.onFormatCells = () => formatCells();
+    const sizeDialog = async (axis: 'row' | 'col') => {
+      if (!grid.commit()) return;
+      const sel = grid.sel();
+      const sheet = wb.sheets[wb.active];
+      const now = axis === 'row' ? (sheet.rowH.get(sel.r0) ?? 20) * 0.75 : ((sheet.colW.get(sel.c0) ?? 64) - 5) / 7;
+      const v = await shell.dialogs.prompt({
+        title: axis === 'row' ? 'Row height' : 'Column width',
+        label: axis === 'row' ? 'Row height in points (15 is the standard)' : 'Column width in characters (8.43 is the standard)',
+        value: String(Math.round(now * 100) / 100),
+        ok: 'OK',
+        check: x => {
+          const n = Number(x);
+          return Number.isFinite(n) && n >= 0 && n <= (axis === 'row' ? 409 : 255) ? null : axis === 'row' ? 'Type a height from 0 to 409 points.' : 'Type a width from 0 to 255 characters.';
+        },
+      });
+      if (v === null) return;
+      const n = Number(v);
+      const [from, to] = axis === 'row' ? [sel.r0, Math.min(sel.r1, sel.r0 + 4999)] : [sel.c0, sel.c1];
+      for (let i = from; i <= to; i++) {
+        if (n === 0) continue;
+        wb.setSize(wb.active, axis, i, axis === 'row' ? n / 0.75 : n * 7 + 5);
+      }
+      // 0 hides them, as in Excel.
+      if (n === 0) wb.setHidden(wb.active, axis, from, to, true);
+      grid.fitRows();
+      onChange();
+    };
+    const formatBtn = menuBtn('Format ▾', 'Format: row height, column width, hide and unhide, Format cells', () => [
+      { label: 'Row height...', action: () => void sizeDialog('row') },
+      { label: 'AutoFit row height', action: () => {
+        const sel = grid.sel();
+        for (let r = sel.r0; r <= Math.min(sel.r1, sel.r0 + 4999); r++) wb.setSize(wb.active, 'row', r, null);
+        grid.fitRows();
+        onChange();
+      } },
+      { label: 'Column width...', action: () => void sizeDialog('col') },
+      { label: 'AutoFit column width', action: () => {
+        const sel = grid.sel();
+        grid.fitColumns(sel.c0, sel.c1);
+        onChange();
+      } },
+      { separator: true },
+      { label: 'Hide and unhide', submenu: [
+        { label: 'Hide rows', action: () => grid.hide('row', true) },
+        { label: 'Hide columns', action: () => grid.hide('col', true) },
+        { label: 'Unhide rows', action: () => grid.hide('row', false) },
+        { label: 'Unhide columns', action: () => grid.hide('col', false) },
+      ] },
+      { separator: true },
+      { label: 'Format cells...', hint: 'Ctrl+1', action: () => formatCells() },
+    ]);
+
+    // View: the same switches as on the Formulas and Review tabs, and the sheet's gridlines on screen.
+    const viewNotesBtn = btn('Notes', 'Show every note beside its cell', () => showNotesBtn.click(), 'text-rb');
+    const viewFormulasBtn = btn('Formulas', 'Show formulas in the cells instead of their answers (Ctrl+`)', () => toggleFormulas(), 'text-rb');
+    const gridlinesBtn = btn('Gridlines', 'Show the lines between cells on this sheet', () => {
+      wb.setGridlines(wb.active, !!wb.sheets[wb.active].noGrid);
+      onChange();
+    }, 'text-rb');
+
     const tabGroups = {
       home: [
-        group('Undo', undoBtn, redoBtn),
-        group('Clipboard', btn('Paste', 'Paste (Ctrl+V)', () => grid.paste(), 'text-rb'), btn('Cut', 'Cut (Ctrl+X)', () => grid.copy(true), 'text-rb'), btn('Copy', 'Copy (Ctrl+C)', () => grid.copy(false), 'text-rb')),
-        group('Font', boldBtn, italicBtn, underBtn, bordersBtn, fillBtn, colorBtn),
-        group('Alignment', ...alignBtns, wrapBtn, mergeBtn),
-        group('Number', fmtSelect, btn('$', 'Currency format', () => doStyle(s => ({ ...s, fmt: 'currency', dec: 2 }))), btn('%', 'Percent format', () => doStyle(s => ({ ...s, fmt: 'percent', dec: 0 }))), btn(',', 'Comma format', () => doStyle(s => ({ ...s, fmt: 'comma', dec: 2 }))), btn('.0→', 'More decimal places', () => decimals(1)), btn('←.0', 'Fewer decimal places', () => decimals(-1))),
-        group('Styles', cfBtn),
-        group('Editing', btn('Σ AutoSum', 'AutoSum (Alt+=)', () => grid.autoSum(), 'text-rb'), btn('A→Z', 'Sort A to Z (or smallest first)', () => sortRegion(true), 'text-rb'), btn('Z→A', 'Sort Z to A (or largest first)', () => sortRegion(false), 'text-rb'), filterBtn, findBtn),
-        group('Cells', insertBtn, deleteBtn),
-        group('View', freezeBtn),
+        sized(36, group('Undo', undoBtn, redoBtn)),
+        sized(190, group('Clipboard', btn('Paste', 'Paste (Ctrl+V)', () => grid.paste(), 'text-rb'), pasteMenuBtn, btn('Cut', 'Cut (Ctrl+X)', () => grid.copy(true), 'text-rb'), btn('Copy', 'Copy (Ctrl+C)', () => grid.copy(false), 'text-rb'), painterBtn)),
+        sized(240, group('Font', faceSelect, sizeBox, sizeList, growBtn, shrinkBtn, boldBtn, italicBtn, underBtn, strikeBtn, bordersBtn, fillBtn, colorBtn)),
+        sized(185, group('Alignment', ...vaBtns, wrapBtn, ...alignBtns, mergeBtn, indentOut, indentIn)),
+        sized(150, group('Number', fmtSelect, btn('$', 'Currency format', () => doStyle(s => ({ ...s, fmt: 'currency', dec: 2 }))), btn('%', 'Percent format', () => doStyle(s => ({ ...s, fmt: 'percent', dec: 0 }))), btn(',', 'Comma format', () => doStyle(s => ({ ...s, fmt: 'comma', dec: 2 }))), btn('.0→', 'More decimal places', () => decimals(1)), btn('←.0', 'Fewer decimal places', () => decimals(-1)))),
+        sized(200, group('Styles', cfBtn, menuBtn('Format as table ▾', 'Format as table: make the cells a table in a ready-made style', () => formatAsTableMenu(ctx)), cellStylesBtn)),
+        sized(90, group('Cells', insertBtn, deleteBtn, formatBtn)),
+        sized(180, group('Editing', btn('Σ AutoSum', 'AutoSum (Alt+=)', () => grid.autoSum(), 'text-rb'), clearBtn, btn('A→Z', 'Sort A to Z (or smallest first)', () => sortRegion(true), 'text-rb'), btn('Z→A', 'Sort Z to A (or largest first)', () => sortRegion(false), 'text-rb'), filterBtn, findBtn)),
       ],
-      insert: [group('Charts', ...chartButtons)],
+      insert: [group('Tables',
+        btn('PivotTable', 'Insert a PivotTable: sum up a table of data by its items', () => void insertPivotDialog(ctx, (s, col, row) => {
+          grid.setActiveSheet(s);
+          drawTabs();
+          grid.goTo(col, row);
+        }), 'text-rb'),
+        btn('Table', 'Insert a table: column names, banded rows, filter buttons, a total row (Ctrl+T)', () => void insertTableDialog(ctx), 'text-rb')), group('Charts', ...chartButtons)],
       layout: [
         group('Page setup', marginsBtn, orientBtn, sizeBtn, areaBtn, btn('Print titles', 'Print titles: rows (or columns) printed again on every page', () => void pageSetupDialog(ctx), 'text-rb')),
         group('Scale to fit', scaleBtn),
         group('Sheet options', gridPrintBtn, headPrintBtn),
         group('Print', btn('Page setup...', 'Page setup: everything about how this sheet prints', () => void pageSetupDialog(ctx), 'text-rb'), btn('Print...', 'Print, with a preview of each page (Ctrl+P)', () => void printPreview(ctx), 'text-rb')),
       ],
+      formulas: [
+        sized(430, group('Function library',
+          btn('fx Insert function', 'Insert function: find one by what it does (Shift+F3)', () => void insertFunctionDialog(ctx), 'text-rb'),
+          menuBtn('Σ AutoSum ▾', 'AutoSum: sum, average, count, max or min of the figures above', () => autoSumMenu(ctx)),
+          fnMenu('Financial', 'Financial'), fnMenu('Logical', 'Logical'), fnMenu('Text', 'Text'), fnMenu('Date and time', 'Date and time'),
+          fnMenu('Lookup and reference', 'Lookup and reference'), fnMenu('Maths and trig', 'Maths and trig'),
+          menuBtn('More ▾', 'More functions: statistical, information, engineering, lists', () => (['Statistical', 'Information', 'Engineering', 'Lists'] as const).map(c => ({ label: c, submenu: functionMenu(ctx, c) }))))),
+        sized(250, group('Defined names',
+          btn('Name manager', 'Name manager: every name, what it stands for (Ctrl+F3)', () => void nameManager(ctx), 'text-rb'),
+          btn('Define name', 'Define name: a name for the selected cells, or for a value', () => void nameDialog(ctx), 'text-rb'),
+          menuBtn('Use in formula ▾', 'Use a name in the formula you are typing', () => useInFormulaMenu(ctx)),
+          btn('Create from selection', 'Create names from the labels in the selection\'s top row or left column', () => void createFromSelection(ctx), 'text-rb'))),
+        group('Formula auditing', showFormulasBtn),
+      ],
       data: [
-        group('Sort and filter', btn('A→Z', 'Sort A to Z (or smallest first)', () => sortRegion(true), 'text-rb'), btn('Z→A', 'Sort Z to A (or largest first)', () => sortRegion(false), 'text-rb'), filterBtn2),
-        group('Data tools', dvBtn),
+        group('Queries', btn('Refresh all', 'Work every PivotTable of the workbook out again from its data', () => {
+          if (!grid.commit()) return;
+          const failed = wb.refreshAll();
+          onChange();
+          if (failed.length) void shell.dialogs.alert('Some PivotTables could not be refreshed', failed.join('\n'));
+          else shell.toast('Every PivotTable is up to date.');
+        }, 'text-rb')),
+        group('Sort and filter',
+          btn('A→Z', 'Sort A to Z (or smallest first)', () => sortRegion(true), 'text-rb'), btn('Z→A', 'Sort Z to A (or largest first)', () => sortRegion(false), 'text-rb'),
+          btn('Sort...', 'Sort by several columns, each A to Z or Z to A', () => void sortDialog(ctx), 'text-rb'), filterBtn2,
+          btn('Clear', 'Clear every column\'s filter (the ▾ buttons stay)', () => {
+            if (!grid.commit()) return;
+            wb.clearFilters(wb.active);
+            onChange();
+          }, 'text-rb')),
+        group('Data tools',
+          btn('Text to columns', 'Text to columns: split the text of one column at commas, tabs, spaces...', () => void textToColumnsDialog(ctx), 'text-rb'),
+          btn('Remove duplicates', 'Remove duplicates: take out rows that repeat an earlier row', () => void removeDuplicatesDialog(ctx), 'text-rb'),
+          dvBtn),
+      ],
+      review: [
+        group('Notes',
+          btn('New note', 'New note on the active cell, or edit its note (Shift+F2)', () => editNote(grid.active().col, grid.active().row), 'text-rb'),
+          btn('Delete note', 'Delete the notes in the selected cells', () => {
+            if (!grid.commit()) return;
+            wb.clearNotes(wb.active, grid.sel());
+            onChange();
+          }, 'text-rb'),
+          btn('Previous', 'Go to the previous note', () => goNote(-1), 'text-rb'),
+          btn('Next', 'Go to the next note', () => goNote(1), 'text-rb'),
+          showNotesBtn),
+      ],
+      view: [
+        group('Show', gridlinesBtn, viewFormulasBtn, viewNotesBtn),
+        group('Zoom', btn('100%', 'Zoom to 100%', () => grid.setZoom(1), 'text-rb'), btn('Zoom out', 'Zoom out', () => grid.setZoom(grid.zoom() / 1.1), 'text-rb'), btn('Zoom in', 'Zoom in', () => grid.setZoom(grid.zoom() * 1.1), 'text-rb')),
+        group('Window', freezeBtn),
       ],
     };
-    type Tab = keyof typeof tabGroups;
-    const TAB_NAMES: Record<Tab, string> = { home: 'Home', insert: 'Insert', layout: 'Page Layout', data: 'Data' };
+    // Table Design: shown only while the active cell is in a table, as Excel's own tab for tables is.
+    type Tab = keyof typeof tabGroups | 'table' | 'pivot';
+    const TAB_ORDER: Tab[] = [...(Object.keys(tabGroups) as Tab[]), 'table', 'pivot'];
+    const TAB_NAMES: Record<Tab, string> = { home: 'Home', insert: 'Insert', layout: 'Page Layout', formulas: 'Formulas', data: 'Data', review: 'Review', view: 'View', table: 'Table Design', pivot: 'PivotTable Analyze' };
     let tab: Tab = 'home';
-    const ribbon = h('div', { class: 'ribbon', role: 'tabpanel' }, ...tabGroups.home);
-    const tabButtons = (Object.keys(tabGroups) as Tab[]).map(t => {
-      const b = h('button', { type: 'button', class: 'ribbon-tab', role: 'tab', 'aria-selected': String(t === 'home') }, TAB_NAMES[t]);
+    /** What the Table Design tab was last built for, so it is built again only when the table changes. */
+    let tableKey = '';
+    const groupsOf = (t: Tab): HTMLElement[] => {
+      if (t === 'pivot') {
+        const pv = activePivot(ctx);
+        return pv ? pivotAnalyze(ctx, pv, btn, group, () => pivotPane.toggle()) : [];
+      }
+      if (t !== 'table') return tabGroups[t];
+      const table = activeTable(ctx);
+      return table ? tableDesign(ctx, table, btn, group, {
+        pivot: () => void insertPivotDialog(ctx, (s, col, row) => {
+          grid.setActiveSheet(s);
+          drawTabs();
+          grid.goTo(col, row);
+        }),
+        dups: () => void removeDuplicatesDialog(ctx),
+      }) : [];
+    };
+    const ribbon = h('div', { class: 'ribbon', role: 'tabpanel', 'data-menus-stay': '' }, ...tabGroups.home);
+    const tabButtons = TAB_ORDER.map(t => {
+      const b = h('button', { type: 'button', class: `ribbon-tab${t === 'table' || t === 'pivot' ? ' context-tab' : ''}`, role: 'tab', 'aria-selected': String(t === 'home'), hidden: t === 'table' || t === 'pivot' }, TAB_NAMES[t]);
       on(b, 'click', () => showTab(t), app.signal);
       return b;
     });
     function showTab(t: Tab): void {
       tab = t;
       closePalette();
-      ribbon.replaceChildren(...tabGroups[t]);
-      tabButtons.forEach((b, i) => b.setAttribute('aria-selected', String((Object.keys(tabGroups) as Tab[])[i] === t)));
+      tableKey = contextKey();
+      ribbon.replaceChildren(...groupsOf(t));
+      tabButtons.forEach((b, i) => b.setAttribute('aria-selected', String(TAB_ORDER[i] === t)));
       showBreaks();
       syncToolbar();
     }
+    /** What the table or PivotTable tab shows, to know when to build it again. */
+    function contextKey(): string {
+      return tab === 'table' ? JSON.stringify(activeTable(ctx)) : tab === 'pivot' ? JSON.stringify(activePivot(ctx)) : '';
+    }
+    /**
+     * The Table Design and PivotTable Analyze tabs follow the active cell: shown in a table (a PivotTable), rebuilt
+     * when it changes, gone outside it. The PivotTable Fields pane does the same.
+     */
+    function syncTableTab(): void {
+      const table = activeTable(ctx);
+      const pv = activePivot(ctx);
+      tabButtons[TAB_ORDER.indexOf('table')].hidden = !table;
+      tabButtons[TAB_ORDER.indexOf('pivot')].hidden = !pv;
+      if ((!table && tab === 'table') || (!pv && tab === 'pivot')) showTab('home');
+      else if ((tab === 'table' || tab === 'pivot') && contextKey() !== tableKey) showTab(tab);
+      pivotPane.sync();
+    }
+    grid.listFor = (col, row) => totalChoices(ctx, col, row);
 
     /** On the Page Layout tab, the grid shows where printed pages end (dashed lines), as Excel does. */
     function showBreaks(): void {
@@ -924,7 +1363,12 @@ export const sheetApp: AppDef = {
     }
 
     /** The workbook as the bytes of a file of this kind. */
-    const fileBytes = async (as: 'sheet' | 'xlsx'): Promise<Uint8Array> => (as === 'xlsx' ? saveXlsx(wb) : new TextEncoder().encode(wb.serialize()));
+    const fileBytes = async (as: 'sheet' | 'xlsx'): Promise<Uint8Array> => {
+      if (as !== 'xlsx') return new TextEncoder().encode(wb.serialize());
+      // Said each time: Excel gets a PivotTable's report as cells, not the PivotTable itself.
+      if (wb.sheets.some(sh => sh.pivots.length)) shell.toast('PivotTables go into Excel files as the cells of their reports: Excel will not see them as PivotTables. A .sheet file keeps them working.');
+      return saveXlsx(wb);
+    };
 
     async function save(): Promise<boolean> {
       if (!grid.commit()) return false;
@@ -1202,11 +1646,21 @@ export const sheetApp: AppDef = {
     }
 
     function syncToolbar(): void {
+      syncTableTab();
       const s = activeStyle();
       const press = (b: HTMLElement, on: boolean | undefined) => b.setAttribute('aria-pressed', String(!!on));
       press(boldBtn, s.b);
       press(italicBtn, s.i);
       press(underBtn, s.u);
+      press(strikeBtn, s.st);
+      (['t', 'm', 'b'] as const).forEach((va, i) => press(vaBtns[i], (s.va ?? 'b') === va));
+      // A typeface not in the list (from an Excel file) is shown as it is.
+      const listed = !s.ff || FONT_FACES.some(f => f.name.toLowerCase() === s.ff!.toLowerCase());
+      otherFace.hidden = listed;
+      otherFace.value = listed ? '' : s.ff!;
+      otherFace.textContent = listed ? '' : s.ff!;
+      faceSelect.value = s.ff ? (FONT_FACES.find(f => f.name.toLowerCase() === s.ff!.toLowerCase())?.name ?? s.ff) : '';
+      if (document.activeElement !== sizeBox) sizeBox.value = String(s.fs ?? STANDARD_SIZE);
       (['l', 'c', 'r'] as const).forEach((al, i) => press(alignBtns[i], s.al === al));
       press(wrapBtn, s.wrap);
       press(filterBtn, !!wb.sheets[wb.active].filter);
@@ -1214,12 +1668,20 @@ export const sheetApp: AppDef = {
       press(gridPrintBtn, page().gridlines);
       press(headPrintBtn, page().headings);
       press(freezeBtn, !!(wb.sheets[wb.active].freeze.rows || wb.sheets[wb.active].freeze.cols));
+      press(showFormulasBtn, grid.showFormulas);
+      press(showNotesBtn, grid.showNotes);
+      press(viewNotesBtn, grid.showNotes);
+      press(viewFormulasBtn, grid.showFormulas);
+      press(gridlinesBtn, !wb.sheets[wb.active].noGrid);
       const f = wb.sheets[wb.active].filter;
-      if (f && f.cols.size) {
+      if (f && (f.cols.size || f.rules?.size)) {
         let shown = 0;
         for (let r = f.range.r0 + 1; r <= f.range.r1; r++) if (!wb.sheets[wb.active].hiddenRows.has(r)) shown++;
         filterNote.textContent = `${shown.toLocaleString()} of ${(f.range.r1 - f.range.r0).toLocaleString()} rows shown (filter)`;
-      } else filterNote.textContent = '';
+      } else {
+        const t = activeTable(ctx);
+        filterNote.textContent = t ? tableSummary(t) : '';
+      }
       // A format code shows as the ready-made format it is, or as "Custom: <code>".
       let shownFmt: string = s.fmt ?? '';
       if (s.fmt === 'custom') shownFmt = Object.keys(presetCodes).find(k => presetCodes[k] === s.code) ?? 'custom';
@@ -1233,6 +1695,7 @@ export const sheetApp: AppDef = {
     }
 
     function onChange(): void {
+      grid.sync();
       refresh();
       syncToolbar();
       drawTabs();
@@ -1250,7 +1713,7 @@ export const sheetApp: AppDef = {
       mode.textContent = editing ? 'Edit' : 'Ready';
     };
 
-    app.root.append(tabsRow, ribbon, formulaBar, grid.el, tabsBar, status);
+    app.root.append(tabsRow, ribbon, formulaBar, main, tabsBar, status);
     drawTabs();
     syncToolbar();
     refresh();
@@ -1270,6 +1733,34 @@ export const sheetApp: AppDef = {
       } else if (ctrl && !event.shiftKey && k === 'p') {
         event.preventDefault();
         void printPreview(ctx);
+      } else if (ctrl && (event.key === '`' || event.code === 'Backquote')) {
+        event.preventDefault();
+        toggleFormulas();
+      } else if (event.key === 'F3' && event.shiftKey && !ctrl) {
+        event.preventDefault();
+        void insertFunctionDialog(ctx);
+      } else if (event.key === 'F3' && ctrl) {
+        event.preventDefault();
+        void nameManager(ctx);
+      } else if (ctrl && !event.shiftKey && (k === 't' || k === 'l') && !grid.editing()) {
+        // Ctrl+T as in Excel (some browsers keep Ctrl+T for a new tab; Ctrl+L, Excel's other key for it, works there).
+        event.preventDefault();
+        void insertTableDialog(ctx);
+      } else if (ctrl && !event.shiftKey && (k === '1' || event.code === 'Digit1') && !grid.editing()) {
+        event.preventDefault();
+        formatCells();
+      } else if (ctrl && !event.shiftKey && k === '5' && !grid.editing()) {
+        event.preventDefault();
+        strikeBtn.click();
+      } else if (ctrl && event.shiftKey && (event.key === '>' || event.key === '<' || event.code === 'Period' || event.code === 'Comma') && !grid.editing()) {
+        event.preventDefault();
+        (event.key === '>' || event.code === 'Period' ? growBtn : shrinkBtn).click();
+      } else if (ctrl && event.shiftKey && k === 'v' && !grid.editing() && grid.hasClip()) {
+        event.preventDefault();
+        grid.pasteSpecial('values');
+        onChange();
+      } else if (event.key === 'Escape' && painter) {
+        stopPainting();
       } else if (ctrl && !event.shiftKey && (k === 'b' || k === 'i' || k === 'u') && !(((event.target instanceof HTMLInputElement && event.target.type === 'text') || event.target instanceof HTMLTextAreaElement) && grid.editing())) {
         event.preventDefault();
         if (k === 'b') boldBtn.click();

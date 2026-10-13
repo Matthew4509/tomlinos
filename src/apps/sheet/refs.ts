@@ -63,7 +63,20 @@ export function addressOf(col: number, row: number): string {
 
 // ---- Tokens --------------------------------------------------------------------------------------------------------
 
-export type TokType = 'num' | 'str' | 'ident' | 'sheetq' | 'op' | 'lp' | 'rp' | 'lb' | 'rb' | 'comma' | 'colon' | 'bang' | 'err';
+/** 'struct' is a reference to part of an Excel table: Sales[Amount], Sales[[#Totals],[Amount]], [@Amount]. */
+export type TokType = 'num' | 'str' | 'ident' | 'sheetq' | 'op' | 'lp' | 'rp' | 'lb' | 'rb' | 'comma' | 'colon' | 'bang' | 'err' | 'struct';
+
+/** Where the [ ... ] that starts at `i` ends (just past its closing bracket); ' makes the next character plain. */
+function closeBracket(src: string, i: number): number {
+  let depth = 0;
+  for (; i < src.length; i++) {
+    const c = src[i];
+    if (c === "'") i++;
+    else if (c === '[') depth++;
+    else if (c === ']' && --depth === 0) return i + 1;
+  }
+  throw new SyntaxProblem('A [ is not closed with a ].');
+}
 export interface Tok {
   type: TokType;
   text: string;
@@ -72,6 +85,8 @@ export interface Tok {
 }
 
 export class SyntaxProblem extends Error {}
+/** A cell that cannot be typed in (part of a PivotTable's report): said with its own title, not as a wrong formula. */
+export class CellLocked extends SyntaxProblem {}
 
 /** Splits a formula (without its leading "=") into tokens; throws SyntaxProblem on a character it cannot place. */
 export function tokenize(src: string): Tok[] {
@@ -120,7 +135,13 @@ export function tokenize(src: string): Tok[] {
     } else if (/[A-Za-z_$]/.test(c)) {
       i++;
       while (i < src.length && /[A-Za-z0-9_.$]/.test(src[i])) i++;
-      push('ident', start, i);
+      if (src[i] === '[') {
+        i = closeBracket(src, i);
+        push('struct', start, i);
+      } else push('ident', start, i);
+    } else if (c === '[') {
+      i = closeBracket(src, i);
+      push('struct', start, i);
     } else if (c === '#') {
       i++;
       while (i < src.length && /[A-Za-z0-9/!?]/.test(src[i])) i++;
@@ -138,6 +159,59 @@ export function tokenize(src: string): Tok[] {
       push('op', start, i);
     } else if ('+-*/^&=%'.includes(c)) { i++; push('op', start, i); }
     else throw new SyntaxProblem(`The character "${c}" cannot be used in a formula.`);
+  }
+  return out;
+}
+
+/** Which part of a table a structured reference means: some of its rows, and its columns from c0 to c1 (all when unset). */
+export interface TablePart {
+  table: string;
+  /** '#All', '#Data', '#Headers', '#Totals'; '#This Row' is `thisRow`. */
+  areas: string[];
+  thisRow: boolean;
+  c0?: string;
+  c1?: string;
+}
+
+const AREAS = ['#all', '#data', '#headers', '#totals', '#this row'];
+
+/** Reads "Sales[Amount]", "Sales[[#Totals],[Amount]]", "[@Amount]", "Sales[[Jan]:[Mar]]" into its parts. */
+export function parseTablePart(text: string): TablePart {
+  const open = text.indexOf('[');
+  const table = text.slice(0, open);
+  const inner = text.slice(open + 1, -1).trim();
+  const plain = (s: string) => s.replace(/'(.)/g, '$1');
+  const out: TablePart = { table, areas: [], thisRow: false };
+  const column = (s: string) => {
+    if (!out.c0) out.c0 = s;
+    else out.c1 = s;
+  };
+  if (inner.startsWith('@')) {
+    out.thisRow = true;
+    const rest = inner.slice(1).trim();
+    if (rest.startsWith('[')) {
+      // [@[Unit price]] or [@[Jan]:[Mar]]
+      for (const m of rest.matchAll(/\[((?:[^\]']|'.)*)\]/g)) column(plain(m[1]));
+    } else if (rest) column(plain(rest));
+    return out;
+  }
+  if (!inner.includes('[')) {
+    if (inner.startsWith('#')) {
+      const a = inner.toLowerCase();
+      if (!AREAS.includes(a)) throw new SyntaxProblem(`"${inner}" is not a part of a table (use #All, #Data, #Headers, #Totals or #This Row).`);
+      if (a === '#this row') out.thisRow = true;
+      else out.areas.push(a);
+    } else if (inner) column(plain(inner));
+    return out;
+  }
+  for (const m of inner.matchAll(/\[((?:[^\]']|'.)*)\]/g)) {
+    const item = plain(m[1]).trim();
+    const a = item.toLowerCase();
+    if (a.startsWith('#')) {
+      if (!AREAS.includes(a)) throw new SyntaxProblem(`"${item}" is not a part of a table (use #All, #Data, #Headers, #Totals or #This Row).`);
+      if (a === '#this row') out.thisRow = true;
+      else out.areas.push(a);
+    } else column(item);
   }
   return out;
 }

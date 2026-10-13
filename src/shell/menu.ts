@@ -57,6 +57,9 @@ export class MenuLayer {
     const anchor = options.anchor ?? null;
     on(document, 'scroll', (event: Event) => {
       const t = event.target;
+      // A toolbar that scrolls sideways (the spreadsheet's ribbon) scrolls a button into view as it is clicked: its
+      // menu stays open.
+      if (t instanceof Element && t.hasAttribute('data-menus-stay')) return;
       if (!anchor || !(t instanceof Element) || t === document.documentElement || t.contains(anchor) || anchor.contains(t)) this.close(false);
     }, abort.signal, { capture: true });
     first.focus({ preventScroll: true });

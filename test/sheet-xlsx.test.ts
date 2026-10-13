@@ -128,12 +128,13 @@ test('xlsx: an Excel-made workbook opens with values, formulas, formats, layout 
   // Whole columns.
   assert.equal(cellOf(wb, 'H1')?.f, 'SUM(C:C)');
   assert.equal(at(wb, 'H1'), '1779.5', 'C2:C5 and C7');
-  // A function this spreadsheet lacks (LET) and a named range: kept as Excel's answer, and said.
-  assert.equal(cellOf(wb, 'G1')?.f, undefined);
-  assert.equal(cellOf(wb, 'G1')?.v, 6);
-  assert.equal(cellOf(wb, 'I1')?.v, 92612);
-  assert.equal(report.asValues.count, 2);
-  assert.deepEqual(report.asValues.names, ['LET']);
+  // LET (session 7) and a named range: worked out here, the same as Excel's answers.
+  assert.equal(cellOf(wb, 'G1')?.f, 'LET(x,2,x*3)');
+  assert.equal(at(wb, 'G1'), '6');
+  assert.equal(cellOf(wb, 'I1')?.f, 'Rate*2');
+  assert.equal(at(wb, 'I1'), '92612');
+  assert.deepEqual(wb.names, [{ name: 'Rate', ref: 'Orders!$B$2' }]);
+  assert.equal(report.asValues.count, 0);
   // A formula whose answer here differs from Excel's saved one is listed (J1 was saved as 999; it is 121).
   assert.equal(report.differ.count, 1);
   assert.deepEqual(report.differ.examples, ['Orders!J1']);
@@ -152,7 +153,7 @@ test('xlsx: an Excel-made workbook opens with values, formulas, formats, layout 
   assert.equal(at(wb, 'B1', 1), '125');
   // The report names what was left out.
   const said = report.dropped.join(' | ');
-  for (const word of ['comments', '1 sheet that is not a sheet of cells', '1 hidden sheet', 'text sizes and typefaces', '1 cell past row 5,000', '1 named range']) {
+  for (const word of ['1 sheet that is not a sheet of cells', '1 hidden sheet', '1 cell past row 5,000']) {
     assert.ok(said.includes(word), `report says "${word}": ${said}`);
   }
   // Conditional formatting is kept now (session 6), so it is not in the report; the chart sheet still is.
@@ -181,7 +182,8 @@ test('xlsx: formulas move between Excel\'s spelling and ours', () => {
   assert.equal(toExcelFormula('"XLOOKUP(" & A1'), '"XLOOKUP(" & A1', 'text is never changed');
   assert.equal(fromExcelFormula("_xlfn.ANCHORARRAY('My data'!E1)"), "'My data'!E1#");
   assert.equal(fromExcelFormula('_xlfn._xlws.FILTER(A:A,B:B="x")'), 'FILTER(A:A,B:B="x")');
-  assert.equal(fromExcelFormula('Table1[Amount]'), null, 'structured references cannot be read');
+  assert.equal(fromExcelFormula('SUM(Table1[Amount])'), 'SUM(Table1[Amount])', 'table references are kept as written');
+  assert.equal(fromExcelFormula('_xlfn.LET(_xlpm.x,2,_xlpm.x*3)'), 'LET(x,2,x*3)');
   assert.equal(fromExcelFormula('SUM(1:1)'), null, 'whole rows cannot be read yet');
   for (const f of ['TEXTJOIN(",",TRUE,UNIQUE(A2:A9))', 'IFNA(XMATCH(A1,B:B),0)', 'SUM(Sheet2!E1#)']) assert.equal(fromExcelFormula(toExcelFormula(f)), f);
 });

@@ -306,7 +306,7 @@ body.is-dragging .win-body { pointer-events: none; }
 /* ---- Menus and dialogs ------------------------------------------------------------------------------------------ */
 #layer-menus > .menu-root { position: fixed; inset: 0; pointer-events: none; }
 .menu-root > * { pointer-events: auto; }
-.menu { position: fixed; min-width: 190px; padding: 3px; background: #fff; border: 1px solid #7a869c; border-radius: 4px; box-shadow: 3px 3px 10px rgba(0, 0, 0, .35); outline: none; }
+.menu { position: fixed; min-width: 190px; max-height: calc(100vh - 16px); overflow-y: auto; padding: 3px; background: #fff; border: 1px solid #7a869c; border-radius: 4px; box-shadow: 3px 3px 10px rgba(0, 0, 0, .35); outline: none; }
 .menu-item { display: flex; align-items: center; gap: 6px; padding: 5px 10px 5px 4px; border-radius: 3px; cursor: default; white-space: nowrap; min-height: 28px; }
 .menu-item:hover, .menu-item:focus { background: var(--sel); color: #fff; outline: none; }
 .menu-item[aria-disabled="true"] { color: #8a93a3; }
@@ -321,7 +321,7 @@ body.is-dragging .win-body { pointer-events: none; }
 .backdrop { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 12px; background: rgba(10, 20, 40, .35); }
 .dialog { width: min(420px, 100%); max-height: 100%; overflow: auto; background: var(--face); border: 3px solid #0b4fd6; border-radius: 8px; box-shadow: 4px 6px 22px rgba(0, 0, 0, .5); outline: none; }
 /* A dialog that holds a wide form (the spreadsheet's chart, print, page setup, validation and rule screens) is as wide as it. */
-.dialog:has(.chart-dialog, .pp-dialog, .ps-dialog, .dv-dialog, .cf-manage-wrap, .xlsx-report) { width: auto; max-width: 100%; }
+.dialog:has(.chart-dialog, .pp-dialog, .ps-dialog, .dv-dialog, .cf-manage-wrap, .xlsx-report, .fn-dialog, .name-manager, .wide-dialog) { width: auto; max-width: 100%; }
 .dialog-title { padding: 6px 10px; color: #fff; font-weight: 700; text-shadow: 1px 1px 1px rgba(0, 0, 0, .5); background: linear-gradient(to bottom, #6db2ff, #0a5be0 50%, #0a45b0); }
 .dialog-body { padding: 12px; }
 .dialog-text { margin: 0; white-space: pre-line; overflow-wrap: anywhere; }
@@ -427,16 +427,43 @@ body.is-dragging .win-body { pointer-events: none; }
 .ribbon-tab { border: 1px solid transparent; border-bottom: 0; padding: 4px 14px; margin-bottom: -1px; background: none; color: #222; cursor: pointer; border-radius: 3px 3px 0 0; font-size: 13px; }
 .ribbon-tab:hover { background: #dcdcdc; }
 .ribbon-tab[aria-selected="true"] { background: #f3f3f3; border-color: #c8c8c8; border-bottom: 1px solid #f3f3f3; color: #1e7a45; font-weight: 600; }
-.ribbon { position: relative; display: flex; flex-wrap: wrap; align-items: stretch; gap: 0; padding: 4px 6px; background: #f3f3f3; border-bottom: 1px solid #c8c8c8; }
-.rgroup { display: flex; flex-direction: column; padding: 0 8px; border-right: 1px solid #d4d4d4; }
+/* One row of groups that scrolls sideways in a narrow window; each group's buttons wrap into rows at its own width. */
+.ribbon { position: relative; display: flex; flex-wrap: nowrap; align-items: stretch; gap: 0; padding: 4px 6px; background: #f3f3f3; border-bottom: 1px solid #c8c8c8; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+.rgroup { flex: 0 0 auto; display: flex; flex-direction: column; padding: 0 8px; border-right: 1px solid #d4d4d4; }
 .rgroup:last-child { border-right: 0; }
-.rgroup-items { display: flex; align-items: center; gap: 2px; flex: 1; min-height: 30px; }
-.rgroup-name { text-align: center; font-size: 11px; color: #666; padding-top: 2px; }
+.rgroup-items { display: flex; flex-wrap: wrap; align-items: center; align-content: center; gap: 2px; flex: 1; min-height: 30px; }
+.rgroup-name { text-align: center; font-size: 12px; color: #595959; padding-top: 2px; white-space: nowrap; }
+.rb { white-space: nowrap; }
+.sheet { position: relative; }
 .rb { min-width: 28px; height: 28px; padding: 0 6px; border: 1px solid transparent; border-radius: 3px; background: none; cursor: pointer; font-size: 14px; color: #222; display: inline-flex; align-items: center; justify-content: center; gap: 3px; }
 .rb:hover:not(:disabled) { background: #e3efe7; border-color: #b7d3c1; }
 .rb:disabled { opacity: .4; cursor: default; }
 .rb[aria-pressed="true"] { background: #cfe5d6; border-color: #86b898; }
-.rb.bold { font-weight: 700; } .rb.italic { font-style: italic; } .rb.under { text-decoration: underline; }
+.rb.bold { font-weight: 700; } .rb.italic { font-style: italic; } .rb.under { text-decoration: underline; } .rb.strike { text-decoration: line-through; }
+.rb.grow, .rb.shrink { font-weight: 600; font-size: 13px; }
+.rb-select.font-face { width: 128px; }
+.rb-size { width: 46px; height: 26px; box-sizing: border-box; padding: 0 4px; font-size: 13px; border: 1px solid #bdbdbd; border-radius: 3px; background: #fff; color: #222; }
+.grid-wrap.painting .grid-scroll { cursor: copy !important; }
+.rb-name { width: 120px; height: 26px; box-sizing: border-box; padding: 0 6px; font-size: 13px; border: 1px solid #bdbdbd; border-radius: 3px; background: #fff; color: #222; }
+.ribbon-tab.context-tab { color: #1e5a33; font-weight: 600; }
+.ribbon-tab[hidden] { display: none; }
+.sort-dialog { width: min(560px, 88vw); display: flex; flex-direction: column; gap: 8px; }
+.sort-levels { display: flex; flex-direction: column; gap: 6px; max-height: 40vh; overflow: auto; }
+.sort-level { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.sort-level .field { flex: 1 1 140px; min-width: 0; }
+.sort-then { flex: 0 0 64px; font-size: 13px; }
+.dup-cols { display: flex; flex-wrap: wrap; gap: 4px 14px; max-height: 30vh; overflow: auto; }
+.fc-dialog { width: min(620px, 90vw); display: flex; flex-direction: column; gap: 8px; }
+.fc-tabs { display: flex; gap: 2px; border-bottom: 1px solid #c8c8c8; }
+.fc-tab { border: 1px solid transparent; border-bottom: 0; padding: 5px 12px; background: none; cursor: pointer; border-radius: 3px 3px 0 0; font-size: 13px; color: #222; }
+.fc-tab[aria-selected="true"] { background: #fff; border-color: #c8c8c8; font-weight: 600; color: #1e7a45; margin-bottom: -1px; }
+.fc-panel { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-start; align-content: flex-start; min-height: 220px; }
+.fc-panel[hidden] { display: none; }
+.fc-panel .dialog-label { flex: 1 1 140px; min-width: 120px; }
+.fc-side { flex: 1 1 220px; display: flex; flex-direction: column; gap: 6px; }
+.fc-look { display: flex; flex-direction: column; gap: 4px; }
+.fc-preview { display: flex; min-height: 48px; padding: 6px 10px; box-sizing: border-box; background: #fff; overflow: hidden; }
+.ttc-sample { margin: 0; padding: 6px; max-height: 120px; overflow: auto; background: #f4f4f4; border: 1px solid #d0d0d0; font: 12px Consolas, "Cascadia Mono", monospace; white-space: pre-wrap; }
 .rb.text-rb { font-size: 13px; padding: 0 8px; }
 .rb-caret { font-size: 9px; }
 .wide-rb { position: relative; flex-direction: row; }
@@ -479,6 +506,25 @@ body.is-dragging .win-body { pointer-events: none; }
 .fx { font-style: italic; font-weight: 700; color: #666; padding: 0 6px; border-left: 1px solid #ddd; border-right: 1px solid #ddd; }
 .formula-input { flex: 1; min-width: 0; box-sizing: border-box; height: 25px; border: 1px solid #bdbdbd; padding: 3px 6px; font: 13px "Segoe UI", Arial, sans-serif; line-height: 17px; resize: none; overflow: hidden auto; white-space: pre; }
 .grid-wrap { position: relative; flex: 1; min-height: 0; background: #fff; overflow: hidden; }
+.sheet-main { display: flex; flex: 1; min-height: 0; }
+.sheet-main > .grid-wrap { min-width: 0; }
+.pivot-pane { flex: 0 0 280px; max-width: 45%; display: flex; flex-direction: column; gap: 8px; padding: 8px 10px; box-sizing: border-box; overflow: auto; background: #f7f7f7; border-left: 1px solid #c8c8c8; color: #222; font-size: 13px; }
+.pivot-pane[hidden] { display: none; }
+.pv-head { display: flex; align-items: center; justify-content: space-between; }
+.pv-title { margin: 0; font-size: 15px; }
+.pv-close { border: 0; background: none; font-size: 18px; cursor: pointer; padding: 0 4px; color: #333; }
+.pv-hint { margin: 0; color: #444; font-size: 12px; line-height: 1.4; }
+.pv-problem { margin: 0; color: #a4262c; }
+.pv-fields { display: flex; flex-direction: column; max-height: 30vh; overflow: auto; background: #fff; border: 1px solid #d0d0d0; padding: 4px; }
+.pv-field { display: flex; align-items: center; gap: 6px; padding: 2px 4px; cursor: grab; }
+.pv-field[hidden] { display: none; }
+.pv-areas { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.pv-area { min-height: 72px; padding: 4px; background: #fff; border: 1px solid #d0d0d0; display: flex; flex-direction: column; gap: 3px; }
+.pv-area.pv-over { border-color: #1e7a45; background: #eef6f1; }
+.pv-area-name { font-weight: 600; font-size: 12px; color: #444; }
+.pv-chip { display: flex; justify-content: space-between; align-items: center; gap: 4px; padding: 3px 6px; border: 1px solid #b7d3c1; border-radius: 3px; background: #e3efe7; cursor: grab; font-size: 13px; text-align: left; color: #222; }
+.pv-chip span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pv-items { max-height: 50vh; overflow: auto; min-width: 240px; }
 .grid-canvas { position: absolute; left: 0; top: 0; pointer-events: none; }
 .grid-scroll { position: absolute; inset: 0; overflow: auto; outline: none; cursor: cell; }
 .grid-spacer { pointer-events: none; }
@@ -543,6 +589,29 @@ body.is-dragging .win-body { pointer-events: none; }
 .dv-item:hover, .dv-item:focus { background: #1e7a45; color: #fff; outline: none; }
 .dv-item[aria-selected="true"]:not(:focus):not(:hover) { background: #e3efe7; }
 .dv-empty { margin: 6px 8px; color: #555; font-size: 13px; }
+
+/* Notes on cells. */
+.note-layer { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 5; }
+.note-box { position: absolute; z-index: 6; width: 200px; max-height: 160px; overflow: hidden; padding: 6px 8px; box-sizing: border-box; background: #ffffe1; color: #222; border: 1px solid #8a8a8a; box-shadow: 2px 2px 5px rgba(0, 0, 0, .25); font: 12px "Segoe UI", Arial, sans-serif; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; pointer-events: none; }
+.note-box[hidden] { display: none; }
+.note-text { width: min(420px, 80vw); min-height: 120px; box-sizing: border-box; resize: vertical; font: inherit; }
+
+/* Formulas: the list offered while typing a formula, the line under it, Insert function and names. */
+.fx-list { position: absolute; z-index: 8; width: 420px; max-width: calc(100% - 8px); max-height: 240px; overflow: auto; padding: 2px 0; background: #fff; color: #222; border: 1px solid #8a8a8a; box-shadow: 0 4px 12px rgba(0, 0, 0, .25); font: 13px "Segoe UI", Arial, sans-serif; }
+.fx-list[hidden], .fx-tip[hidden] { display: none; }
+.fx-item { display: flex; gap: 10px; padding: 3px 8px; cursor: pointer; white-space: nowrap; }
+.fx-item[aria-selected="true"] { background: #1e7a45; color: #fff; }
+.fx-name { flex: 0 0 auto; font-weight: 600; }
+.fx-kind { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; opacity: .8; }
+.fx-tip { position: absolute; z-index: 7; max-width: calc(100% - 8px); padding: 3px 8px; background: #fffbe6; color: #222; border: 1px solid #b9a64a; box-shadow: 0 2px 6px rgba(0, 0, 0, .2); font: 12px "Segoe UI", Arial, sans-serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
+.fn-dialog { width: min(520px, 88vw); }
+.fn-dialog .dialog-label + .dialog-label { margin-top: 8px; }
+.fn-list { width: 100%; font-family: Consolas, "Cascadia Mono", monospace; }
+.fn-syntax { margin: 10px 0 4px; font: 600 13px Consolas, "Cascadia Mono", monospace; overflow-wrap: anywhere; }
+.fn-about { margin: 0 0 8px; font-size: 13px; line-height: 1.4; }
+.name-manager { width: min(720px, 90vw); }
+.name-list { width: 100%; font: 13px Consolas, "Cascadia Mono", monospace; white-space: pre; }
+.name-dialog { width: min(440px, 84vw); display: flex; flex-direction: column; gap: 8px; }
 
 /* Page setup and print preview. */
 .ps-margins { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; margin: 6px 0; }

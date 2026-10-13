@@ -3,7 +3,7 @@
 // What is kept: every sheet's values and formulas, number formats, bold/italic/underline, text and fill colours, borders,
 // alignment and wrapping, column widths and row heights, merged cells, frozen panes, hidden rows and columns, the
 // filter, and (xlsx-parts.ts) charts, conditional formatting, data validation and page setup. What this spreadsheet does
-// not have (pictures, comments, pivot tables, some kinds of chart and rule...) is left out, and the person is told what,
+// not have (pictures, some kinds of chart and rule...) is left out, and the person is told what,
 // so nothing is lost without them knowing.
 // Formulas: Excel's newer functions are stored with a prefix (_xlfn.XLOOKUP); A1# is stored as _xlfn.ANCHORARRAY(A1);
 // a formula that works on lists is stored as a "dynamic array" formula, so Excel 365 fills the cells as it does here.
@@ -14,7 +14,7 @@ import { FUNCTION_NAMES, parseFormula, worksOnLists } from './formula.ts';
 import { codeProblem, isDateCode } from './numfmt.ts';
 import { addressOf, colName, MAX_COLS, MAX_ROWS, parseCellRef, shiftFormula, SyntaxProblem, tokenize, type Tok } from './refs.ts';
 import { CellError, type CellStyle, type Line, type Value } from './values.ts';
-import { colOfKey, FILE_FORMAT, keyOf, MAX_CELLS, rowOfKey, type Range, type Workbook } from './workbook.ts';
+import { cleanFilterRule, colOfKey, FILE_FORMAT, keyOf, MAX_CELLS, rowOfKey, type Filter, type FilterRule, type Range, type Workbook } from './workbook.ts';
 import { allText, child, children, escapeXml, parseXml, tag, XML_HEAD, XmlProblem, type XmlEl } from './xml.ts';
 import {
   anchorOf, chartXml, drawingXml, dxfXml, finishChart, newPartsReport, printNames, readCf, readChartPart, readDv, readDxfs, readPage, readPrintNames,
@@ -22,6 +22,10 @@ import {
 } from './xlsx-parts.ts';
 import type { Chart } from './chart.ts';
 import type { CfFormat } from './condfmt.ts';
+import { cleanFace, fontKind } from './fonts.ts';
+import { rewriteStructs } from './workbook.ts';
+import { dataRows, TOTAL_LABEL, type Table, type TotalFn } from './tables.ts';
+import { AGGS, type Agg, type DateGroup, type ShowAs } from './pivot.ts';
 
 /** What opening a file could not keep, said to the person. */
 export interface XlsxReport {
@@ -225,7 +229,19 @@ function codeForStyle(style: CellStyle, symbol: string): string {
 // ---- Formulas ------------------------------------------------------------------------------------------------------
 
 /** Functions Excel stores with a prefix (added after Excel 2007); FILTER and SORT carry a second one. */
-const XLFN = new Set(['CONCAT', 'DAYS', 'IFNA', 'IFS', 'ISOWEEKNUM', 'NUMBERVALUE', 'SEQUENCE', 'SORTBY', 'SWITCH', 'TEXTAFTER', 'TEXTBEFORE', 'TEXTJOIN', 'TEXTSPLIT', 'UNICHAR', 'UNICODE', 'UNIQUE', 'XLOOKUP', 'XMATCH']);
+const XLFN = new Set([
+  // Excel 2010
+  'AGGREGATE', 'CEILING.PRECISE', 'COVARIANCE.P', 'COVARIANCE.S', 'FLOOR.PRECISE', 'MODE.MULT', 'MODE.SNGL', 'NETWORKDAYS.INTL', 'NORM.DIST',
+  'NORM.INV', 'NORM.S.DIST', 'NORM.S.INV', 'PERCENTILE.EXC', 'PERCENTILE.INC', 'PERCENTRANK.EXC', 'PERCENTRANK.INC', 'QUARTILE.EXC',
+  'QUARTILE.INC', 'RANK.AVG', 'RANK.EQ', 'STDEV.P', 'STDEV.S', 'VAR.P', 'VAR.S', 'WORKDAY.INTL',
+  // Excel 2013
+  'BASE', 'CEILING.MATH', 'DAYS', 'DECIMAL', 'FLOOR.MATH', 'FORMULATEXT', 'IFNA', 'ISFORMULA', 'ISOWEEKNUM', 'NUMBERVALUE', 'UNICHAR', 'UNICODE', 'XOR',
+  // Excel 2016 and 2019
+  'CONCAT', 'FORECAST.LINEAR', 'IFS', 'MAXIFS', 'MINIFS', 'SWITCH', 'TEXTJOIN',
+  // Excel 365
+  'ARRAYTOTEXT', 'CHOOSECOLS', 'CHOOSEROWS', 'DROP', 'EXPAND', 'HSTACK', 'LET', 'RANDARRAY', 'SEQUENCE', 'SORTBY', 'TAKE', 'TEXTAFTER', 'TEXTBEFORE',
+  'TEXTSPLIT', 'TOCOL', 'TOROW', 'UNIQUE', 'VALUETOTEXT', 'VSTACK', 'WRAPCOLS', 'WRAPROWS', 'XLOOKUP', 'XMATCH',
+]);
 const XLWS = new Set(['FILTER', 'SORT']);
 const KNOWN = new Set(FUNCTION_NAMES);
 /** Formulas whose answer changes by itself, so one that differs from Excel's saved answer is not a fault. */
@@ -287,12 +303,28 @@ export function toExcelFormula(f: string): string {
     return f;
   }
   const edits: Array<{ start: number; end: number; text: string }> = [];
+  // LET's names are stored with a prefix of their own (_xlpm.x), wherever they are used inside it.
+  const letNames = new Set<string>();
+  for (let k = 0; k < toks.length; k++) {
+    if (toks[k].type !== 'ident' || toks[k].text.toUpperCase() !== 'LET' || toks[k + 1]?.type !== 'lp') continue;
+    let depth = 0;
+    let arg = 0;
+    for (let j = k + 1; j < toks.length; j++) {
+      const t = toks[j];
+      if (t.type === 'lp') depth++;
+      else if (t.type === 'rp' && --depth === 0) break;
+      else if (t.type === 'comma' && depth === 1) arg++;
+      else if (depth === 1 && arg % 2 === 0 && t.type === 'ident' && toks[j - 1]?.type !== 'bang' && toks[j + 1]?.type === 'comma') letNames.add(t.text.toUpperCase());
+    }
+  }
   for (let k = 0; k < toks.length; k++) {
     const t = toks[k];
     if (t.type === 'ident' && toks[k + 1]?.type === 'lp') {
       const up = t.text.toUpperCase();
       if (XLWS.has(up)) edits.push({ start: t.start, end: t.end, text: `_xlfn._xlws.${up}` });
       else if (XLFN.has(up)) edits.push({ start: t.start, end: t.end, text: `_xlfn.${up}` });
+    } else if (t.type === 'ident' && letNames.has(t.text.toUpperCase()) && toks[k - 1]?.type !== 'bang' && toks[k + 1]?.type !== 'bang' && !parseCellRef(t.text)) {
+      edits.push({ start: t.start, end: t.end, text: `_xlpm.${t.text}` });
     } else if (t.type === 'err' && t.text === '#' && toks[k - 1]?.type === 'ident' && toks[k - 1].end === t.start && parseCellRef(toks[k - 1].text)) {
       const sheeted = toks[k - 2]?.type === 'bang' && (toks[k - 3]?.type === 'ident' || toks[k - 3]?.type === 'sheetq');
       const start = sheeted ? toks[k - 3].start : toks[k - 1].start;
@@ -309,7 +341,7 @@ export function toExcelFormula(f: string): string {
 
 interface ReadStyles {
   /** Per cell format (xf) number: this spreadsheet's style, and whether it shows dates. */
-  xf: Array<{ style: CellStyle; date: boolean; fontOdd: boolean }>;
+  xf: Array<{ style: CellStyle; date: boolean }>;
   unreadCodes: number;
 }
 
@@ -320,7 +352,7 @@ function readStyles(xml: XmlEl | null, theme: string[], order: DateOrder, symbol
   for (const n of children(child(xml, 'numFmts'), 'numFmt')) codes.set(Number(n.attrs.numFmtId), n.attrs.formatCode ?? '');
   const on = (el: XmlEl | undefined) => !!el && el.attrs.val !== '0' && el.attrs.val !== 'false' && el.attrs.val !== 'none';
   const fonts = children(child(xml, 'fonts'), 'font').map(f => ({
-    b: on(child(f, 'b')), i: on(child(f, 'i')), u: on(child(f, 'u')),
+    b: on(child(f, 'b')), i: on(child(f, 'i')), u: on(child(f, 'u')), st: on(child(f, 'strike')),
     color: readColour(child(f, 'color'), theme),
     sz: child(f, 'sz')?.attrs.val, name: child(f, 'name')?.attrs.val,
   }));
@@ -362,7 +394,13 @@ function readStyles(xml: XmlEl | null, theme: string[], order: DateOrder, symbol
       if (font.b) style.b = true;
       if (font.i) style.i = true;
       if (font.u) style.u = true;
+      if (font.st) style.st = true;
       if (font.color && font.color !== '#000000') style.color = font.color;
+      // A size or typeface other than the workbook's standard one is kept (the standard shows as this spreadsheet's own).
+      const sz = Number(font.sz);
+      if (font.sz !== undefined && Number.isFinite(sz) && sz >= 1 && sz <= 409 && font.sz !== (base?.sz ?? '11')) style.fs = Math.round(sz * 2) / 2;
+      const face = cleanFace(font.name);
+      if (face && font.name !== (base?.name ?? font.name)) style.ff = face;
     }
     const fill = fills[Number(x.attrs.fillId ?? 0)];
     if (fill) style.fill = fill;
@@ -373,17 +411,16 @@ function readStyles(xml: XmlEl | null, theme: string[], order: DateOrder, symbol
     else if (hz === 'center' || hz === 'centerContinuous') style.al = 'c';
     else if (hz === 'right') style.al = 'r';
     if (al?.attrs.wrapText === '1' || al?.attrs.wrapText === 'true') style.wrap = true;
+    if (al?.attrs.vertical === 'top') style.va = 't';
+    else if (al?.attrs.vertical === 'center') style.va = 'm';
+    const indent = Number(al?.attrs.indent ?? 0);
+    if (Number.isInteger(indent) && indent >= 1) style.ind = Math.min(15, indent);
     const id = Number(x.attrs.numFmtId ?? 0);
     const code = codes.get(id) ?? builtinCode(id, order) ?? 'General';
     const fmt = styleForCode(code, symbol);
     if (fmt) Object.assign(style, fmt);
     else out.unreadCodes++;
-    out.xf.push({
-      style,
-      date: style.fmt === 'custom' && !!style.code && isDateCode(style.code),
-      // A font that leaves its size or typeface out uses the standard one.
-      fontOdd: !!font && !!base && ((font.sz !== undefined && font.sz !== (base.sz ?? '11')) || (font.name !== undefined && font.name !== (base.name ?? font.name))),
-    });
+    out.xf.push({ style, date: style.fmt === 'custom' && !!style.code && isDateCode(style.code) });
   }
   return out;
 }
@@ -454,11 +491,39 @@ export async function openXlsx(wb: Workbook, bytes: Uint8Array): Promise<XlsxRep
   const bookRels = await relsOf(bookPath);
   const relTarget = (kind: string) => bookRels.find(r => r.type.endsWith(`/${kind}`))?.target;
   const date1904 = ['1', 'true'].includes(child(book, 'workbookPr')?.attrs.date1904 ?? '');
+  // PivotTables' data caches, by their number: where the data is, the field names, each field's items.
+  const caches = new Map<string, { source: string; fields: string[]; items: string[][]; groups: Record<number, DateGroup> }>();
+  for (const pc of children(child(book, 'pivotCaches'), 'pivotCache')) {
+    const target = bookRels.find(r => r.id === (pc.attrs['r:id'] ?? pc.attrs.id))?.target;
+    const xml = target ? await readXml(target) : null;
+    const ws = child(child(xml ?? undefined, 'cacheSource'), 'worksheetSource');
+    if (!xml || !ws) continue;
+    const quoted = (n: string) => (/^[A-Za-z_][A-Za-z0-9_]*$/.test(n) ? n : `'${n.replace(/'/g, "''")}'`);
+    // A table's data (worksheetSource name="Table1") is its whole block, header row first; a defined name as it is.
+    const named = ws.attrs.name;
+    const definedHere = children(child(book, 'definedNames'), 'definedName').some(d => (d.attrs.name ?? '').toLowerCase() === (named ?? '').toLowerCase());
+    const source = named ? (definedHere || /[[!]/.test(named) ? named : `${named}[[#Headers],[#Data]]`) : ws.attrs.ref && ws.attrs.sheet ? `${quoted(ws.attrs.sheet)}!${ws.attrs.ref.split(':').map(a => a.replace(/^\$?([A-Za-z]+)\$?(\d+)$/, '$$$1$$$2')).join(':')}` : '';
+    const fields: string[] = [];
+    const items: string[][] = [];
+    const groups: Record<number, DateGroup> = {};
+    children(child(xml, 'cacheFields'), 'cacheField').forEach((cf, i) => {
+      fields.push(decodeOoxml(cf.attrs.name ?? ''));
+      items.push((child(cf, 'sharedItems')?.kids ?? []).map(k => (k.name === 'm' ? '(blank)' : decodeOoxml(k.attrs.v ?? ''))));
+      const by = child(child(cf, 'fieldGroup'), 'rangePr')?.attrs.groupBy;
+      if (by === 'years' || by === 'quarters' || by === 'months') groups[i] = by;
+    });
+    if (source) caches.set(pc.attrs.cacheId ?? '', { source, fields, items, groups });
+  }
 
   const sst: string[] = [];
   const sstPath = relTarget('sharedStrings');
   const sstXml = sstPath ? await readXml(sstPath) : null;
-  for (const si of children(sstXml ?? undefined, 'si')) sst.push(decodeOoxml(stringOf(si)));
+  // Text with part of it in bold or a colour (rich text) is kept as its words.
+  let richText = 0;
+  for (const si of children(sstXml ?? undefined, 'si')) {
+    sst.push(decodeOoxml(stringOf(si)));
+    if (children(si, 'r').some(r => child(r, 'rPr'))) richText++;
+  }
   const themePath = relTarget('theme');
   const theme = readTheme(themePath ? await readXml(themePath) : null);
   const stylesPath = relTarget('styles');
@@ -495,8 +560,13 @@ export async function openXlsx(wb: Workbook, bytes: Uint8Array): Promise<XlsxRep
   let offSheet = 0;
   let cut = 0;
   let hiddenSheets = 0;
-  let fontOdd = false;
   let customFilters = 0;
+  let notesRead = 0;
+  let tablesLost = 0;
+  let pivotsLost = 0;
+  let shapes = 0;
+  let sparklines = 0;
+  let dataTables = 0;
   const counts = { links: 0, protect: 0 };
   const names = new Set<string>();
   const sheetEls = children(child(book, 'sheets'), 'sheet');
@@ -571,7 +641,6 @@ export async function openXlsx(wb: Workbook, bytes: Uint8Array): Promise<XlsxRep
           continue;
         }
         const info = styles.xf[xf];
-        if (info?.fontOdd) fontOdd = true;
         let v: number | string | boolean | null = null;
         let error: string | null = null;
         if (t === 's') v = sst[Number(vText)] ?? null;
@@ -620,6 +689,7 @@ export async function openXlsx(wb: Workbook, bytes: Uint8Array): Promise<XlsxRep
             if (error !== null || (vText !== undefined && (vText !== '' || t === 'str'))) cached.set(`${s}:${at.col}:${at.row}`, was);
             if (f.length > 4000) f = null;
           }
+          if (kind === 'dataTable') dataTables++;
           if (f === null && kind !== 'dataTable') {
             report.asValues.count++;
             addExample(report.asValues.examples, `${name}!${addressOf(at.col, at.row)}`);
@@ -652,13 +722,16 @@ export async function openXlsx(wb: Workbook, bytes: Uint8Array): Promise<XlsxRep
     const afRange = af?.attrs.ref ? parseRange(af.attrs.ref) : null;
     if (af && afRange && afRange.r1 > afRange.r0) {
       const cols: Record<number, string[]> = {};
+      const rules: Record<number, FilterRule> = {};
       for (const fc of children(af, 'filterColumn')) {
         const c = afRange.c0 + Number(fc.attrs.colId ?? -1);
         const list = child(fc, 'filters');
         if (!Number.isInteger(c) || c < afRange.c0 || c > afRange.c1) continue;
         if (!list) {
-          // Top 10, a condition (greater than...), by colour: the rows it hides stay hidden, the rule itself is not kept.
-          customFilters++;
+          // A condition (greater than, contains...), top 10, or above average: kept; by colour: the rows stay hidden.
+          const rule = filterRuleOf(fc);
+          if (rule) rules[c] = rule;
+          else customFilters++;
           continue;
         }
         const keep = children(list, 'filter').map(x => x.attrs.val ?? '');
@@ -666,9 +739,10 @@ export async function openXlsx(wb: Workbook, bytes: Uint8Array): Promise<XlsxRep
         if (children(list, 'dateGroupItem').length) customFilters++;
         cols[c] = keep;
       }
-      filter = { range: [afRange.c0, afRange.r0, afRange.c1, afRange.r1], cols };
+      filter = { range: [afRange.c0, afRange.r0, afRange.c1, afRange.r1], cols, rules };
     }
     if (child(ws, 'hyperlinks')) counts.links++;
+    if (findDeep(ws, 'sparklineGroup')) sparklines++;
     if (child(ws, 'sheetProtection')) counts.protect++;
     const asArray = (r: Range) => [r.c0, r.r0, r.c1, r.r1];
     const cf = readCf(ws, dxfs, theme, parts).map(e => ({ ranges: e.ranges.map(asArray), rule: e.rule, stop: e.stop }));
@@ -689,6 +763,8 @@ export async function openXlsx(wb: Workbook, bytes: Uint8Array): Promise<XlsxRep
         const frame = child(anchor, 'graphicFrame');
         const chartRef = frame ? findDeep(frame, 'chart') : undefined;
         const partPath = chartRef ? drawingRels.find(r => r.id === (chartRef.attrs['r:id'] ?? chartRef.attrs.id))?.target : undefined;
+        // Shapes, text boxes and arrows (pictures are counted by their files).
+        if (!partPath && (child(anchor, 'sp') || child(anchor, 'grpSp') || child(anchor, 'cxnSp') || (frame && !chartRef))) shapes++;
         if (!partPath) continue;
         const partXml = await readXml(partPath);
         const made = partXml ? readChartPart(partXml, theme, parts) : null;
@@ -698,8 +774,131 @@ export async function openXlsx(wb: Workbook, bytes: Uint8Array): Promise<XlsxRep
         else if (made && place) parts.chartsOther.push('a chart past the 50 a sheet holds here');
       }
     }
+    const sheetRels = await relsOf(rel.target);
+    // Excel tables: each is a part of its own, named by the sheet's tableParts.
+    const tables: unknown[] = [];
+    for (const tp of children(child(ws, 'tableParts'), 'tablePart')) {
+      const target = sheetRels.find(r => r.id === (tp.attrs['r:id'] ?? tp.attrs.id))?.target;
+      const xml = target ? await readXml(target) : null;
+      if (!xml || xml.name !== 'table') continue;
+      const where = xml.attrs.ref ? parseRange(xml.attrs.ref) : null;
+      const cols = children(child(xml, 'tableColumns'), 'tableColumn');
+      const name = xml.attrs.displayName ?? xml.attrs.name ?? '';
+      if (!where || where.r1 >= MAX_ROWS || where.c1 >= MAX_COLS || cols.length !== where.c1 - where.c0 + 1 || !/^[A-Za-z_][A-Za-z0-9_.]*$/.test(name)) {
+        tablesLost++;
+        continue;
+      }
+      const info = child(xml, 'tableStyleInfo');
+      const flag = (v: string | undefined, d: boolean) => (v === undefined ? d : v === '1' || v === 'true');
+      const af = child(xml, 'autoFilter');
+      const header = xml.attrs.headerRowCount !== '0';
+      const totals = Number(xml.attrs.totalsRowCount ?? 0) > 0;
+      tables.push({
+        id: Number(xml.attrs.id) || tables.length + 1,
+        name,
+        range: [where.c0, where.r0, where.c1, where.r1],
+        header, totals,
+        style: info?.attrs.name ?? '',
+        bandRows: flag(info?.attrs.showRowStripes, true), bandCols: flag(info?.attrs.showColumnStripes, false),
+        firstCol: flag(info?.attrs.showFirstColumn, false), lastCol: flag(info?.attrs.showLastColumn, false),
+        filter: !!af && !filter,
+        columns: cols.map(c => ({
+          name: decodeOoxml(c.attrs.name ?? ''),
+          ...(c.attrs.totalsRowFunction && c.attrs.totalsRowFunction in TOTAL_LABEL ? { total: c.attrs.totalsRowFunction as TotalFn } : {}),
+          ...(c.attrs.totalsRowLabel ? { label: decodeOoxml(c.attrs.totalsRowLabel) } : {}),
+        })),
+      });
+      // The table's filter buttons are the sheet's filter here (a sheet has one filter).
+      if (af && !filter && header) {
+        const fr = { ...where, r1: where.r1 - (totals ? 1 : 0) };
+        const keep: Record<number, string[]> = {};
+        const rules: Record<number, FilterRule> = {};
+        for (const fc of children(af, 'filterColumn')) {
+          const list = child(fc, 'filters');
+          if (!list) {
+            const rule = filterRuleOf(fc);
+            if (rule) rules[fr.c0 + Number(fc.attrs.colId ?? 0)] = rule;
+            continue;
+          }
+          const vals = children(list, 'filter').map(x => x.attrs.val ?? '');
+          if (list.attrs.blank === '1' || list.attrs.blank === 'true') vals.push('');
+          keep[fr.c0 + Number(fc.attrs.colId ?? 0)] = vals;
+        }
+        filter = { range: [fr.c0, fr.r0, fr.c1, fr.r1], cols: keep, rules };
+      }
+    }
+    // PivotTables: kept live, their cells as Excel wrote them until they are changed or refreshed here.
+    const pivots: unknown[] = [];
+    for (const r of sheetRels.filter(x => x.type.endsWith('/pivotTable'))) {
+      const xml = await readXml(r.target);
+      const cache = xml ? caches.get(xml.attrs.cacheId ?? '') : undefined;
+      const loc = child(xml ?? undefined, 'location');
+      const where = loc?.attrs.ref ? parseRange(loc.attrs.ref) : null;
+      if (!xml || !cache || !where || where.r1 >= MAX_ROWS || where.c1 >= MAX_COLS) {
+        pivotsLost++;
+        continue;
+      }
+      const fieldEls = children(child(xml, 'pivotFields'), 'pivotField');
+      const axis = (name: string) => children(child(xml, name), 'field').map(f => Number(f.attrs.x)).filter(x => Number.isInteger(x) && x >= 0 && x < cache.fields.length);
+      const hidden: Record<number, string[]> = {};
+      fieldEls.forEach((pf, i) => {
+        const off = children(child(pf, 'items'), 'item').filter(it => it.attrs.h === '1' || it.attrs.h === 'true').map(it => cache.items[i]?.[Number(it.attrs.x)]).filter((x): x is string => x !== undefined);
+        if (off.length) hidden[i] = off;
+      });
+      const SHOW: Record<string, ShowAs> = { percentOfTotal: 'pctTotal', percentOfCol: 'pctCol', percentOfRow: 'pctRow' };
+      const values = children(child(xml, 'dataFields'), 'dataField').map(df => ({
+        field: Number(df.attrs.fld),
+        agg: (AGGS.includes((df.attrs.subtotal ?? 'sum') as Agg) ? df.attrs.subtotal ?? 'sum' : 'sum') as Agg,
+        ...(df.attrs.showDataAs && SHOW[df.attrs.showDataAs] ? { show: SHOW[df.attrs.showDataAs] } : {}),
+        ...(df.attrs.name ? { name: decodeOoxml(df.attrs.name) } : {}),
+      })).filter(v => Number.isInteger(v.field) && v.field >= 0 && v.field < cache.fields.length);
+      const pages = children(child(xml, 'pageFields'), 'pageField').map(pf => {
+        const f = Number(pf.attrs.fld);
+        const item = pf.attrs.item !== undefined ? cache.items[f]?.[Number(pf.attrs.item)] : undefined;
+        return { field: f, keep: item !== undefined ? [item] : null };
+      }).filter(pf => Number.isInteger(pf.field) && pf.field >= 0 && pf.field < cache.fields.length);
+      // Report filters sit above the report, with a blank row between.
+      const top = Math.max(0, where.r0 - (pages.length ? pages.length + 1 : 0));
+      const flag = (v: string | undefined) => v !== '0' && v !== 'false';
+      pivots.push({
+        id: pivots.length + 1 + index * 100, name: decodeOoxml(xml.attrs.name ?? `PivotTable${pivots.length + 1}`), source: cache.source,
+        at: { col: where.c0, row: top }, rows: axis('rowFields'), cols: axis('colFields'), values, filters: pages, hidden, groups: cache.groups,
+        grandRows: flag(xml.attrs.rowGrandTotals), grandCols: flag(xml.attrs.colGrandTotals), subtotals: fieldEls.every(pf => pf.attrs.defaultSubtotal !== '0'),
+        last: [where.c0, top, Math.max(where.c1, where.c0 + 1), where.r1],
+      });
+    }
+    // Notes (Excel's comments part; Excel 365's threaded comments keep a copy there too).
+    const commentsPath = sheetRels.find(r => r.type.endsWith('/comments'))?.target;
+    if (commentsPath) {
+      const xml = await readXml(commentsPath);
+      const authors = children(child(xml ?? undefined, 'authors'), 'author').map(a => a.text);
+      const byAt = new Map<string, unknown[]>();
+      for (const c of cells as unknown[][]) byAt.set(`${c[0]}:${c[1]}`, c);
+      for (const cm of children(child(xml ?? undefined, 'commentList'), 'comment')) {
+        const at = cm.attrs.ref ? cellAddress(cm.attrs.ref) : null;
+        if (!at || at.row >= MAX_ROWS || at.col >= MAX_COLS) continue;
+        const textEl = child(cm, 'text');
+        let note = decodeOoxml(stringOf(textEl));
+        // Excel starts a note with its author's name in bold ("Ann Lee:" and a new line): left out, as Excel shows it apart.
+        const author = authors[Number(cm.attrs.authorId ?? -1)];
+        if (author && note.startsWith(`${author}:`)) note = note.slice(author.length + 1).replace(/^\r?\n/, '');
+        note = note.replace(/\r\n/g, '\n').slice(0, 32_000);
+        if (!note.trim()) continue;
+        const own = byAt.get(`${at.col}:${at.row}`);
+        if (own) {
+          while (own.length < 5) own.push(null);
+          own[5] = note;
+        } else {
+          cells.push([at.col, at.row, null, null, 0, note]);
+          total++;
+        }
+        notesRead++;
+      }
+    }
     ourSheet.set(index, sheetsOut.length);
-    sheetsOut.push({ name, colW, rowH, rowFit: [], cells, merges, freeze, hiddenRows, hiddenCols, filter, charts, cf, dv, page: page ? { ...page, area: null } : null });
+    const view = child(child(ws, 'sheetViews'), 'sheetView');
+    const noGrid = view?.attrs.showGridLines === '0' || view?.attrs.showGridLines === 'false';
+    sheetsOut.push({ name, colW, rowH, rowFit: [], cells, merges, freeze, hiddenRows, hiddenCols, filter, charts, cf, dv, page: page ? { ...page, area: null } : null, tables, pivots, noGrid });
   }
   if (!sheetsOut.length) throw new SyntaxProblem('This Excel file has no sheets of cells this spreadsheet can open (only charts or the like).');
 
@@ -720,10 +919,19 @@ export async function openXlsx(wb: Workbook, bytes: Uint8Array): Promise<XlsxRep
   // Charts this spreadsheet could not draw, each said once ("a radar chart...").
   for (const [what, n] of [...parts.chartsOther.reduce((m, w) => m.set(w, (m.get(w) ?? 0) + 1), new Map<string, number>())]) report.dropped.push(n > 1 ? `${what} (${n} of them)` : what);
   say(count(/^xl\/media\//i), plural(count(/^xl\/media\//i), 'picture'));
-  say(count(/^xl\/pivotTables\/.*\.xml$/i), plural(count(/^xl\/pivotTables\/.*\.xml$/i), 'pivot table') + ' (their cells are kept as plain values)');
-  say(count(/^xl\/(comments\d*|threadedComments\/.*)\.xml$/i), 'comments and notes');
-  say(count(/^xl\/tables\/.*\.xml$/i), plural(count(/^xl\/tables\/.*\.xml$/i), 'Excel table') + ' (the data is kept; the table style and its column formulas are not)');
+  say(pivotsLost, `${plural(pivotsLost, 'PivotTable')} this spreadsheet could not read (their cells are kept as plain values)`);
+  // Excel 365's threaded comments (a conversation) keep their first text as a note here; the replies are not kept.
+  say(count(/^xl\/threadedComments\/.*\.xml$/i), 'replies in threaded comments (each comment\'s first text is kept as a note)');
+  void notesRead;
+  say(tablesLost, `${plural(tablesLost, 'Excel table')} this spreadsheet could not read (the cells are kept as plain cells)`);
   say(count(/vbaProject\.bin$/i), 'macros (VBA): they are never run or saved here');
+  say(shapes, `${plural(shapes, 'shape')} (text boxes, arrows, drawn shapes)`);
+  say(sparklines, `sparklines (the small charts in cells) on ${plural(sparklines, 'sheet')}`);
+  say(count(/^xl\/(slicers|timelines)\/.*\.xml$/i), 'slicers and timelines (the filter buttons beside PivotTables and tables)');
+  say(count(/^xl\/externalLinks\/.*\.xml$/i), 'links to other workbooks (formulas that use them keep the answer Excel last saved)');
+  say(count(/^xl\/(ctrlProps|activeX)\//i), 'form controls (buttons, tick boxes, drop-downs drawn on the sheet)');
+  say(dataTables, `${plural(dataTables, 'what-if data table')} (their answers are kept as values)`);
+  say(richText, `${plural(richText, 'cell')} with part of the text in bold, italics or a colour (shown in one style)`);
   say(parts.cfOther, `${plural(parts.cfOther, 'conditional formatting rule')} of a kind this spreadsheet does not have (icon sets, dates occurring, errors, above or below by standard deviations)`);
   say(parts.dvOther, `${plural(parts.dvOther, 'data validation rule')} this spreadsheet could not read`);
   say(parts.pageOther, 'some print settings (another paper size, manual page breaks, or a different header on the first or even pages)');
@@ -733,11 +941,23 @@ export async function openXlsx(wb: Workbook, bytes: Uint8Array): Promise<XlsxRep
   say(hiddenSheets, `${plural(hiddenSheets, 'hidden sheet')}: shown here`);
   say(styles.unreadCodes, `${plural(styles.unreadCodes, 'number format')} this spreadsheet cannot read (shown as General)`);
   say(customFilters ? 1 : 0, 'a filter rule (top 10, a condition, by colour or by date group): the rows it hid stay hidden');
-  say(fontOdd ? 1 : 0, 'text sizes and typefaces (cells show in the standard font)');
   say(offSheet, `${plural(offSheet, 'cell')} past row ${MAX_ROWS.toLocaleString()} or column ${colName(MAX_COLS - 1)}, the edge of a sheet here`);
   say(cut, `the end of ${plural(cut, 'very long text')} (over ${MAX_TEXT.toLocaleString()} characters)`);
-  const definedNames = children(child(book, 'definedNames'), 'definedName').filter(d => !/^_xlnm\./i.test(d.attrs.name ?? ''));
-  say(definedNames.length, `${plural(definedNames.length, 'named range')} (formulas that use them keep their last answer)`);
+  // Named ranges and values: kept (with the sheet they belong to); Excel's own hidden ones (_xlnm., _xlfn.) are not names.
+  const namesOut: Array<{ name: string; ref: string; scope?: string; comment?: string }> = [];
+  let unreadNames = 0;
+  for (const d of children(child(book, 'definedNames'), 'definedName')) {
+    const name = d.attrs.name ?? '';
+    if (/^_xl/i.test(name)) continue;
+    const ref = fromExcelFormula(d.text.trim().replace(/^=/, ''));
+    const local = d.attrs.localSheetId !== undefined ? ourSheet.get(Number(d.attrs.localSheetId)) : undefined;
+    if (!ref || (d.attrs.localSheetId !== undefined && local === undefined)) {
+      unreadNames++;
+      continue;
+    }
+    namesOut.push({ name, ref, ...(local !== undefined ? { scope: (sheetsOut[local] as { name: string }).name } : {}), ...(d.attrs.comment ? { comment: d.attrs.comment } : {}) });
+  }
+  say(unreadNames, `${plural(unreadNames, 'named range')} this spreadsheet could not read (formulas that use them keep their last answer)`);
   // A sheet's print area and print titles are names the workbook keeps for it.
   let areas = 0;
   for (const d of children(child(book, 'definedNames'), 'definedName')) {
@@ -767,6 +987,7 @@ export async function openXlsx(wb: Workbook, bytes: Uint8Array): Promise<XlsxRep
     active: Math.max(0, Math.min(sheetsOut.length - 1, activeTab)),
     styles: styleList,
     sheets: sheetsOut,
+    names: namesOut,
   });
 
   // Every formula is worked out here and set beside the answer Excel saved: one that uses something this spreadsheet
@@ -797,6 +1018,19 @@ export async function openXlsx(wb: Workbook, bytes: Uint8Array): Promise<XlsxRep
     }
   }
   report.asValues.names = [...names].sort().slice(0, 12);
+  // Inside a table, Excel shows Sales[[#This Row],[Amount]] as [@Amount]: written that way here too.
+  for (const sheet of wb.sheets) {
+    for (const t of sheet.tables) {
+      for (let r = t.range.r0; r <= t.range.r1; r++) {
+        for (let c = t.range.c0; c <= t.range.c1; c++) {
+          const cell = sheet.cells.get(keyOf(c, r));
+          if (!cell?.f || !/#this row/i.test(cell.f)) continue;
+          cell.f = rewriteStructs(cell.f, part => (part.thisRow && part.table.toLowerCase() === t.name.toLowerCase() ? { ...part, table: '' } : null));
+          changed = true;
+        }
+      }
+    }
+  }
   if (changed) wb.load(JSON.parse(wb.serialize()));
   // A formula with no saved answer that calls a function this spreadsheet lacks can only show #NAME?: said too.
   const missing = new Set<string>();
@@ -855,6 +1089,69 @@ function textTag(s: string): string {
   return /^\s|\s$|\n/.test(s) ? `<t xml:space="preserve">${t}</t>` : `<t>${t}</t>`;
 }
 
+/** A filter column's rule as Excel writes it (customFilters, top10, dynamicFilter), read; null for one not kept. */
+function filterRuleOf(fc: XmlEl): FilterRule | null {
+  const custom = child(fc, 'customFilters');
+  const top = child(fc, 'top10');
+  const dyn = child(fc, 'dynamicFilter');
+  if (custom) {
+    const conds = children(custom, 'customFilter').slice(0, 2).map(x => ({ op: x.attrs.operator ?? 'equal', val: decodeOoxml(x.attrs.val ?? '') }));
+    return conds.length ? cleanFilterRule({ kind: 'custom', and: custom.attrs.and === '1' || custom.attrs.and === 'true', a: conds[0], ...(conds[1] ? { b: conds[1] } : {}) }) : null;
+  }
+  if (top) return cleanFilterRule({ kind: 'top', top: top.attrs.top !== '0' && top.attrs.top !== 'false', n: Number(top.attrs.val ?? 10), percent: top.attrs.percent === '1' || top.attrs.percent === 'true' });
+  if (dyn && (dyn.attrs.type === 'aboveAverage' || dyn.attrs.type === 'belowAverage')) return { kind: 'average', above: dyn.attrs.type === 'aboveAverage' };
+  return null;
+}
+
+/** A filter's columns as Excel's filterColumn elements: kept values, or a rule. */
+function filterColumnsXml(f: Filter, c0: number): string {
+  const out: string[] = [];
+  for (const [c, keep] of [...f.cols].sort((a, b) => a[0] - b[0])) {
+    const blank = keep.includes('');
+    out.push(tag('filterColumn', { colId: c - c0 }, `<filters${blank ? ' blank="1"' : ''}>${keep.filter(k => k !== '').map(k => tag('filter', { val: k })).join('')}</filters>`));
+  }
+  for (const [c, rule] of [...(f.rules ?? [])].sort((a, b) => a[0] - b[0])) {
+    let inner: string;
+    if (rule.kind === 'custom') inner = tag('customFilters', { and: rule.and && rule.b ? 1 : undefined }, [rule.a, ...(rule.b ? [rule.b] : [])].map(x => tag('customFilter', { operator: x.op === 'equal' ? undefined : x.op, val: x.val })).join(''));
+    else if (rule.kind === 'top') inner = tag('top10', { top: rule.top ? undefined : 0, percent: rule.percent ? 1 : undefined, val: rule.n });
+    else inner = tag('dynamicFilter', { type: rule.above ? 'aboveAverage' : 'belowAverage' });
+    out.push(tag('filterColumn', { colId: c - c0 }, inner));
+  }
+  return out.join('');
+}
+
+/** A formula's table references as Excel files hold them: with the table's name, and "this row" written out. */
+function excelStructs(f: string, owner: string): string {
+  if (!f.includes('[')) return f;
+  return rewriteStructs(f, part => ({ ...part, table: part.table || owner }), true);
+}
+
+/** A table's own part (xl/tables/tableN.xml): where it is, its columns, total row, style and filter. */
+function tableXml(t: Table, id: number, filter: Filter | null): string {
+  const dr = dataRows(t);
+  const filterXml = filter ? tag('autoFilter', { ref: rangeText({ ...t.range, r1: dr.r1 }) }, filterColumnsXml(filter, t.range.c0) || undefined) : '';
+  const cols = t.columns.map((c, i) => tag('tableColumn', {
+    id: i + 1, name: encodeOoxml(c.name),
+    totalsRowLabel: t.totals && c.label ? c.label : undefined,
+    totalsRowFunction: t.totals && c.total && c.total !== 'none' ? c.total : undefined,
+  })).join('');
+  return `<table xmlns="${NS_MAIN}" ${[
+    `id="${id}"`, `name="${escapeXml(t.name)}"`, `displayName="${escapeXml(t.name)}"`, `ref="${rangeText(t.range)}"`,
+    ...(t.header ? [] : ['headerRowCount="0"']), ...(t.totals ? ['totalsRowCount="1"'] : ['totalsRowShown="0"']),
+  ].join(' ')}>${filterXml}<tableColumns count="${t.columns.length}">${cols}</tableColumns>${tag('tableStyleInfo', {
+    name: t.style || undefined, showFirstColumn: t.firstCol ? 1 : 0, showLastColumn: t.lastCol ? 1 : 0, showRowStripes: t.bandRows ? 1 : 0, showColumnStripes: t.bandCols ? 1 : 0,
+  })}</table>`;
+}
+
+/**
+ * The old-style drawing (VML) Excel still needs to show notes: one hidden yellow box per note, anchored beside its
+ * cell. `n` keeps each sheet's shape numbers apart.
+ */
+function noteVml(n: number, notes: Array<{ col: number; row: number }>): string {
+  const shapes = notes.map((nt, i) => `<v:shape id="_x0000_s${n * 1024 + i + 1}" type="#_x0000_t202" style="position:absolute;margin-left:59.25pt;margin-top:1.5pt;width:108pt;height:59.25pt;z-index:${i + 1};visibility:hidden" fillcolor="#ffffe1" o:insetmode="auto"><v:fill color2="#ffffe1"/><v:shadow on="t" color="black" obscured="t"/><v:path o:connecttype="none"/><v:textbox style="mso-direction-alt:auto"><div style="text-align:left"></div></v:textbox><x:ClientData ObjectType="Note"><x:MoveWithCells/><x:SizeWithCells/><x:Anchor>${nt.col + 1}, 15, ${Math.max(0, nt.row - 1)}, 2, ${nt.col + 3}, 15, ${nt.row + 3}, 16</x:Anchor><x:AutoFill>False</x:AutoFill><x:Row>${nt.row}</x:Row><x:Column>${nt.col}</x:Column></x:ClientData></v:shape>`).join('');
+  return `<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><o:shapelayout v:ext="edit"><o:idmap v:ext="edit" data="${n}"/></o:shapelayout><v:shapetype id="_x0000_t202" coordsize="21600,21600" o:spt="202" path="m,l,21600r21600,l21600,xe"><v:stroke joinstyle="miter"/><v:path gradientshapeok="t" o:connecttype="rect"/></v:shapetype>${shapes}</xml>`;
+}
+
 /** The workbook as an .xlsx file (Office Open XML), packed. */
 export async function saveXlsx(wb: Workbook): Promise<Uint8Array<ArrayBuffer>> {
   const strings = new Map<string, number>();
@@ -893,13 +1190,20 @@ export async function saveXlsx(wb: Workbook): Promise<Uint8Array<ArrayBuffer>> {
         numFmts.push(tag('numFmt', { numFmtId, formatCode: code }));
       }
     }
-    const fontId = st.b || st.i || st.u || st.color
-      ? indexOf(fonts, `<font>${st.b ? '<b/>' : ''}${st.i ? '<i/>' : ''}${st.u ? '<u/>' : ''}<sz val="11"/>${st.color ? `<color rgb="${argb(st.color)}"/>` : '<color theme="1"/>'}<name val="Calibri"/><family val="2"/><scheme val="minor"/></font>`)
+    const fontId = st.b || st.i || st.u || st.st || st.color || st.fs || st.ff
+      ? indexOf(fonts, `<font>${st.b ? '<b/>' : ''}${st.i ? '<i/>' : ''}${st.st ? '<strike/>' : ''}${st.u ? '<u/>' : ''}<sz val="${st.fs ?? 11}"/>${st.color ? `<color rgb="${argb(st.color)}"/>` : '<color theme="1"/>'}${st.ff ? `<name val="${escapeXml(st.ff)}"/><family val="${{ sans: 2, serif: 1, mono: 3 }[fontKind(st.ff)]}"/>` : '<name val="Calibri"/><family val="2"/><scheme val="minor"/>'}</font>`)
       : 0;
     const fillId = st.fill ? indexOf(fills, `<fill><patternFill patternType="solid"><fgColor rgb="${argb(st.fill)}"/><bgColor indexed="64"/></patternFill></fill>`) : 0;
     const side = (name: string, line: Line | undefined) => (line ? `<${name} style="${LINE_STYLE[String(line)]}"><color ${st.bc ? `rgb="${argb(st.bc)}"` : 'indexed="64"'}/></${name}>` : `<${name}/>`);
     const borderId = st.bt || st.bb || st.bl || st.br ? indexOf(borders, `<border>${side('left', st.bl)}${side('right', st.br)}${side('top', st.bt)}${side('bottom', st.bb)}<diagonal/></border>`) : 0;
-    const align = st.al || st.wrap ? tag('alignment', { horizontal: st.al === 'l' ? 'left' : st.al === 'c' ? 'center' : st.al === 'r' ? 'right' : undefined, wrapText: st.wrap ? 1 : undefined }) : '';
+    const align = st.al || st.wrap || st.va || st.ind
+      ? tag('alignment', {
+        horizontal: st.al === 'l' || (st.ind && !st.al) ? 'left' : st.al === 'c' ? 'center' : st.al === 'r' ? 'right' : undefined,
+        vertical: st.va === 't' ? 'top' : st.va === 'm' ? 'center' : undefined,
+        indent: st.ind && st.al !== 'c' ? st.ind : undefined,
+        wrapText: st.wrap ? 1 : undefined,
+      })
+      : '';
     return tag('xf', {
       numFmtId, fontId, fillId, borderId, xfId: 0,
       applyNumberFormat: numFmtId ? 1 : undefined, applyFont: fontId ? 1 : undefined, applyFill: fillId ? 1 : undefined,
@@ -913,6 +1217,9 @@ export async function saveXlsx(wb: Workbook): Promise<Uint8Array<ArrayBuffer>> {
   const overridesExtra: string[] = [];
   let chartNo = 0;
   let drawingNo = 0;
+  let notesNo = 0;
+  let tableNo = 0;
+  let vml = false;
   let dynamic = false;
   const files: ZipEntry[] = [];
   const now = Date.now();
@@ -953,7 +1260,7 @@ export async function saveXlsx(wb: Workbook): Promise<Uint8Array<ArrayBuffer>> {
         const list = tree !== null && worksOnLists(tree);
         if (list) dynamic = true;
         const fAttrs = list ? ` t="array" ref="${area && area.col === col && area.row === row ? rangeText(area) : r}"` : '';
-        xml = `<c r="${r}"${sAttr}${answer.t ? ` t="${answer.t}"` : ''}${list ? ' cm="1"' : ''}><f${fAttrs}>${escapeXml(toExcelFormula(cell.f))}</f>${answer.v !== undefined ? `<v>${answer.v}</v>` : ''}</c>`;
+        xml = `<c r="${r}"${sAttr}${answer.t ? ` t="${answer.t}"` : ''}${list ? ' cm="1"' : ''}><f${fAttrs}>${escapeXml(toExcelFormula(excelStructs(cell.f, wb.tableAt(s, col, row)?.name ?? '')))}</f>${answer.v !== undefined ? `<v>${answer.v}</v>` : ''}</c>`;
         if (list && area && area.col === col && area.row === row) {
           for (let rr = area.r0; rr <= area.r1; rr++) {
             for (let cc = area.c0; cc <= area.c1; cc++) {
@@ -990,7 +1297,7 @@ export async function saveXlsx(wb: Workbook): Promise<Uint8Array<ArrayBuffer>> {
     const paneXml = fr || fc
       ? tag('pane', { xSplit: fc || undefined, ySplit: fr || undefined, topLeftCell: addressOf(fc, fr), activePane: fr && fc ? 'bottomRight' : fr ? 'bottomLeft' : 'topRight', state: 'frozen' })
       : '';
-    parts.push(`<sheetViews>${tag('sheetView', { tabSelected: s === wb.active ? 1 : undefined, workbookViewId: 0 }, paneXml)}</sheetViews>`);
+    parts.push(`<sheetViews>${tag('sheetView', { showGridLines: sheet.noGrid ? 0 : undefined, tabSelected: s === wb.active ? 1 : undefined, workbookViewId: 0 }, paneXml)}</sheetViews>`);
     parts.push('<sheetFormatPr defaultRowHeight="15"/>');
     const colIdx = [...new Set([...sheet.colW.keys(), ...sheet.hiddenCols])].sort((a, b) => a - b);
     if (colIdx.length) {
@@ -1008,14 +1315,10 @@ export async function saveXlsx(wb: Workbook): Promise<Uint8Array<ArrayBuffer>> {
       parts.push(`${tag('row', { r: r + 1, ht: h !== undefined ? Math.round(h * 0.75 * 100) / 100 : undefined, customHeight: h !== undefined ? 1 : undefined, hidden: sheet.hiddenRows.has(r) ? 1 : undefined }, cellsXml || undefined)}`);
     }
     parts.push('</sheetData>');
-    if (sheet.filter) {
+    const tableFilter = sheet.tables.find(t => wb.isTableFilter(s, t));
+    if (sheet.filter && !tableFilter) {
       const f = sheet.filter;
-      const colsXml = [...f.cols].sort((a, b) => a[0] - b[0]).map(([c, keep]) => {
-        const blank = keep.includes('');
-        const vals = keep.filter(k => k !== '').map(k => tag('filter', { val: k })).join('');
-        return tag('filterColumn', { colId: c - f.range.c0 }, `<filters${blank ? ' blank="1"' : ''}>${vals}</filters>`);
-      }).join('');
-      parts.push(tag('autoFilter', { ref: rangeText(f.range) }, colsXml || undefined));
+      parts.push(tag('autoFilter', { ref: rangeText(f.range) }, filterColumnsXml(f, f.range.c0) || undefined));
       const quoted = `'${sheet.name.replace(/'/g, "''")}'`;
       definedNames.push(tag('definedName', { name: '_xlnm._FilterDatabase', localSheetId: s, hidden: 1 }, escapeXml(`${quoted}!$${colName(f.range.c0)}$${f.range.r0 + 1}:$${colName(f.range.c1)}$${f.range.r1 + 1}`)));
     }
@@ -1024,6 +1327,13 @@ export async function saveXlsx(wb: Workbook): Promise<Uint8Array<ArrayBuffer>> {
     parts.push(writeDv(sheet));
     parts.push(pageXml.printOptions, pageXml.margins, pageXml.setup, pageXml.headerFooter);
     definedNames.push(...printNames(sheet, s));
+    const sheetRels: string[] = [];
+    const relId = (type: string, target: string) => {
+      const id = `rId${sheetRels.length + 1}`;
+      sheetRels.push(tag('Relationship', { Id: id, Type: REL(type), Target: target }));
+      return id;
+    };
+    const tail: string[] = [];
     if (sheet.charts.length) {
       // The sheet's drawing (where each chart sits) and one part per chart, each with its relationships.
       const d = ++drawingNo;
@@ -1038,14 +1348,42 @@ export async function saveXlsx(wb: Workbook): Promise<Uint8Array<ArrayBuffer>> {
         rels.push(tag('Relationship', { Id: `rId${k + 1}`, Type: REL('chart'), Target: `../charts/chart${n}.xml` }));
       });
       add(`xl/drawings/_rels/drawing${d}.xml.rels`, `<Relationships xmlns="${NS_PKG_REL}">${rels.join('')}</Relationships>`);
-      add(`xl/worksheets/_rels/sheet${s + 1}.xml.rels`, `<Relationships xmlns="${NS_PKG_REL}">${tag('Relationship', { Id: 'rId1', Type: REL('drawing'), Target: `../drawings/drawing${d}.xml` })}</Relationships>`);
       overridesExtra.push(tag('Override', { PartName: `/xl/drawings/drawing${d}.xml`, ContentType: 'application/vnd.openxmlformats-officedocument.drawing+xml' }));
-      parts.push('<drawing r:id="rId1"/>');
+      tail.push(`<drawing r:id="${relId('drawing', `../drawings/drawing${d}.xml`)}"/>`);
     }
+    // Tables: a part each; written after the notes' drawing, as Excel orders them (tableParts last).
+    const tableIds: string[] = [];
+    for (const t of sheet.tables) {
+      const n = ++tableNo;
+      add(`xl/tables/table${n}.xml`, tableXml(t, n, tableFilter === t ? sheet.filter : null));
+      overridesExtra.push(tag('Override', { PartName: `/xl/tables/table${n}.xml`, ContentType: CT('table') }));
+      tableIds.push(relId('table', `../tables/table${n}.xml`));
+    }
+    // Notes: Excel's comments part, and the old-style drawing (VML) that places each note's box.
+    const notes = wb.notesOf(s);
+    if (notes.length) {
+      const n = ++notesNo;
+      add(`xl/comments${n}.xml`, `<comments xmlns="${NS_MAIN}"><authors><author>Author</author></authors><commentList>${notes.map(nt => tag('comment', { ref: addressOf(nt.col, nt.row), authorId: 0 }, `<text><r><rPr><sz val="9"/><color indexed="81"/><rFont val="Tahoma"/><family val="2"/></rPr>${textTag(nt.text.replace(/\n/g, '\r\n'))}</r></text>`)).join('')}</commentList></comments>`);
+      files.push({ name: `xl/drawings/vmlDrawing${n}.vml`, data: new TextEncoder().encode(noteVml(n, notes)), modified: now });
+      overridesExtra.push(tag('Override', { PartName: `/xl/comments${n}.xml`, ContentType: CT('comments') }));
+      relId('comments', `../comments${n}.xml`);
+      tail.push(`<legacyDrawing r:id="${relId('vmlDrawing', `../drawings/vmlDrawing${n}.vml`)}"/>`);
+      vml = true;
+    }
+    if (tableIds.length) tail.push(`<tableParts count="${tableIds.length}">${tableIds.map(id => tag('tablePart', { 'r:id': id })).join('')}</tableParts>`);
+    parts.push(...tail);
+    if (sheetRels.length) add(`xl/worksheets/_rels/sheet${s + 1}.xml.rels`, `<Relationships xmlns="${NS_PKG_REL}">${sheetRels.join('')}</Relationships>`);
     parts.push('</worksheet>');
     add(`xl/worksheets/sheet${s + 1}.xml`, parts.join(''));
   });
 
+  for (const n of wb.names) {
+    const local = n.scope !== undefined ? wb.sheets.findIndex(sh => sh.name.toLowerCase() === n.scope!.toLowerCase()) : -1;
+    definedNames.push(tag('definedName', { name: n.name, comment: n.comment, localSheetId: local >= 0 ? local : undefined }, escapeXml(toExcelFormula(n.ref))));
+  }
+  // Excel wants its names in order of name.
+  const nameOf = (x: string) => (/name="([^"]*)"/.exec(x)?.[1] ?? '').toLowerCase();
+  definedNames.sort((a, b) => nameOf(a).localeCompare(nameOf(b)));
   const sheetsXml = wb.sheets.map((sh, i) => tag('sheet', { name: sh.name, sheetId: i + 1, 'r:id': `rId${i + 1}` })).join('');
   add('xl/workbook.xml', `<workbook xmlns="${NS_MAIN}" xmlns:r="${NS_REL}"><bookViews>${tag('workbookView', { activeTab: wb.active || undefined })}</bookViews><sheets>${sheetsXml}</sheets>${definedNames.length ? `<definedNames>${definedNames.join('')}</definedNames>` : ''}<calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>`);
 
@@ -1078,7 +1416,7 @@ export async function saveXlsx(wb: Workbook): Promise<Uint8Array<ArrayBuffer>> {
   files.unshift({
     name: '[Content_Types].xml',
     modified: now,
-    data: new TextEncoder().encode(`${XML_HEAD}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>${overrides.join('')}</Types>`),
+    data: new TextEncoder().encode(`${XML_HEAD}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>${vml ? '<Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/>' : ''}${overrides.join('')}</Types>`),
   });
   return zipDeflate(files);
 }

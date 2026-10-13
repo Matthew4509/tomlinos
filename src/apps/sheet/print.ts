@@ -5,6 +5,7 @@
 import { chartData, drawChart } from './chart.ts';
 import { cfLook } from './condfmt.ts';
 import { fitText, OffsetPainter, textWidth, wrapText, type Painter } from './paint.ts';
+import { fontKind } from './fonts.ts';
 import { colName, MAX_COLS, MAX_ROWS } from './refs.ts';
 import { CellError, type CellStyle, type Line } from './values.ts';
 import type { Range, Workbook } from './workbook.ts';
@@ -329,7 +330,7 @@ export function drawPage(p: Painter, wb: Workbook, s: number, plan: PrintPlan, i
     if (!looks.has(key)) looks.set(key, sheet.cf.length ? cfLook(wb, s, c, r) : null);
     return looks.get(key) ?? null;
   };
-  const styleAt = (c: number, r: number): CellStyle | undefined => wb.styleOf(sheet.cells.get(keyOf(c, r)));
+  const styleAt = (c: number, r: number): CellStyle | undefined => wb.lookOf(s, c, r);
   for (const r of rows) {
     if (!rh(r)) continue;
     for (const c of cols) {
@@ -401,24 +402,31 @@ export function drawPage(p: Painter, wb: Workbook, s: number, plan: PrintPlan, i
     if ((!cell || (cell.v === undefined && cell.f === undefined)) && !wb.isSpilled(s, c, r)) return;
     const shown = wb.shown(s, c, r);
     if (shown.text === '') return;
-    const st = wb.styleOf(cell);
+    const st = wb.lookOf(s, c, r);
     const cf = look(c, r);
     const v = wb.value(s, c, r);
     const bold = !!(cf?.b ?? st?.b);
     const italic = !!(cf?.i ?? st?.i);
     const underline = !!(cf?.u ?? st?.u);
+    const strike = !!st?.st;
+    // The cell's own size (11 points is the standard, printed at `size`) and kind of typeface.
+    const fsize = (size * (st?.fs ?? 11)) / 11;
+    const kind = fontKind(st?.ff);
+    const indent = st?.ind && (st.al ?? 'l') !== 'c' ? st.ind * 6.75 * k : 0;
+    const half = Math.max((ROW_H * PT * k) / 2, fsize * 0.75);
+    const lineY = (count: number, lh: number) => (st?.va === 't' ? by + half : st?.va === 'm' ? by + bh / 2 - (lh * (count - 1)) / 2 : by + bh - half - lh * (count - 1));
     const colour = v instanceof CellError ? '#c0392b' : shown.color ?? cf?.color ?? st?.color ?? '#000000';
     const isNum = typeof v === 'number';
     const align = st?.al ?? (isNum ? 'r' : v instanceof CellError || typeof v === 'boolean' ? 'c' : 'l');
     const pad = 2 * k;
     if (st?.wrap && !isNum) {
-      const lines = wrapText(shown.text, bw - pad * 2, size, bold);
-      const lh = size * 1.25;
-      let ly = by + bh - (ROW_H * PT * k) / 2 - lh * (lines.length - 1);
+      const lines = wrapText(shown.text, bw - pad * 2 - indent, fsize, bold, 60, kind);
+      const lh = fsize * 1.25;
+      let ly = lineY(lines.length, lh);
       p.clip(bx, by, bw, bh);
       for (const line of lines) {
-        const lx = align === 'r' ? bx + bw - pad : align === 'c' ? bx + bw / 2 : bx + pad;
-        p.text(lx, ly, line, { size, bold, italic, underline, colour, align });
+        const lx = align === 'r' ? bx + bw - pad - indent : align === 'c' ? bx + bw / 2 : bx + pad + indent;
+        p.text(lx, ly, line, { size: fsize, bold, italic, underline, strike, colour, align, kind });
         ly += lh;
       }
       p.unclip();
@@ -426,9 +434,9 @@ export function drawPage(p: Painter, wb: Workbook, s: number, plan: PrintPlan, i
     }
     let text = shown.text.replace(/\r?\n/g, ' ');
     let room = bw;
-    const tw = textWidth(text, size, bold);
-    if (tw > bw - pad * 2) {
-      if (isNum && st?.fmt !== 'text') text = '#'.repeat(Math.max(1, Math.floor((bw - pad * 2) / textWidth('#', size))));
+    const tw = textWidth(text, fsize, bold, kind);
+    if (tw > bw - pad * 2 - indent) {
+      if (isNum && st?.fmt !== 'text') text = '#'.repeat(Math.max(1, Math.floor((bw - pad * 2 - indent) / textWidth('#', fsize, false, kind))));
       else if (align === 'l' && !merged) {
         // Text runs on into empty cells to its right, on this page.
         const i = cols.indexOf(c);
@@ -440,10 +448,10 @@ export function drawPage(p: Painter, wb: Workbook, s: number, plan: PrintPlan, i
         }
       }
     }
-    const ty = by + bh - (ROW_H * PT * k) / 2;
-    const tx = align === 'r' ? bx + bw - pad : align === 'c' ? bx + bw / 2 : bx + pad;
+    const ty = lineY(1, 0);
+    const tx = align === 'r' ? bx + bw - pad - indent : align === 'c' ? bx + bw / 2 : bx + pad + indent;
     p.clip(bx, by, room, bh);
-    p.text(tx, ty, text, { size, bold, italic, underline, colour, align });
+    p.text(tx, ty, text, { size: fsize, bold, italic, underline, strike, colour, align, kind });
     p.unclip();
   };
   for (const r of rows) {

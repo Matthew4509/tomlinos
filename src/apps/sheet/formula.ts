@@ -5,7 +5,8 @@
 // (B2:B10>5 is a list of TRUE/FALSE), and a formula whose answer is a list fills the cells around it (see workbook.ts).
 import { daysInMonth, nowSerial, partsOf, readDateTime, serialOf, type DateOrder } from './dates.ts';
 import { CodeProblem, formatCode } from './numfmt.ts';
-import { parseCellRef, parseColRef, sheetNameOf, SyntaxProblem, tokenize, wholeColumns, type Ref, type Tok } from './refs.ts';
+import { MAX_COLS, MAX_ROWS, parseCellRef, parseColRef, parseTablePart, sheetNameOf, SyntaxProblem, tokenize, wholeColumns, type Ref, type TablePart, type Tok } from './refs.ts';
+import { moreFunctions } from './formula-fns.ts';
 import { CellError, clean, E, type Value } from './values.ts';
 
 export const MAX_FORMULA_LENGTH = 4000;
@@ -34,7 +35,25 @@ export type Node =
   | { t: 'spill'; ref: Ref; sheet?: string }
   /** A value or a list already worked out (used inside the evaluator, never parsed). */
   | { t: 'val'; v: Value }
-  | { t: 'grid'; g: Grid };
+  | { t: 'grid'; g: Grid }
+  /** A name: one given in LET, or a named range or value of the workbook ("TaxRate", "Sheet2!Prices"). */
+  | { t: 'name'; name: string; sheet?: string }
+  /** Part of an Excel table: Sales[Amount], [@Amount]. */
+  | { t: 'struct'; part: TablePart }
+  /** A range between two references worked out by functions: A2:INDEX(A:A,COUNTA(A:A)). */
+  | { t: 'rangeop'; l: Node; r: Node };
+
+/** A block of cells on a sheet, as a reference (not its values). */
+export interface Box {
+  s: number;
+  c0: number;
+  r0: number;
+  c1: number;
+  r1: number;
+}
+
+/** Functions whose answer can be a reference to cells, so a range can be made with them (A1:INDEX(...)). */
+const REF_FUNCTIONS = new Set(['INDEX', 'OFFSET', 'INDIRECT']);
 
 // ---- Parsing -------------------------------------------------------------------------------------------------------
 
@@ -87,7 +106,7 @@ export function parseFormula(text: string): Node {
     }
     return x;
   }
-  function refAt(tok: Tok, sheet?: string): Node | null {
+  function refAt(tok: Tok, d: number, sheet?: string): Node | null {
     // A:C, whole columns (written with no space round the colon).
     if (toks[p]?.type === 'colon' && toks[p + 1]?.type === 'ident' && toks[p].start === tok.end && toks[p + 1].start === toks[p].end) {
       const ca = parseColRef(tok.text);
@@ -102,7 +121,14 @@ export function parseFormula(text: string): Node {
     if (!a) return null;
     if (toks[p]?.type === 'colon' && toks[p + 1]?.type === 'ident') {
       const b = parseCellRef(toks[p + 1].text);
-      if (!b) return fail('That range is not written correctly.');
+      if (!b) {
+        // A1:INDEX(...): the other end is worked out by a function that gives a reference.
+        if (toks[p + 2]?.type === 'lp' && REF_FUNCTIONS.has(toks[p + 1].text.toUpperCase())) {
+          p++;
+          return { t: 'rangeop', l: { t: 'ref', ref: a, sheet }, r: primary(d + 1) };
+        }
+        return fail('That range is not written correctly.');
+      }
       p += 2;
       return { t: 'range', a, b: b!, sheet };
     }
@@ -143,8 +169,19 @@ export function parseFormula(text: string): Node {
     if ((t.type === 'ident' || t.type === 'sheetq') && toks[p]?.type === 'bang' && toks[p + 1]?.type === 'ident') {
       const sheet = sheetNameOf(t);
       p += 2;
-      const node = refAt(toks[p - 1], sheet);
-      return node ?? fail('That is not a cell.');
+      const node = refAt(toks[p - 1], d, sheet);
+      if (node) return node;
+      // Sheet2!Prices: a name kept for that sheet.
+      if (/^[A-Za-z_\\][A-Za-z0-9_.]*$/.test(toks[p - 1].text) && toks[p]?.type !== 'lp') return { t: 'name', name: toks[p - 1].text, sheet };
+      return fail('That is not a cell.');
+    }
+    if (t.type === 'struct') {
+      try {
+        return { t: 'struct', part: parseTablePart(t.text) };
+      } catch (error) {
+        if (error instanceof SyntaxProblem) throw error;
+        return fail('That table reference is not written correctly.');
+      }
     }
     if (t.type === 'ident') {
       if (toks[p]?.type === 'lp') {
@@ -160,14 +197,21 @@ export function parseFormula(text: string): Node {
             if (n?.type !== 'comma') fail('A comma or closing bracket is missing.');
           }
         }
-        return { t: 'call', name: t.text.toUpperCase(), args };
+        const call: Node = { t: 'call', name: t.text.toUpperCase().replace(/^(_XL(FN|WS)\.)+/, ''), args };
+        // INDEX(...):A9 or OFFSET(...):INDEX(...): a range between references the functions work out.
+        if (toks[p]?.type === 'colon' && REF_FUNCTIONS.has(call.name)) {
+          p++;
+          return { t: 'rangeop', l: call, r: primary(d + 1) };
+        }
+        return call;
       }
       const upper = t.text.toUpperCase();
       if (upper === 'TRUE') return { t: 'bool', v: true };
       if (upper === 'FALSE') return { t: 'bool', v: false };
-      const node = refAt(t);
+      const node = refAt(t, d);
       if (node) return node;
-      return { t: 'err', e: E.NAME };
+      // Anything else is a name: one given in LET, or one of the workbook's names. Unknown, it is #NAME?.
+      return { t: 'name', name: t.text };
     }
     return fail(`The formula is not written correctly near "${t.text}".`);
   }
@@ -195,6 +239,20 @@ export interface Context {
   spill(sheet: number, col: number, row: number): Grid | CellError;
   /** Which way round typed dates are read (13/10/2026 or 10/13/2026). */
   dateOrder?: DateOrder;
+  /** The cell the formula is in (ROW() and COLUMN() with nothing in the brackets, [@Amount] in a table). */
+  here?: { col: number; row: number };
+  /** A workbook name's formula, read ("Prices" might be Sheet1!$A$2:$B$40); null when there is no such name. */
+  name?(name: string, sheet?: string): Node | null;
+  /** The cells part of a table covers ("Sales[Amount]"); an error when there is no such table or column. */
+  table?(part: TablePart, current: number, here?: { col: number; row: number }): Box | CellError;
+  /** Why a row is hidden: by the filter, or by hand (SUBTOTAL leaves such rows out). */
+  rowHidden?(s: number, row: number): 'filter' | 'hand' | null;
+  /** True when the cell's own formula is a SUBTOTAL or AGGREGATE (they leave each other out, as in Excel). */
+  isSubtotal?(s: number, col: number, row: number): boolean;
+  /** The formula typed in a cell (with its "="), or null when it holds none. */
+  formulaAt?(s: number, col: number, row: number): string | null;
+  /** The name of a sheet by its number. */
+  sheetName?(s: number): string;
 }
 
 /** How the formula being worked out reads dates in text ("13/10/2026"+1). */
@@ -220,6 +278,30 @@ const liftsAt = (name: string, i: number): boolean => {
 };
 
 const listCache = new WeakMap<Node, boolean>();
+const nameCache = new WeakMap<Node, boolean>();
+
+/** True when a name (or a LET) is anywhere in the formula: whether it gives a list then depends on what the name holds. */
+function hasName(n: Node): boolean {
+  const known = nameCache.get(n);
+  if (known !== undefined) return known;
+  let got: boolean;
+  switch (n.t) {
+    case 'name': got = true; break;
+    case 'bin': got = hasName(n.l) || hasName(n.r); break;
+    case 'un': got = hasName(n.x); break;
+    case 'rangeop': got = hasName(n.l) || hasName(n.r); break;
+    case 'call': got = n.name === 'LET' || n.args.some(hasName); break;
+    case 'array': got = n.rows.some(r => r.some(hasName)); break;
+    default: got = false;
+  }
+  nameCache.set(n, got);
+  return got;
+}
+
+/** The formula being worked out (innermost first), so a name can be looked up while deciding if it gives a list. */
+let active: Ev | null = null;
+/** Names being checked for whether they give a list, so a name that leads back to itself stops. */
+const checking = new Set<string>();
 
 /** One value of a list as an operator sees it beside a list of another size: a single row or column is repeated. */
 function pick(g: Grid, r: number, c: number): Value {
@@ -231,24 +313,31 @@ function pick(g: Grid, r: number, c: number): Value {
 
 const first = (g: Grid | CellError): Value => (g instanceof CellError ? g : g[0]?.[0] ?? null);
 
-class Ev {
+export class Ev {
   private steps = 0;
   ctx: Context;
+  /** Names given by LET, innermost last: each holds one value or a list. */
+  scopes: Array<Map<string, Value | Grid>> = [];
+  /** Workbook names being worked out in this formula, so a name that leads back to itself stops (#REF!). */
+  private resolving = new Set<string>();
   constructor(ctx: Context) {
     this.ctx = ctx;
   }
 
-  private sheetOf(name: string | undefined): number {
+  sheetOf(name: string | undefined): number {
     return name === undefined ? this.ctx.current : this.ctx.sheetIndex(name);
   }
 
   range(n: { a: Ref; b: Ref; sheet?: string }): Grid | CellError {
     const s = this.sheetOf(n.sheet);
     if (s < 0) return E.REF;
-    const c0 = Math.min(n.a.col, n.b.col);
-    const c1 = Math.max(n.a.col, n.b.col);
-    const r0 = Math.min(n.a.row, n.b.row);
-    const r1 = Math.max(n.a.row, n.b.row);
+    return this.read({ s, c0: Math.min(n.a.col, n.b.col), c1: Math.max(n.a.col, n.b.col), r0: Math.min(n.a.row, n.b.row), r1: Math.max(n.a.row, n.b.row) });
+  }
+
+  /** The values of a block of cells. */
+  read(b: Box): Grid | CellError {
+    const { s, c0, r0, c1, r1 } = b;
+    if ((r1 - r0 + 1) * (c1 - c0 + 1) > MAX_LIST * 2) return E.NUM;
     const limit = this.ctx.bounds(s, { c0, r0, c1, r1 });
     const grid: Grid = [];
     // Cells beyond the used area are empty, so stop there: "A:A"-sized ranges stay cheap.
@@ -262,9 +351,193 @@ class Ev {
     return grid;
   }
 
-  private cell(s: number, c: number, r: number): Value {
+  cell(s: number, c: number, r: number): Value {
     if (++this.steps > 2_000_000) return E.NUM;
     return this.ctx.cell(s, c, r);
+  }
+
+  /** What a name holds: a LET name's value or list, or the workbook name's formula; null when there is no such name. */
+  named(n: { name: string; sheet?: string }): { v: Value | Grid } | { node: Node } | null {
+    const key = n.name.toUpperCase();
+    if (n.sheet === undefined) {
+      for (let i = this.scopes.length - 1; i >= 0; i--) {
+        const got = this.scopes[i].get(key);
+        if (got !== undefined) return { v: got };
+      }
+    }
+    const node = this.ctx.name?.(n.name, n.sheet);
+    return node ? { node } : null;
+  }
+
+  /**
+   * The cells a reference covers (not their values): a cell, a range, a name for one, part of a table, or what OFFSET,
+   * INDIRECT and INDEX point at. Null when the node is not a reference at all (a number, a sum...).
+   */
+  refOf(n: Node, depth = 0): Box | CellError | null {
+    if (depth > MAX_DEPTH * 2) return E.NUM;
+    switch (n.t) {
+      case 'ref': {
+        const s = this.sheetOf(n.sheet);
+        return s < 0 ? E.REF : { s, c0: n.ref.col, r0: n.ref.row, c1: n.ref.col, r1: n.ref.row };
+      }
+      case 'range': {
+        const s = this.sheetOf(n.sheet);
+        if (s < 0) return E.REF;
+        return { s, c0: Math.min(n.a.col, n.b.col), c1: Math.max(n.a.col, n.b.col), r0: Math.min(n.a.row, n.b.row), r1: Math.max(n.a.row, n.b.row) };
+      }
+      case 'spill': {
+        const s = this.sheetOf(n.sheet);
+        if (s < 0) return E.REF;
+        const g = this.ctx.spill(s, n.ref.col, n.ref.row);
+        if (g instanceof CellError) return g;
+        return { s, c0: n.ref.col, r0: n.ref.row, c1: n.ref.col + (g[0]?.length ?? 1) - 1, r1: n.ref.row + g.length - 1 };
+      }
+      case 'struct':
+        return this.ctx.table ? this.ctx.table(n.part, this.ctx.current, this.ctx.here) : E.REF;
+      case 'name': {
+        const m = this.named(n);
+        if (!m || !('node' in m)) return null;
+        const key = `${n.sheet ?? ''}!${n.name}`.toUpperCase();
+        if (this.resolving.has(key)) return E.REF;
+        this.resolving.add(key);
+        try {
+          return this.refOf(m.node, depth + 1);
+        } finally {
+          this.resolving.delete(key);
+        }
+      }
+      case 'rangeop': {
+        const a = this.refOf(n.l, depth + 1);
+        const b = this.refOf(n.r, depth + 1);
+        if (a instanceof CellError) return a;
+        if (b instanceof CellError) return b;
+        if (!a || !b || a.s !== b.s) return E.VALUE;
+        return { s: a.s, c0: Math.min(a.c0, b.c0), r0: Math.min(a.r0, b.r0), c1: Math.max(a.c1, b.c1), r1: Math.max(a.r1, b.r1) };
+      }
+      case 'call':
+        if (n.name === 'OFFSET') return this.offset(n.args, depth);
+        if (n.name === 'INDIRECT') return this.indirect(n.args, depth);
+        if (n.name === 'INDEX') return this.indexRef(n.args, depth);
+        return null;
+      default:
+        return null;
+    }
+  }
+
+  /** OFFSET(reference, rows, columns, [height], [width]): a block moved from the reference, and sized. */
+  private offset(a: Node[], depth: number): Box | CellError {
+    const base = a[0] ? this.refOf(a[0], depth + 1) : null;
+    if (base instanceof CellError) return base;
+    if (!base) return E.VALUE;
+    const num = (i: number, fallback: number): number | CellError => {
+      if (!a[i] || a[i].t === 'blank') return fallback;
+      const v = toNumber(this.scalar(a[i], depth + 1));
+      return v instanceof CellError ? v : Math.trunc(v);
+    };
+    const dr = num(1, 0);
+    const dc = num(2, 0);
+    const h = num(3, base.r1 - base.r0 + 1);
+    const w = num(4, base.c1 - base.c0 + 1);
+    for (const x of [dr, dc, h, w]) if (x instanceof CellError) return x;
+    if ((h as number) === 0 || (w as number) === 0) return E.REF;
+    // A negative height or width reaches up or left, as in Excel.
+    let r0 = base.r0 + (dr as number);
+    let c0 = base.c0 + (dc as number);
+    let r1 = r0 + (h as number) - ((h as number) > 0 ? 1 : -1);
+    let c1 = c0 + (w as number) - ((w as number) > 0 ? 1 : -1);
+    [r0, r1] = [Math.min(r0, r1), Math.max(r0, r1)];
+    [c0, c1] = [Math.min(c0, c1), Math.max(c0, c1)];
+    if (r0 < 0 || c0 < 0 || r1 >= MAX_ROWS || c1 >= MAX_COLS) return E.REF;
+    return { s: base.s, c0, r0, c1, r1 };
+  }
+
+  /** INDIRECT("B7"), INDIRECT("Sheet2!A1:C9"), INDIRECT("R2C3", FALSE), INDIRECT("Prices"): text read as a reference. */
+  private indirect(a: Node[], depth: number): Box | CellError {
+    const v = a[0] ? this.scalar(a[0], depth + 1) : E.VALUE;
+    if (v instanceof CellError) return v;
+    let textRef = text(v).trim();
+    const style = a[1] && a[1].t !== 'blank' ? toBool(this.scalar(a[1], depth + 1)) : true;
+    if (style instanceof CellError) return style;
+    if (!textRef) return E.REF;
+    if (!style) {
+      // R1C1: absolute row and column numbers (R[1]C[-1], counted from the formula's cell, too).
+      const here = this.ctx.here ?? { col: 0, row: 0 };
+      const one = (s: string): { col: number; row: number } | null => {
+        const m = /^R(\[-?\d+\]|\d+)?C(\[-?\d+\]|\d+)?$/i.exec(s);
+        if (!m) return null;
+        const part = (x: string | undefined, at: number) => (x === undefined ? at : x.startsWith('[') ? at + Number(x.slice(1, -1)) : Number(x) - 1);
+        return { row: part(m[1], here.row), col: part(m[2], here.col) };
+      };
+      const bang = textRef.lastIndexOf('!');
+      const sheetPart = bang >= 0 ? textRef.slice(0, bang).replace(/^'(.*)'$/, '$1').replace(/''/g, "'") : undefined;
+      const [x, y] = (bang >= 0 ? textRef.slice(bang + 1) : textRef).split(':');
+      const p = one(x);
+      const q = y === undefined ? p : one(y);
+      const s = this.sheetOf(sheetPart);
+      if (!p || !q || s < 0 || p.row < 0 || p.col < 0 || q.row < 0 || q.col < 0 || Math.max(p.row, q.row) >= MAX_ROWS || Math.max(p.col, q.col) >= MAX_COLS) return E.REF;
+      return { s, c0: Math.min(p.col, q.col), r0: Math.min(p.row, q.row), c1: Math.max(p.col, q.col), r1: Math.max(p.row, q.row) };
+    }
+    if (textRef.startsWith('=')) textRef = textRef.slice(1);
+    let node: Node;
+    try {
+      node = parseFormula(textRef);
+    } catch {
+      return E.REF;
+    }
+    if (!['ref', 'range', 'name', 'struct'].includes(node.t)) return E.REF;
+    const got = this.refOf(node, depth + 1);
+    return got ?? E.REF;
+  }
+
+  /** INDEX(reference, row, column) as a reference: one cell, or a whole row or column when the other number is 0. */
+  private indexRef(a: Node[], depth: number): Box | CellError | null {
+    const base = a[0] ? this.refOf(a[0], depth + 1) : null;
+    if (!base || base instanceof CellError) return base;
+    const num = (i: number): number | CellError => {
+      if (!a[i] || a[i].t === 'blank') return 0;
+      const v = toNumber(this.scalar(a[i], depth + 1));
+      return v instanceof CellError ? v : Math.trunc(v);
+    };
+    let r = num(1);
+    let c = a.length > 2 ? num(2) : 0;
+    if (r instanceof CellError) return r;
+    if (c instanceof CellError) return c;
+    const rows = base.r1 - base.r0 + 1;
+    const cols = base.c1 - base.c0 + 1;
+    // One row or one column given one number: the number counts along it.
+    if (a.length <= 2 && rows === 1 && cols > 1) [r, c] = [0, r];
+    else if (a.length <= 2 && cols === 1) c = 0;
+    if (r < 0 || c < 0 || r > rows || c > cols) return E.REF;
+    return {
+      s: base.s,
+      r0: r ? base.r0 + r - 1 : base.r0, r1: r ? base.r0 + r - 1 : base.r1,
+      c0: c ? base.c0 + c - 1 : base.c0, c1: c ? base.c0 + c - 1 : base.c1,
+    };
+  }
+
+  /** The values a reference covers (#VALUE! when the node is no reference). */
+  readRef(n: Node, depth = 0): Grid | CellError {
+    const b = this.refOf(n, depth);
+    if (b instanceof CellError) return b;
+    return b ? this.read(b) : E.VALUE;
+  }
+
+  /** LET(name1, value1, [name2, value2, ...], calculation): the calculation with the names standing for their values. */
+  private withLet<T>(a: Node[], depth: number, run: (calc: Node) => T, fail: (e: CellError) => T): T {
+    if (a.length < 3 || a.length % 2 === 0) return fail(E.VALUE);
+    const scope = new Map<string, Value | Grid>();
+    this.scopes.push(scope);
+    try {
+      for (let i = 0; i + 1 < a.length; i += 2) {
+        const nameNode = a[i];
+        if (nameNode.t !== 'name' || nameNode.sheet !== undefined) return fail(E.VALUE);
+        const v = Ev.isList(a[i + 1]) ? this.block(a[i + 1], depth + 1) : this.scalar(a[i + 1], depth + 1);
+        scope.set(nameNode.name.toUpperCase().replace(/^_XLPM\./, ''), v);
+      }
+      return run(a[a.length - 1]);
+    } finally {
+      this.scopes.pop();
+    }
   }
 
   /**
@@ -296,7 +569,23 @@ class Ev {
           return g instanceof CellError ? g : g.map(row => row.map(v => unary(n.op, v)));
         }
         break;
+      case 'name': {
+        const m = this.named(n);
+        if (!m) return E.NAME;
+        if ('v' in m) return Array.isArray(m.v) ? m.v : m.v instanceof CellError ? m.v : [[m.v]];
+        return this.throughName(n, () => this.block(m.node, depth + 1));
+      }
+      case 'struct': case 'rangeop':
+        return this.readRef(n, depth + 1);
       case 'call': {
+        if (n.name === 'LET') return this.withLet(n.args, depth, calc => this.block(calc, depth + 1), e => e);
+        // INDEX(A1:C9, 0, 2): a whole column (or row) of the block.
+        if (n.name === 'INDEX' && Ev.indexWhole(n)) {
+          const ref = this.refOf(n, depth + 1);
+          if (ref) return ref instanceof CellError ? ref : this.read(ref);
+          return indexWhole(this, n.args, depth);
+        }
+        if ((n.name === 'ROW' || n.name === 'COLUMN') && n.args.length) return rowsOrColumns(this, n.name, n.args, depth);
         const lifted = this.lift(n, depth);
         if (lifted) return lifted;
         if (LIST_FUNCTIONS[n.name]) return LIST_FUNCTIONS[n.name](this, n.args, depth);
@@ -305,6 +594,24 @@ class Ev {
     }
     const v = this.scalar(n, depth);
     return v instanceof CellError ? v : [[v]];
+  }
+
+  /** Works out a workbook name's formula, stopping a name that leads back to itself. */
+  private throughName<T>(n: { name: string; sheet?: string }, run: () => T | CellError): T | CellError {
+    const key = `${n.sheet ?? ''}!${n.name}`.toUpperCase();
+    if (this.resolving.has(key)) return E.REF;
+    this.resolving.add(key);
+    try {
+      return run();
+    } finally {
+      this.resolving.delete(key);
+    }
+  }
+
+  /** INDEX with a 0 (or nothing) for its row or column: the whole column or row, a list. */
+  static indexWhole(n: { args: Node[] }): boolean {
+    const zero = (x: Node | undefined) => !!x && (x.t === 'blank' || (x.t === 'num' && x.v === 0));
+    return n.args.length >= 2 && (zero(n.args[1]) || (n.args.length >= 3 && zero(n.args[2])));
   }
 
   /**
@@ -349,18 +656,74 @@ class Ev {
 
   /** True when the node gives a list of values rather than one (so a function takes all of it, as it takes a range). */
   static isList(n: Node): boolean {
-    const known = listCache.get(n);
-    if (known !== undefined) return known;
+    return Ev.listy(n, null);
+  }
+
+  /**
+   * isList, with the LET names known so far (`env`: name -> gives a list). A formula with a name in it is not
+   * remembered: whether it gives a list depends on what the name holds at the time.
+   */
+  static listy(n: Node, env: Map<string, boolean> | null): boolean {
+    const keep = !env && !hasName(n);
+    if (keep) {
+      const known = listCache.get(n);
+      if (known !== undefined) return known;
+    }
     let list: boolean;
     switch (n.t) {
-      case 'range': case 'array': case 'grid': case 'spill': list = true; break;
-      case 'bin': list = Ev.isList(n.l) || Ev.isList(n.r); break;
-      case 'un': list = Ev.isList(n.x); break;
-      case 'call': list = !!LIST_FUNCTIONS[n.name] || (!!LIFT[n.name] && n.args.some((a, i) => liftsAt(n.name, i) && Ev.isList(a))); break;
+      case 'range': case 'array': case 'grid': case 'spill': case 'rangeop': list = true; break;
+      // [@Amount] is one cell; anything else in a table is a block.
+      case 'struct': list = !(n.part.thisRow && n.part.c0 !== undefined && n.part.c1 === undefined); break;
+      case 'name': list = Ev.nameIsList(n, env); break;
+      case 'bin': list = Ev.listy(n.l, env) || Ev.listy(n.r, env); break;
+      case 'un': list = Ev.listy(n.x, env); break;
+      case 'call':
+        if (n.name === 'LET') {
+          if (n.args.length < 3) {
+            list = false;
+            break;
+          }
+          const inner = new Map(env ?? []);
+          for (let i = 0; i + 1 < n.args.length; i += 2) {
+            const nm = n.args[i];
+            if (nm.t === 'name') inner.set(nm.name.toUpperCase(), Ev.listy(n.args[i + 1], inner));
+          }
+          list = Ev.listy(n.args[n.args.length - 1], inner);
+        } else if (n.name === 'ROW' || n.name === 'COLUMN') {
+          const a = n.args[0];
+          list = !!a && (a.t === 'range' || a.t === 'rangeop' || a.t === 'spill' || (a.t === 'struct' && Ev.listy(a, env)) || (a.t === 'call' && REF_FUNCTIONS.has(a.name)) || (a.t === 'name' && Ev.listy(a, env)));
+        } else if (n.name === 'INDEX' && Ev.indexWhole(n)) list = true;
+        else list = !!LIST_FUNCTIONS[n.name] || (!!LIFT[n.name] && n.args.some((a, i) => liftsAt(n.name, i) && Ev.listy(a, env)));
+        break;
       default: list = false;
     }
-    listCache.set(n, list);
+    if (keep) listCache.set(n, list);
     return list;
+  }
+
+  /** Whether a name stands for a list: a LET name by what it was given, a workbook name by its formula. */
+  private static nameIsList(n: { name: string; sheet?: string }, env: Map<string, boolean> | null): boolean {
+    const key = n.name.toUpperCase();
+    if (n.sheet === undefined) {
+      const fromLet = env?.get(key);
+      if (fromLet !== undefined) return fromLet;
+      if (active) {
+        for (let i = active.scopes.length - 1; i >= 0; i--) {
+          const got = active.scopes[i].get(key);
+          if (got !== undefined) return Array.isArray(got);
+        }
+      }
+    }
+    const node = active?.ctx.name?.(n.name, n.sheet);
+    if (!node) return false;
+    const guard = `${n.sheet ?? ''}!${key}`;
+    if (checking.has(guard)) return false;
+    checking.add(guard);
+    try {
+      return Ev.listy(node, null);
+    } finally {
+      checking.delete(guard);
+    }
   }
 
   /** A single value; a range on its own is an error (there is no implicit "same row" rule here). */
@@ -392,8 +755,20 @@ class Ev {
         if (Ev.isList(n)) return first(this.block(n, depth));
         return this.binary(n.op, this.scalar(n.l, depth + 1), this.scalar(n.r, depth + 1));
       case 'call': {
+        if (n.name === 'LET') return this.withLet(n.args, depth, calc => this.scalar(calc, depth + 1), e => e);
         if (!Ev.isList(n)) return callFunction(this, n, depth);
         return first(this.block(n, depth));
+      }
+      case 'name': {
+        const m = this.named(n);
+        if (!m) return E.NAME;
+        if ('v' in m) return Array.isArray(m.v) ? first(m.v) : m.v;
+        return this.throughName(n, () => this.scalar(m.node, depth + 1));
+      }
+      case 'struct': case 'rangeop': {
+        const g = this.readRef(n, depth + 1);
+        if (g instanceof CellError) return g;
+        return g.length === 1 && g[0].length === 1 ? g[0][0] : E.VALUE;
       }
     }
   }
@@ -520,8 +895,12 @@ function collect(ev: Ev, args: Node[], depth: number): Array<{ v: Value; fromRan
       const g = ev.block(a, depth + 1);
       if (g instanceof CellError) return g;
       for (const row of g) for (const v of row) out.push({ v, fromRange: true });
-    } else if (a.t === 'ref') {
+    } else if (a.t === 'ref' || a.t === 'struct') {
       out.push({ v: ev.scalar(a, depth + 1), fromRange: true });
+    } else if (a.t === 'name') {
+      // A name for a cell counts as the cell (its text is skipped by the sums); a name for a value counts as typed.
+      const ref = ev.refOf(a, depth + 1);
+      out.push({ v: ev.scalar(a, depth + 1), fromRange: !!ref && !(ref instanceof CellError) });
     } else out.push({ v: ev.scalar(a, depth + 1), fromRange: false });
   }
   return out;
@@ -613,6 +992,13 @@ function roundTo(x: number, d: number, mode: 'round' | 'up' | 'down'): number {
   const r = mode === 'round' ? Math.round(clean(s)) : mode === 'up' ? Math.ceil(clean(s)) : Math.floor(clean(s));
   const back = Number(`${r}e${-d}`);
   return clean(Math.sign(x) * (Number.isFinite(back) ? back : r / f));
+}
+
+/** An exact match as VLOOKUP and MATCH read it: text ignores case, and * ? ~ are wildcards in text, as in Excel. */
+function exactly(v: Value, key: Value): boolean {
+  if (v === null || key === null) return false;
+  if (typeof key === 'string' && typeof v === 'string' && /[*?~]/.test(key)) return new RegExp(`^${wildcard(key)}$`, 'i').test(v);
+  return rank(v) === rank(key) && compare('=', v, key);
 }
 
 function lookupTable(ev: Ev, args: Node[], depth: number): Grid | CellError {
@@ -735,7 +1121,7 @@ const FUNCTIONS: Record<string, Fn> = {
       if (approx) {
         if (cell !== null && rank(cell) === rank(key) && compare('<=', cell, key)) best = r;
         else if (cell !== null && rank(cell) === rank(key)) break;
-      } else if (cell !== null && rank(cell) === rank(key) && compare('=', cell, key)) {
+      } else if (exactly(cell, key)) {
         best = r;
         break;
       }
@@ -767,7 +1153,7 @@ const FUNCTIONS: Record<string, Fn> = {
       const v = flat[i];
       if (v === null || rank(v) !== rank(key)) continue;
       if (type === 0) {
-        if (compare('=', v, key)) return i + 1;
+        if (exactly(v, key)) return i + 1;
       } else if (type > 0 ? compare('<=', v, key) : compare('>=', v, key)) best = i;
       else break;
     }
@@ -1592,19 +1978,75 @@ const DATE_FUNCTIONS: Record<string, Fn> = {
 };
 Object.assign(FUNCTIONS, DATE_FUNCTIONS);
 
+/** INDEX(list, 0, n) of a list that is not cells ({1,2;3,4}): its whole column n (or row). */
+function indexWhole(ev: Ev, a: Node[], d: number): Grid | CellError {
+  const g = grid(ev, a[0], d);
+  if (g instanceof CellError) return g;
+  const r = int(ev, a, 1, d, 0);
+  const c = int(ev, a, 2, d, 0);
+  if (r instanceof CellError) return r;
+  if (c instanceof CellError) return c;
+  if (r < 0 || c < 0 || r > g.length || c > (g[0]?.length ?? 0)) return E.REF;
+  if (r && c) return [[g[r - 1][c - 1]]];
+  if (r) return [g[r - 1]];
+  if (c) return g.map(row => [row[c - 1]]);
+  return g;
+}
+
+/** ROW(A2:A9) and COLUMN(B1:F1) of a block: the number of each of its rows (a column of them) or columns (a row). */
+function rowsOrColumns(ev: Ev, name: string, a: Node[], d: number): Grid | CellError {
+  const b = ev.refOf(a[0], d + 1);
+  if (b instanceof CellError) return b;
+  if (!b) return E.VALUE;
+  if (name === 'ROW') {
+    const out: Grid = [];
+    for (let r = b.r0; r <= b.r1; r++) out.push([r + 1]);
+    return out;
+  }
+  const row: Value[] = [];
+  for (let c = b.c0; c <= b.c1; c++) row.push(c + 1);
+  return [row];
+}
+
+/** What formula-fns.ts's functions share with these. */
+const helpers = {
+  toNumber, toBool, text, compare, rank, numbers, collect, num1, grid, str, int, texts, makeMatcher, numberList, roundTo, capped,
+  serialArg, wildcard, isList: (n: Node) => Ev.isList(n),
+};
+export type Helpers = typeof helpers;
+{
+  const more = moreFunctions(helpers);
+  Object.assign(FUNCTIONS, more.fns);
+  Object.assign(LIST_FUNCTIONS, more.lists);
+  Object.assign(LIFT, more.lift);
+}
+
 function callFunction(ev: Ev, n: { name: string; args: Node[] }, depth: number): Value {
   const fn = FUNCTIONS[n.name];
   return fn ? fn(ev, n.args, depth) : E.NAME;
 }
 
-export function evaluate(node: Node, ctx: Context): Value {
-  dateOrder = ctx.dateOrder ?? 'dmy';
-  return new Ev(ctx).scalar(node);
+/** Runs `fn` with `ev` as the formula being worked out (put back after, as formulas work out others inside). */
+function within<T>(ev: Ev, fn: () => T): T {
+  const before = active;
+  active = ev;
+  try {
+    return fn();
+  } finally {
+    active = before;
+  }
 }
 
-/** True when a formula's answer can be a list (it may fill the cells around it). */
-export function givesList(node: Node): boolean {
-  return Ev.isList(node);
+export function evaluate(node: Node, ctx: Context): Value {
+  dateOrder = ctx.dateOrder ?? 'dmy';
+  const ev = new Ev(ctx);
+  return within(ev, () => ev.scalar(node));
+}
+
+/** True when a formula's answer can be a list (it may fill the cells around it). `ctx` lets names be looked up. */
+export function givesList(node: Node, ctx?: Context): boolean {
+  if (!ctx || !hasName(node)) return Ev.isList(node);
+  return within(new Ev(ctx), () => Ev.isList(node));
 }
 
 /**
@@ -1629,10 +2071,12 @@ export function worksOnLists(node: Node): boolean {
 export function evaluateCell(node: Node, ctx: Context): Value | Grid {
   dateOrder = ctx.dateOrder ?? 'dmy';
   const ev = new Ev(ctx);
-  if (!Ev.isList(node)) return ev.scalar(node);
-  const g = ev.block(node);
-  if (g instanceof CellError) return g;
-  return g.length && g[0].length ? g : E.CALC;
+  return within(ev, () => {
+    if (!Ev.isList(node)) return ev.scalar(node);
+    const g = ev.block(node);
+    if (g instanceof CellError) return g;
+    return g.length && g[0].length ? g : E.CALC;
+  });
 }
 
 /** The first function a formula calls, read from its top (=DATE(...)+1 is DATE), for choosing a format. */
@@ -1646,4 +2090,4 @@ export function leadingFunction(node: Node): string | null {
   }
 }
 
-export const FUNCTION_NAMES = [...Object.keys(FUNCTIONS), ...Object.keys(LIST_FUNCTIONS)].sort();
+export const FUNCTION_NAMES = [...Object.keys(FUNCTIONS), ...Object.keys(LIST_FUNCTIONS), 'LET'].sort();

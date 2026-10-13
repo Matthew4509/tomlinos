@@ -12,6 +12,14 @@ import { cleanChart, mapChartRefs, MAX_CHARTS, type Chart } from './chart.ts';
 import { cleanRule, MAX_RANGES, MAX_RULES, subtractAll, type CfEntry } from './condfmt.ts';
 import { cleanPage, type PageSetup } from './print.ts';
 import { cleanValidation, MAX_VALIDATIONS, type Validation } from './validate.ts';
+import { cleanFace } from './fonts.ts';
+import {
+  cleanTable, dataRows, DEFAULT_STYLE, escapeColumn, MAX_TABLES, overTable, partBox, tableAt, tableLook, TOTAL_CODE, uniqueColumns,
+  type Table, type TotalFn,
+} from './tables.ts';
+import { CellLocked, parseTablePart } from './refs.ts';
+import { buildReport, cleanPivot, MAX_PIVOTS, type Pivot, type PivotData } from './pivot.ts';
+import { Ev } from './formula.ts';
 
 export const FILE_FORMAT = 'tomlinos-sheet';
 /** Spreadsheets saved before the desktop's rename carry this tag; they still open, and are saved with the new one. */
@@ -34,7 +42,15 @@ export interface Cell {
   f?: string;
   /** Index into the workbook's style list. */
   s?: number;
+  /** A note on the cell (Review > New note): shown when the pointer is over the cell, marked by a red corner. */
+  n?: string;
 }
+
+/** The longest note kept, as Excel's limit for a note's text. */
+export const MAX_NOTE = 32_000;
+
+/** True when a cell holds nothing at all: no value, formula, look or note (so it is not kept). */
+const bare = (c: Cell): boolean => c.v === undefined && c.f === undefined && !c.s && c.n === undefined;
 
 export const keyOf = (col: number, row: number): number => row * MAX_COLS + col;
 export const colOfKey = (k: number): number => k % MAX_COLS;
@@ -63,6 +79,12 @@ export class Sheet {
   dv: Validation[] = [];
   /** How the sheet prints (null: as usual, see print.ts defaultPage). */
   page: PageSetup | null = null;
+  /** Excel tables on the sheet (Insert > Table). */
+  tables: Table[] = [];
+  /** PivotTables whose reports are on this sheet. */
+  pivots: Pivot[] = [];
+  /** The lines between cells are not drawn on screen (View > Gridlines). */
+  noGrid = false;
   constructor(name: string) {
     this.name = name;
   }
@@ -75,11 +97,98 @@ export interface Range {
   r1: number;
 }
 
+/** A name for cells or a value ("Prices" = Sheet1!$A$2:$A$40, "TaxRate" = 0.15), for the whole workbook or one sheet. */
+export interface DefinedName {
+  name: string;
+  /** What it stands for: a formula without its "=" (Sheet1!$A$2:$A$40, 0.15, Sheet1!$B$1*12). */
+  ref: string;
+  /** The sheet it belongs to (only formulas on that sheet see it); unset for the whole workbook. */
+  scope?: string;
+  comment?: string;
+}
+
+const MAX_NAMES = 2000;
+
+/** Why a name cannot be used (null when it can): Excel's rules for names. */
+export function nameRuleProblem(name: string): string | null {
+  if (!name) return 'A name needs at least one letter.';
+  if (name.length > 255) return 'A name can be up to 255 characters long.';
+  if (/\s/.test(name)) return 'A name cannot contain spaces. Use an underscore (Sales_tax) or capitals (SalesTax) instead.';
+  if (!/^[A-Za-z_]/.test(name)) return 'A name must start with a letter or an underscore (_).';
+  if (!/^[A-Za-z_][A-Za-z0-9_.]*$/.test(name)) return 'A name can only hold letters, numbers, underscores (_) and full stops (.).';
+  if (/^(TRUE|FALSE)$/i.test(name)) return 'TRUE and FALSE cannot be names.';
+  if (parseCellRef(name) || /^[A-Za-z]{1,3}\d+$/.test(name) || /^(R|C|R\d+|C\d+|R\d+C\d+)$/i.test(name)) return `"${name}" is a cell address, so it cannot be a name. Try "${name}_" or "My${name}".`;
+  return null;
+}
+
 /** A filter: its range (the header row first) and, per filtered column, the values (as shown) whose rows stay in view. */
 export interface Filter {
   range: Range;
   /** Column index -> the shown texts kept; '' stands for empty cells ("(Blanks)"). */
   cols: Map<number, string[]>;
+  /** Column index -> a rule instead of a list (Number filters, Text filters: greater than, contains, top 10...). */
+  rules?: Map<number, FilterRule>;
+}
+
+/** One condition of a custom filter, as Excel writes it: text may hold * and ? ("a*" begins with a). */
+export interface FilterCond {
+  op: 'equal' | 'notEqual' | 'greaterThan' | 'greaterThanOrEqual' | 'lessThan' | 'lessThanOrEqual';
+  val: string;
+}
+
+/** A filter rule on a column: one or two conditions, the top or bottom N (or N%), or above or below the average. */
+export type FilterRule =
+  | { kind: 'custom'; and: boolean; a: FilterCond; b?: FilterCond }
+  | { kind: 'top'; top: boolean; n: number; percent: boolean }
+  | { kind: 'average'; above: boolean };
+
+const FILTER_OPS = new Set(['equal', 'notEqual', 'greaterThan', 'greaterThanOrEqual', 'lessThan', 'lessThanOrEqual']);
+
+/** A filter rule from a saved file, checked; null when damaged. */
+export function cleanFilterRule(raw: unknown): FilterRule | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const cond = (x: unknown): FilterCond | null => {
+    const c = x as Record<string, unknown> | null;
+    return c && typeof c.op === 'string' && FILTER_OPS.has(c.op) && typeof c.val === 'string' && c.val.length <= 255 ? { op: c.op as FilterCond['op'], val: c.val } : null;
+  };
+  if (r.kind === 'custom') {
+    const a = cond(r.a);
+    const b = r.b === undefined ? undefined : cond(r.b);
+    return a && b !== null ? { kind: 'custom', and: r.and !== false, a, ...(b ? { b } : {}) } : null;
+  }
+  if (r.kind === 'top' && typeof r.n === 'number' && r.n >= 1 && r.n <= 500) return { kind: 'top', top: r.top !== false, n: Math.trunc(r.n), percent: r.percent === true };
+  if (r.kind === 'average') return { kind: 'average', above: r.above !== false };
+  return null;
+}
+
+/** True when a value passes one condition: numbers by size, text without case and with * and ? (as Excel's filter). */
+export function condHolds(v: Value, shown: string, c: FilterCond): boolean {
+  const num = c.val.trim() !== '' && !Number.isNaN(Number(c.val)) ? Number(c.val) : null;
+  if (num !== null && typeof v === 'number') {
+    switch (c.op) {
+      case 'equal': return v === num;
+      case 'notEqual': return v !== num;
+      case 'greaterThan': return v > num;
+      case 'greaterThanOrEqual': return v >= num;
+      case 'lessThan': return v < num;
+      default: return v <= num;
+    }
+  }
+  const text = shown.toLowerCase();
+  if (c.op === 'equal' || c.op === 'notEqual') {
+    const hit = findPattern(c.val, false, true).test(shown);
+    return c.op === 'equal' ? hit : !hit;
+  }
+  // Greater or less than for text: in order of the alphabet.
+  const cmp = text.localeCompare(c.val.toLowerCase());
+  if (v === null) return false;
+  switch (c.op) {
+    case 'greaterThan': return cmp > 0;
+    case 'greaterThanOrEqual': return cmp >= 0;
+    case 'lessThan': return cmp < 0;
+    default: return cmp <= 0;
+  }
 }
 
 export interface FindOptions {
@@ -198,6 +307,8 @@ export class Workbook {
   version = 0;
   /** How typed dates are read: this computer's order (day first in most of the world), as Excel follows Windows. */
   dateOrder: DateOrder = localeDateOrder();
+  /** Named ranges and values (Formulas > Name Manager). */
+  names: DefinedName[] = [];
   private memo = new Map<number, Value>();
   /** The list each list formula fills, by its memo key; null when it cannot fill (it shows #SPILL!). */
   private spills = new Map<number, Grid | null>();
@@ -214,15 +325,69 @@ export class Workbook {
 
   // ---- Working out values ------------------------------------------------------------------------------------------
 
-  private context(current: number): Context {
+  private context(current: number, here?: { col: number; row: number }): Context {
     return {
       current,
+      here,
       cell: (s, c, r) => this.value(s, c, r),
       sheetIndex: name => this.sheets.findIndex(x => x.name.toLowerCase() === name.toLowerCase()),
       bounds: (s, area) => (area ? this.areaBounds(s, area) : this.fullBounds(s)),
       spill: (s, c, r) => this.spillOf(s, c, r),
       dateOrder: this.dateOrder,
+      name: (n, sheet) => this.nameNode(n, sheet, current),
+      rowHidden: (s, r) => {
+        const sh = this.sheets[s];
+        if (!sh?.hiddenRows.has(r)) return null;
+        const f = sh.filter;
+        return f && (f.cols.size || f.rules?.size) && r > f.range.r0 && r <= f.range.r1 ? 'filter' : 'hand';
+      },
+      isSubtotal: (s, c, r) => {
+        const f = this.sheets[s]?.cells.get(keyOf(c, r))?.f;
+        return f !== undefined && /\b(SUBTOTAL|AGGREGATE)\s*\(/i.test(f);
+      },
+      formulaAt: (s, c, r) => {
+        const f = this.sheets[s]?.cells.get(keyOf(c, r))?.f;
+        return f === undefined ? null : `=${f}`;
+      },
+      sheetName: s => this.sheets[s]?.name ?? '',
+      table: (part, cur, here) => partBox(this.allTables(), part, cur, here),
     };
+  }
+
+  /** Every table in the workbook, with its sheet. */
+  allTables(): Array<{ s: number; t: Table }> {
+    const out: Array<{ s: number; t: Table }> = [];
+    this.sheets.forEach((sh, s) => {
+      for (const t of sh.tables) out.push({ s, t });
+    });
+    return out;
+  }
+
+  /** The table a cell is in, if any. */
+  tableAt(s: number, col: number, row: number): Table | null {
+    return tableAt(this.sheets[s]?.tables ?? [], col, row);
+  }
+
+  /** How a cell looks: its own formatting laid over its table's style (when it is in a table). */
+  lookOf(s: number, col: number, row: number): CellStyle | undefined {
+    const own = this.styleOf(this.sheets[s]?.cells.get(keyOf(col, row)));
+    const t = this.sheets[s]?.tables.length ? this.tableAt(s, col, row) : null;
+    return t ? overTable(own, tableLook(t, col, row)) : own;
+  }
+
+  /** A name's formula, read: one kept for the sheet (the formula's own, or the one named) first, then the workbook's. */
+  private nameNode(name: string, sheet: string | undefined, current: number): Node | null {
+    const lower = name.toLowerCase();
+    const scope = sheet ?? this.sheets[current]?.name;
+    const hit = (scope !== undefined ? this.names.find(n => n.scope !== undefined && n.scope.toLowerCase() === scope.toLowerCase() && n.name.toLowerCase() === lower) : undefined)
+      ?? (sheet === undefined ? this.names.find(n => n.scope === undefined && n.name.toLowerCase() === lower) : undefined);
+    if (!hit) {
+      // A table's name on its own stands for its data, as Sales[] does.
+      const tab = sheet === undefined ? this.allTables().find(x => x.t.name.toLowerCase() === lower) : undefined;
+      return tab ? { t: 'struct', part: { table: tab.t.name, areas: [], thisRow: false } } : null;
+    }
+    const tree = this.parsed(hit.ref);
+    return tree instanceof CellError ? { t: 'err', e: tree } : tree;
   }
 
   private parsed(f: string): Node | CellError {
@@ -253,7 +418,7 @@ export class Workbook {
     for (const [k, cell] of this.sheets[s]?.cells ?? []) {
       if (cell.f === undefined) continue;
       const tree = this.parsed(cell.f);
-      if (!(tree instanceof CellError) && givesList(tree)) keys.push(k);
+      if (!(tree instanceof CellError) && givesList(tree, this.context(s, { col: colOfKey(k), row: rowOfKey(k) }))) keys.push(k);
     }
     keys.sort((a, b) => a - b);
     this.listCells[s] = { v: this.version, keys };
@@ -497,11 +662,12 @@ export class Workbook {
       const tree = this.parsed(cell.f);
       if (tree instanceof CellError) result = tree;
       else {
-        const out = evaluateCell(tree, this.context(s));
+        const ctx = this.context(s, { col, row });
+        const out = evaluateCell(tree, ctx);
         if (Array.isArray(out)) result = this.place(s, col, row, memoKey, out);
         else {
           result = out;
-          if (givesList(tree)) this.spills.set(memoKey, out instanceof CellError ? null : [[out]]);
+          if (givesList(tree, ctx)) this.spills.set(memoKey, out instanceof CellError ? null : [[out]]);
         }
       }
     } finally {
@@ -657,6 +823,8 @@ export class Workbook {
     if (!Number.isInteger(col) || !Number.isInteger(row) || col < 0 || row < 0 || col >= MAX_COLS || row >= MAX_ROWS) {
       throw new SyntaxProblem('That is past the edge of the sheet.');
     }
+    const pivot = this.pivotAt(s, col, row);
+    if (pivot) throw new CellLocked(`This cell is part of the PivotTable “${pivot.name}”, which writes its own cells. Change it with the PivotTable Fields pane, or delete the PivotTable (PivotTable Analyze > Delete) to type here.`);
     const entry = parseEntry(input, this.dateOrder);
     const old = this.sheets[s].cells.get(keyOf(col, row));
     let after: Cell | undefined = entry.cell ? { ...entry.cell } : undefined;
@@ -675,8 +843,11 @@ export class Workbook {
         if (id) after.s = id;
       } else if (id) after = { s: id };
     }
+    // A note stays on the cell whatever is typed in it.
+    if (old?.n !== undefined) after = { ...(after ?? {}), n: old.n };
     if (!old && after) this.assertRoom(1);
     this.applyChanges([{ sheet: s, key: keyOf(col, row), after }]);
+    if (this.sheets[s].tables.length && !this.batching) this.afterTyping(s, col, row);
   }
 
   /** Clears what is typed in the cells but keeps their formatting. */
@@ -686,7 +857,9 @@ export class Workbook {
       const c = colOfKey(k);
       const rw = rowOfKey(k);
       if (c < r.c0 || c > r.c1 || rw < r.r0 || rw > r.r1) continue;
-      changes.push({ sheet: s, key: k, after: cell.s ? { s: cell.s } : undefined });
+      const kept: Cell = { ...(cell.s ? { s: cell.s } : {}), ...(cell.n !== undefined ? { n: cell.n } : {}) };
+      if (kept.s === cell.s && kept.n === cell.n && cell.v === undefined && cell.f === undefined) continue;
+      changes.push({ sheet: s, key: k, after: bare(kept) ? undefined : kept });
     }
     if (changes.length) this.applyChanges(changes);
   }
@@ -707,33 +880,668 @@ export class Workbook {
         const after: Cell = { ...old };
         if (id) after.s = id;
         else delete after.s;
-        changes.push({ sheet: s, key, after: after.v === undefined && after.f === undefined && !after.s ? undefined : after });
+        changes.push({ sheet: s, key, after: bare(after) ? undefined : after });
       }
     }
     this.assertRoom(created);
     if (changes.length) this.applyChanges(changes);
   }
 
-  /** Copies cells from `src` onto `dest` (top-left corner), shifting relative references. `cut` empties the source. */
-  copyBlock(s: number, src: Range, dest: { col: number; row: number }, opts: { cut?: boolean; fromSheet?: number } = {}): void {
+  /**
+   * Format Painter: the formatting of the `src` cells laid over `target`, repeated when the target is bigger (as Excel
+   * brushes it). What is typed in the target stays. One Undo takes it back.
+   */
+  paintFormats(fromSheet: number, src: Range, s: number, target: Range): void {
+    const w = src.c1 - src.c0 + 1;
+    const h = src.r1 - src.r0 + 1;
+    // A whole row or column brushed with one cell's look: only as far as the sheet is used (and at least the pattern).
+    const used = this.usedBounds(s);
+    const t = { ...target, r1: Math.min(target.r1, Math.max(target.r0 + h - 1, used.rows - 1)), c1: Math.min(target.c1, Math.max(target.c0 + w - 1, used.cols - 1)) };
+    if ((t.c1 - t.c0 + 1) * (t.r1 - t.r0 + 1) > MAX_CHANGES_PER_EDIT) throw new SyntaxProblem('That is too many cells to format at once.');
+    const changes: Change[] = [];
+    let created = 0;
+    for (let r = t.r0; r <= t.r1; r++) {
+      for (let c = t.c0; c <= t.c1; c++) {
+        const look = this.sheets[fromSheet].cells.get(keyOf(src.c0 + ((c - t.c0) % w), src.r0 + ((r - t.r0) % h)))?.s;
+        const key = keyOf(c, r);
+        const old = this.sheets[s].cells.get(key);
+        if ((old?.s ?? 0) === (look ?? 0)) continue;
+        const after: Cell = { ...old };
+        if (look) after.s = look;
+        else delete after.s;
+        if (!old) created++;
+        changes.push({ sheet: s, key, after: bare(after) ? undefined : after });
+      }
+    }
+    this.assertRoom(created);
+    if (changes.length) this.applyChanges(changes);
+  }
+
+  // ---- Excel tables ---------------------------------------------------------------------------------------------------
+
+  /** Why a table name cannot be used (null when it can): the rules for names, and not taken by a table or a name. */
+  tableNameProblem(name: string, except?: Table): string | null {
+    const rule = nameRuleProblem(name);
+    if (rule) return rule;
+    if (this.allTables().some(x => x.t !== except && x.t.name.toLowerCase() === name.toLowerCase())) return `There is already a table called "${name}". Choose another name.`;
+    if (this.names.some(n => n.name.toLowerCase() === name.toLowerCase())) return `"${name}" is already a name in this workbook (Formulas > Name Manager). Choose another.`;
+    return null;
+  }
+
+  /**
+   * Makes the block into a table (Insert > Table). Its first row is the header row; without one, the empty row above
+   * becomes it. Header cells hold the column names as text, made unique. The sheet's filter becomes the table's when
+   * the sheet has none. One Undo.
+   */
+  addTable(s: number, range: Range, opts: { header: boolean; style?: string }): Table {
+    const sheet = this.sheets[s];
+    let r = { ...range };
+    if (this.allTables().length >= MAX_TABLES) throw new SyntaxProblem(`A workbook holds up to ${MAX_TABLES} tables.`);
+    if (sheet.tables.some(t => overlaps(t.range, r))) throw new SyntaxProblem('Part of these cells is already a table. Choose cells outside it, or change that table (Table Design).');
+    if (sheet.merges.some(m => overlaps(m, r))) throw new SyntaxProblem('Some of these cells are merged, and a table cannot hold merged cells. Unmerge them first (Merge > Unmerge cells).');
+    if (sheet.cells.size && [...this.listKeys(s)].some(k => overlaps({ c0: colOfKey(k), r0: rowOfKey(k), c1: colOfKey(k), r1: rowOfKey(k) }, r) && this.spillArea(s, colOfKey(k), rowOfKey(k)))) {
+      throw new SyntaxProblem('A formula in these cells fills the cells around it (a list), which a table cannot hold. Choose other cells.');
+    }
+    if (!opts.header) {
+      // The row above takes the column names, when it is free.
+      const above = r.r0 - 1;
+      let free = above >= 0;
+      for (let c = r.c0; c <= r.c1 && free; c++) free = this.value(s, c, above) === null && !sheet.tables.some(t => overlaps(t.range, { c0: c, r0: above, c1: c, r1: above }));
+      if (!free) throw new SyntaxProblem('There is no empty row above these cells for the column names. Insert a row above them (right-click > Insert row) and try again, or tick "My table has headers" if its first row holds them.');
+      r = { ...r, r0: above };
+    }
+    if (r.r1 <= r.r0) r = { ...r, r1: r.r0 + 1 };
+    if (r.r1 >= MAX_ROWS) throw new SyntaxProblem('That does not fit on the sheet.');
+    const names = uniqueColumns(Array.from({ length: r.c1 - r.c0 + 1 }, (_, i) => (opts.header ? this.display(s, r.c0 + i, r.r0) : '')));
+    let n = 1;
+    while (this.tableNameProblem(`Table${n}`)) n++;
+    const id = Math.max(0, ...this.allTables().map(x => x.t.id)) + 1;
+    const table: Table = {
+      id, name: `Table${n}`, range: r, header: true, totals: false, style: opts.style ?? DEFAULT_STYLE,
+      bandRows: true, bandCols: false, firstCol: false, lastCol: false, filter: !sheet.filter, columns: names.map(name => ({ name })),
+    };
+    this.snapshotChange(() => {
+      // The header cells hold their names as text (a number there becomes its text, as Excel does).
+      names.forEach((name, i) => {
+        const key = keyOf(r.c0 + i, r.r0);
+        const old = sheet.cells.get(key);
+        const cell: Cell = { ...old, v: name };
+        delete cell.f;
+        sheet.cells.set(key, cell);
+      });
+      sheet.tables.push(table);
+      if (table.filter) sheet.filter = { range: { ...r, r1: dataRows(table).r1 }, cols: new Map() };
+    });
+    return table;
+  }
+
+  /** Changes a table's options (style, banding, first and last column, filter buttons). One Undo. */
+  setTableOptions(s: number, t: Table, patch: Partial<Pick<Table, 'style' | 'bandRows' | 'bandCols' | 'firstCol' | 'lastCol' | 'filter'>>): void {
+    const sheet = this.sheets[s];
+    if (patch.filter && !t.filter && sheet.filter && !this.isTableFilter(s, t)) throw new SyntaxProblem('This sheet already has a filter elsewhere (Data > Filter). Turn that one off first, then turn on the table\'s filter buttons.');
+    this.snapshotChange(() => {
+      Object.assign(t, patch);
+      if (patch.filter === true) sheet.filter = { range: { ...t.range, r1: dataRows(t).r1 }, cols: new Map() };
+      if (patch.filter === false && this.isTableFilter(s, t)) {
+        for (let r = t.range.r0 + 1; r <= t.range.r1; r++) sheet.hiddenRows.delete(r);
+        sheet.filter = null;
+      }
+    });
+  }
+
+  /** True when the sheet's filter is this table's. */
+  isTableFilter(s: number, t: Table): boolean {
+    const f = this.sheets[s].filter;
+    return !!f && f.range.r0 === t.range.r0 && f.range.c0 === t.range.c0 && f.range.c1 === t.range.c1;
+  }
+
+  /** Renames a table; formulas that use its name are rewritten (as Excel does). */
+  renameTable(t: Table, name: string): void {
+    const problem = this.tableNameProblem(name.trim(), t);
+    if (problem) throw new SyntaxProblem(problem);
+    const old = t.name;
+    const to = name.trim();
+    if (old === to) return;
+    this.snapshotChange(() => {
+      t.name = to;
+      this.rewriteTableRefs(part => (part.table.toLowerCase() === old.toLowerCase() ? { ...part, table: to } : null));
+    });
+  }
+
+  /** Rewrites the table references in every formula of the workbook; `fn` gives a reference's new parts, or null to leave it. */
+  private rewriteTableRefs(fn: (part: ReturnType<typeof parseTablePart>) => ReturnType<typeof parseTablePart> | null): void {
+    const swap = (f: string) => rewriteStructs(f, fn);
+    for (const sheet of this.sheets) {
+      for (const cell of sheet.cells.values()) if (cell.f !== undefined) cell.f = swap(cell.f);
+      mapSheetFormulas(sheet, swap);
+    }
+    for (const n of this.names) n.ref = swap(n.ref);
+  }
+
+  /** Total row on or off. On: the row under the table (it must be empty) gets "Total" and a sum under the last column. */
+  setTotals(s: number, t: Table, on: boolean): void {
+    if (t.totals === on) return;
+    const sheet = this.sheets[s];
+    if (on) {
+      const below = t.range.r1 + 1;
+      if (below >= MAX_ROWS) throw new SyntaxProblem('There is no room under the table for a total row.');
+      for (let c = t.range.c0; c <= t.range.c1; c++) {
+        if (this.value(s, c, below) !== null || sheet.tables.some(x => x !== t && overlaps(x.range, { c0: c, r0: below, c1: c, r1: below }))) {
+          throw new SyntaxProblem('The row under the table holds something, so the total row has no room. Move or clear what is in that row, then try again.');
+        }
+      }
+    }
+    const owned = this.isTableFilter(s, t);
+    this.snapshotChange(() => {
+      if (on) {
+        t.range = { ...t.range, r1: t.range.r1 + 1 };
+        t.totals = true;
+        const last = t.columns.length - 1;
+        t.columns = t.columns.map((c, i) => ({ ...c, ...(i === 0 && last > 0 ? { label: 'Total', total: undefined } : {}), ...(i === last ? { total: c.total && c.total !== 'none' ? c.total : 'sum' } : {}) }));
+        t.columns.forEach((_, i) => this.writeTotal(s, t, i));
+      } else {
+        for (let c = t.range.c0; c <= t.range.c1; c++) {
+          const key = keyOf(c, t.range.r1);
+          const cell = sheet.cells.get(key);
+          if (!cell) continue;
+          const kept: Cell = { ...(cell.s ? { s: cell.s } : {}), ...(cell.n !== undefined ? { n: cell.n } : {}) };
+          if (bare(kept)) sheet.cells.delete(key);
+          else sheet.cells.set(key, kept);
+        }
+        t.range = { ...t.range, r1: t.range.r1 - 1 };
+        t.totals = false;
+      }
+      if (owned && sheet.filter) sheet.filter.range = { ...sheet.filter.range, r1: dataRows(t).r1 };
+    });
+  }
+
+  /** The total row cell of a column: its words, or SUBTOTAL over the column (which leaves filtered rows out). */
+  private writeTotal(s: number, t: Table, i: number): void {
+    const col = t.columns[i];
+    const key = keyOf(t.range.c0 + i, t.range.r1);
+    const old = this.sheets[s].cells.get(key);
+    const base: Cell = { ...(old?.s ? { s: old.s } : {}), ...(old?.n !== undefined ? { n: old.n } : {}) };
+    let cell: Cell = base;
+    if (col.total && col.total !== 'none' && col.total !== 'custom') cell = { ...base, f: `SUBTOTAL(${TOTAL_CODE[col.total]},${t.name}[${escapeColumn(col.name)}])` };
+    else if (col.label) cell = { ...base, v: col.label };
+    else if (col.total === 'custom' && old?.f !== undefined) cell = { ...base, f: old.f };
+    if (bare(cell)) this.sheets[s].cells.delete(key);
+    else this.sheets[s].cells.set(key, cell);
+  }
+
+  /** What a column's total row cell shows (Sum, Average, Count...). One Undo. */
+  setTotalFn(s: number, t: Table, i: number, fn: TotalFn): void {
+    if (!t.totals || !t.columns[i]) return;
+    this.snapshotChange(() => {
+      t.columns[i] = { ...t.columns[i], total: fn === 'none' ? undefined : fn, label: undefined };
+      this.writeTotal(s, t, i);
+    });
+  }
+
+  /** Header row on or off; off keeps the column names (formulas still use them), and the row above holds them again when on. */
+  setHeader(s: number, t: Table, on: boolean): void {
+    if (t.header === on) return;
+    const sheet = this.sheets[s];
+    if (on) {
+      const above = t.range.r0 - 1;
+      let free = above >= 0;
+      for (let c = t.range.c0; c <= t.range.c1 && free; c++) free = this.value(s, c, above) === null;
+      if (!free) throw new SyntaxProblem('The row above the table holds something, so the header row has no room. Clear that row, then try again.');
+    } else if (dataRows(t).r1 - dataRows(t).r0 + 1 < 1) return;
+    this.snapshotChange(() => {
+      if (on) {
+        t.range = { ...t.range, r0: t.range.r0 - 1 };
+        t.columns.forEach((c, i) => {
+          const key = keyOf(t.range.c0 + i, t.range.r0);
+          sheet.cells.set(key, { ...sheet.cells.get(key), v: c.name });
+        });
+      } else {
+        for (let c = t.range.c0; c <= t.range.c1; c++) {
+          const key = keyOf(c, t.range.r0);
+          const cell = sheet.cells.get(key);
+          if (!cell) continue;
+          const kept: Cell = { ...(cell.s ? { s: cell.s } : {}), ...(cell.n !== undefined ? { n: cell.n } : {}) };
+          if (bare(kept)) sheet.cells.delete(key);
+          else sheet.cells.set(key, kept);
+        }
+        if (this.isTableFilter(s, t)) {
+          for (let r = t.range.r0; r <= t.range.r1; r++) sheet.hiddenRows.delete(r);
+          sheet.filter = null;
+          t.filter = false;
+        }
+        t.range = { ...t.range, r0: t.range.r0 + 1 };
+      }
+      t.header = on;
+    });
+  }
+
+  /** Makes the table bigger or smaller (Table Design > Resize table); its top-left cell stays. */
+  resizeTable(s: number, t: Table, to: Range): void {
+    const sheet = this.sheets[s];
+    if (to.r0 !== t.range.r0 || to.c0 !== t.range.c0) throw new SyntaxProblem(`The table's top-left cell has to stay where it is (${colLabel(t.range.c0)}${t.range.r0 + 1}). Choose a range that starts there.`);
+    if (to.r1 - to.r0 + 1 < 1 + (t.header ? 1 : 0) + (t.totals ? 1 : 0)) throw new SyntaxProblem('A table needs at least one row of data under its header.');
+    if (sheet.tables.some(x => x !== t && overlaps(x.range, to))) throw new SyntaxProblem('That would run into another table.');
+    if (sheet.merges.some(m => overlaps(m, to))) throw new SyntaxProblem('Some of those cells are merged, and a table cannot hold merged cells.');
+    const width = to.c1 - to.c0 + 1;
+    const fresh = t.header ? Array.from({ length: width }, (_, i) => (i < t.columns.length ? t.columns[i].name : this.display(s, to.c0 + i, to.r0))) : Array.from({ length: width }, (_, i) => t.columns[i]?.name ?? '');
+    const names = uniqueColumns(fresh);
+    const owned = this.isTableFilter(s, t);
+    this.snapshotChange(() => {
+      t.range = { ...to };
+      t.columns = names.map((name, i) => ({ ...(t.columns[i] ?? {}), name }));
+      if (t.header) names.forEach((name, i) => sheet.cells.set(keyOf(to.c0 + i, to.r0), { ...sheet.cells.get(keyOf(to.c0 + i, to.r0)), v: name }));
+      if (owned && sheet.filter) sheet.filter.range = { ...t.range, r1: dataRows(t).r1 };
+    });
+  }
+
+  /**
+   * Convert to range: the table goes, its look stays as the cells' own formatting, and formulas that used its name use
+   * plain cell addresses instead (as Excel does). One Undo.
+   */
+  convertTable(s: number, t: Table): void {
+    const sheet = this.sheets[s];
+    this.snapshotChange(() => {
+      for (let r = t.range.r0; r <= t.range.r1; r++) {
+        for (let c = t.range.c0; c <= t.range.c1; c++) {
+          const look = this.lookOf(s, c, r);
+          const key = keyOf(c, r);
+          const old = sheet.cells.get(key);
+          const id = look ? this.internStyle(look) : 0;
+          if ((old?.s ?? 0) === id) continue;
+          const cell: Cell = { ...old };
+          if (id) cell.s = id;
+          else delete cell.s;
+          if (bare(cell)) sheet.cells.delete(key);
+          else sheet.cells.set(key, cell);
+        }
+      }
+      // Formulas: each reference to this table becomes the cells it covered.
+      const tables = this.allTables();
+      for (const [si, sh] of this.sheets.entries()) {
+        for (const [k, cell] of sh.cells) {
+          if (cell.f === undefined) continue;
+          const here = { col: colOfKey(k), row: rowOfKey(k) };
+          cell.f = structsToRefs(cell.f, tables, t, si, here, this.sheets.map(x => x.name), s);
+        }
+      }
+      if (this.isTableFilter(s, t)) {
+        // The filter stays on the cells, as Excel keeps it; only the table goes.
+      }
+      sheet.tables = sheet.tables.filter(x => x !== t);
+    });
+  }
+
+  /**
+   * After typing in a cell beside a table: the table grows to take in a row typed just under it (or a column just to
+   * its right), and a formula typed in an empty table column fills the whole column (a calculated column). Each is a
+   * step of its own, so Ctrl+Z takes it back first, as in Excel.
+   */
+  private afterTyping(s: number, col: number, row: number): void {
+    const sheet = this.sheets[s];
+    const cell = sheet.cells.get(keyOf(col, row));
+    if (cell?.v === undefined && cell?.f === undefined) return;
+    const inside = tableAt(sheet.tables, col, row);
+    if (inside) {
+      // A header typed over: the column's name follows it.
+      if (inside.header && row === inside.range.r0) {
+        const i = col - inside.range.c0;
+        const text = this.display(s, col, row);
+        const names = uniqueColumns(inside.columns.map((c, k) => (k === i ? text : c.name)));
+        if (names[i] !== inside.columns[i].name || typeof cell.v !== 'string') {
+          const old = inside.columns[i].name;
+          this.snapshotChange(() => {
+            inside.columns[i] = { ...inside.columns[i], name: names[i] };
+            const head: Cell = { ...sheet.cells.get(keyOf(col, row)), v: names[i] };
+            delete head.f;
+            sheet.cells.set(keyOf(col, row), head);
+            this.rewriteTableRefs(part => {
+              if (part.table && part.table.toLowerCase() !== inside.name.toLowerCase()) return null;
+              const swapCol = (x: string | undefined) => (x !== undefined && x.toLowerCase() === old.toLowerCase() ? names[i] : x);
+              if (swapCol(part.c0) === part.c0 && swapCol(part.c1) === part.c1) return null;
+              return { ...part, c0: swapCol(part.c0), c1: swapCol(part.c1) };
+            });
+          });
+        }
+        return;
+      }
+      // A formula in an otherwise empty data column: the whole column gets it.
+      const dr = dataRows(inside);
+      if (cell.f !== undefined && row >= dr.r0 && row <= dr.r1 && dr.r1 > dr.r0) {
+        let empty = true;
+        for (let r = dr.r0; r <= dr.r1 && empty; r++) {
+          if (r === row) continue;
+          const other = sheet.cells.get(keyOf(col, r));
+          empty = other?.v === undefined && other?.f === undefined;
+        }
+        if (empty) {
+          const changes: Change[] = [];
+          for (let r = dr.r0; r <= dr.r1; r++) {
+            if (r === row) continue;
+            const old = sheet.cells.get(keyOf(col, r));
+            changes.push({ sheet: s, key: keyOf(col, r), after: { ...old, ...(cell.s && !old?.s ? { s: cell.s } : {}), f: shiftFormula(cell.f, 0, r - row) } });
+          }
+          this.applyChanges(changes);
+        }
+      }
+      return;
+    }
+    // Just under a table without a total row: the table takes the row in.
+    const below = sheet.tables.find(t => !t.totals && row === t.range.r1 + 1 && col >= t.range.c0 && col <= t.range.c1);
+    if (below) {
+      const prev = below.range.r1;
+      const owned = this.isTableFilter(s, below);
+      this.snapshotChange(() => {
+        below.range = { ...below.range, r1: row };
+        if (owned && sheet.filter) sheet.filter.range = { ...sheet.filter.range, r1: row };
+        // Calculated columns carry on into the new row.
+        for (let i = 0; i < below.columns.length; i++) {
+          const c = below.range.c0 + i;
+          if (c === col) continue;
+          const above = sheet.cells.get(keyOf(c, prev));
+          const mine = sheet.cells.get(keyOf(c, row));
+          if (above?.f === undefined || mine?.v !== undefined || mine?.f !== undefined) continue;
+          if (!this.calculatedColumn(s, below, i)) continue;
+          sheet.cells.set(keyOf(c, row), { ...mine, ...(above.s && !mine?.s ? { s: above.s } : {}), f: shiftFormula(above.f, 0, row - prev) });
+        }
+      });
+      return;
+    }
+    // Just right of a table: the table takes the column in, named by its header cell.
+    const right = sheet.tables.find(t => col === t.range.c1 + 1 && row >= t.range.r0 && row <= t.range.r1 && t.header);
+    if (right && !sheet.tables.some(t => t !== right && overlaps(t.range, { c0: col, r0: right.range.r0, c1: col, r1: right.range.r1 }))) {
+      const owned = this.isTableFilter(s, right);
+      this.snapshotChange(() => {
+        const name = uniqueColumns([...right.columns.map(c => c.name), row === right.range.r0 ? this.display(s, col, row) : ''])[right.columns.length];
+        right.range = { ...right.range, c1: col };
+        right.columns = [...right.columns, { name }];
+        const hk = keyOf(col, right.range.r0);
+        sheet.cells.set(hk, { ...sheet.cells.get(hk), v: name });
+        if (owned && sheet.filter) sheet.filter.range = { ...sheet.filter.range, c1: col };
+      });
+    }
+  }
+
+  /** True when every filled data cell of a table column holds the same formula (moved row by row): a calculated column. */
+  private calculatedColumn(s: number, t: Table, i: number): boolean {
+    const dr = dataRows(t);
+    const c = t.range.c0 + i;
+    let first: { f: string; row: number } | null = null;
+    for (let r = dr.r0; r <= dr.r1; r++) {
+      const cell = this.sheets[s].cells.get(keyOf(c, r));
+      if (cell?.f === undefined) {
+        if (cell?.v !== undefined) return false;
+        continue;
+      }
+      if (!first) first = { f: cell.f, row: r };
+      else if (shiftFormula(first.f, 0, r - first.row) !== cell.f) return false;
+    }
+    return !!first;
+  }
+
+  // ---- PivotTables ----------------------------------------------------------------------------------------------------
+
+  /** The PivotTable whose report covers a cell (or whose top-left cell it is), if any. */
+  pivotAt(s: number, col: number, row: number): Pivot | null {
+    for (const p of this.sheets[s]?.pivots ?? []) {
+      if (p.at.col === col && p.at.row === row) return p;
+      const l = p.last;
+      if (l && col >= l.c0 && col <= l.c1 && row >= l.r0 && row <= l.r1) return p;
+    }
+    return null;
+  }
+
+  /** The cells a formula stands for (a range, a name for one, part of a table), or null. */
+  refBox(s: number, formula: string): { s: number; range: Range } | null {
+    const tree = this.parsed(formula.replace(/^=/, ''));
+    if (tree instanceof CellError) return null;
+    const box = new Ev(this.context(s)).refOf(tree);
+    if (!box || box instanceof CellError) return null;
+    return { s: box.s, range: { c0: box.c0, r0: box.r0, c1: box.c1, r1: box.r1 } };
+  }
+
+  /** A PivotTable's data: the header row's names, the rows under it (empty rows at the end left out), each column's format. */
+  pivotData(s: number, source: string): PivotData {
+    const at = this.refBox(s, source);
+    if (!at) throw new SyntaxProblem(`The PivotTable's data (${source}) cannot be found: its cells, table or sheet may have been deleted. Choose it again (PivotTable Analyze > Change data source).`);
+    const { range: r } = at;
+    const used = this.usedBounds(at.s);
+    const r1 = Math.min(r.r1, Math.max(r.r0, used.rows - 1));
+    if (r1 <= r.r0) throw new SyntaxProblem('The PivotTable\'s data needs a header row (a name for each column) and at least one row under it.');
+    if (r.c1 - r.c0 > 255) throw new SyntaxProblem('A PivotTable here reads up to 256 columns of data.');
+    const fields: string[] = [];
+    for (let c = r.c0; c <= r.c1; c++) {
+      const name = this.display(at.s, c, r.r0).trim();
+      if (!name) throw new SyntaxProblem(`The PivotTable's data needs a name in every column of its header row; ${colLabel(c)}${r.r0 + 1} is empty. Type a name there, or choose the data again.`);
+      fields.push(name);
+    }
+    const rows: Value[][] = [];
+    for (let row = r.r0 + 1; row <= r1; row++) {
+      const vals: Value[] = [];
+      for (let c = r.c0; c <= r.c1; c++) vals.push(this.value(at.s, c, row));
+      rows.push(vals);
+    }
+    while (rows.length && rows[rows.length - 1].every(v => v === null)) rows.pop();
+    const formats = fields.map((_, i) => {
+      const st = this.styleOf(this.sheets[at.s].cells.get(keyOf(r.c0 + i, r.r0 + 1)));
+      return st?.fmt ? { fmt: st.fmt, code: st.code, dec: st.dec } : undefined;
+    });
+    return { fields, rows, formats };
+  }
+
+  /**
+   * Writes a PivotTable's report into its cells: its old cells cleared, the new ones written with their looks.
+   * Refuses (and changes nothing) when the report would cover cells that hold something else.
+   */
+  private writePivot(s: number, p: Pivot): void {
+    const sheet = this.sheets[s];
+    const data = this.pivotData(s, p.source);
+    let report;
+    try {
+      report = buildReport(p, data);
+    } catch (error) {
+      throw new SyntaxProblem(error instanceof Error ? error.message : 'This PivotTable could not be laid out.');
+    }
+    const old = p.last;
+    const mine = (c: number, r: number) => !!old && c >= old.c0 && c <= old.c1 && r >= old.r0 && r <= old.r1;
+    const nr = report.range;
+    if (nr.r1 >= MAX_ROWS || nr.c1 >= MAX_COLS) throw new SyntaxProblem('The PivotTable would run off the edge of the sheet. Put it further up or left, or use fewer items.');
+    for (const [k, cell] of sheet.cells) {
+      const c = colOfKey(k);
+      const r = rowOfKey(k);
+      if (c < nr.c0 || c > nr.c1 || r < nr.r0 || r > nr.r1 || mine(c, r)) continue;
+      if (cell.v !== undefined || cell.f !== undefined) {
+        throw new SyntaxProblem(`The PivotTable needs the cells ${colLabel(nr.c0)}${nr.r0 + 1}:${colLabel(nr.c1)}${nr.r1 + 1}, and some of them hold something. Move or clear those cells, or put the PivotTable somewhere else.`);
+      }
+    }
+    if (sheet.tables.some(t => overlaps(t.range, nr)) || sheet.merges.some(m => overlaps(m, nr))) throw new SyntaxProblem('The PivotTable would run into a table or merged cells. Put it somewhere else.');
+    if (old) for (let r = old.r0; r <= old.r1; r++) for (let c = old.c0; c <= old.c1; c++) sheet.cells.delete(keyOf(c, r));
+    const looks: Record<string, CellStyle> = {
+      head: { b: true, fill: '#ddebf7', bb: true, bc: '#9bc2e6' },
+      total: { b: true, fill: '#ddebf7', bt: true, bc: '#9bc2e6' },
+      subtotal: { b: true },
+      label: { b: true },
+    };
+    for (const o of report.cells) {
+      const style: CellStyle = { ...(o.look ? looks[o.look] : {}), ...(o.fmt ?? {}), ...(o.indent ? { ind: Math.min(15, o.indent) } : {}), ...(o.pct ? { fmt: 'percent', dec: 2 } : {}) };
+      const id = this.internStyle(style);
+      const cell: Cell = {};
+      if (o.v instanceof CellError) cell.f = o.v.code;
+      else if (o.v !== null) cell.v = o.v;
+      if (id) cell.s = id;
+      if (!bare(cell)) sheet.cells.set(keyOf(o.col, o.row), cell);
+    }
+    p.last = { ...nr };
+  }
+
+  /** Makes a PivotTable from data (a range or a table) at a cell of a sheet. One Undo. */
+  addPivot(s: number, source: string, at: { col: number; row: number }): Pivot {
+    if (this.sheets.reduce((n, sh) => n + sh.pivots.length, 0) >= MAX_PIVOTS) throw new SyntaxProblem(`A workbook holds up to ${MAX_PIVOTS} PivotTables.`);
+    this.pivotData(s, source);
+    const taken = new Set(this.sheets.flatMap(sh => sh.pivots.map(p => p.name.toLowerCase())));
+    let n = 1;
+    while (taken.has(`pivottable${n}`)) n++;
+    const id = Math.max(0, ...this.sheets.flatMap(sh => sh.pivots.map(p => p.id))) + 1;
+    const pivot: Pivot = {
+      id, name: `PivotTable${n}`, source: source.replace(/^=/, ''), at: { ...at }, rows: [], cols: [], values: [], filters: [], hidden: {}, groups: {},
+      grandRows: true, grandCols: true, subtotals: true, last: null,
+    };
+    try {
+      this.snapshotChange(() => {
+        this.sheets[s].pivots.push(pivot);
+        this.writePivot(s, pivot);
+      });
+    } catch (error) {
+      this.sheets[s].pivots = this.sheets[s].pivots.filter(x => x !== pivot);
+      throw error;
+    }
+    return pivot;
+  }
+
+  /** Changes a PivotTable's fields or options and works its report out again. One Undo; nothing changes if it does not fit. */
+  setPivot(s: number, p: Pivot, patch: Partial<Omit<Pivot, 'id' | 'last'>>): void {
+    const before = JSON.stringify(p);
+    try {
+      this.snapshotChange(() => {
+        Object.assign(p, patch);
+        this.writePivot(s, p);
+      });
+    } catch (error) {
+      // Nothing was written (the report is checked before any cell changes): the PivotTable is put back as it was.
+      Object.assign(p, JSON.parse(before));
+      throw error;
+    }
+  }
+
+  /** Works a PivotTable out again from its data (Refresh). */
+  refreshPivot(s: number, p: Pivot): void {
+    this.snapshotChange(() => this.writePivot(s, p));
+  }
+
+  /** Works every PivotTable of the workbook out again (Refresh all); returns the ones that could not be. */
+  refreshAll(): string[] {
+    const failed: string[] = [];
+    this.snapshotChange(() => {
+      this.sheets.forEach((sh, s) => {
+        for (const p of sh.pivots) {
+          try {
+            this.writePivot(s, p);
+          } catch (error) {
+            failed.push(`${p.name}: ${error instanceof Error ? error.message : 'could not be worked out'}`);
+          }
+        }
+      });
+    });
+    return failed;
+  }
+
+  /** Deletes a PivotTable and its report's cells. One Undo. */
+  deletePivot(s: number, p: Pivot): void {
+    const sheet = this.sheets[s];
+    this.snapshotChange(() => {
+      const l = p.last;
+      if (l) for (let r = l.r0; r <= l.r1; r++) for (let c = l.c0; c <= l.c1; c++) sheet.cells.delete(keyOf(c, r));
+      sheet.pivots = sheet.pivots.filter(x => x !== p);
+    });
+  }
+
+  /** Puts a note on a cell, changes it, or takes it off (null or empty). One Undo. */
+  setNote(s: number, col: number, row: number, text: string | null): void {
+    if (text !== null && text.length > MAX_NOTE) throw new SyntaxProblem(`A note can be up to ${MAX_NOTE.toLocaleString()} characters long.`);
+    const key = keyOf(col, row);
+    const old = this.sheets[s].cells.get(key);
+    const after: Cell = { ...old };
+    if (text) after.n = text;
+    else delete after.n;
+    if ((old?.n ?? null) === (after.n ?? null)) return;
+    if (!old) this.assertRoom(1);
+    this.applyChanges([{ sheet: s, key, after: bare(after) ? undefined : after }]);
+  }
+
+  /** Takes the notes off a block of cells (Clear > Clear notes). */
+  clearNotes(s: number, r: Range): void {
+    const changes: Change[] = [];
+    for (const [k, cell] of this.sheets[s].cells) {
+      if (cell.n === undefined) continue;
+      const c = colOfKey(k);
+      const rw = rowOfKey(k);
+      if (c < r.c0 || c > r.c1 || rw < r.r0 || rw > r.r1) continue;
+      const after: Cell = { ...cell };
+      delete after.n;
+      changes.push({ sheet: s, key: k, after: bare(after) ? undefined : after });
+    }
+    if (changes.length) this.applyChanges(changes);
+  }
+
+  /** Every cell with a note on a sheet, row by row. */
+  notesOf(s: number): Array<{ col: number; row: number; text: string }> {
+    const out: Array<{ col: number; row: number; text: string }> = [];
+    for (const [k, cell] of this.sheets[s]?.cells ?? []) if (cell.n !== undefined) out.push({ col: colOfKey(k), row: rowOfKey(k), text: cell.n });
+    return out.sort((a, b) => a.row - b.row || a.col - b.col);
+  }
+
+  /** Takes the formatting off the cells (what is typed in them stays), as Home > Clear > Clear formats. */
+  clearFormats(s: number, r: Range): void {
+    const changes: Change[] = [];
+    for (const [k, cell] of this.sheets[s].cells) {
+      const c = colOfKey(k);
+      const rw = rowOfKey(k);
+      if (c < r.c0 || c > r.c1 || rw < r.r0 || rw > r.r1 || !cell.s) continue;
+      const after: Cell = { ...cell };
+      delete after.s;
+      changes.push({ sheet: s, key: k, after: bare(after) ? undefined : after });
+    }
+    if (changes.length) this.applyChanges(changes);
+  }
+
+  /**
+   * Copies cells from `src` onto `dest` (top-left corner), shifting relative references. `cut` empties the source.
+   * `what` pastes only part of each cell (Paste Special): its value (a formula's answer), its formula, its formatting,
+   * or its value with its formatting; `transpose` turns rows into columns.
+   */
+  copyBlock(s: number, src: Range, dest: { col: number; row: number }, opts: { cut?: boolean; fromSheet?: number; what?: 'all' | 'values' | 'formulas' | 'formats' | 'valuesFormats'; transpose?: boolean } = {}): void {
     const from = opts.fromSheet ?? s;
+    const what = opts.cut ? 'all' : opts.what ?? 'all';
     const width = src.c1 - src.c0 + 1;
     const height = src.r1 - src.r0 + 1;
-    if (dest.col + width > MAX_COLS || dest.row + height > MAX_ROWS) throw new SyntaxProblem('That does not fit on the sheet.');
-    const grabbed: Array<{ dc: number; dr: number; cell?: Cell }> = [];
-    for (let dr = 0; dr < height; dr++) for (let dc = 0; dc < width; dc++) grabbed.push({ dc, dr, cell: this.sheets[from].cells.get(keyOf(src.c0 + dc, src.r0 + dr)) });
+    const [outW, outH] = opts.transpose ? [height, width] : [width, height];
+    if (dest.col + outW > MAX_COLS || dest.row + outH > MAX_ROWS) throw new SyntaxProblem('That does not fit on the sheet.');
+    const grabbed: Array<{ dc: number; dr: number; cell?: Cell; value: Value }> = [];
+    for (let dr = 0; dr < height; dr++) {
+      for (let dc = 0; dc < width; dc++) {
+        const cell = this.sheets[from].cells.get(keyOf(src.c0 + dc, src.r0 + dr));
+        // A formula's answer (or a value a list formula fills in) is what Paste Values puts down.
+        const value = what === 'values' || what === 'valuesFormats' ? this.value(from, src.c0 + dc, src.r0 + dr) : null;
+        grabbed.push(opts.transpose ? { dc: dr, dr: dc, cell, value } : { dc, dr, cell, value });
+      }
+    }
     const changes: Change[] = [];
     const moved = new Set<number>();
     let created = 0;
     for (const g of grabbed) {
       const key = keyOf(dest.col + g.dc, dest.row + g.dr);
       moved.add(key);
+      const old = this.sheets[s].cells.get(key);
+      const srcCol = src.c0 + (opts.transpose ? g.dr : g.dc);
+      const srcRow = src.r0 + (opts.transpose ? g.dc : g.dr);
+      const shifted = (c: Cell): Cell => (c.f !== undefined ? { ...c, f: shiftFormula(c.f, dest.col + g.dc - srcCol, dest.row + g.dr - srcRow) } : { ...c });
       let after: Cell | undefined;
-      if (g.cell) {
-        after = { ...g.cell };
-        if (after.f !== undefined) after.f = shiftFormula(after.f, dest.col - src.c0, dest.row - src.r0);
+      if (what === 'all') after = g.cell ? shifted(g.cell) : undefined;
+      else {
+        // The part pasted, with the rest of the cell as it was.
+        const keepStyle = what === 'values' || what === 'formulas' ? old?.s : g.cell?.s;
+        let body: Cell = {};
+        if (what === 'formats') body = old ? { ...old } : {};
+        else if (what === 'formulas') body = g.cell ? shifted(g.cell) : {};
+        else if (g.value !== null && !(g.value instanceof CellError)) body = { v: g.value };
+        else if (g.value instanceof CellError) body = { f: g.value.code };
+        delete body.s;
+        delete body.n;
+        if (keepStyle) body.s = keepStyle;
+        // A note stays with its cell when only part of what was copied is pasted.
+        if (old?.n !== undefined) body.n = old.n;
+        after = bare(body) ? undefined : body;
       }
-      if (!this.sheets[s].cells.has(key) && after) created++;
+      if (!old && after) created++;
       changes.push({ sheet: s, key, after });
     }
     if (opts.cut) {
@@ -818,21 +1626,36 @@ export class Workbook {
   // ---- Sorting -----------------------------------------------------------------------------------------------------
 
   sortRange(s: number, r: Range, byCol: number, ascending: boolean): void {
+    this.sortBy(s, r, [{ col: byCol, ascending }]);
+  }
+
+  /**
+   * Sorts the rows of a block by several columns in turn (Data > Sort): the first key, then the next among equals.
+   * Numbers come before text, then TRUE/FALSE, then errors; empty cells always go last, as in Excel.
+   */
+  sortBy(s: number, r: Range, keys: Array<{ col: number; ascending: boolean }>): void {
     if (this.sheets[s].merges.some(m => overlaps(m, r))) throw new SyntaxProblem('Some of these cells are merged, and merged cells cannot be sorted. Unmerge them first (Merge > Unmerge cells), then sort.');
+    if (!keys.length) return;
     const rows: number[] = [];
     for (let row = r.r0; row <= r.r1; row++) rows.push(row);
-    const keyValue = (row: number): Value => this.value(s, byCol, row);
     const rank = (v: Value) => (v === null ? 3 : typeof v === 'number' ? 0 : typeof v === 'boolean' ? 2 : v instanceof CellError ? 4 : 1);
+    const values = new Map(rows.map(row => [row, keys.map(k => this.value(s, k.col, row))]));
     const sorted = [...rows].sort((a, b) => {
-      const va = keyValue(a);
-      const vb = keyValue(b);
-      const ra = rank(va);
-      const rb = rank(vb);
-      if (ra !== rb) return ra - rb;
-      let c = 0;
-      if (typeof va === 'number' && typeof vb === 'number') c = va - vb;
-      else if (typeof va === 'string' && typeof vb === 'string') c = va.toLowerCase().localeCompare(vb.toLowerCase());
-      return (ascending ? c : -c) || a - b;
+      const ka = values.get(a)!;
+      const kb = values.get(b)!;
+      for (let i = 0; i < keys.length; i++) {
+        const va = ka[i];
+        const vb = kb[i];
+        const ra = rank(va);
+        const rb = rank(vb);
+        if (ra !== rb) return ra - rb;
+        let c = 0;
+        if (typeof va === 'number' && typeof vb === 'number') c = va - vb;
+        else if (typeof va === 'string' && typeof vb === 'string') c = va.toLowerCase().localeCompare(vb.toLowerCase());
+        else if (typeof va === 'boolean' && typeof vb === 'boolean') c = Number(va) - Number(vb);
+        if (c) return keys[i].ascending ? c : -c;
+      }
+      return a - b;
     });
     // Blank rows always stay last, so descending does not push them to the top.
     const changes: Change[] = [];
@@ -851,6 +1674,132 @@ export class Workbook {
     });
     // Compute afters from the ORIGINAL cells before any of them is overwritten (done above), then apply together.
     this.applyChanges(changes);
+  }
+
+  /**
+   * Remove duplicates (Data tab): rows of the block that repeat an earlier row in the chosen columns (text compared
+   * without case) are taken out and the rows below move up, inside the block only. One Undo.
+   */
+  removeDuplicates(s: number, r: Range, cols: number[], header: boolean): { removed: number; kept: number } {
+    if (this.sheets[s].merges.some(m => overlaps(m, r))) throw new SyntaxProblem('Some of these cells are merged. Unmerge them first, then remove duplicates.');
+    if (!cols.length) throw new SyntaxProblem('Tick at least one column to compare.');
+    const first = r.r0 + (header ? 1 : 0);
+    const seen = new Set<string>();
+    const keep: number[] = [];
+    for (let row = first; row <= r.r1; row++) {
+      const key = cols.map(c => {
+        const v = this.value(s, c, row);
+        return v === null ? 'b' : v instanceof CellError ? `e${v.code}` : typeof v === 'string' ? `s${v.toLowerCase()}` : typeof v === 'boolean' ? `l${v}` : `n${clean(v)}`;
+      }).join('\u0000');
+      if (seen.has(key)) continue;
+      seen.add(key);
+      keep.push(row);
+    }
+    const removed = r.r1 - first + 1 - keep.length;
+    if (!removed) return { removed: 0, kept: keep.length };
+    const cells = this.sheets[s].cells;
+    const changes: Change[] = [];
+    for (let i = 0; i <= r.r1 - first; i++) {
+      const toRow = first + i;
+      const fromRow = keep[i];
+      for (let col = r.c0; col <= r.c1; col++) {
+        let after: Cell | undefined;
+        if (fromRow !== undefined) {
+          const src = cells.get(keyOf(col, fromRow));
+          if (src) {
+            after = { ...src };
+            if (after.f !== undefined) after.f = shiftFormula(after.f, 0, toRow - fromRow);
+          }
+        }
+        changes.push({ sheet: s, key: keyOf(col, toRow), after });
+      }
+    }
+    // In a table, the rows taken out leave the table: it gets shorter and its total row moves up, as in Excel.
+    const t = this.sheets[s].tables.find(x => x.range.c0 === r.c0 && x.range.c1 === r.c1 && x.range.r0 === r.r0 && dataRows(x).r1 === r.r1);
+    if (!t) {
+      this.applyChanges(changes);
+      return { removed, kept: keep.length };
+    }
+    const owned = this.isTableFilter(s, t);
+    this.snapshotChange(() => {
+      for (const ch of changes) {
+        if (ch.after) cells.set(ch.key, ch.after);
+        else cells.delete(ch.key);
+      }
+      if (t.totals) {
+        for (let col = t.range.c0; col <= t.range.c1; col++) {
+          const total = cells.get(keyOf(col, t.range.r1));
+          cells.delete(keyOf(col, t.range.r1));
+          if (total) cells.set(keyOf(col, t.range.r1 - removed), total.f !== undefined ? { ...total, f: shiftFormula(total.f, 0, -removed) } : total);
+        }
+      }
+      t.range = { ...t.range, r1: t.range.r1 - removed };
+      const f = this.sheets[s].filter;
+      if (owned && f) f.range = { ...f.range, r1: dataRows(t).r1 };
+    });
+    return { removed, kept: keep.length };
+  }
+
+  /**
+   * Text to columns (Data tab): each cell of one column split at the delimiters into the cells to its right (or from
+   * `dest`); each piece is read as typing would read it (numbers, dates). Text in quotes keeps its delimiters. One Undo.
+   */
+  splitText(s: number, col: number, r0: number, r1: number, opts: { delims: string[]; consecutive: boolean; quote: string | null }, dest = { col, row: r0 }): number {
+    const changes: Change[] = [];
+    let created = 0;
+    let widest = 0;
+    const delims = opts.delims.filter(Boolean);
+    if (!delims.length) throw new SyntaxProblem('Choose at least one delimiter (the character the text is split at).');
+    for (let row = r0; row <= r1; row++) {
+      const text = this.display(s, col, row);
+      if (text === '' && this.sheets[s].cells.get(keyOf(col, row))?.v === undefined) continue;
+      const pieces: string[] = [];
+      let cur = '';
+      let quoted = false;
+      for (let i = 0; i < text.length; i++) {
+        const ch = text[i];
+        if (opts.quote && ch === opts.quote) {
+          if (quoted && text[i + 1] === opts.quote) {
+            cur += ch;
+            i++;
+          } else quoted = !quoted;
+          continue;
+        }
+        if (!quoted && delims.includes(ch)) {
+          pieces.push(cur);
+          cur = '';
+          if (opts.consecutive) while (i + 1 < text.length && delims.includes(text[i + 1])) i++;
+          continue;
+        }
+        cur += ch;
+      }
+      pieces.push(cur);
+      widest = Math.max(widest, pieces.length);
+      pieces.forEach((piece, k) => {
+        const c = dest.col + k;
+        const rr = dest.row + (row - r0);
+        if (c >= MAX_COLS || rr >= MAX_ROWS) return;
+        const key = keyOf(c, rr);
+        const old = this.sheets[s].cells.get(key);
+        let after: Cell | undefined;
+        try {
+          const entry = parseEntry(piece, this.dateOrder);
+          after = entry.cell ? { ...entry.cell } : undefined;
+          if (after?.f !== undefined) after = { v: piece };
+          if (entry.fmt && after && !this.styleOf(old)?.fmt) after.s = this.internStyle({ ...this.styleOf(old), ...entry.fmt });
+        } catch {
+          after = piece ? { v: piece } : undefined;
+        }
+        if (old?.s && after && after.s === undefined) after.s = old.s;
+        if (!after && old?.s) after = { s: old.s };
+        if (old?.n !== undefined) after = { ...(after ?? {}), n: old.n };
+        if (!old && after) created++;
+        changes.push({ sheet: s, key, after });
+      });
+    }
+    this.assertRoom(created);
+    if (changes.length) this.applyChanges(changes);
+    return widest;
   }
 
   // ---- Rows, columns, sheets ---------------------------------------------------------------------------------------
@@ -907,6 +1856,15 @@ export class Workbook {
         // Charts, rules and validations read cells too: their references move the same way.
         mapSheetFormulas(sheet, f => moveRefs(f, sheet));
       }
+      // So do names (a name's cells are on its own sheet, or the first, when it does not say).
+      for (const n of this.names) {
+        const home = (n.scope ? this.sheets.find(x => x.name.toLowerCase() === n.scope!.toLowerCase()) : undefined) ?? this.sheets[0];
+        try {
+          n.ref = moveRefs(n.ref, home);
+        } catch {
+          // A name whose formula does not read is left as it is.
+        }
+      }
       const moved = new Map<number, Cell>();
       for (const [k, cell] of target.cells) {
         const col = colOfKey(k);
@@ -953,6 +1911,29 @@ export class Workbook {
       });
       const moveAll = (ranges: Range[]) => ranges.map(moveRange).filter((m): m is Range => m !== null);
       target.cf = target.cf.map(e => ({ ...e, ranges: moveAll(e.ranges) })).filter(e => e.ranges.length);
+      // A PivotTable's report moves with its cells (a report cut through is worked out again by Refresh).
+      target.pivots = target.pivots.flatMap(p => {
+        const idx = axis === 'row' ? p.at.row : p.at.col;
+        const m = remap(idx);
+        if (m === null) return [];
+        return [{ ...p, at: axis === 'row' ? { ...p.at, row: m } : { ...p.at, col: m }, last: p.last ? moveRange(p.last) : null }];
+      });
+      // Tables grow and shrink with the rows and columns inserted or deleted in them; deleted columns go from their list.
+      target.tables = target.tables.flatMap(t => {
+        const moved = moveRange(t.range);
+        if (!moved) return [];
+        let columns = t.columns;
+        if (axis === 'col' && n < 0) columns = t.columns.filter((_, i) => remap(t.range.c0 + i) !== null);
+        else if (axis === 'col' && n > 0 && at > t.range.c0 && at <= t.range.c1) {
+          const i = at - t.range.c0;
+          const added = uniqueColumns([...t.columns.map(c => c.name), ...Array<string>(n).fill('')]).slice(t.columns.length);
+          columns = [...t.columns.slice(0, i), ...added.map(name => ({ name })), ...t.columns.slice(i)];
+        }
+        if (columns.length !== moved.c1 - moved.c0 + 1) return [];
+        const next = { ...t, range: moved, columns };
+        const rows = moved.r1 - moved.r0 + 1 - (t.header ? 1 : 0) - (t.totals ? 1 : 0);
+        return rows >= 1 ? [next] : [];
+      });
       target.dv = target.dv.map(v => ({ ...v, ranges: moveAll(v.ranges) })).filter(v => v.ranges.length);
       if (target.page) {
         const pg = target.page;
@@ -976,7 +1957,12 @@ export class Workbook {
             const m = axis === 'col' ? remap(c) : c;
             if (m !== null) cols.set(m, keep);
           }
-          target.filter = { range, cols };
+          const rules = new Map<number, FilterRule>();
+          for (const [c, rule] of f.rules ?? []) {
+            const m = axis === 'col' ? remap(c) : c;
+            if (m !== null) rules.set(m, rule);
+          }
+          target.filter = { range, cols, ...(rules.size ? { rules } : {}) };
         }
       }
     });
@@ -1009,6 +1995,10 @@ export class Workbook {
         for (const cell of sheet.cells.values()) if (cell.f !== undefined) cell.f = renameSheetInFormula(cell.f, old, name);
         mapSheetFormulas(sheet, f => renameSheetInFormula(f, old, name));
       }
+      for (const n of this.names) {
+        n.ref = renameSheetInFormula(n.ref, old, name);
+        if (n.scope?.toLowerCase() === old.toLowerCase()) n.scope = name;
+      }
       this.sheets[s].name = name;
     });
   }
@@ -1024,6 +2014,15 @@ export class Workbook {
           cell.f = mapRefs(cell.f, (a, b, refSheet) => (refSheet !== undefined && refSheet.toLowerCase() === gone.toLowerCase() ? null : [a, b]));
         }
         mapSheetFormulas(sheet, f => mapRefs(f, (a, b, refSheet) => (refSheet !== undefined && refSheet.toLowerCase() === gone.toLowerCase() ? null : [a, b])));
+      }
+      // A name kept for the sheet goes with it; one that pointed at it now says #REF!.
+      this.names = this.names.filter(n => n.scope?.toLowerCase() !== gone.toLowerCase());
+      for (const n of this.names) {
+        try {
+          n.ref = mapRefs(n.ref, (a, b, refSheet) => (refSheet !== undefined && refSheet.toLowerCase() === gone.toLowerCase() ? null : [a, b]));
+        } catch {
+          // Left as it is.
+        }
       }
       this.active = Math.min(this.active, this.sheets.length - 1);
     });
@@ -1120,8 +2119,9 @@ export class Workbook {
           const col = colOfKey(k);
           const row = rowOfKey(k);
           if (col < b.c0 || col > b.c1 || row < b.r0 || row > b.r1 || (col === b.c0 && row === b.r0)) continue;
-          if (cell.s) sheet.cells.set(k, { s: cell.s });
-          else sheet.cells.delete(k);
+          const kept: Cell = { ...(cell.s ? { s: cell.s } : {}), ...(cell.n !== undefined ? { n: cell.n } : {}) };
+          if (bare(kept)) sheet.cells.delete(k);
+          else sheet.cells.set(k, kept);
         }
         sheet.merges.push(b);
         if (how === 'center') {
@@ -1144,6 +2144,13 @@ export class Workbook {
   }
 
   // ---- Freeze panes, hidden rows and columns -----------------------------------------------------------------------
+
+  /** The lines between cells shown on screen, or not (View > Gridlines). Not an undo step, as in Excel. */
+  setGridlines(s: number, on: boolean): void {
+    if (this.sheets[s].noGrid === !on) return;
+    this.sheets[s].noGrid = !on;
+    this.version++;
+  }
 
   /** Keeps `rows` rows and `cols` columns in view while the rest scrolls (0, 0: nothing frozen). Not an undo step, as in Excel. */
   setFreeze(s: number, rows: number, cols: number): void {
@@ -1213,9 +2220,11 @@ export class Workbook {
     if (!f || col < f.range.c0 || col > f.range.c1) return;
     this.snapshotChange(() => {
       const filter = sheet.filter!;
-      // New rows typed under the table are taken in, as Excel does when a filter is applied again.
+      // New rows typed under the table are taken in, as Excel does when a filter is applied again (a table's own
+      // filter grows with the table instead, and stops above its total row).
       const used = this.usedBounds(s);
-      while (filter.range.r1 + 1 < Math.min(MAX_ROWS, used.rows)) {
+      const owned = sheet.tables.some(t => this.isTableFilter(s, t));
+      while (!owned && filter.range.r1 + 1 < Math.min(MAX_ROWS, used.rows)) {
         let any = false;
         for (let c = filter.range.c0; c <= filter.range.c1 && !any; c++) any = this.value(s, c, filter.range.r1 + 1) !== null;
         if (!any) break;
@@ -1223,6 +2232,33 @@ export class Workbook {
       }
       if (keep) filter.cols.set(col, [...new Set(keep)]);
       else filter.cols.delete(col);
+      filter.rules?.delete(col);
+      this.applyFilter(s);
+    });
+  }
+
+  /** Data > Clear: every column's filter taken off (the ▾ buttons stay), every row in view again. */
+  clearFilters(s: number): void {
+    const f = this.sheets[s].filter;
+    if (!f || (!f.cols.size && !f.rules?.size)) return;
+    this.snapshotChange(() => {
+      f.cols.clear();
+      f.rules?.clear();
+      this.applyFilter(s);
+    });
+  }
+
+  /** Keeps in view only the rows whose cell in `col` meets a rule (Number filters, Text filters); null clears it. */
+  filterRule(s: number, col: number, rule: FilterRule | null): void {
+    const sheet = this.sheets[s];
+    const f = sheet.filter;
+    if (!f || col < f.range.c0 || col > f.range.c1) return;
+    this.snapshotChange(() => {
+      const filter = sheet.filter!;
+      filter.rules ??= new Map();
+      filter.cols.delete(col);
+      if (rule) filter.rules.set(col, rule);
+      else filter.rules.delete(col);
       this.applyFilter(s);
     });
   }
@@ -1233,8 +2269,36 @@ export class Workbook {
     const f = sheet.filter;
     if (!f) return;
     const tests = [...f.cols].map(([c, keep]) => ({ c, keep: new Set(keep.map(k => k.toLowerCase())) }));
+    // Rules over a whole column (top 10, above average) look at every row of the filter, shown or hidden.
+    const ruled = [...(f.rules ?? [])].map(([c, rule]) => {
+      const nums: number[] = [];
+      for (let r = f.range.r0 + 1; r <= f.range.r1; r++) {
+        const v = this.value(s, c, r);
+        if (typeof v === 'number') nums.push(v);
+      }
+      let line = 0;
+      if (rule.kind === 'top' && nums.length) {
+        const sorted = [...nums].sort((x, y) => (rule.top ? y - x : x - y));
+        const count = rule.percent ? Math.max(1, Math.floor((nums.length * rule.n) / 100)) : rule.n;
+        line = sorted[Math.min(sorted.length, count) - 1];
+      } else if (rule.kind === 'average' && nums.length) line = nums.reduce((a, b) => a + b, 0) / nums.length;
+      return { c, rule, line, any: nums.length > 0 };
+    });
+    const passes = (r: number) => ruled.every(({ c, rule, line, any }) => {
+      const v = this.value(s, c, r);
+      if (rule.kind === 'custom') {
+        const shown = this.display(s, c, r);
+        const a = condHolds(v, shown, rule.a);
+        if (!rule.b) return a;
+        const b = condHolds(v, shown, rule.b);
+        return rule.and ? a && b : a || b;
+      }
+      if (typeof v !== 'number' || !any) return false;
+      if (rule.kind === 'top') return rule.top ? v >= line : v <= line;
+      return rule.above ? v > line : v < line;
+    });
     for (let r = f.range.r0 + 1; r <= f.range.r1; r++) {
-      const pass = tests.every(t => t.keep.has(this.display(s, t.c, r).toLowerCase()));
+      const pass = tests.every(t => t.keep.has(this.display(s, t.c, r).toLowerCase())) && passes(r);
       if (pass) sheet.hiddenRows.delete(r);
       else sheet.hiddenRows.add(r);
     }
@@ -1384,11 +2448,11 @@ export class Workbook {
   // ---- Charts, conditional formatting, validation, page setup (each change is one Undo) -------------------------------
 
   /** A formula (without "=") worked out on a sheet: one value, or the list it gives. */
-  evalFormula(s: number, f: string): Value | Grid {
+  evalFormula(s: number, f: string, here?: { col: number; row: number }): Value | Grid {
     const tree = this.parsed(f);
     if (tree instanceof CellError) return tree;
     try {
-      return evaluateCell(tree, this.context(s));
+      return evaluateCell(tree, this.context(s, here));
     } catch (error) {
       if (!(error instanceof TooDeep) && !(error instanceof RangeError)) throw error;
       this.depth = 0;
@@ -1502,6 +2566,81 @@ export class Workbook {
     });
   }
 
+  // ---- Names (Formulas > Name Manager) -------------------------------------------------------------------------------
+
+  /** Why `name` cannot be given (null when it can): Excel's rules, and no second name of that kind in the same place. */
+  nameProblem(name: string, scope?: string, except?: DefinedName): string | null {
+    const rule = nameRuleProblem(name);
+    if (rule) return rule;
+    const clash = this.names.find(n => n !== except && n.name.toLowerCase() === name.toLowerCase() && (n.scope ?? '').toLowerCase() === (scope ?? '').toLowerCase());
+    if (clash) return `There is already a name "${clash.name}"${scope ? ` on ${scope}` : ''}. Choose another, or edit that one.`;
+    return null;
+  }
+
+  /** What a name may stand for: a formula that reads (an "=" in front is fine). */
+  private nameRef(ref: string): string {
+    const f = ref.trim().replace(/^=/, '');
+    if (!f) throw new SyntaxProblem('Type what the name stands for: cells (=Sheet1!$A$1:$A$10) or a value (=0.15).');
+    parseFormula(f);
+    return f;
+  }
+
+  /** Adds a name ("Prices" for Sheet1!$A$2:$A$40), for the whole workbook or one sheet (`scope`). */
+  setName(name: string, ref: string, scope?: string, comment?: string): void {
+    const problem = this.nameProblem(name.trim(), scope);
+    if (problem) throw new SyntaxProblem(problem);
+    if (this.names.length >= MAX_NAMES) throw new SyntaxProblem(`A workbook holds up to ${MAX_NAMES} names.`);
+    const f = this.nameRef(ref);
+    this.snapshotChange(() => {
+      this.names.push({ name: name.trim(), ref: f, ...(scope ? { scope } : {}), ...(comment ? { comment } : {}) });
+    });
+  }
+
+  /** Changes a name: what it stands for, and its own name (formulas that use it are rewritten to the new one, as in Excel). */
+  editName(old: DefinedName, name: string, ref: string, comment?: string): void {
+    const at = this.names.indexOf(old);
+    if (at < 0) throw new SyntaxProblem('That name is not there any more.');
+    const problem = this.nameProblem(name.trim(), old.scope, old);
+    if (problem) throw new SyntaxProblem(problem);
+    const f = this.nameRef(ref);
+    const renamed = name.trim() !== old.name;
+    this.snapshotChange(() => {
+      this.names[at] = { name: name.trim(), ref: f, ...(old.scope ? { scope: old.scope } : {}), ...(comment ? { comment } : {}) };
+      if (!renamed) return;
+      const swap = (formula: string) => renameInFormula(formula, old.name, name.trim());
+      for (const sheet of this.sheets) {
+        if (old.scope && sheet.name.toLowerCase() !== old.scope.toLowerCase()) continue;
+        for (const cell of sheet.cells.values()) if (cell.f !== undefined) cell.f = swap(cell.f);
+        mapSheetFormulas(sheet, swap);
+      }
+      for (const n of this.names) n.ref = swap(n.ref);
+    });
+  }
+
+  /** Deletes a name; formulas that use it show #NAME? (as in Excel). */
+  deleteName(name: string | DefinedName, scope?: string): void {
+    const target = typeof name === 'string' ? this.names.find(n => n.name.toLowerCase() === name.toLowerCase() && (n.scope ?? '').toLowerCase() === (scope ?? '').toLowerCase()) : name;
+    if (!target || !this.names.includes(target)) return;
+    this.snapshotChange(() => {
+      this.names = this.names.filter(n => n !== target);
+    });
+  }
+
+  /** The block of cells a name stands for, when it stands for one (Go To, the Name box). */
+  nameRange(name: string, current: number): { s: number; range: Range } | null {
+    const node = this.nameNode(name, undefined, current);
+    if (!node) return null;
+    const take = (n: Node): { s: number; range: Range } | null => {
+      if (n.t !== 'ref' && n.t !== 'range') return null;
+      const s = n.sheet === undefined ? current : this.sheets.findIndex(x => x.name.toLowerCase() === n.sheet!.toLowerCase());
+      if (s < 0) return null;
+      const a = n.t === 'ref' ? n.ref : n.a;
+      const b = n.t === 'ref' ? n.ref : n.b;
+      return { s, range: { c0: Math.min(a.col, b.col), r0: Math.min(a.row, b.row), c1: Math.max(a.col, b.col), r1: Math.max(a.row, b.row) } };
+    };
+    return take(node);
+  }
+
   /** How the sheet prints (null: back to the usual setup). */
   setPage(s: number, page: PageSetup | null): void {
     this.snapshotChange(() => {
@@ -1517,19 +2656,22 @@ export class Workbook {
       colW: Object.fromEntries(sh.colW),
       rowH: Object.fromEntries(sh.rowH),
       rowFit: [...sh.rowFit],
-      cells: [...sh.cells].map(([k, c]) => [colOfKey(k), rowOfKey(k), c.v ?? null, c.f ?? null, c.s ?? 0]),
+      cells: [...sh.cells].map(([k, c]) => (c.n !== undefined ? [colOfKey(k), rowOfKey(k), c.v ?? null, c.f ?? null, c.s ?? 0, c.n] : [colOfKey(k), rowOfKey(k), c.v ?? null, c.f ?? null, c.s ?? 0])),
       merges: sh.merges.map(m => [m.c0, m.r0, m.c1, m.r1]),
       freeze: [sh.freeze.rows, sh.freeze.cols],
       hiddenRows: [...sh.hiddenRows],
       hiddenCols: [...sh.hiddenCols],
-      filter: sh.filter ? { range: [sh.filter.range.c0, sh.filter.range.r0, sh.filter.range.c1, sh.filter.range.r1], cols: Object.fromEntries(sh.filter.cols) } : null,
+      filter: sh.filter ? { range: [sh.filter.range.c0, sh.filter.range.r0, sh.filter.range.c1, sh.filter.range.r1], cols: Object.fromEntries(sh.filter.cols), ...(sh.filter.rules?.size ? { rules: Object.fromEntries(sh.filter.rules) } : {}) } : null,
       // Added with charts and printing: written only when the sheet has them, so other files stay as they were.
       ...(sh.charts.length ? { charts: sh.charts } : {}),
       ...(sh.cf.length ? { cf: sh.cf.map(e => ({ ranges: e.ranges.map(rangeArray), rule: e.rule, stop: e.stop || undefined })) } : {}),
       ...(sh.dv.length ? { dv: sh.dv.map(v => ({ ...v, ranges: v.ranges.map(rangeArray) })) } : {}),
       ...(sh.page ? { page: { ...sh.page, area: sh.page.area ? rangeArray(sh.page.area) : null } } : {}),
+      ...(sh.tables.length ? { tables: sh.tables.map(t => ({ ...t, range: rangeArray(t.range) })) } : {}),
+      ...(sh.pivots.length ? { pivots: sh.pivots.map(p => ({ ...p, last: p.last ? rangeArray(p.last) : null })) } : {}),
+      ...(sh.noGrid ? { noGrid: true } : {}),
     }));
-    return JSON.stringify({ format: FILE_FORMAT, version: 1, symbol: this.symbol, active: this.active, styles: this.styles, sheets });
+    return JSON.stringify({ format: FILE_FORMAT, version: 1, symbol: this.symbol, active: this.active, styles: this.styles, sheets, ...(this.names.length ? { names: this.names } : {}) });
   }
 
   /** Loads a saved workbook, checking every field. Throws SyntaxProblem with a plain reason if the file is not one. */
@@ -1563,7 +2705,9 @@ export class Workbook {
         else if (typeof v === 'string' && v.length <= MAX_TEXT) cell.v = v;
         else if (typeof v === 'boolean') cell.v = v;
         if (typeof s === 'number' && Number.isInteger(s) && s > 0 && s < styles.length) cell.s = s;
-        if (cell.v === undefined && cell.f === undefined && !cell.s) continue;
+        const note = (c as unknown[])[5];
+        if (typeof note === 'string' && note.length <= MAX_NOTE) cell.n = note;
+        if (bare(cell)) continue;
         sheet.cells.set(keyOf(col as number, row as number), cell);
         if (++total > MAX_CELLS) return bad('too many cells');
       }
@@ -1615,7 +2759,15 @@ export class Workbook {
             cols.set(c, keep.slice(0, 20000).filter((x): x is string => typeof x === 'string' && x.length <= MAX_TEXT));
           }
         }
-        sheet.filter = { range: fr, cols };
+        const rules = new Map<number, FilterRule>();
+        if (rf!.rules && typeof rf!.rules === 'object') {
+          for (const [k, raw] of Object.entries(rf!.rules as Record<string, unknown>).slice(0, MAX_COLS)) {
+            const c = Number(k);
+            const rule = cleanFilterRule(raw);
+            if (Number.isInteger(c) && c >= fr.c0 && c <= fr.c1 && rule && !cols.has(c)) rules.set(c, rule);
+          }
+        }
+        sheet.filter = { range: fr, cols, ...(rules.size ? { rules } : {}) };
       }
       const ranges = (raw: unknown): Range[] => (Array.isArray(raw) ? raw.slice(0, MAX_RANGES).map(range).filter((r): r is Range => r !== null) : []);
       if (Array.isArray(rs.charts)) {
@@ -1643,12 +2795,56 @@ export class Workbook {
         }
       }
       if (rs.page && typeof rs.page === 'object') sheet.page = cleanPage(rs.page, range);
+      if (rs.noGrid === true) sheet.noGrid = true;
+      if (Array.isArray(rs.pivots)) {
+        for (const raw of rs.pivots.slice(0, MAX_PIVOTS)) {
+          const p = cleanPivot(raw, range);
+          if (p) sheet.pivots.push(p);
+        }
+      }
+      if (Array.isArray(rs.tables)) {
+        for (const raw of rs.tables.slice(0, MAX_TABLES)) {
+          const t = cleanTable(raw, range);
+          if (t && !sheet.tables.some(x => overlaps(x.range, t.range))) sheet.tables.push(t);
+        }
+      }
       sheets.push(sheet);
     }
-    const names = new Set(sheets.map(s => s.name.toLowerCase()));
-    if (names.size !== sheets.length) return bad('two sheets have the same name');
+    const sheetNames = new Set(sheets.map(s => s.name.toLowerCase()));
+    if (sheetNames.size !== sheets.length) return bad('two sheets have the same name');
+    // Table names and numbers are unique in a workbook: a repeat is renamed or renumbered.
+    const tableNames = new Set<string>();
+    const tableIds = new Set<number>();
+    for (const sh of sheets) {
+      for (const t of sh.tables) {
+        let name = t.name;
+        for (let k = 2; tableNames.has(name.toLowerCase()); k++) name = `${t.name}_${k}`;
+        t.name = name;
+        tableNames.add(name.toLowerCase());
+        while (tableIds.has(t.id)) t.id++;
+        tableIds.add(t.id);
+      }
+    }
+    // Names: each checked; one that breaks a rule, or says what it stands for in a way that does not read, is left out.
+    const defined: DefinedName[] = [];
+    if (Array.isArray(d.names)) {
+      for (const raw of d.names.slice(0, MAX_NAMES)) {
+        const n = raw as Record<string, unknown> | null;
+        if (!n || typeof n.name !== 'string' || typeof n.ref !== 'string' || n.ref.length > 4000 || nameRuleProblem(n.name)) continue;
+        const scope = typeof n.scope === 'string' && sheetNames.has(n.scope.toLowerCase()) ? n.scope : undefined;
+        if (n.scope !== undefined && scope === undefined) continue;
+        if (defined.some(x => x.name.toLowerCase() === (n.name as string).toLowerCase() && (x.scope ?? '').toLowerCase() === (scope ?? '').toLowerCase())) continue;
+        try {
+          parseFormula(n.ref);
+        } catch {
+          continue;
+        }
+        defined.push({ name: n.name, ref: n.ref, ...(scope ? { scope } : {}), ...(typeof n.comment === 'string' && n.comment ? { comment: n.comment.slice(0, 255) } : {}) });
+      }
+    }
     this.sheets = sheets;
     this.styles = styles;
+    this.names = defined;
     this.symbol = typeof d.symbol === 'string' && d.symbol.length <= 3 ? d.symbol : '$';
     this.active = typeof d.active === 'number' && d.active >= 0 && d.active < sheets.length ? d.active : 0;
     if (!keepUndo) {
@@ -1689,6 +2885,7 @@ export class Workbook {
       }
       if (wrap && !this.styleOf(old)?.wrap) after = { ...(after ?? {}), s: this.internStyle({ ...this.styleOf(old), wrap: true }) };
       else if (old?.s && after?.s === undefined) after = { ...(after ?? {}), s: old.s };
+      if (old?.n !== undefined) after = { ...(after ?? {}), n: old.n };
       if (!old && after) created++;
       changes.push({ sheet: s, key, after });
       if (after) count++;
@@ -1728,6 +2925,101 @@ export class Workbook {
 
 const rangeArray = (r: Range): number[] => [r.c0, r.r0, r.c1, r.r1];
 
+const colLabel = (c: number): string => {
+  let s = '';
+  for (let n = c + 1; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + ((n - 1) % 26)) + s;
+  return s;
+};
+
+/** A table reference written back from its parts: Sales[Amount], Sales[[#Totals],[Amount]], [@Amount]. */
+export function tablePartText(p: ReturnType<typeof parseTablePart>, long = false): string {
+  const cols = p.c0 === undefined ? '' : p.c1 === undefined ? `[${escapeColumn(p.c0)}]` : `[${escapeColumn(p.c0)}]:[${escapeColumn(p.c1)}]`;
+  // Excel files hold "this row" written out in full: Sales[[#This Row],[Amount]].
+  if (p.thisRow && long) return cols ? `${p.table}[[#This Row],${cols}]` : `${p.table}[#This Row]`;
+  if (p.thisRow) {
+    if (!cols) return `${p.table}[@]`;
+    return p.c1 === undefined && /^[A-Za-z0-9_]+$/.test(p.c0!) ? `${p.table}[@${p.c0}]` : `${p.table}[@${cols}]`;
+  }
+  const areas = p.areas.map(a => `[${a === '#all' ? '#All' : a === '#data' ? '#Data' : a === '#headers' ? '#Headers' : '#Totals'}]`);
+  if (!areas.length) return `${p.table}${p.c1 === undefined && cols ? cols : `[${cols}]`}`;
+  return `${p.table}[${[...areas, ...(cols ? [cols] : [])].join(',')}]`;
+}
+
+/** A formula with its table references rewritten by `fn` (null leaves a reference as it is). */
+export function rewriteStructs(formula: string, fn: (part: ReturnType<typeof parseTablePart>) => ReturnType<typeof parseTablePart> | null, long = false): string {
+  let toks;
+  try {
+    toks = tokenize(formula);
+  } catch {
+    return formula;
+  }
+  let out = formula;
+  for (let k = toks.length - 1; k >= 0; k--) {
+    const t = toks[k];
+    if (t.type !== 'struct') continue;
+    let part;
+    try {
+      part = parseTablePart(t.text);
+    } catch {
+      continue;
+    }
+    const next = fn(part);
+    if (next) out = out.slice(0, t.start) + tablePartText(next, long) + out.slice(t.end);
+  }
+  return out;
+}
+
+/** A formula with its references to one table turned into plain cell addresses (Convert to range). */
+function structsToRefs(formula: string, tables: Array<{ s: number; t: Table }>, table: Table, formulaSheet: number, here: { col: number; row: number }, sheetNames: string[], tableSheet: number): string {
+  let toks;
+  try {
+    toks = tokenize(formula);
+  } catch {
+    return formula;
+  }
+  let out = formula;
+  for (let k = toks.length - 1; k >= 0; k--) {
+    const tk = toks[k];
+    if (tk.type !== 'struct') continue;
+    let part;
+    try {
+      part = parseTablePart(tk.text);
+    } catch {
+      continue;
+    }
+    const named = part.table ? part.table.toLowerCase() === table.name.toLowerCase() : formulaSheet === tableSheet && here.col >= table.range.c0 && here.col <= table.range.c1 && here.row >= table.range.r0 && here.row <= table.range.r1;
+    if (!named) continue;
+    const box = partBox(tables, part, formulaSheet, here);
+    if (box instanceof CellError) {
+      out = out.slice(0, tk.start) + '#REF!' + out.slice(tk.end);
+      continue;
+    }
+    const abs = !part.thisRow;
+    const a = `${abs ? '$' : ''}${colLabel(box.c0)}${abs ? '$' : ''}${box.r0 + 1}`;
+    const b = `${abs ? '$' : ''}${colLabel(box.c1)}${abs ? '$' : ''}${box.r1 + 1}`;
+    const prefix = box.s !== formulaSheet ? `${/^[A-Za-z_][A-Za-z0-9_]*$/.test(sheetNames[box.s]) ? sheetNames[box.s] : `'${sheetNames[box.s].replace(/'/g, "''")}'`}!` : '';
+    out = out.slice(0, tk.start) + prefix + (a === b ? a : `${a}:${b}`) + out.slice(tk.end);
+  }
+  return out;
+}
+
+/** A formula with every use of a name changed to another (not a function of that name, nor a cell address). */
+export function renameInFormula(formula: string, from: string, to: string): string {
+  let toks;
+  try {
+    toks = tokenize(formula);
+  } catch {
+    return formula;
+  }
+  let out = formula;
+  for (let k = toks.length - 1; k >= 0; k--) {
+    const t = toks[k];
+    if (t.type !== 'ident' || t.text.toLowerCase() !== from.toLowerCase() || toks[k + 1]?.type === 'lp' || toks[k + 1]?.type === 'bang') continue;
+    out = out.slice(0, t.start) + to + out.slice(t.end);
+  }
+  return out;
+}
+
 /** Rewrites every formula a sheet's charts, conditional formats and validation rules hold (a reference that cannot be
  *  read is left as it is). */
 function mapSheetFormulas(sheet: Sheet, fn: (f: string) => string): void {
@@ -1740,6 +3032,7 @@ function mapSheetFormulas(sheet: Sheet, fn: (f: string) => string): void {
     }
   };
   sheet.charts = sheet.charts.map(ch => mapChartRefs(ch, safe));
+  for (const p of sheet.pivots) p.source = safe(p.source);
   for (const e of sheet.cf) {
     const r = e.rule;
     if (r.t === 'cell') e.rule = { ...r, f1: safe(r.f1), ...(r.f2 !== undefined ? { f2: safe(r.f2) } : {}) };
@@ -1769,6 +3062,14 @@ function cleanStyle(raw: unknown): CellStyle {
   if (typeof r.dec === 'number' && Number.isInteger(r.dec) && r.dec >= 0 && r.dec <= 15) out.dec = r.dec;
   if (typeof r.fill === 'string' && COLOUR.test(r.fill)) out.fill = r.fill;
   if (typeof r.color === 'string' && COLOUR.test(r.color)) out.color = r.color;
+  // Added with fonts (session 8): size 1 to 409 points (Excel's range), a plain typeface name, strikethrough,
+  // vertical alignment and indent.
+  if (typeof r.fs === 'number' && r.fs >= 1 && r.fs <= 409) out.fs = Math.round(r.fs * 2) / 2;
+  const face = cleanFace(r.ff);
+  if (face) out.ff = face;
+  if (r.st === true) out.st = true;
+  if (r.va === 't' || r.va === 'm') out.va = r.va;
+  if (typeof r.ind === 'number' && Number.isInteger(r.ind) && r.ind >= 1 && r.ind <= 15) out.ind = r.ind;
   return out;
 }
 

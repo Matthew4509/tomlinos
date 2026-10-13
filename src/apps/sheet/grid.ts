@@ -5,10 +5,13 @@ import { css, h, on } from '../../core/dom.ts';
 import { clamp } from '../../core/dom.ts';
 import { bindContextMenu, type MenuItem } from '../../shell/menu.ts';
 import type { Shell } from '../../shell/types.ts';
-import { addressOf, colName, MAX_COLS, MAX_ROWS, SyntaxProblem } from './refs.ts';
+import { addressOf, CellLocked, colName, MAX_COLS, MAX_ROWS, SyntaxProblem } from './refs.ts';
 import { cfLook, type CfLook } from './condfmt.ts';
 import { CellError, type CellStyle } from './values.ts';
 import { describeValidation, listItems, passes, validationAt, type Validation } from './validate.ts';
+import { formulaHelper } from './autocomplete.ts';
+import { cssFamily, sizePx, STANDARD_PX } from './fonts.ts';
+import { FUNCTION_NAMES } from './formula.ts';
 import { colOfKey, keyOf, parseDelimited, rowOfKey, type Range, type Workbook } from './workbook.ts';
 
 const HEAD_W = 46;
@@ -22,7 +25,10 @@ const MAX_LINES = 60;
 const MAX_FIT_CELLS = 5000;
 
 const fontFor = (style: CellStyle | undefined, z: number): string =>
-  `${style?.i ? 'italic ' : ''}${style?.b ? 'bold ' : ''}${13 * z}px "Segoe UI", Arial, Helvetica, sans-serif`;
+  `${style?.i ? 'italic ' : ''}${style?.b ? 'bold ' : ''}${sizePx(style?.fs) * z}px ${cssFamily(style?.ff)}`;
+
+/** One line of text at a cell's size (the standard line is LINE_H). */
+const lineFor = (style: CellStyle | undefined): number => (LINE_H * sizePx(style?.fs)) / STANDARD_PX;
 
 /** Text laid out in lines no wider than `width`: at its own line breaks, then between words (a long word is cut). */
 function wrapLines(ctx: CanvasRenderingContext2D, text: string, width: number): string[] {
@@ -88,6 +94,12 @@ export interface Grid {
   autoSum(): void;
   copy(cut: boolean): void;
   paste(): void;
+  /** Paste Special: part of what was copied in this window (values, formulas, formatting...), or turned on its side. */
+  pasteSpecial(what: 'all' | 'values' | 'formulas' | 'formats' | 'valuesFormats', transpose?: boolean): void;
+  /** True when something was copied (or cut) in this window. */
+  hasClip(): boolean;
+  /** What was copied in this window: its sheet and cells. */
+  clip(): { sheet: number; range: Range; cut: boolean } | null;
   deleteContents(): void;
   insert(axis: 'row' | 'col'): void;
   remove(axis: 'row' | 'col'): void;
@@ -114,6 +126,22 @@ export interface Grid {
   openList(): void;
   /** Where printed pages end, drawn as dashed lines (the first column and row of each new page); null for none. */
   breaks: { cols: number[]; rows: number[] } | null;
+  /** Cells show their formulas instead of their answers (Formulas > Show formulas, Ctrl+`). */
+  showFormulas: boolean;
+  /** Starts typing in the active cell with this text (or, while typing a formula, puts it in at the caret). */
+  edit(text: string): void;
+  /** The formula bar, name box and spoken status read the workbook again (after a change made from the toolbar). */
+  sync(): void;
+  /** Columns from c0 to c1 as wide as what they show (a PivotTable's report after it changes). */
+  fitColumns(c0: number, c1: number): void;
+  /** Every note shows beside its cell all the time (Review > Show all notes); otherwise a note shows under the pointer. */
+  showNotes: boolean;
+  /** Called to add or change the note on a cell (right-click > New note / Edit note, Shift+F2). */
+  onNote: (col: number, row: number) => void;
+  /** Called by right-click > Format cells (the window opens Format Cells). */
+  onFormatCells: () => void;
+  /** A drop-down list of choices for a cell other than a validation list (a table's total row), or null. */
+  listFor: (col: number, row: number) => { items: string[]; current: string; pick(item: string): void } | null;
   onChange: () => void;
   onSelect: () => void;
   onEdit: (editing: boolean) => void;
@@ -130,10 +158,16 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
   const live = h('div', { class: 'visually-hidden', role: 'status', 'aria-live': 'polite' });
   // A validation rule's input message, shown beside the active cell.
   const prompt = h('div', { class: 'dv-prompt', role: 'note', hidden: true });
-  const root = h('div', { class: 'grid-wrap' }, canvas, scroller, cellInput, prompt, live);
+  // Notes: the one under the pointer, and (Show all notes) every one in view.
+  const noteTip = h('div', { class: 'note-box', role: 'note', hidden: true });
+  const noteLayer = h('div', { class: 'note-layer', 'aria-hidden': 'true' });
+  const root = h('div', { class: 'grid-wrap' }, canvas, scroller, noteLayer, cellInput, prompt, noteTip, live);
+  let hoverNote: { col: number; row: number } | null = null;
   let listBox: HTMLElement | null = null;
   const formulaInput = h('textarea', { class: 'formula-input', 'aria-label': 'Formula bar', spellcheck: 'false', autocomplete: 'off', rows: 1, wrap: 'off' });
-  const nameBox = h('input', { type: 'text', class: 'name-box', 'aria-label': 'Cell address', spellcheck: 'false', autocomplete: 'off', value: 'A1' });
+  const nameList = h('datalist', { id: `names-${Math.random().toString(36).slice(2)}` });
+  const nameBox = h('input', { type: 'text', class: 'name-box', 'aria-label': 'Cell address or name', spellcheck: 'false', autocomplete: 'off', value: 'A1', list: nameList.id });
+  root.append(nameList);
 
   const state = {
     zoom: 1,
@@ -176,6 +210,9 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
     autoSum,
     copy,
     paste,
+    pasteSpecial: (what, transpose) => pasteSpecial(what, !!transpose),
+    hasClip: () => !!state.clip,
+    clip: () => (state.clip ? { sheet: state.clip.sheet, range: { ...state.clip.range }, cut: state.clip.cut } : null),
     deleteContents,
     insert: axis => shift(axis, 1),
     remove: axis => shift(axis, -1),
@@ -203,6 +240,30 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
     onPaint: () => {},
     openList: () => openList(),
     breaks: null,
+    showFormulas: false,
+    sync: () => {
+      if (!state.editing) changed();
+    },
+    fitColumns: (c0, c1) => {
+      for (let c = c0; c <= c1; c++) autoFit('col', c, true);
+    },
+    showNotes: false,
+    onNote: () => {},
+    listFor: () => null,
+    onFormatCells: () => {},
+    edit: text => {
+      if (state.editing) {
+        const input = document.activeElement === formulaInput ? formulaInput : cellInput;
+        input.setRangeText(text, input.selectionStart ?? input.value.length, input.selectionEnd ?? input.value.length, 'end');
+        (input === cellInput ? formulaInput : cellInput).value = input.value;
+        input.focus();
+        placeEditor();
+        fx.update(input);
+        return;
+      }
+      beginEdit(text);
+      fx.update(cellInput);
+    },
     onChange: () => {},
     onSelect: () => {},
     onEdit: () => {},
@@ -354,6 +415,10 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
   }
 
   function changed(): void {
+    const names = grid.wb.names.map(n => n.name).sort((a, b) => a.localeCompare(b));
+    if (nameList.childElementCount !== names.length || [...nameList.children].some((o, i) => (o as HTMLOptionElement).value !== names[i])) {
+      nameList.replaceChildren(...names.map(n => h('option', { value: n })));
+    }
     nameBox.value = sel().c0 === sel().c1 && sel().r0 === sel().r1 ? addressOf(state.cursor.col, state.cursor.row) : `${addressOf(sel().c0, sel().r0)}:${addressOf(sel().c1, sel().r1)}`;
     if (!state.editing) {
       formulaInput.value = grid.wb.editText(grid.wb.active, state.cursor.col, state.cursor.row);
@@ -362,7 +427,8 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
       sizeBar();
     }
     const v = grid.wb.value(grid.wb.active, state.cursor.col, state.cursor.row);
-    live.textContent = `${addressOf(state.cursor.col, state.cursor.row)}: ${v === null ? 'empty' : grid.wb.display(grid.wb.active, state.cursor.col, state.cursor.row)}`;
+    const note = grid.wb.sheets[grid.wb.active].cells.get(keyOf(state.cursor.col, state.cursor.row))?.n;
+    live.textContent = `${addressOf(state.cursor.col, state.cursor.row)}: ${v === null ? 'empty' : grid.wb.display(grid.wb.active, state.cursor.col, state.cursor.row)}${note !== undefined ? `. Note: ${note}` : ''}`;
     grid.onSelect();
     redraw();
   }
@@ -466,39 +532,51 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
     /** One cell's text (or a merged block's, drawn over the whole block). */
     const drawText = (c: number, r: number, box: { x: number; y: number; w: number; h: number }, p: Pane, mergedBlock: boolean) => {
       const cell = sheet.cells.get(keyOf(c, r));
-      const own = wbk.styleOf(cell);
+      const own = wbk.lookOf(sheetIndex, c, r);
       const cf = lookAt(c, r);
       const style: CellStyle | undefined = cf ? { ...own, b: cf.b ?? own?.b, i: cf.i ?? own?.i, u: cf.u ?? own?.u } : own;
       // An empty cell may show a value from a list formula above or to the left of it.
       if ((!cell || (cell.v === undefined && cell.f === undefined)) && !wbk.isSpilled(sheetIndex, c, r)) return;
-      const look = wbk.shown(sheetIndex, c, r);
+      const formulaShown = grid.showFormulas && cell?.f !== undefined;
+      const look = formulaShown ? { text: `=${cell!.f}` } as { text: string; color?: string } : wbk.shown(sheetIndex, c, r);
       const shown = look.text;
       if (shown === '') return;
       const { x, y, w: cw, h: ch } = box;
-      const v = wbk.value(sheetIndex, c, r);
+      const v = formulaShown ? shown : wbk.value(sheetIndex, c, r);
       // A colour from the number format ([Red] for minus amounts) wins over the cell's text colour, as in Excel.
       const ink = v instanceof CellError ? '#c0392b' : (cf?.color ?? look.color ?? style?.color ?? '#000');
       ctx.font = fontFor(style, z);
       ctx.fillStyle = ink;
-      const isNum = typeof v === 'number';
-      const align = style?.al ?? (isNum ? 'r' : v instanceof CellError || typeof v === 'boolean' ? 'c' : 'l');
+      const isNum = typeof v === 'number' && !formulaShown;
+      const align = formulaShown ? 'l' : style?.al ?? (isNum ? 'r' : v instanceof CellError || typeof v === 'boolean' ? 'c' : 'l');
+      const px = sizePx(style?.fs) * z;
+      // An indent moves the text in from the side it is aligned to.
+      const indent = style?.ind && align !== 'c' ? style.ind * 9 * z : 0;
       const pad = 3 * z;
       // Room for the filter button on a header cell.
       const button = filter && r === filter.range.r0 && c >= filter.range.c0 && c <= filter.range.c1 ? 17 * z : 0;
+      /** Where a line's middle sits: at the bottom of the cell (as Excel), its middle, or its top. */
+      const half = Math.max((ROW_H * z) / 2, px * 0.75);
+      const lines = (h: number, count: number, lh: number) => (style?.va === 't' ? y + half : style?.va === 'm' ? y + h / 2 - (lh * (count - 1)) / 2 : y + h - half - lh * (count - 1));
+      const marks = (tx: number, ty: number, tw: number) => {
+        const thick = Math.max(1, px / 13);
+        if (style?.u) ctx.fillRect(tx, ty + px * 0.54, tw, thick);
+        if (style?.st) ctx.fillRect(tx, ty + z * 0.5, tw, thick);
+      };
       if (style?.wrap && !isNum) {
         // Wrapped: line after line inside the cell, the last line where one line of text would sit.
-        const lines = wrapLines(ctx, shown, cw - pad * 2 - button);
-        const lh = LINE_H * z;
-        let ly = y + ch - (ROW_H * z) / 2 - lh * (lines.length - 1);
+        const parts = wrapLines(ctx, shown, cw - pad * 2 - button - indent);
+        const lh = lineFor(style) * z;
+        let ly = lines(ch, parts.length, lh);
         ctx.save();
         ctx.beginPath();
         ctx.rect(x, y, cw - button, ch);
         ctx.clip();
-        for (const line of lines) {
+        for (const line of parts) {
           const lw = ctx.measureText(line).width;
-          const lx = align === 'r' ? x + cw - pad - button - lw : align === 'c' ? x + (cw - button - lw) / 2 : x + pad;
+          const lx = align === 'r' ? x + cw - pad - button - lw - indent : align === 'c' ? x + (cw - button - lw) / 2 : x + pad + indent;
           ctx.fillText(line, lx, ly + z);
-          if (style.u) ctx.fillRect(lx, ly + 7 * z, lw, Math.max(1, z));
+          marks(lx, ly, lw);
           ly += lh;
         }
         ctx.restore();
@@ -508,9 +586,9 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
       let text = shown.replace(/\r?\n/g, ' ');
       let tw = ctx.measureText(text).width;
       let clipW = cw - button;
-      if (tw > cw - pad * 2 - button) {
+      if (tw > cw - pad * 2 - button - indent) {
         if (isNum && style?.fmt !== 'text') {
-          text = '#'.repeat(Math.max(1, Math.floor((cw - pad * 2 - button) / Math.max(1, ctx.measureText('#').width))));
+          text = '#'.repeat(Math.max(1, Math.floor((cw - pad * 2 - button - indent) / Math.max(1, ctx.measureText('#').width))));
           tw = ctx.measureText(text).width;
         } else if (align === 'l' && !mergedBlock && !button) {
           // Text runs on into empty cells on its right (not into merged ones, and not past this pane).
@@ -531,11 +609,11 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
       ctx.beginPath();
       ctx.rect(x, y, clipW, ch);
       ctx.clip();
-      const tx = align === 'r' ? x + cw - pad - button - tw : align === 'c' ? x + (cw - button - tw) / 2 : x + pad;
-      // At the bottom of a tall row (one grown for wrapped text beside it), as Excel places it.
-      const ty = y + ch - (ROW_H * z) / 2;
+      const tx = align === 'r' ? x + cw - pad - button - tw - indent : align === 'c' ? x + (cw - button - tw) / 2 : x + pad + indent;
+      // At the bottom of a tall row (one grown for wrapped text beside it), as Excel places it, unless set otherwise.
+      const ty = lines(ch, 1, 0);
       ctx.fillText(text, tx, ty + z);
-      if (style?.u) ctx.fillRect(tx, ty + 7 * z, tw, Math.max(1, z));
+      marks(tx, ty, tw);
       ctx.restore();
     };
 
@@ -571,15 +649,15 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
       for (let r = p.r0; r <= p.r1; r++) {
         if (sheet.hiddenRows.has(r)) continue;
         for (let c = p.c0; c <= p.c1; c++) {
-          const fill = lookAt(c, r)?.fill ?? wbk.styleOf(sheet.cells.get(keyOf(c, r)))?.fill;
+          const fill = lookAt(c, r)?.fill ?? wbk.lookOf(sheetIndex, c, r)?.fill;
           if (!fill || (blocks.length && merged(c, r))) continue;
           ctx.fillStyle = fill;
           ctx.fillRect(X(c), Y(r), XR(c) - X(c), YB(r) - Y(r));
         }
       }
 
-      // Grid lines.
-      ctx.strokeStyle = GRID;
+      // Grid lines (View > Gridlines can turn them off for the sheet).
+      ctx.strokeStyle = sheet.noGrid ? 'rgba(0, 0, 0, 0)' : GRID;
       ctx.lineWidth = 1;
       ctx.beginPath();
       for (let c = p.c0; c <= p.c1 + 1 && c <= MAX_COLS; c++) {
@@ -597,7 +675,7 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
       // A merged block is one cell: its inside lines are covered with its fill (or white).
       for (const m of blocks) {
         const b = rect(m.c0, m.r0, m.c1, m.r1);
-        ctx.fillStyle = lookAt(m.c0, m.r0)?.fill ?? wbk.styleOf(sheet.cells.get(keyOf(m.c0, m.r0)))?.fill ?? '#fff';
+        ctx.fillStyle = lookAt(m.c0, m.r0)?.fill ?? wbk.lookOf(sheetIndex, m.c0, m.r0)?.fill ?? '#fff';
         ctx.fillRect(Math.round(b.x) + 1, Math.round(b.y) + 1, Math.round(b.x + b.w) - Math.round(b.x) - 1, Math.round(b.y + b.h) - Math.round(b.y) - 1);
       }
 
@@ -623,7 +701,7 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
       for (let r = p.r0; r <= p.r1; r++) {
         if (sheet.hiddenRows.has(r)) continue;
         for (let c = p.c0; c <= p.c1; c++) {
-          const style = wbk.styleOf(sheet.cells.get(keyOf(c, r)));
+          const style = wbk.lookOf(sheetIndex, c, r);
           if (!style || !(style.bt || style.bb || style.bl || style.br)) continue;
           const m = blocks.length ? merged(c, r) : null;
           const x = Math.round(X(c)) + 0.5;
@@ -649,6 +727,23 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
       // A merged block's text, centred over the whole block, even when its top-left cell is scrolled out of view.
       for (const m of blocks) drawText(m.c0, m.r0, rect(m.c0, m.r0, m.c1, m.r1), p, true);
 
+      // A note: a small red triangle in the cell's top-right corner, as Excel marks one.
+      for (let r = p.r0; r <= p.r1; r++) {
+        if (sheet.hiddenRows.has(r)) continue;
+        for (let c = p.c0; c <= p.c1; c++) {
+          if (sheet.cells.get(keyOf(c, r))?.n === undefined || sheet.hiddenCols.has(c)) continue;
+          const b = cellRect(c, r);
+          const t = 6 * z;
+          ctx.fillStyle = '#d13438';
+          ctx.beginPath();
+          ctx.moveTo(b.x + b.w - t - 1, b.y + 1);
+          ctx.lineTo(b.x + b.w - 1, b.y + 1);
+          ctx.lineTo(b.x + b.w - 1, b.y + 1 + t);
+          ctx.closePath();
+          ctx.fill();
+        }
+      }
+
       // The filter's buttons on its header row: an arrow, or a funnel on a column that is filtered (shape, not colour).
       if (filter && filter.range.r0 >= p.r0 && filter.range.r0 <= p.r1 && !sheet.hiddenRows.has(filter.range.r0)) {
         for (let c = Math.max(filter.range.c0, p.c0); c <= Math.min(filter.range.c1, p.c1); c++) {
@@ -659,12 +754,13 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
           ctx.strokeStyle = '#8a8a8a';
           ctx.lineWidth = 1;
           ctx.strokeRect(Math.round(b.x) + 0.5, Math.round(b.y) + 0.5, Math.round(b.w) - 1, Math.round(b.h) - 1);
-          ctx.fillStyle = filter.cols.has(c) ? FILTERED : '#444';
+          const filtered = filter.cols.has(c) || !!filter.rules?.has(c);
+          ctx.fillStyle = filtered ? FILTERED : '#444';
           const cx = b.x + b.w / 2;
           const cy = b.y + b.h / 2;
           const u = z;
           ctx.beginPath();
-          if (filter.cols.has(c)) {
+          if (filtered) {
             ctx.moveTo(cx - 5 * u, cy - 4 * u); ctx.lineTo(cx + 5 * u, cy - 4 * u); ctx.lineTo(cx + 1 * u, cy);
             ctx.lineTo(cx + 1 * u, cy + 5 * u); ctx.lineTo(cx - 1 * u, cy + 4 * u); ctx.lineTo(cx - 1 * u, cy);
           } else {
@@ -723,7 +819,7 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
       if (many) {
         ctx.fillStyle = 'rgba(30, 122, 69, 0.12)';
         ctx.fillRect(box.x, box.y, box.w, box.h);
-        ctx.fillStyle = lookAt(state.cursor.col, state.cursor.row)?.fill ?? wbk.styleOf(sheet.cells.get(keyOf(state.cursor.col, state.cursor.row)))?.fill ?? '#fff';
+        ctx.fillStyle = lookAt(state.cursor.col, state.cursor.row)?.fill ?? wbk.lookOf(sheetIndex, state.cursor.col, state.cursor.row)?.fill ?? '#fff';
         ctx.fillRect(a.x + 1, a.y + 1, a.w - 2, a.h - 2);
         // The active cell is drawn again on its own fill, as it looks anywhere else (its alignment, font and colour).
         ctx.save();
@@ -815,7 +911,7 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
           ctx.fillRect(0, y, HEAD_W * z, rh);
         }
         // Row numbers of rows a filter keeps in view are blue, as in Excel (the hidden ones are what tell).
-        ctx.fillStyle = inSel ? ACCENT : filter && r > filter.range.r0 && r <= filter.range.r1 && filter.cols.size ? FILTERED : '#333';
+        ctx.fillStyle = inSel ? ACCENT : filter && r > filter.range.r0 && r <= filter.range.r1 && (filter.cols.size || filter.rules?.size) ? FILTERED : '#333';
         ctx.textAlign = 'center';
         ctx.fillText(String(r + 1), HEAD_W * z / 2, y + rh / 2 + 1);
         ctx.strokeStyle = '#c6c6c6';
@@ -857,8 +953,45 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
       ctx.fill();
     }
     placePrompt();
+    placeNotes();
     if (state.editing) placeEditor();
     grid.onPaint();
+  }
+
+  /** A note's box beside its cell (right of it, a little above, as Excel puts it). */
+  function noteBox(el: HTMLElement, col: number, row: number, text: string): void {
+    if (el.dataset.for !== `${col}:${row}:${text}`) {
+      el.dataset.for = `${col}:${row}:${text}`;
+      el.textContent = text;
+    }
+    const b = cellRect(col, row);
+    const host = root.getBoundingClientRect();
+    css(el, { left: Math.min(b.x + b.w + 8, Math.max(0, host.width - 210)), top: Math.max(0, b.y - 4) });
+  }
+
+  function placeNotes(): void {
+    const sheet = grid.wb.sheets[grid.wb.active];
+    // Under the pointer.
+    const hn = hoverNote ? sheet.cells.get(keyOf(hoverNote.col, hoverNote.row))?.n : undefined;
+    if (hoverNote && hn !== undefined && !grid.showNotes && !state.editing) {
+      noteTip.hidden = false;
+      noteBox(noteTip, hoverNote.col, hoverNote.row, hn);
+    } else noteTip.hidden = true;
+    // Every note in view.
+    if (!grid.showNotes) {
+      if (noteLayer.childElementCount) noteLayer.replaceChildren();
+      return;
+    }
+    const w = scroller.clientWidth;
+    const hgt = scroller.clientHeight;
+    const shown = grid.wb.notesOf(grid.wb.active).filter(n => {
+      if (sheet.hiddenRows.has(n.row) || sheet.hiddenCols.has(n.col)) return false;
+      const b = cellRect(n.col, n.row);
+      return b.x < w && b.y < hgt && b.x + b.w > HEAD_W * state.zoom && b.y + b.h > HEAD_H * state.zoom;
+    }).slice(0, 60);
+    while (noteLayer.childElementCount > shown.length) noteLayer.lastElementChild!.remove();
+    while (noteLayer.childElementCount < shown.length) noteLayer.append(h('div', { class: 'note-box' }));
+    shown.forEach((n, i) => noteBox(noteLayer.children[i] as HTMLElement, n.col, n.row, n.text));
   }
 
   /** The active cell's validation rule, when it has a list with a drop-down button. */
@@ -867,9 +1000,25 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
     return v && v.type === 'list' && v.dropdown ? v : null;
   }
 
+  /** The active cell's drop-down choices: its validation list, or another list (a table's total row). */
+  function listSource(): { items: string[]; current: string; pick(item: string): void } | null {
+    const v = activeList();
+    const s = grid.wb.active;
+    const { col, row } = state.cursor;
+    if (v) {
+      return {
+        items: listItems(grid.wb, s, v, col, row),
+        current: grid.wb.display(s, col, row),
+        // A value from the list goes in as text where it would otherwise read as something else (a formula).
+        pick: item => grid.wb.setInput(s, col, row, /^[='"]/.test(item) ? `'${item}` : item),
+      };
+    }
+    return grid.listFor(col, row);
+  }
+
   /** Where the drop-down list button of the active cell is drawn (scaled pixels), or null when it has none. */
   function listButton(): { x: number; y: number; w: number; h: number } | null {
-    if (!activeList()) return null;
+    if (!listSource()) return null;
     const b = cellRect(state.cursor.col, state.cursor.row);
     const size = Math.min(18 * state.zoom, b.h);
     return { x: b.x + b.w + 1, y: b.y + b.h - size, w: size, h: size };
@@ -907,10 +1056,15 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
   function placeEditor(): void {
     const b = cellRect(state.cursor.col, state.cursor.row);
     const wide = Math.max(b.w, 160 * state.zoom);
-    // Taller for every line typed or pasted, as Excel's in-cell editor grows.
+    // The cell's own size and typeface; taller for every line typed or pasted, as Excel's in-cell editor grows.
+    const style = grid.wb.styleOf(grid.wb.sheets[grid.wb.active].cells.get(keyOf(state.cursor.col, state.cursor.row)));
+    const lh = lineFor(style);
     const lines = Math.min(12, cellInput.value.split('\n').length);
-    const tall = Math.max(b.h, (lines * LINE_H + 6) * state.zoom);
-    css(cellInput, { left: b.x, top: b.y, width: wide, height: tall, display: 'block', 'font-size': `${13 * state.zoom}px`, 'line-height': `${LINE_H * state.zoom}px` });
+    const tall = Math.max(b.h, (lines * lh + 6) * state.zoom);
+    css(cellInput, {
+      left: b.x, top: b.y, width: wide, height: tall, display: 'block', 'font-size': `${sizePx(style?.fs) * state.zoom}px`, 'line-height': `${lh * state.zoom}px`,
+      'font-family': cssFamily(style?.ff), 'font-weight': style?.b ? '700' : '400', 'font-style': style?.i ? 'italic' : 'normal',
+    });
     sizeBar();
   }
 
@@ -947,6 +1101,7 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
   function endEdit(): void {
     state.editing = false;
     state.pointAt = null;
+    fx.hide();
     css(cellInput, { display: 'none' });
     grid.onEdit(false);
     changed();
@@ -961,6 +1116,10 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
     try {
       grid.wb.setInput(grid.wb.active, state.cursor.col, state.cursor.row, text);
     } catch (error) {
+      if (error instanceof CellLocked) {
+        void shell.dialogs.alert('This cell belongs to a PivotTable', error.message, 'Press Esc to leave the cell as it is.').then(() => (state.editing ? cellInput.focus() : undefined));
+        return false;
+      }
       if (error instanceof SyntaxProblem) {
         void shell.dialogs.alert('There is a problem with this formula', error.message, 'Fix it and press Enter again, or press Esc to cancel.').then(() => (state.editing ? (document.activeElement === formulaInput ? formulaInput : cellInput).focus() : undefined));
         return false;
@@ -1033,13 +1192,12 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
   /** The drop-down list of the active cell's validation rule: pick a value to put in the cell. */
   function openList(): void {
     closeList();
-    const v = activeList();
-    if (!v || !commit()) return;
-    const s = grid.wb.active;
+    const src = listSource();
+    if (!src || !commit()) return;
     const { col, row } = state.cursor;
-    const items = listItems(grid.wb, s, v, col, row);
+    const items = src.items;
     const box = h('div', { class: 'dv-list', role: 'listbox', 'aria-label': 'Choose a value' });
-    const current = grid.wb.display(s, col, row).toLowerCase();
+    const current = src.current.toLowerCase();
     const done = new AbortController();
     const close = () => {
       done.abort();
@@ -1049,8 +1207,7 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
     };
     const pick = (item: string) => {
       try {
-        // A value from the list goes in as text where it would otherwise read as something else (a formula).
-        grid.wb.setInput(s, col, row, /^[='"]/.test(item) ? `'${item}` : item);
+        src.pick(item);
         afterEdit();
       } catch (error) {
         void report(error);
@@ -1110,11 +1267,32 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
       grid.onEdit(true);
     }
     placeEditor();
+    fx.update(src);
   };
+  // The functions and names offered while a formula is typed, and the line saying what goes in the brackets.
+  const fx = formulaHelper(root, () => grid.wb.names.map(n => n.name), () => FUNCTION_NAMES, input => {
+    (input === cellInput ? formulaInput : cellInput).value = input.value;
+    state.pointAt = null;
+    placeEditor();
+  }, signal);
+  for (const input of [cellInput, formulaInput]) {
+    on(input, 'keyup', (event: KeyboardEvent) => {
+      if (state.editing && (event.key.startsWith('Arrow') || event.key === 'Home' || event.key === 'End')) fx.update(input);
+    }, signal);
+    on(input, 'click', () => {
+      if (state.editing) fx.update(input);
+    }, signal);
+    on(input, 'blur', () => fx.hide(), signal);
+  }
   on(cellInput, 'input', syncFrom(cellInput, formulaInput), signal);
   on(formulaInput, 'input', syncFrom(formulaInput, cellInput), signal);
 
   const editKeys = (event: KeyboardEvent) => {
+    if (fx.key(event, event.target as HTMLTextAreaElement)) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
     if (event.key === 'Enter' && event.altKey && !event.ctrlKey && !event.metaKey) {
       event.preventDefault();
       newLine(event.target as HTMLTextAreaElement);
@@ -1150,9 +1328,39 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
   on(nameBox, 'keydown', (event: KeyboardEvent) => {
     if (event.key !== 'Enter') return;
     event.preventDefault();
-    const m = /^\$?([A-Za-z]{1,3})\$?(\d+)(?::\$?([A-Za-z]{1,3})\$?(\d+))?$/.exec(nameBox.value.trim());
+    const typed = nameBox.value.trim();
+    const m = /^\$?([A-Za-z]{1,3})\$?(\d+)(?::\$?([A-Za-z]{1,3})\$?(\d+))?$/.exec(typed);
     if (!m) {
-      void shell.dialogs.alert('That is not a cell address', 'Type something like B7 or A1:C10.');
+      // A name: go to its cells; a new name: give it to the selected cells, as Excel's Name box does.
+      const named = grid.wb.nameRange(typed, grid.wb.active);
+      if (named) {
+        if (named.s !== grid.wb.active) setActiveSheet(named.s);
+        select(named.range, { col: named.range.c0, row: named.range.r0 });
+        reveal(named.range.c0, named.range.r0);
+        scroller.focus({ preventScroll: true });
+        return;
+      }
+      if (grid.wb.names.some(n => n.name.toLowerCase() === typed.toLowerCase())) {
+        void shell.dialogs.alert('That name is not a block of cells', `"${typed}" stands for a value or a formula, so there are no cells to go to. Formulas > Name Manager shows what it stands for.`);
+        return;
+      }
+      const problem = grid.wb.nameProblem(typed);
+      if (problem) {
+        void shell.dialogs.alert('That is not a cell address or a name', `Type an address such as B7 or A1:C10, or a name for the selected cells. ${problem}`);
+        return;
+      }
+      const s = sel();
+      const sheetName = grid.wb.sheets[grid.wb.active].name;
+      const quoted = /^[A-Za-z_][A-Za-z0-9_]*$/.test(sheetName) ? sheetName : `'${sheetName.replace(/'/g, "''")}'`;
+      const abs = (c: number, r: number) => `$${colName(c)}$${r + 1}`;
+      try {
+        grid.wb.setName(typed, `${quoted}!${abs(s.c0, s.r0)}${s.c1 > s.c0 || s.r1 > s.r0 ? `:${abs(s.c1, s.r1)}` : ''}`);
+        shell.toast(`The selected cells are now called “${typed}”. Use it in formulas, such as =SUM(${typed}).`);
+        grid.onChange();
+      } catch (error) {
+        void report(error);
+      }
+      scroller.focus({ preventScroll: true });
       return;
     }
     const idx = (s: string) => [...s.toUpperCase()].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1;
@@ -1192,6 +1400,7 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
     const other = input === cellInput ? formulaInput : cellInput;
     other.value = input.value;
     input.setSelectionRange(start + text.length, start + text.length);
+    fx.update(input);
   }
 
   // ---- Mouse -----------------------------------------------------------------------------------------------------
@@ -1232,6 +1441,13 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
   on(scroller, 'pointermove', (event: PointerEvent) => {
     if (event.buttons || onScrollbar(event)) return;
     const { x, y } = posOf(event);
+    const under = hit(x, y);
+    const top = under.where === 'cell' ? topLeft(under.col, under.row) : null;
+    const next = top && grid.wb.sheets[grid.wb.active].cells.get(keyOf(top.col, top.row))?.n !== undefined ? top : null;
+    if ((next?.col ?? -1) !== (hoverNote?.col ?? -1) || (next?.row ?? -1) !== (hoverNote?.row ?? -1)) {
+      hoverNote = next;
+      placeNotes();
+    }
     const edge = edgeAt(x, y);
     scroller.style.cursor = edge ? (edge.axis === 'col' ? 'col-resize' : 'row-resize') : onFillHandle(x, y) ? 'crosshair' : 'cell';
   }, signal);
@@ -1370,8 +1586,8 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
         const cell = sheet.cells.get(keyOf(c, row));
         if (!cell || typeof grid.wb.value(grid.wb.active, c, row) !== 'number') continue;
         const style = grid.wb.styleOf(cell);
-        ctx.font = `${style?.i ? 'italic ' : ''}${style?.b ? 'bold ' : ''}13px "Segoe UI", Arial, Helvetica, sans-serif`;
-        need = Math.max(need, ctx.measureText(grid.wb.display(grid.wb.active, c, row)).width + 10);
+        ctx.font = fontFor(style, 1);
+        need = Math.max(need, ctx.measureText(grid.wb.display(grid.wb.active, c, row)).width + 10 + (style?.ind ? style.ind * 9 : 0));
       }
       if (need > COL_W) {
         grid.wb.setSize(grid.wb.active, 'col', c, Math.min(need, 300));
@@ -1395,38 +1611,44 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
     let measured = 0;
     for (const [k, cell] of sheet.cells) {
       const style = grid.wb.styleOf(cell);
-      if (!style?.wrap || (cell.v === undefined && cell.f === undefined)) continue;
+      // Wrapped text, and text bigger than the standard size, make their rows taller (as Excel fits a row).
+      const big = (style?.fs ?? 11) > 11;
+      if (!(style?.wrap || big) || (cell.v === undefined && cell.f === undefined)) continue;
       if (++measured > MAX_FIT_CELLS) break;
       const col = colOfKey(k);
       const row = rowOfKey(k);
       const shown = grid.wb.display(s, col, row);
-      if (!shown || typeof grid.wb.value(s, col, row) === 'number') continue;
-      ctx.font = fontFor(style, 1);
-      const lines = wrapLines(ctx, shown, (sheet.colW.get(col) ?? COL_W) - 6).length;
-      need.set(row, Math.max(need.get(row) ?? 0, lines * LINE_H + 5));
+      if (!shown) continue;
+      const lh = lineFor(style);
+      if (style!.wrap && typeof grid.wb.value(s, col, row) !== 'number') {
+        ctx.font = fontFor(style, 1);
+        const lines = wrapLines(ctx, shown, (sheet.colW.get(col) ?? COL_W) - 6 - (style!.ind ? style!.ind * 9 : 0)).length;
+        need.set(row, Math.max(need.get(row) ?? 0, lines * lh + 5));
+      } else need.set(row, Math.max(need.get(row) ?? 0, Math.ceil(sizePx(style?.fs) * 1.35 + 4)));
     }
     for (const row of [...sheet.rowFit]) if (!need.has(row)) grid.wb.fitRow(s, row, null);
     for (const [row, height] of need) grid.wb.fitRow(s, row, height > ROW_H ? height : null);
     redraw();
   }
 
-  function autoFit(axis: 'col' | 'row', index: number): void {
+  function autoFit(axis: 'col' | 'row', index: number, quiet = false): void {
     if (axis === 'row') {
       // Double-clicking a row's edge: back to fitting its text (or the standard height).
       grid.wb.setSize(grid.wb.active, 'row', index, null);
       fitRows();
     } else {
       const ctx = canvas.getContext('2d')!;
-      ctx.font = FONT;
       let widest = 40;
       for (const [k, cell] of grid.wb.sheets[grid.wb.active].cells) {
         if (k % MAX_COLS !== index || (cell.v === undefined && cell.f === undefined)) continue;
-        widest = Math.max(widest, ctx.measureText(grid.wb.display(grid.wb.active, index, Math.floor(k / MAX_COLS))).width + 12);
+        const style = grid.wb.styleOf(cell);
+        ctx.font = fontFor(style, 1);
+        widest = Math.max(widest, ctx.measureText(grid.wb.display(grid.wb.active, index, Math.floor(k / MAX_COLS))).width + 12 + (style?.ind ? style.ind * 9 : 0));
       }
-      grid.wb.setSize(grid.wb.active, 'col', index, Math.min(widest, 600));
+      grid.wb.setSize(grid.wb.active, 'col', index, Math.max(quiet ? 64 : 0, Math.min(widest, 600)));
     }
     redraw();
-    grid.onChange();
+    if (!quiet) grid.onChange();
   }
 
   function beginFill(event: PointerEvent): void {
@@ -1474,6 +1696,11 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
   on(scroller, 'scroll', () => {
     if (state.editing) placeEditor();
     redraw();
+  }, signal);
+  on(scroller, 'pointerleave', () => {
+    if (!hoverNote) return;
+    hoverNote = null;
+    placeNotes();
   }, signal);
   new ResizeObserver(() => redraw()).observe(scroller);
 
@@ -1526,7 +1753,7 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
     const typing = key.length === 1 && !ctrl && !event.altKey;
     if (key === 'Tab') state.tabCol = state.tabCol ?? col;
     else if (key !== 'Enter' && !typing && key !== 'Shift' && key !== 'Control' && key !== 'Alt') state.tabCol = null;
-    if (key === 'ArrowDown' && event.altKey && activeList()) {
+    if (key === 'ArrowDown' && event.altKey && listSource()) {
       openList();
     } else if (arrow[key]) {
       const [dc, dr] = arrow[key];
@@ -1552,6 +1779,7 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
       moveCursor(Math.max(0, b.cols - 1), Math.max(0, b.rows - 1), event.shiftKey);
     } else if (key === 'PageDown') moveCursor(col, row + page, event.shiftKey);
     else if (key === 'PageUp') moveCursor(col, row - page, event.shiftKey);
+    else if (key === 'F2' && event.shiftKey) grid.onNote(col, row);
     else if (key === 'F2') beginEdit(null);
     else if (key === 'Delete') deleteContents();
     else if (key === 'Backspace') beginEdit('');
@@ -1701,6 +1929,26 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
     pasteText(state.clip?.text ?? null);
   }
 
+  function pasteSpecial(what: 'all' | 'values' | 'formulas' | 'formats' | 'valuesFormats', transpose: boolean): void {
+    const clip = state.clip;
+    if (!clip) {
+      void shell.dialogs.alert('Nothing copied in this window yet', 'Copy cells here first (Ctrl+C), then choose how to paste them. Text from other programs is pasted with Ctrl+V.');
+      return;
+    }
+    const target = { col: sel().c0, row: sel().r0 };
+    try {
+      grid.wb.copyBlock(grid.wb.active, clip.range, target, { fromSheet: clip.sheet, what, transpose, cut: clip.cut && what === 'all' && !transpose });
+      if (clip.cut && what === 'all' && !transpose) state.clip = null;
+      const w = clip.range.c1 - clip.range.c0 + 1;
+      const h = clip.range.r1 - clip.range.r0 + 1;
+      const [ow, oh] = transpose ? [h, w] : [w, h];
+      select({ c0: target.col, r0: target.row, c1: target.col + ow - 1, r1: target.row + oh - 1 }, target);
+      afterEdit();
+    } catch (error) {
+      void report(error);
+    }
+  }
+
   function pasteText(text: string | null): void {
     const target = { col: sel().c0, row: sel().r0 };
     try {
@@ -1759,6 +2007,15 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
       { label: 'Cut', hint: 'Ctrl+X', action: () => copy(true) },
       { label: 'Copy', hint: 'Ctrl+C', action: () => copy(false) },
       { label: 'Paste', hint: 'Ctrl+V', disabled: !state.clip, action: () => paste() },
+      {
+        label: 'Paste special', disabled: !state.clip, submenu: [
+          { label: 'Values', hint: 'Ctrl+Shift+V', action: () => pasteSpecial('values', false) },
+          { label: 'Formulas', action: () => pasteSpecial('formulas', false) },
+          { label: 'Formatting', action: () => pasteSpecial('formats', false) },
+          { label: 'Values and formatting', action: () => pasteSpecial('valuesFormats', false) },
+          { label: 'Transpose', action: () => pasteSpecial('all', true) },
+        ],
+      },
       { separator: true },
       { label: 'Insert row', action: () => shift('row', 1) },
       { label: 'Insert column', action: () => shift('col', 1) },
@@ -1771,6 +2028,17 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
       { label: 'Unhide columns', action: () => hide('col', false) },
       { separator: true },
       { label: 'Clear contents', hint: 'Del', action: () => deleteContents() },
+      { label: 'Format cells...', hint: 'Ctrl+1', action: () => grid.onFormatCells() },
+      { separator: true },
+      ...(grid.wb.sheets[grid.wb.active].cells.get(keyOf(state.cursor.col, state.cursor.row))?.n !== undefined
+        ? [
+          { label: 'Edit note', hint: 'Shift+F2', action: () => grid.onNote(state.cursor.col, state.cursor.row) },
+          { label: 'Delete note', action: () => {
+            grid.wb.setNote(grid.wb.active, state.cursor.col, state.cursor.row, null);
+            afterEdit();
+          } },
+        ]
+        : [{ label: 'New note', hint: 'Shift+F2', action: () => grid.onNote(state.cursor.col, state.cursor.row) }]),
     ];
     return menu;
   });
