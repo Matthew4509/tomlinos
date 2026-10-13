@@ -46,7 +46,7 @@ test('TEXTSPLIT cuts a pasted block into lines, and INDEX picks one', () => {
   assert.equal(calc('=INDEX(TEXTSPLIT(A1,,CHAR(10)),3)', cells), 'Springfield 3000');
   assert.equal(calc('=ROWS(TEXTSPLIT(A1,,CHAR(10)))', cells), '4');
   assert.equal(calc('=COLUMNS(TEXTSPLIT("a,b,c",","))'), '3');
-  // On its own (no spill yet) the cell shows the first piece.
+  // On its own the formula's cell shows the first piece (the others fill the cells beside it: sheet-spill.test.ts).
   assert.equal(calc('=TEXTSPLIT("a,b,c",",")'), 'a');
   // Rows and columns at once; a short row is padded with #N/A, or with what pad_with says.
   assert.equal(calc('=INDEX(TEXTSPLIT("1,2,3;4,5,6",",",";"),2,3)'), '6');
@@ -133,7 +133,7 @@ test('XLOOKUP and XMATCH: exact, next smaller/larger, wildcards, from the end, n
   assert.equal(calc('=XLOOKUP(35,C1:C3,A1:A3,,1)', t), '#N/A');
   assert.equal(calc('=XLOOKUP("1",B1:B4,A1:A4)', t), '#N/A');
   assert.equal(calc('=XLOOKUP("apple",A1:A4,B1:B3)', t), '#VALUE!');
-  // A row comes back whole; on its own the cell shows its first value, INDEX picks the others.
+  // A row comes back whole (it fills the cells beside the formula); INDEX picks one of them.
   assert.equal(calc('=INDEX(XLOOKUP("cherry",A1:A3,B1:C3),2)', t), '30');
   // Across a row.
   assert.equal(calc('=XLOOKUP("b",A1:C1,A2:C2)', { A1: 'a', B1: 'b', C1: 'c', A2: 'x', B2: 'y', C2: 'z' }), 'y');

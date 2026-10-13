@@ -6,7 +6,9 @@ import { clamp } from '../../core/dom.ts';
 import { bindContextMenu, type MenuItem } from '../../shell/menu.ts';
 import type { Shell } from '../../shell/types.ts';
 import { addressOf, colName, MAX_COLS, MAX_ROWS, SyntaxProblem } from './refs.ts';
+import { cfLook, type CfLook } from './condfmt.ts';
 import { CellError, type CellStyle } from './values.ts';
+import { describeValidation, listItems, passes, validationAt, type Validation } from './validate.ts';
 import { colOfKey, keyOf, parseDelimited, rowOfKey, type Range, type Workbook } from './workbook.ts';
 
 const HEAD_W = 46;
@@ -54,6 +56,11 @@ const GRID = '#d9d9d9';
 const HEAD_BG = '#f0f0f0';
 const HEAD_SEL = '#d3e3d8';
 const ACCENT = '#1e7a45';
+/** The thin line round the cells a list formula fills, while one of them is selected (blue, as in Excel). */
+const SPILL_EDGE = '#2f6fd0';
+/** The line along frozen rows and columns, and the mark of a filtered column. */
+const FREEZE_EDGE = '#8c8c8c';
+const FILTERED = '#2f6fd0';
 const EDGE = 5;
 
 interface Clip {
@@ -88,6 +95,25 @@ export interface Grid {
   widen(r: Range): void;
   /** Sizes rows to their wrapped text (rows sized by hand are left alone). */
   fitRows(): void;
+  /** Hides (or shows again) the selected rows or columns. */
+  hide(axis: 'row' | 'col', hidden: boolean): void;
+  /** Called when a filter header's ▾ button is pressed (column, and the screen point under the button). */
+  onFilterButton: (col: number, x: number, y: number) => void;
+  /** Where a cell is drawn, in pixels from the top-left of the grid (its merged block's box for a merged cell). */
+  cellBox(col: number, row: number): { x: number; y: number; w: number; h: number };
+  /** The cell under a point (pixels from the top-left of the grid), and how far into it the point is (unzoomed pixels). */
+  cellAt(x: number, y: number): { col: number; row: number; dx: number; dy: number };
+  /** Where the part that scrolls begins (the frozen rows and columns, and the headings, are above and left of it). */
+  scrollEdge(): { x: number; y: number };
+  scrollBy(dx: number, dy: number): void;
+  /** The size of the part the cells are drawn in (without its scroll bars). */
+  viewSize(): { w: number; h: number };
+  /** Called after every redraw (scrolling, zooming, a change). */
+  onPaint: () => void;
+  /** Opens the drop-down list of the active cell's validation rule, if it has one. */
+  openList(): void;
+  /** Where printed pages end, drawn as dashed lines (the first column and row of each new page); null for none. */
+  breaks: { cols: number[]; rows: number[] } | null;
   onChange: () => void;
   onSelect: () => void;
   onEdit: (editing: boolean) => void;
@@ -102,7 +128,10 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
   const cellInput = h('textarea', { class: 'grid-editor', 'aria-label': 'Cell contents', spellcheck: 'false', autocomplete: 'off', rows: 1, wrap: 'off' });
   css(cellInput, { display: 'none' });
   const live = h('div', { class: 'visually-hidden', role: 'status', 'aria-live': 'polite' });
-  const root = h('div', { class: 'grid-wrap' }, canvas, scroller, cellInput, live);
+  // A validation rule's input message, shown beside the active cell.
+  const prompt = h('div', { class: 'dv-prompt', role: 'note', hidden: true });
+  const root = h('div', { class: 'grid-wrap' }, canvas, scroller, cellInput, prompt, live);
+  let listBox: HTMLElement | null = null;
   const formulaInput = h('textarea', { class: 'formula-input', 'aria-label': 'Formula bar', spellcheck: 'false', autocomplete: 'off', rows: 1, wrap: 'off' });
   const nameBox = h('input', { type: 'text', class: 'name-box', 'aria-label': 'Cell address', spellcheck: 'false', autocomplete: 'off', value: 'A1' });
 
@@ -121,6 +150,8 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
     /** Where Tab-ing along a row began: Enter returns there, as it does in Excel. */
     tabCol: null as number | null,
     pointAt: null as { start: number; end: number } | null,
+    /** The person said "Yes, keep it" to a validation warning: the next commit is not checked again. */
+    allowOnce: false,
     perSheet: new Map<number, { anchor: { col: number; row: number }; cursor: { col: number; row: number } }>(),
   };
 
@@ -151,6 +182,27 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
     setActiveSheet,
     widen: () => {},
     fitRows: () => fitRows(),
+    hide: (axis, hidden) => hide(axis, hidden),
+    onFilterButton: () => {},
+    cellBox: (col, row) => cellRect(col, row),
+    cellAt: (x, y) => {
+      const p = hit(x, y);
+      const b = rect(p.col, p.row, p.col, p.row);
+      return { col: p.col, row: p.row, dx: Math.max(0, (x - b.x) / state.zoom), dy: Math.max(0, (y - b.y) / state.zoom) };
+    },
+    scrollEdge: () => {
+      geometry();
+      const f = frozen();
+      return { x: (HEAD_W + f.fw) * state.zoom, y: (HEAD_H + f.fh) * state.zoom };
+    },
+    scrollBy: (dx, dy) => {
+      scroller.scrollLeft += dx;
+      scroller.scrollTop += dy;
+    },
+    viewSize: () => ({ w: scroller.clientWidth, h: scroller.clientHeight }),
+    onPaint: () => {},
+    openList: () => openList(),
+    breaks: null,
     onChange: () => {},
     onSelect: () => {},
     onEdit: () => {},
@@ -163,9 +215,10 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
     state.geomVersion = grid.wb.version;
     const sheet = grid.wb.sheets[grid.wb.active];
     const cols = [0];
-    for (let c = 0; c < MAX_COLS; c++) cols.push(cols[c] + (sheet.colW.get(c) ?? COL_W));
+    // A hidden row or column takes no room.
+    for (let c = 0; c < MAX_COLS; c++) cols.push(cols[c] + (sheet.hiddenCols.has(c) ? 0 : sheet.colW.get(c) ?? COL_W));
     const rows = [0];
-    for (let r = 0; r < MAX_ROWS; r++) rows.push(rows[r] + (sheet.rowH.get(r) ?? ROW_H));
+    for (let r = 0; r < MAX_ROWS; r++) rows.push(rows[r] + (sheet.hiddenRows.has(r) ? 0 : sheet.rowH.get(r) ?? ROW_H));
     state.colPos = cols;
     state.rowPos = rows;
     const z = state.zoom;
@@ -183,55 +236,88 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
     return lo;
   };
 
+  /** The frozen part: how many columns and rows, and how wide and tall it is (unscaled). */
+  function frozen(): { fc: number; fr: number; fw: number; fh: number } {
+    const f = grid.wb.sheets[grid.wb.active].freeze;
+    return { fc: f.cols, fr: f.rows, fw: state.colPos[f.cols] ?? 0, fh: state.rowPos[f.rows] ?? 0 };
+  }
+
+  // Where a column or row starts and ends on screen (scaled pixels): frozen ones never scroll.
+  const colLeft = (c: number): number => (HEAD_W + state.colPos[c] - (c < frozen().fc ? 0 : scroller.scrollLeft / state.zoom)) * state.zoom;
+  const colRight = (c: number): number => (HEAD_W + state.colPos[c + 1] - (c < frozen().fc ? 0 : scroller.scrollLeft / state.zoom)) * state.zoom;
+  const rowTop = (r: number): number => (HEAD_H + state.rowPos[r] - (r < frozen().fr ? 0 : scroller.scrollTop / state.zoom)) * state.zoom;
+  const rowBottom = (r: number): number => (HEAD_H + state.rowPos[r + 1] - (r < frozen().fr ? 0 : scroller.scrollTop / state.zoom)) * state.zoom;
+
   /** Which cell (or header) is under a point given in pixels from the top-left of the grid area. */
   function hit(x: number, y: number): { col: number; row: number; where: 'cell' | 'colhead' | 'rowhead' | 'corner' } {
     geometry();
     const z = state.zoom;
     const lx = x / z;
     const ly = y / z;
-    const cx = lx - HEAD_W + scroller.scrollLeft / z;
-    const cy = ly - HEAD_H + scroller.scrollTop / z;
-    const col = clamp(search(state.colPos, Math.max(0, cx)), 0, MAX_COLS - 1);
-    const row = clamp(search(state.rowPos, Math.max(0, cy)), 0, MAX_ROWS - 1);
+    const { fc, fr, fw, fh } = frozen();
+    const cx = Math.max(0, lx - HEAD_W);
+    const cy = Math.max(0, ly - HEAD_H);
+    const col = clamp(fc && cx < fw ? Math.min(fc - 1, search(state.colPos, cx)) : search(state.colPos, cx + scroller.scrollLeft / z), 0, MAX_COLS - 1);
+    const row = clamp(fr && cy < fh ? Math.min(fr - 1, search(state.rowPos, cy)) : search(state.rowPos, cy + scroller.scrollTop / z), 0, MAX_ROWS - 1);
     if (lx < HEAD_W && ly < HEAD_H) return { col, row, where: 'corner' };
     if (ly < HEAD_H) return { col, row, where: 'colhead' };
     if (lx < HEAD_W) return { col, row, where: 'rowhead' };
     return { col, row, where: 'cell' };
   }
 
-  /** Screen rectangle (unscaled pixels) of a cell block. */
+  /** Screen rectangle (scaled pixels) of a cell block. */
   function rect(c0: number, r0: number, c1: number, r1: number): { x: number; y: number; w: number; h: number } {
     geometry();
-    const z = state.zoom;
-    return {
-      x: (HEAD_W + state.colPos[c0]) * z - scroller.scrollLeft,
-      y: (HEAD_H + state.rowPos[r0]) * z - scroller.scrollTop,
-      w: (state.colPos[c1 + 1] - state.colPos[c0]) * z,
-      h: (state.rowPos[r1 + 1] - state.rowPos[r0]) * z,
-    };
+    const x = colLeft(c0);
+    const y = rowTop(r0);
+    return { x, y, w: colRight(c1) - x, h: rowBottom(r1) - y };
+  }
+
+  /** The cell's rectangle, or its merged block's. */
+  function cellRect(col: number, row: number): { x: number; y: number; w: number; h: number } {
+    const m = grid.wb.mergeAt(grid.wb.active, col, row);
+    return m ? rect(m.c0, m.r0, m.c1, m.r1) : rect(col, row, col, row);
   }
 
   function reveal(col: number, row: number): void {
     geometry();
     const z = state.zoom;
-    const box = rect(col, row, col, row);
+    const { fc, fr, fw, fh } = frozen();
     const vw = scroller.clientWidth;
     const vh = scroller.clientHeight;
-    if (box.x < HEAD_W * z) scroller.scrollLeft += box.x - HEAD_W * z;
-    else if (box.x + box.w > vw) scroller.scrollLeft += Math.min(box.x + box.w - vw, box.x - HEAD_W * z);
-    if (box.y < HEAD_H * z) scroller.scrollTop += box.y - HEAD_H * z;
-    else if (box.y + box.h > vh) scroller.scrollTop += Math.min(box.y + box.h - vh, box.y - HEAD_H * z);
+    // Frozen cells are always in view; the others are brought out from under the frozen part as well as from the edges.
+    if (col >= fc) {
+      const edge = (HEAD_W + fw) * z;
+      const x = colLeft(col);
+      const x2 = colRight(col);
+      if (x < edge) scroller.scrollLeft += x - edge;
+      else if (x2 > vw) scroller.scrollLeft += Math.min(x2 - vw, x - edge);
+    }
+    if (row >= fr) {
+      const edge = (HEAD_H + fh) * z;
+      const y = rowTop(row);
+      const y2 = rowBottom(row);
+      if (y < edge) scroller.scrollTop += y - edge;
+      else if (y2 > vh) scroller.scrollTop += Math.min(y2 - vh, y - edge);
+    }
   }
 
   // ---- Selection -------------------------------------------------------------------------------------------------
 
   function sel(): Range {
-    return {
+    // A selection that touches merged cells takes in the whole of each block, as in Excel.
+    return grid.wb.growToMerges(grid.wb.active, {
       c0: Math.min(state.anchor.col, state.cursor.col),
       c1: Math.max(state.anchor.col, state.cursor.col),
       r0: Math.min(state.anchor.row, state.cursor.row),
       r1: Math.max(state.anchor.row, state.cursor.row),
-    };
+    });
+  }
+
+  /** A cell inside a merged block stands for the block: its top-left cell. */
+  function topLeft(col: number, row: number): { col: number; row: number } {
+    const m = grid.wb.mergeAt(grid.wb.active, col, row);
+    return m ? { col: m.c0, row: m.r0 } : { col, row };
   }
 
   function select(r: Range, active?: { col: number; row: number }): void {
@@ -243,18 +329,36 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
   }
 
   function moveCursor(col: number, row: number, extend: boolean): void {
-    const c = clamp(col, 0, MAX_COLS - 1);
-    const r = clamp(row, 0, MAX_ROWS - 1);
+    let c = clamp(col, 0, MAX_COLS - 1);
+    let r = clamp(row, 0, MAX_ROWS - 1);
+    if (!extend) ({ col: c, row: r } = topLeft(c, r));
     state.cursor = { col: c, row: r };
     if (!extend) state.anchor = { col: c, row: r };
     reveal(c, r);
     changed();
   }
 
+  /**
+   * One step from the active cell (an arrow key, Enter, Tab): past the far side of a merged block, and over hidden rows
+   * and columns. Stays put at the edge of the sheet.
+   */
+  function step(dc: number, dr: number, from = state.cursor): { col: number; row: number } {
+    const sheet = grid.wb.sheets[grid.wb.active];
+    const m = grid.wb.mergeAt(grid.wb.active, from.col, from.row);
+    let col = dc > 0 ? (m ? m.c1 : from.col) + 1 : dc < 0 ? (m ? m.c0 : from.col) - 1 : from.col;
+    let row = dr > 0 ? (m ? m.r1 : from.row) + 1 : dr < 0 ? (m ? m.r0 : from.row) - 1 : from.row;
+    while (dc && col >= 0 && col < MAX_COLS && sheet.hiddenCols.has(col)) col += dc;
+    while (dr && row >= 0 && row < MAX_ROWS && sheet.hiddenRows.has(row)) row += dr;
+    if (col < 0 || col >= MAX_COLS || row < 0 || row >= MAX_ROWS) return { ...from };
+    return { col, row };
+  }
+
   function changed(): void {
     nameBox.value = sel().c0 === sel().c1 && sel().r0 === sel().r1 ? addressOf(state.cursor.col, state.cursor.row) : `${addressOf(sel().c0, sel().r0)}:${addressOf(sel().c1, sel().r1)}`;
     if (!state.editing) {
       formulaInput.value = grid.wb.editText(grid.wb.active, state.cursor.col, state.cursor.row);
+      // A cell a list fills shows the list's formula, greyed (it is the formula's cell that holds it).
+      formulaInput.placeholder = formulaInput.value === '' ? grid.wb.spillFormula(grid.wb.active, state.cursor.col, state.cursor.row) ?? '' : '';
       sizeBar();
     }
     const v = grid.wb.value(grid.wb.active, state.cursor.col, state.cursor.row);
@@ -316,235 +420,492 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
 
     const left = scroller.scrollLeft / z;
     const top = scroller.scrollTop / z;
-    const c0 = search(state.colPos, left);
-    const r0 = search(state.rowPos, top);
-    let c1 = c0;
-    while (c1 < MAX_COLS - 1 && state.colPos[c1] - left < w / z - HEAD_W) c1++;
-    let r1 = r0;
-    while (r1 < MAX_ROWS - 1 && state.rowPos[r1] - top < vh / z - HEAD_H) r1++;
-    const X = (c: number) => (HEAD_W + state.colPos[c] - left) * z;
-    const Y = (r: number) => (HEAD_H + state.rowPos[r] - top) * z;
+    const { fc, fr, fw, fh } = frozen();
+    const X = colLeft;
+    const XR = colRight;
+    const Y = rowTop;
+    const YB = rowBottom;
+    // The scrolling part starts after the frozen columns and rows.
+    let cs0 = Math.max(fc, search(state.colPos, fw + left));
+    let cs1 = cs0;
+    while (cs1 < MAX_COLS - 1 && X(cs1 + 1) < w) cs1++;
+    let rs0 = Math.max(fr, search(state.rowPos, fh + top));
+    let rs1 = rs0;
+    while (rs1 < MAX_ROWS - 1 && Y(rs1 + 1) < vh) rs1++;
+    cs0 = Math.min(cs0, MAX_COLS - 1);
+    rs0 = Math.min(rs0, MAX_ROWS - 1);
+    const fx = (HEAD_W + fw) * z;
+    const fy = (HEAD_H + fh) * z;
+    type Pane = { c0: number; c1: number; r0: number; r1: number; x: number; y: number; x2: number; y2: number };
+    const panes: Pane[] = [];
+    const colParts: Array<[number, number, number, number]> = [];
+    const rowParts: Array<[number, number, number, number]> = [];
+    if (fc > 0) colParts.push([0, fc - 1, HEAD_W * z, fx]);
+    colParts.push([cs0, cs1, fx, w]);
+    if (fr > 0) rowParts.push([0, fr - 1, HEAD_H * z, fy]);
+    rowParts.push([rs0, rs1, fy, vh]);
+    for (const [r0, r1, y, y2] of rowParts) for (const [c0, c1, x, x2] of colParts) panes.push({ c0, c1, r0, r1, x, y, x2, y2 });
 
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(HEAD_W * z, HEAD_H * z, w, vh);
-    ctx.clip();
-
-    // Cell fills.
     const s = sel();
-    for (let r = r0; r <= r1; r++) {
-      for (let c = c0; c <= c1; c++) {
-        const style = wbk.styleOf(sheet.cells.get(keyOf(c, r)));
-        if (!style?.fill) continue;
-        ctx.fillStyle = style.fill;
-        ctx.fillRect(X(c), Y(r), X(c + 1) - X(c), Y(r + 1) - Y(r));
+    const filter = sheet.filter;
+    const merged = (c: number, r: number) => (sheet.merges.length ? wbk.mergeAt(sheetIndex, c, r) : null);
+    // Conditional formatting: worked out once per cell drawn.
+    const looks = new Map<number, CfLook | null>();
+    const lookAt = (c: number, r: number): CfLook | null => {
+      if (!sheet.cf.length) return null;
+      const k = keyOf(c, r);
+      let got = looks.get(k);
+      if (got === undefined) {
+        got = cfLook(wbk, sheetIndex, c, r);
+        looks.set(k, got);
       }
-    }
+      return got;
+    };
+    const visible = (p: Pane) => sheet.merges.filter(m => m.c0 <= p.c1 && m.c1 >= p.c0 && m.r0 <= p.r1 && m.r1 >= p.r0);
 
-    // Grid lines.
-    ctx.strokeStyle = GRID;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (let c = c0; c <= c1 + 1; c++) {
-      const x = Math.round(X(c)) + 0.5;
-      ctx.moveTo(x, HEAD_H * z);
-      ctx.lineTo(x, vh);
-    }
-    for (let r = r0; r <= r1 + 1; r++) {
-      const y = Math.round(Y(r)) + 0.5;
-      ctx.moveTo(HEAD_W * z, y);
-      ctx.lineTo(w, y);
-    }
-    ctx.stroke();
-
-    // Cell borders.
-    ctx.strokeStyle = '#000';
-    ctx.beginPath();
-    for (let r = r0; r <= r1; r++) {
-      for (let c = c0; c <= c1; c++) {
-        const style = wbk.styleOf(sheet.cells.get(keyOf(c, r)));
-        if (!style || !(style.bt || style.bb || style.bl || style.br)) continue;
-        const x = Math.round(X(c)) + 0.5;
-        const y = Math.round(Y(r)) + 0.5;
-        const x2 = Math.round(X(c + 1)) + 0.5;
-        const y2 = Math.round(Y(r + 1)) + 0.5;
-        if (style.bt) { ctx.moveTo(x, y); ctx.lineTo(x2, y); }
-        if (style.bb) { ctx.moveTo(x, y2); ctx.lineTo(x2, y2); }
-        if (style.bl) { ctx.moveTo(x, y); ctx.lineTo(x, y2); }
-        if (style.br) { ctx.moveTo(x2, y); ctx.lineTo(x2, y2); }
-      }
-    }
-    ctx.stroke();
-
-    // Text.
-    for (let r = r0; r <= r1; r++) {
-      for (let c = c0; c <= c1; c++) {
-        const cell = sheet.cells.get(keyOf(c, r));
-        const style = wbk.styleOf(cell);
-        const x = X(c);
-        const y = Y(r);
-        const cw = X(c + 1) - x;
-        const ch = Y(r + 1) - y;
-        if (!cell || (cell.v === undefined && cell.f === undefined)) continue;
-        const shown = wbk.display(sheetIndex, c, r);
-        if (shown === '') continue;
-        const v = wbk.value(sheetIndex, c, r);
-        ctx.font = fontFor(style, z);
-        ctx.fillStyle = v instanceof CellError ? '#c0392b' : (style?.color ?? '#000');
-        const isNum = typeof v === 'number';
-        const align = style?.al ?? (isNum ? 'r' : v instanceof CellError || typeof v === 'boolean' ? 'c' : 'l');
-        const pad = 3 * z;
-        if (style?.wrap && !isNum) {
-          // Wrapped: line after line inside the cell, the last line where one line of text would sit.
-          const lines = wrapLines(ctx, shown, cw - pad * 2);
-          const lh = LINE_H * z;
-          let ly = y + ch - (ROW_H * z) / 2 - lh * (lines.length - 1);
-          ctx.save();
-          ctx.beginPath();
-          ctx.rect(x, y, cw, ch);
-          ctx.clip();
-          for (const line of lines) {
-            const lw = ctx.measureText(line).width;
-            const lx = align === 'r' ? x + cw - pad - lw : align === 'c' ? x + (cw - lw) / 2 : x + pad;
-            ctx.fillText(line, lx, ly + z);
-            if (style.u) ctx.fillRect(lx, ly + 7 * z, lw, Math.max(1, z));
-            ly += lh;
-          }
-          ctx.restore();
-          continue;
-        }
-        // Not wrapped: line breaks show as spaces, on one line.
-        let text = shown.replace(/\r?\n/g, ' ');
-        let tw = ctx.measureText(text).width;
-        let clipX = x;
-        let clipW = cw;
-        if (tw > cw - pad * 2) {
-          if (isNum && style?.fmt !== 'text') {
-            text = '#'.repeat(Math.max(1, Math.floor((cw - pad * 2) / Math.max(1, ctx.measureText('#').width))));
-            tw = ctx.measureText(text).width;
-          } else if (align === 'l') {
-            // Text spills into empty cells on its right.
-            let end = c + 1;
-            let room = cw;
-            while (end <= c1 + 1 && end < MAX_COLS && !sheet.cells.get(keyOf(end, r))?.v && sheet.cells.get(keyOf(end, r))?.f === undefined && room < tw + pad * 2) {
-              room += X(end + 1) - X(end);
-              end++;
-            }
-            clipW = room;
-            ctx.fillStyle = '#fff';
-            ctx.fillRect(x + cw - 1, y + 1, room - cw, ch - 1);
-            ctx.fillStyle = v instanceof CellError ? '#c0392b' : (style?.color ?? '#000');
-          }
-        }
+    /** One cell's text (or a merged block's, drawn over the whole block). */
+    const drawText = (c: number, r: number, box: { x: number; y: number; w: number; h: number }, p: Pane, mergedBlock: boolean) => {
+      const cell = sheet.cells.get(keyOf(c, r));
+      const own = wbk.styleOf(cell);
+      const cf = lookAt(c, r);
+      const style: CellStyle | undefined = cf ? { ...own, b: cf.b ?? own?.b, i: cf.i ?? own?.i, u: cf.u ?? own?.u } : own;
+      // An empty cell may show a value from a list formula above or to the left of it.
+      if ((!cell || (cell.v === undefined && cell.f === undefined)) && !wbk.isSpilled(sheetIndex, c, r)) return;
+      const look = wbk.shown(sheetIndex, c, r);
+      const shown = look.text;
+      if (shown === '') return;
+      const { x, y, w: cw, h: ch } = box;
+      const v = wbk.value(sheetIndex, c, r);
+      // A colour from the number format ([Red] for minus amounts) wins over the cell's text colour, as in Excel.
+      const ink = v instanceof CellError ? '#c0392b' : (cf?.color ?? look.color ?? style?.color ?? '#000');
+      ctx.font = fontFor(style, z);
+      ctx.fillStyle = ink;
+      const isNum = typeof v === 'number';
+      const align = style?.al ?? (isNum ? 'r' : v instanceof CellError || typeof v === 'boolean' ? 'c' : 'l');
+      const pad = 3 * z;
+      // Room for the filter button on a header cell.
+      const button = filter && r === filter.range.r0 && c >= filter.range.c0 && c <= filter.range.c1 ? 17 * z : 0;
+      if (style?.wrap && !isNum) {
+        // Wrapped: line after line inside the cell, the last line where one line of text would sit.
+        const lines = wrapLines(ctx, shown, cw - pad * 2 - button);
+        const lh = LINE_H * z;
+        let ly = y + ch - (ROW_H * z) / 2 - lh * (lines.length - 1);
         ctx.save();
         ctx.beginPath();
-        ctx.rect(clipX, y, clipW, ch);
+        ctx.rect(x, y, cw - button, ch);
         ctx.clip();
-        const tx = align === 'r' ? x + cw - pad - tw : align === 'c' ? x + (cw - tw) / 2 : x + pad;
-        // At the bottom of a tall row (one grown for wrapped text beside it), as Excel places it.
-        const ty = y + ch - (ROW_H * z) / 2;
-        ctx.fillText(text, tx, ty + z);
-        if (style?.u) ctx.fillRect(tx, ty + 7 * z, tw, Math.max(1, z));
+        for (const line of lines) {
+          const lw = ctx.measureText(line).width;
+          const lx = align === 'r' ? x + cw - pad - button - lw : align === 'c' ? x + (cw - button - lw) / 2 : x + pad;
+          ctx.fillText(line, lx, ly + z);
+          if (style.u) ctx.fillRect(lx, ly + 7 * z, lw, Math.max(1, z));
+          ly += lh;
+        }
         ctx.restore();
-        clipX = x;
+        return;
       }
-    }
-
-    // Selection.
-    const box = rect(s.c0, s.r0, s.c1, s.r1);
-    const many = s.c1 > s.c0 || s.r1 > s.r0;
-    if (many) {
-      ctx.fillStyle = 'rgba(30, 122, 69, 0.12)';
-      ctx.fillRect(box.x, box.y, box.w, box.h);
-      const a = rect(state.cursor.col, state.cursor.row, state.cursor.col, state.cursor.row);
-      ctx.fillStyle = '#fff';
-      ctx.fillRect(a.x + 1, a.y + 1, a.w - 2, a.h - 2);
-      const v = wbk.display(sheetIndex, state.cursor.col, state.cursor.row);
-      if (v) {
-        ctx.fillStyle = '#000';
-        ctx.font = FONT.replace('13px', `${13 * z}px`);
-        ctx.fillText(v.replace(/\r?\n/g, ' '), a.x + 3 * z, a.y + a.h / 2 + z);
+      // Not wrapped: line breaks show as spaces, on one line.
+      let text = shown.replace(/\r?\n/g, ' ');
+      let tw = ctx.measureText(text).width;
+      let clipW = cw - button;
+      if (tw > cw - pad * 2 - button) {
+        if (isNum && style?.fmt !== 'text') {
+          text = '#'.repeat(Math.max(1, Math.floor((cw - pad * 2 - button) / Math.max(1, ctx.measureText('#').width))));
+          tw = ctx.measureText(text).width;
+        } else if (align === 'l' && !mergedBlock && !button) {
+          // Text runs on into empty cells on its right (not into merged ones, and not past this pane).
+          let end = c + 1;
+          let room = cw;
+          const empty = (k: number) => !sheet.cells.get(keyOf(k, r))?.v && sheet.cells.get(keyOf(k, r))?.f === undefined && !wbk.isSpilled(sheetIndex, k, r) && !merged(k, r);
+          while (end <= p.c1 + 1 && end < MAX_COLS && empty(end) && room < tw + pad * 2) {
+            room += XR(end) - X(end);
+            end++;
+          }
+          clipW = room;
+          ctx.fillStyle = '#fff';
+          ctx.fillRect(x + cw - 1, y + 1, room - cw, ch - 1);
+          ctx.fillStyle = ink;
+        }
       }
-    }
-    ctx.strokeStyle = ACCENT;
-    ctx.lineWidth = 2;
-    ctx.strokeRect(box.x + 1, box.y + 1, box.w - 2, box.h - 2);
-    ctx.fillStyle = ACCENT;
-    ctx.fillRect(box.x + box.w - 4, box.y + box.h - 4, 7, 7);
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(box.x + box.w - 3.5, box.y + box.h - 3.5, 6, 6);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(x, y, clipW, ch);
+      ctx.clip();
+      const tx = align === 'r' ? x + cw - pad - button - tw : align === 'c' ? x + (cw - button - tw) / 2 : x + pad;
+      // At the bottom of a tall row (one grown for wrapped text beside it), as Excel places it.
+      const ty = y + ch - (ROW_H * z) / 2;
+      ctx.fillText(text, tx, ty + z);
+      if (style?.u) ctx.fillRect(tx, ty + 7 * z, tw, Math.max(1, z));
+      ctx.restore();
+    };
 
-    if (state.fillTo) {
-      const f = rect(state.fillTo.c0, state.fillTo.r0, state.fillTo.c1, state.fillTo.r1);
-      ctx.setLineDash([4, 3]);
-      ctx.strokeStyle = '#000';
+    /** A border side: thin, medium or thick (wider lines), or double (two thin lines). */
+    const side = (line: CellStyle['bt'], x1: number, y1: number, x2: number, y2: number, colour: string) => {
+      if (!line) return;
+      ctx.strokeStyle = colour;
+      if (line === 'double') {
+        ctx.lineWidth = 1;
+        const dx = y1 === y2 ? 0 : 1.5;
+        const dy = y1 === y2 ? 1.5 : 0;
+        ctx.beginPath();
+        ctx.moveTo(x1 - dx, y1 - dy); ctx.lineTo(x2 - dx, y2 - dy);
+        ctx.moveTo(x1 + dx, y1 + dy); ctx.lineTo(x2 + dx, y2 + dy);
+        ctx.stroke();
+        return;
+      }
+      ctx.lineWidth = line === 'thick' ? 3 : line === 'medium' ? 2 : 1;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+    };
+
+    for (const p of panes) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(p.x, p.y, p.x2 - p.x, p.y2 - p.y);
+      ctx.clip();
+      const blocks = visible(p);
+
+      // Cell fills (a merged block is filled as one, below).
+      for (let r = p.r0; r <= p.r1; r++) {
+        if (sheet.hiddenRows.has(r)) continue;
+        for (let c = p.c0; c <= p.c1; c++) {
+          const fill = lookAt(c, r)?.fill ?? wbk.styleOf(sheet.cells.get(keyOf(c, r)))?.fill;
+          if (!fill || (blocks.length && merged(c, r))) continue;
+          ctx.fillStyle = fill;
+          ctx.fillRect(X(c), Y(r), XR(c) - X(c), YB(r) - Y(r));
+        }
+      }
+
+      // Grid lines.
+      ctx.strokeStyle = GRID;
       ctx.lineWidth = 1;
-      ctx.strokeRect(f.x + 0.5, f.y + 0.5, f.w - 1, f.h - 1);
-      ctx.setLineDash([]);
-    }
-    if (state.clip && state.clip.sheet === sheetIndex) {
-      const cb = rect(state.clip.range.c0, state.clip.range.r0, state.clip.range.c1, state.clip.range.r1);
-      ctx.setLineDash([5, 4]);
-      ctx.strokeStyle = ACCENT;
-      ctx.lineWidth = 1.5;
-      ctx.strokeRect(cb.x + 0.5, cb.y + 0.5, cb.w - 1, cb.h - 1);
-      ctx.setLineDash([]);
-    }
-    ctx.restore();
+      ctx.beginPath();
+      for (let c = p.c0; c <= p.c1 + 1 && c <= MAX_COLS; c++) {
+        const x = Math.round(c > p.c1 ? XR(p.c1) : X(c)) + 0.5;
+        ctx.moveTo(x, p.y);
+        ctx.lineTo(x, p.y2);
+      }
+      for (let r = p.r0; r <= p.r1 + 1 && r <= MAX_ROWS; r++) {
+        const y = Math.round(r > p.r1 ? YB(p.r1) : Y(r)) + 0.5;
+        ctx.moveTo(p.x, y);
+        ctx.lineTo(p.x2, y);
+      }
+      ctx.stroke();
 
-    // Headers (drawn last so scrolled cells never show through).
+      // A merged block is one cell: its inside lines are covered with its fill (or white).
+      for (const m of blocks) {
+        const b = rect(m.c0, m.r0, m.c1, m.r1);
+        ctx.fillStyle = lookAt(m.c0, m.r0)?.fill ?? wbk.styleOf(sheet.cells.get(keyOf(m.c0, m.r0)))?.fill ?? '#fff';
+        ctx.fillRect(Math.round(b.x) + 1, Math.round(b.y) + 1, Math.round(b.x + b.w) - Math.round(b.x) - 1, Math.round(b.y + b.h) - Math.round(b.y) - 1);
+      }
+
+      // Data bars (conditional formatting): a bar from the left, as long as the value is high, under the text.
+      if (sheet.cf.length) {
+        for (let r = p.r0; r <= p.r1; r++) {
+          if (sheet.hiddenRows.has(r)) continue;
+          for (let c = p.c0; c <= p.c1; c++) {
+            const bar = lookAt(c, r)?.bar;
+            if (!bar || bar.len <= 0) continue;
+            const x = X(c);
+            const y = Y(r);
+            const bw = (XR(c) - x - 4) * bar.len;
+            ctx.fillStyle = bar.colour;
+            ctx.globalAlpha = 0.75;
+            ctx.fillRect(x + 2, y + 2, bw, YB(r) - y - 4);
+            ctx.globalAlpha = 1;
+          }
+        }
+      }
+
+      // Cell borders (inside a merged block only its outside edges show).
+      for (let r = p.r0; r <= p.r1; r++) {
+        if (sheet.hiddenRows.has(r)) continue;
+        for (let c = p.c0; c <= p.c1; c++) {
+          const style = wbk.styleOf(sheet.cells.get(keyOf(c, r)));
+          if (!style || !(style.bt || style.bb || style.bl || style.br)) continue;
+          const m = blocks.length ? merged(c, r) : null;
+          const x = Math.round(X(c)) + 0.5;
+          const y = Math.round(Y(r)) + 0.5;
+          const x2 = Math.round(XR(c)) + 0.5;
+          const y2 = Math.round(YB(r)) + 0.5;
+          const colour = style.bc ?? '#000';
+          if (!m || r === m.r0) side(style.bt, x, y, x2, y, colour);
+          if (!m || r === m.r1) side(style.bb, x, y2, x2, y2, colour);
+          if (!m || c === m.c0) side(style.bl, x, y, x, y2, colour);
+          if (!m || c === m.c1) side(style.br, x2, y, x2, y2, colour);
+        }
+      }
+
+      // Text.
+      for (let r = p.r0; r <= p.r1; r++) {
+        if (sheet.hiddenRows.has(r)) continue;
+        for (let c = p.c0; c <= p.c1; c++) {
+          if (sheet.hiddenCols.has(c) || (blocks.length && merged(c, r))) continue;
+          drawText(c, r, { x: X(c), y: Y(r), w: XR(c) - X(c), h: YB(r) - Y(r) }, p, false);
+        }
+      }
+      // A merged block's text, centred over the whole block, even when its top-left cell is scrolled out of view.
+      for (const m of blocks) drawText(m.c0, m.r0, rect(m.c0, m.r0, m.c1, m.r1), p, true);
+
+      // The filter's buttons on its header row: an arrow, or a funnel on a column that is filtered (shape, not colour).
+      if (filter && filter.range.r0 >= p.r0 && filter.range.r0 <= p.r1 && !sheet.hiddenRows.has(filter.range.r0)) {
+        for (let c = Math.max(filter.range.c0, p.c0); c <= Math.min(filter.range.c1, p.c1); c++) {
+          if (sheet.hiddenCols.has(c)) continue;
+          const b = filterButton(c);
+          ctx.fillStyle = '#fff';
+          ctx.fillRect(b.x, b.y, b.w, b.h);
+          ctx.strokeStyle = '#8a8a8a';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(Math.round(b.x) + 0.5, Math.round(b.y) + 0.5, Math.round(b.w) - 1, Math.round(b.h) - 1);
+          ctx.fillStyle = filter.cols.has(c) ? FILTERED : '#444';
+          const cx = b.x + b.w / 2;
+          const cy = b.y + b.h / 2;
+          const u = z;
+          ctx.beginPath();
+          if (filter.cols.has(c)) {
+            ctx.moveTo(cx - 5 * u, cy - 4 * u); ctx.lineTo(cx + 5 * u, cy - 4 * u); ctx.lineTo(cx + 1 * u, cy);
+            ctx.lineTo(cx + 1 * u, cy + 5 * u); ctx.lineTo(cx - 1 * u, cy + 4 * u); ctx.lineTo(cx - 1 * u, cy);
+          } else {
+            ctx.moveTo(cx - 4 * u, cy - 2 * u); ctx.lineTo(cx + 4 * u, cy - 2 * u); ctx.lineTo(cx, cy + 3 * u);
+          }
+          ctx.closePath();
+          ctx.fill();
+        }
+      }
+      ctx.restore();
+    }
+
+    // Page breaks (Page Layout): a dashed line before the first column and row of each printed page.
+    if (grid.breaks) {
+      ctx.save();
+      ctx.setLineDash([6, 4]);
+      ctx.strokeStyle = '#5a5a5a';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (const c of grid.breaks.cols) {
+        const x = Math.round(X(c)) + 0.5;
+        if (x > HEAD_W * z && x < w) { ctx.moveTo(x, HEAD_H * z); ctx.lineTo(x, vh); }
+      }
+      for (const r of grid.breaks.rows) {
+        const y = Math.round(Y(r)) + 0.5;
+        if (y > HEAD_H * z && y < vh) { ctx.moveTo(HEAD_W * z, y); ctx.lineTo(w, y); }
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // Lines along the frozen edges.
+    ctx.strokeStyle = FREEZE_EDGE;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    if (fc > 0) { ctx.moveTo(Math.round(fx) + 0.5, 0); ctx.lineTo(Math.round(fx) + 0.5, vh); }
+    if (fr > 0) { ctx.moveTo(0, Math.round(fy) + 0.5); ctx.lineTo(w, Math.round(fy) + 0.5); }
+    ctx.stroke();
+
+    // Over the cells, in each pane: the list outline, the selection, the fill-handle drag and the copy marquee.
+    const spill = wbk.spillArea(sheetIndex, state.cursor.col, state.cursor.row);
+    for (const p of panes) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(p.x, p.y, p.x2 - p.x, p.y2 - p.y);
+      ctx.clip();
+      if (spill) {
+        const sb = rect(spill.c0, spill.r0, spill.c1, spill.r1);
+        ctx.strokeStyle = SPILL_EDGE;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(sb.x + 0.5, sb.y + 0.5, sb.w - 1, sb.h - 1);
+      }
+      const box = rect(s.c0, s.r0, s.c1, s.r1);
+      const a = cellRect(state.cursor.col, state.cursor.row);
+      const many = box.w > a.w + 0.5 || box.h > a.h + 0.5;
+      if (many) {
+        ctx.fillStyle = 'rgba(30, 122, 69, 0.12)';
+        ctx.fillRect(box.x, box.y, box.w, box.h);
+        ctx.fillStyle = lookAt(state.cursor.col, state.cursor.row)?.fill ?? wbk.styleOf(sheet.cells.get(keyOf(state.cursor.col, state.cursor.row)))?.fill ?? '#fff';
+        ctx.fillRect(a.x + 1, a.y + 1, a.w - 2, a.h - 2);
+        // The active cell is drawn again on its own fill, as it looks anywhere else (its alignment, font and colour).
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(a.x, a.y, a.w, a.h);
+        ctx.clip();
+        const block = merged(state.cursor.col, state.cursor.row);
+        drawText(state.cursor.col, state.cursor.row, a, { ...p, c1: state.cursor.col }, !!block);
+        ctx.restore();
+      }
+      ctx.strokeStyle = ACCENT;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(box.x + 1, box.y + 1, box.w - 2, box.h - 2);
+      ctx.fillStyle = ACCENT;
+      ctx.fillRect(box.x + box.w - 4, box.y + box.h - 4, 7, 7);
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(box.x + box.w - 3.5, box.y + box.h - 3.5, 6, 6);
+      if (state.fillTo) {
+        const f = rect(state.fillTo.c0, state.fillTo.r0, state.fillTo.c1, state.fillTo.r1);
+        ctx.setLineDash([4, 3]);
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(f.x + 0.5, f.y + 0.5, f.w - 1, f.h - 1);
+        ctx.setLineDash([]);
+      }
+      if (state.clip && state.clip.sheet === sheetIndex) {
+        const cb = rect(state.clip.range.c0, state.clip.range.r0, state.clip.range.c1, state.clip.range.r1);
+        ctx.setLineDash([5, 4]);
+        ctx.strokeStyle = ACCENT;
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(cb.x + 0.5, cb.y + 0.5, cb.w - 1, cb.h - 1);
+        ctx.setLineDash([]);
+      }
+      ctx.restore();
+    }
+
+    // Headers (drawn last so scrolled cells never show through). A hidden row or column shows as a double line.
     ctx.font = `${12 * z}px "Segoe UI", Arial, Helvetica, sans-serif`;
     ctx.textBaseline = 'middle';
     ctx.fillStyle = HEAD_BG;
     ctx.fillRect(0, 0, w, HEAD_H * z);
     ctx.fillRect(0, 0, HEAD_W * z, vh);
-    ctx.strokeStyle = '#c6c6c6';
-    ctx.lineWidth = 1;
-    for (let c = c0; c <= c1; c++) {
-      const x = X(c);
-      const cw = X(c + 1) - x;
-      const inSel = c >= s.c0 && c <= s.c1;
-      if (inSel) {
-        ctx.fillStyle = HEAD_SEL;
-        ctx.fillRect(x, 0, cw, HEAD_H * z);
-      }
-      ctx.fillStyle = inSel ? ACCENT : '#333';
-      ctx.textAlign = 'center';
-      ctx.fillText(colName(c), x + cw / 2, HEAD_H * z / 2 + 1);
+    for (const [c0, c1, x0, x1] of colParts) {
+      ctx.save();
       ctx.beginPath();
-      ctx.moveTo(Math.round(x + cw) + 0.5, 0);
-      ctx.lineTo(Math.round(x + cw) + 0.5, HEAD_H * z);
-      ctx.stroke();
+      ctx.rect(x0, 0, x1 - x0, HEAD_H * z);
+      ctx.clip();
+      for (let c = c0; c <= c1; c++) {
+        if (sheet.hiddenCols.has(c)) continue;
+        const x = X(c);
+        const cw = XR(c) - x;
+        const inSel = c >= s.c0 && c <= s.c1;
+        if (inSel) {
+          ctx.fillStyle = HEAD_SEL;
+          ctx.fillRect(x, 0, cw, HEAD_H * z);
+        }
+        ctx.fillStyle = inSel ? ACCENT : '#333';
+        ctx.textAlign = 'center';
+        ctx.fillText(colName(c), x + cw / 2, HEAD_H * z / 2 + 1);
+        ctx.strokeStyle = '#c6c6c6';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(Math.round(x + cw) + 0.5, 0);
+        ctx.lineTo(Math.round(x + cw) + 0.5, HEAD_H * z);
+        ctx.stroke();
+        if (c > 0 && sheet.hiddenCols.has(c - 1)) {
+          ctx.strokeStyle = '#555';
+          ctx.beginPath();
+          ctx.moveTo(Math.round(x) - 0.5, 0); ctx.lineTo(Math.round(x) - 0.5, HEAD_H * z);
+          ctx.moveTo(Math.round(x) + 1.5, 0); ctx.lineTo(Math.round(x) + 1.5, HEAD_H * z);
+          ctx.stroke();
+        }
+      }
+      ctx.restore();
     }
-    for (let r = r0; r <= r1; r++) {
-      const y = Y(r);
-      const rh = Y(r + 1) - y;
-      const inSel = r >= s.r0 && r <= s.r1;
-      if (inSel) {
-        ctx.fillStyle = HEAD_SEL;
-        ctx.fillRect(0, y, HEAD_W * z, rh);
-      }
-      ctx.fillStyle = inSel ? ACCENT : '#333';
-      ctx.textAlign = 'center';
-      ctx.fillText(String(r + 1), HEAD_W * z / 2, y + rh / 2 + 1);
+    for (const [r0, r1, y0, y1] of rowParts) {
+      ctx.save();
       ctx.beginPath();
-      ctx.moveTo(0, Math.round(y + rh) + 0.5);
-      ctx.lineTo(HEAD_W * z, Math.round(y + rh) + 0.5);
-      ctx.stroke();
+      ctx.rect(0, y0, HEAD_W * z, y1 - y0);
+      ctx.clip();
+      for (let r = r0; r <= r1; r++) {
+        if (sheet.hiddenRows.has(r)) continue;
+        const y = Y(r);
+        const rh = YB(r) - y;
+        const inSel = r >= s.r0 && r <= s.r1;
+        if (inSel) {
+          ctx.fillStyle = HEAD_SEL;
+          ctx.fillRect(0, y, HEAD_W * z, rh);
+        }
+        // Row numbers of rows a filter keeps in view are blue, as in Excel (the hidden ones are what tell).
+        ctx.fillStyle = inSel ? ACCENT : filter && r > filter.range.r0 && r <= filter.range.r1 && filter.cols.size ? FILTERED : '#333';
+        ctx.textAlign = 'center';
+        ctx.fillText(String(r + 1), HEAD_W * z / 2, y + rh / 2 + 1);
+        ctx.strokeStyle = '#c6c6c6';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, Math.round(y + rh) + 0.5);
+        ctx.lineTo(HEAD_W * z, Math.round(y + rh) + 0.5);
+        ctx.stroke();
+        if (r > 0 && sheet.hiddenRows.has(r - 1)) {
+          ctx.strokeStyle = '#555';
+          ctx.beginPath();
+          ctx.moveTo(0, Math.round(y) - 0.5); ctx.lineTo(HEAD_W * z, Math.round(y) - 0.5);
+          ctx.moveTo(0, Math.round(y) + 1.5); ctx.lineTo(HEAD_W * z, Math.round(y) + 1.5);
+          ctx.stroke();
+        }
+      }
+      ctx.restore();
     }
     ctx.fillStyle = '#e4e4e4';
     ctx.fillRect(0, 0, HEAD_W * z, HEAD_H * z);
     ctx.strokeStyle = '#b5b5b5';
+    ctx.lineWidth = 1;
     ctx.strokeRect(0.5, 0.5, w - 1, HEAD_H * z - 1);
     ctx.textAlign = 'left';
+    // The active cell's drop-down list button (data validation), just right of the cell, as Excel draws it.
+    const lb = listButton();
+    if (lb && lb.x < w && lb.y < vh) {
+      ctx.fillStyle = '#f3f3f3';
+      ctx.fillRect(lb.x, lb.y, lb.w, lb.h);
+      ctx.strokeStyle = '#8a8a8a';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(Math.round(lb.x) + 0.5, Math.round(lb.y) + 0.5, Math.round(lb.w) - 1, Math.round(lb.h) - 1);
+      ctx.fillStyle = '#333';
+      const cx = lb.x + lb.w / 2;
+      const cy = lb.y + lb.h / 2;
+      ctx.beginPath();
+      ctx.moveTo(cx - 4 * z, cy - 2 * z); ctx.lineTo(cx + 4 * z, cy - 2 * z); ctx.lineTo(cx, cy + 3 * z);
+      ctx.closePath();
+      ctx.fill();
+    }
+    placePrompt();
     if (state.editing) placeEditor();
+    grid.onPaint();
+  }
+
+  /** The active cell's validation rule, when it has a list with a drop-down button. */
+  function activeList(): Validation | null {
+    const v = validationAt(grid.wb, grid.wb.active, state.cursor.col, state.cursor.row);
+    return v && v.type === 'list' && v.dropdown ? v : null;
+  }
+
+  /** Where the drop-down list button of the active cell is drawn (scaled pixels), or null when it has none. */
+  function listButton(): { x: number; y: number; w: number; h: number } | null {
+    if (!activeList()) return null;
+    const b = cellRect(state.cursor.col, state.cursor.row);
+    const size = Math.min(18 * state.zoom, b.h);
+    return { x: b.x + b.w + 1, y: b.y + b.h - size, w: size, h: size };
+  }
+
+  /** The input message of the active cell's validation rule, in a box beside the cell while it is selected. */
+  function placePrompt(): void {
+    const v = validationAt(grid.wb, grid.wb.active, state.cursor.col, state.cursor.row);
+    const p = v?.prompt;
+    if (!p || !p.show || (!p.title && !p.text) || listBox) {
+      prompt.hidden = true;
+      return;
+    }
+    const key = `${state.cursor.col}:${state.cursor.row}:${p.title}:${p.text}`;
+    if (prompt.dataset.for !== key) {
+      prompt.dataset.for = key;
+      prompt.replaceChildren(...(p.title ? [h('strong', {}, p.title)] : []), ...(p.text ? [h('span', {}, p.text)] : []));
+    }
+    const b = cellRect(state.cursor.col, state.cursor.row);
+    prompt.hidden = false;
+    css(prompt, { left: Math.max(0, b.x + Math.min(b.w, 40)), top: b.y + b.h + 4 });
+  }
+
+  /** Where a filter header cell's ▾ button is (scaled pixels). */
+  function filterButton(col: number): { x: number; y: number; w: number; h: number } {
+    const f = grid.wb.sheets[grid.wb.active].filter!;
+    const z = state.zoom;
+    const b = rect(col, f.range.r0, col, f.range.r0);
+    const size = Math.min(16 * z, b.h - 2, b.w - 2);
+    return { x: b.x + b.w - size - 1, y: b.y + b.h - size - 1, w: size, h: size };
   }
 
   // ---- Editing ---------------------------------------------------------------------------------------------------
 
   function placeEditor(): void {
-    const b = rect(state.cursor.col, state.cursor.row, state.cursor.col, state.cursor.row);
+    const b = cellRect(state.cursor.col, state.cursor.row);
     const wide = Math.max(b.w, 160 * state.zoom);
     // Taller for every line typed or pasted, as Excel's in-cell editor grows.
     const lines = Math.min(12, cellInput.value.split('\n').length);
@@ -571,6 +932,7 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
   function beginEdit(initial: string | null, from: 'cell' | 'bar' = 'cell'): void {
     if (state.editing) return;
     state.editing = true;
+    formulaInput.placeholder = '';
     const text = initial ?? grid.wb.editText(grid.wb.active, state.cursor.col, state.cursor.row);
     cellInput.value = text;
     formulaInput.value = text;
@@ -594,6 +956,8 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
   function commit(): boolean {
     if (!state.editing) return true;
     const text = cellInput.value;
+    if (!state.allowOnce && !allowed(text)) return false;
+    state.allowOnce = false;
     try {
       grid.wb.setInput(grid.wb.active, state.cursor.col, state.cursor.row, text);
     } catch (error) {
@@ -608,6 +972,127 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
     endEdit();
     grid.onChange();
     return true;
+  }
+
+  /**
+   * Checks typed text against the cell's validation rule. False (and the rule's message is shown) when it breaks it:
+   * Stop offers Retry or Cancel; Warning asks whether to keep it; Information says so and keeps it on OK.
+   */
+  function allowed(text: string): boolean {
+    const s = grid.wb.active;
+    const { col, row } = state.cursor;
+    const v = validationAt(grid.wb, s, col, row);
+    // Clearing a cell is not checked (as in Excel), nor is anything when the rule shows no error.
+    if (!v || v.type === 'any' || !v.error.show || text === '') return true;
+    let ok = true;
+    try {
+      ok = grid.wb.withInput(s, col, row, text, () => passes(grid.wb, s, v, grid.wb.value(s, col, row), col, row));
+    } catch {
+      // A formula that does not read: putting it in the cell says what is wrong with it.
+      return true;
+    }
+    if (ok) return true;
+    void refuse(v);
+    return false;
+  }
+
+  async function refuse(v: Validation): Promise<void> {
+    const title = v.error.title || 'That value is not allowed here';
+    const why = v.error.text || `This cell has a rule: it takes ${describeValidation(v)}.`;
+    const back = () => {
+      if (!state.editing) return;
+      cellInput.focus();
+      cellInput.select();
+    };
+    if (v.error.style === 'stop') {
+      const again = await shell.dialogs.ask<boolean>({ title, text: why, buttons: [{ label: 'Retry', value: true, primary: true }, { label: 'Cancel', value: false }], cancel: false });
+      if (again) back();
+      else cancelEdit();
+      return;
+    }
+    if (v.error.style === 'warning') {
+      const answer = await shell.dialogs.ask<'yes' | 'no' | null>({
+        title, text: `${why} Keep it anyway?`,
+        buttons: [{ label: 'Yes, keep it', value: 'yes' }, { label: 'No, change it', value: 'no', primary: true }, { label: 'Cancel', value: null }],
+        cancel: null,
+      });
+      if (answer === 'yes') {
+        state.allowOnce = true;
+        if (commit()) scroller.focus({ preventScroll: true });
+      } else if (answer === 'no') back();
+      else cancelEdit();
+      return;
+    }
+    const keep = await shell.dialogs.ask<boolean>({ title, text: why, buttons: [{ label: 'OK', value: true, primary: true }, { label: 'Cancel', value: false }], cancel: false });
+    if (keep) {
+      state.allowOnce = true;
+      if (commit()) scroller.focus({ preventScroll: true });
+    } else cancelEdit();
+  }
+
+  /** The drop-down list of the active cell's validation rule: pick a value to put in the cell. */
+  function openList(): void {
+    closeList();
+    const v = activeList();
+    if (!v || !commit()) return;
+    const s = grid.wb.active;
+    const { col, row } = state.cursor;
+    const items = listItems(grid.wb, s, v, col, row);
+    const box = h('div', { class: 'dv-list', role: 'listbox', 'aria-label': 'Choose a value' });
+    const current = grid.wb.display(s, col, row).toLowerCase();
+    const done = new AbortController();
+    const close = () => {
+      done.abort();
+      closeList();
+      scroller.focus({ preventScroll: true });
+      redraw();
+    };
+    const pick = (item: string) => {
+      try {
+        // A value from the list goes in as text where it would otherwise read as something else (a formula).
+        grid.wb.setInput(s, col, row, /^[='"]/.test(item) ? `'${item}` : item);
+        afterEdit();
+      } catch (error) {
+        void report(error);
+      }
+      close();
+    };
+    const buttons = items.map(item => {
+      const b = h('button', { type: 'button', class: 'dv-item', role: 'option', 'aria-selected': String(item.toLowerCase() === current) }, item);
+      on(b, 'click', () => pick(item), done.signal);
+      return b;
+    });
+    if (!buttons.length) box.append(h('p', { class: 'dv-empty' }, 'The list is empty.'));
+    box.append(...buttons);
+    on(box, 'keydown', (event: KeyboardEvent) => {
+      const i = buttons.indexOf(document.activeElement as HTMLButtonElement);
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        buttons[Math.max(0, Math.min(buttons.length - 1, i + (event.key === 'ArrowDown' ? 1 : -1)))]?.focus();
+      } else if (event.key === 'Escape' || event.key === 'Tab') {
+        event.preventDefault();
+        close();
+      }
+      event.stopPropagation();
+    }, done.signal);
+    setTimeout(() => {
+      if (done.signal.aborted) return;
+      on(document, 'pointerdown', (event: PointerEvent) => {
+        if (event.target instanceof Node && !box.contains(event.target)) close();
+      }, done.signal);
+    }, 0);
+    signal.addEventListener('abort', () => done.abort());
+    const b = cellRect(col, row);
+    root.append(box);
+    css(box, { left: Math.max(0, Math.min(b.x, root.clientWidth - 200)), top: b.y + b.h + 1, 'min-width': Math.max(b.w, 120) });
+    listBox = box;
+    prompt.hidden = true;
+    (buttons.find(x => x.getAttribute('aria-selected') === 'true') ?? buttons[0])?.focus();
+  }
+
+  function closeList(): void {
+    listBox?.remove();
+    listBox = null;
   }
 
   function cancelEdit(): void {
@@ -636,7 +1121,8 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
     } else if (event.key === 'Enter') {
       event.preventDefault();
       if (commit()) {
-        moveCursor(state.tabCol ?? state.cursor.col, state.cursor.row + (event.shiftKey ? -1 : 1), false);
+        const to = step(0, event.shiftKey ? -1 : 1, { col: state.tabCol ?? state.cursor.col, row: state.cursor.row });
+        moveCursor(to.col, to.row, false);
         state.tabCol = null;
         scroller.focus({ preventScroll: true });
       }
@@ -645,7 +1131,8 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
       const began = state.tabCol ?? state.cursor.col;
       if (commit()) {
         state.tabCol = began;
-        moveCursor(state.cursor.col + (event.shiftKey ? -1 : 1), state.cursor.row, false);
+        const to = step(event.shiftKey ? -1 : 1, 0);
+        moveCursor(to.col, to.row, false);
         scroller.focus({ preventScroll: true });
       }
     } else if (event.key === 'Escape') {
@@ -783,13 +1270,31 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
       beginFill(event);
       return;
     }
+    const lb = listButton();
+    if (lb && x >= lb.x && x <= lb.x + lb.w && y >= lb.y && y <= lb.y + lb.h) {
+      event.preventDefault();
+      openList();
+      return;
+    }
+    const f = grid.wb.sheets[grid.wb.active].filter;
+    if (p.where === 'cell' && f && p.row === f.range.r0 && p.col >= f.range.c0 && p.col <= f.range.c1) {
+      const b = filterButton(p.col);
+      if (x >= b.x - 1 && x <= b.x + b.w + 1 && y >= b.y - 1 && y <= b.y + b.h + 1) {
+        event.preventDefault();
+        select({ c0: p.col, r0: p.row, c1: p.col, r1: p.row });
+        const box = scroller.getBoundingClientRect();
+        grid.onFilterButton(p.col, box.left + b.x, box.top + b.y + b.h);
+        return;
+      }
+    }
     scroller.setPointerCapture(event.pointerId);
     if (p.where === 'corner') {
       select({ c0: 0, r0: 0, c1: MAX_COLS - 1, r1: MAX_ROWS - 1 }, { col: 0, row: 0 });
       return;
     }
     const extend = event.shiftKey;
-    const startAnchor = extend ? { ...state.anchor } : { col: p.col, row: p.row };
+    // A click in a merged block selects the block (its top-left cell is the active one).
+    const startAnchor = extend ? { ...state.anchor } : p.where === 'cell' ? topLeft(p.col, p.row) : { col: p.col, row: p.row };
     const mk = (q: { col: number; row: number }) => {
       if (p.where === 'colhead') return { c0: Math.min(startAnchor.col, q.col), c1: Math.max(startAnchor.col, q.col), r0: 0, r1: MAX_ROWS - 1 };
       if (p.where === 'rowhead') return { r0: Math.min(startAnchor.row, q.row), r1: Math.max(startAnchor.row, q.row), c0: 0, c1: MAX_COLS - 1 };
@@ -802,7 +1307,7 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
       void r;
       changed();
     };
-    apply({ col: p.col, row: p.row });
+    apply(p.where === 'cell' && !extend ? topLeft(p.col, p.row) : { col: p.col, row: p.row });
     const abort = new AbortController();
     on(scroller, 'pointermove', (e: PointerEvent) => {
       const q = posOf(e);
@@ -1021,15 +1526,24 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
     const typing = key.length === 1 && !ctrl && !event.altKey;
     if (key === 'Tab') state.tabCol = state.tabCol ?? col;
     else if (key !== 'Enter' && !typing && key !== 'Shift' && key !== 'Control' && key !== 'Alt') state.tabCol = null;
-    if (arrow[key]) {
+    if (key === 'ArrowDown' && event.altKey && activeList()) {
+      openList();
+    } else if (arrow[key]) {
       const [dc, dr] = arrow[key];
       if (ctrl) {
         const to = jump(col, row, dc, dr);
         moveCursor(to.col, to.row, event.shiftKey);
-      } else moveCursor(col + dc, row + dr, event.shiftKey);
-    } else if (key === 'Tab') moveCursor(col + (event.shiftKey ? -1 : 1), row, false);
-    else if (key === 'Enter') {
-      moveCursor(state.tabCol ?? col, row + (event.shiftKey ? -1 : 1), false);
+      } else if (event.shiftKey) moveCursor(col + dc, row + dr, true);
+      else {
+        const to = step(dc, dr);
+        moveCursor(to.col, to.row, false);
+      }
+    } else if (key === 'Tab') {
+      const to = step(event.shiftKey ? -1 : 1, 0);
+      moveCursor(to.col, to.row, false);
+    } else if (key === 'Enter') {
+      const to = step(0, event.shiftKey ? -1 : 1, { col: state.tabCol ?? col, row });
+      moveCursor(to.col, to.row, false);
       state.tabCol = null;
     }
     else if (key === 'Home') moveCursor(ctrl ? 0 : 0, ctrl ? 0 : row, event.shiftKey);
@@ -1107,6 +1621,27 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
     try {
       grid.wb.shiftAxis(grid.wb.active, axis, at, n * count);
       state.clip = null;
+      afterEdit();
+    } catch (error) {
+      void report(error);
+    }
+  }
+
+  function hide(axis: 'row' | 'col', hidden: boolean): void {
+    const s = sel();
+    try {
+      if (axis === 'row') grid.wb.setHidden(grid.wb.active, 'row', s.r0, s.r1, hidden);
+      else grid.wb.setHidden(grid.wb.active, 'col', s.c0, s.c1, hidden);
+      // The active cell leaves hidden rows and columns for the nearest one in view.
+      const sheet = grid.wb.sheets[grid.wb.active];
+      if (hidden && (sheet.hiddenRows.has(state.cursor.row) || sheet.hiddenCols.has(state.cursor.col))) {
+        const to = axis === 'row' ? step(0, 1, { col: state.cursor.col, row: s.r1 }) : step(1, 0, { col: s.c1, row: state.cursor.row });
+        const back = axis === 'row' ? step(0, -1, { col: state.cursor.col, row: s.r0 }) : step(-1, 0, { col: s.c0, row: state.cursor.row });
+        const ok = (q: { col: number; row: number }) => !sheet.hiddenRows.has(q.row) && !sheet.hiddenCols.has(q.col);
+        const dest = ok(to) ? to : back;
+        state.anchor = { ...dest };
+        state.cursor = { ...dest };
+      }
       afterEdit();
     } catch (error) {
       void report(error);
@@ -1229,6 +1764,11 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
       { label: 'Insert column', action: () => shift('col', 1) },
       { label: s.r1 > s.r0 ? 'Delete rows' : 'Delete row', action: () => shift('row', -1) },
       { label: s.c1 > s.c0 ? 'Delete columns' : 'Delete column', action: () => shift('col', -1) },
+      { separator: true },
+      { label: s.r1 > s.r0 ? 'Hide rows' : 'Hide row', action: () => hide('row', true) },
+      { label: s.c1 > s.c0 ? 'Hide columns' : 'Hide column', action: () => hide('col', true) },
+      { label: 'Unhide rows', action: () => hide('row', false) },
+      { label: 'Unhide columns', action: () => hide('col', false) },
       { separator: true },
       { label: 'Clear contents', hint: 'Del', action: () => deleteContents() },
     ];

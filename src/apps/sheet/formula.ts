@@ -1,11 +1,20 @@
 // Reading and working out formulas: "=SUM(A1:A5)*2". Our own parser and evaluator (nothing is ever passed to eval).
 // Operators: + - * / ^ & % = <> < > <= >= and brackets. Functions: see FUNCTIONS. A formula that is too long, too
 // deeply nested, or that loops back on itself gives an error value instead of hanging.
-import { parseCellRef, sheetNameOf, SyntaxProblem, tokenize, type Ref, type Tok } from './refs.ts';
-import { CellError, clean, E, formatNumber, type Value } from './values.ts';
+// Lists work as in Excel 365: an operator or a one-value function given a list works on every value of it
+// (B2:B10>5 is a list of TRUE/FALSE), and a formula whose answer is a list fills the cells around it (see workbook.ts).
+import { daysInMonth, nowSerial, partsOf, readDateTime, serialOf, type DateOrder } from './dates.ts';
+import { CodeProblem, formatCode } from './numfmt.ts';
+import { parseCellRef, parseColRef, sheetNameOf, SyntaxProblem, tokenize, wholeColumns, type Ref, type Tok } from './refs.ts';
+import { CellError, clean, E, type Value } from './values.ts';
 
 export const MAX_FORMULA_LENGTH = 4000;
 const MAX_DEPTH = 60;
+/** The most values a list worked out inside a formula may hold. */
+export const MAX_LIST = 1_000_000;
+
+/** A block of values, row by row. */
+export type Grid = Value[][];
 
 export type Node =
   | { t: 'num'; v: number }
@@ -20,7 +29,12 @@ export type Node =
   | { t: 'bin'; op: string; l: Node; r: Node }
   | { t: 'call'; name: string; args: Node[] }
   /** A list typed into the formula: {1,2,3} is one row, {1;2;3} one column. */
-  | { t: 'array'; rows: Node[][] };
+  | { t: 'array'; rows: Node[][] }
+  /** A1#: all the cells A1's list answer fills. */
+  | { t: 'spill'; ref: Ref; sheet?: string }
+  /** A value or a list already worked out (used inside the evaluator, never parsed). */
+  | { t: 'val'; v: Value }
+  | { t: 'grid'; g: Grid };
 
 // ---- Parsing -------------------------------------------------------------------------------------------------------
 
@@ -74,6 +88,16 @@ export function parseFormula(text: string): Node {
     return x;
   }
   function refAt(tok: Tok, sheet?: string): Node | null {
+    // A:C, whole columns (written with no space round the colon).
+    if (toks[p]?.type === 'colon' && toks[p + 1]?.type === 'ident' && toks[p].start === tok.end && toks[p + 1].start === toks[p].end) {
+      const ca = parseColRef(tok.text);
+      const cb = ca ? parseColRef(toks[p + 1].text) : null;
+      if (ca && cb) {
+        p += 2;
+        const [a, b] = wholeColumns(ca, cb);
+        return { t: 'range', a, b, sheet };
+      }
+    }
     const a = parseCellRef(tok.text);
     if (!a) return null;
     if (toks[p]?.type === 'colon' && toks[p + 1]?.type === 'ident') {
@@ -81,6 +105,11 @@ export function parseFormula(text: string): Node {
       if (!b) return fail('That range is not written correctly.');
       p += 2;
       return { t: 'range', a, b: b!, sheet };
+    }
+    // A1# straight after the address: the spill range.
+    if (toks[p]?.type === 'err' && toks[p].text === '#' && toks[p].start === tok.end) {
+      p++;
+      return { t: 'spill', ref: a, sheet };
     }
     return { t: 'ref', ref: a, sheet };
   }
@@ -157,11 +186,50 @@ export interface Context {
   sheetIndex(name: string): number;
   /** The sheet the formula lives on. */
   current: number;
-  /** Cells that have a value, in a range, to keep whole-column style ranges fast. */
-  bounds(sheet: number): { cols: number; rows: number };
+  /**
+   * How far the cells in use reach, so a big range stays cheap to read. `area` is the range being read: lists that
+   * fill cells in it count too.
+   */
+  bounds(sheet: number, area?: { c0: number; r0: number; c1: number; r1: number }): { cols: number; rows: number };
+  /** The list a formula cell fills (A1#): #REF! when the cell holds no list formula, #SPILL! when it cannot fill. */
+  spill(sheet: number, col: number, row: number): Grid | CellError;
+  /** Which way round typed dates are read (13/10/2026 or 10/13/2026). */
+  dateOrder?: DateOrder;
 }
 
-type Grid = Value[][];
+/** How the formula being worked out reads dates in text ("13/10/2026"+1). */
+let dateOrder: DateOrder = 'dmy';
+
+/** Which arguments of a one-value function may be given a list, so the function runs once per value. */
+const ALL = 'all';
+const LIFT: Record<string, typeof ALL | number[]> = {
+  TEXTBEFORE: [0, 2, 3, 4, 5], TEXTAFTER: [0, 2, 3, 4, 5],
+  VLOOKUP: [0, 2], MATCH: [0, 2], XMATCH: [0], XLOOKUP: [0], INDEX: [1, 2],
+  COUNTIF: [1], SUMIF: [1], AVERAGEIF: [1], NETWORKDAYS: [0, 1], WORKDAY: [0, 1],
+};
+for (const name of ['ABS', 'SIGN', 'INT', 'TRUNC', 'SQRT', 'EXP', 'LN', 'LOG10', 'POWER', 'MOD', 'ROUND', 'ROUNDUP', 'ROUNDDOWN',
+  'IF', 'IFERROR', 'IFNA', 'IFS', 'SWITCH', 'CHOOSE', 'NOT', 'ISBLANK', 'ISNUMBER', 'ISTEXT', 'ISERROR', 'ISNA', 'ISERR', 'ISLOGICAL',
+  'LEN', 'UPPER', 'LOWER', 'PROPER', 'TRIM', 'LEFT', 'RIGHT', 'MID', 'TEXT', 'FIND', 'SEARCH', 'SUBSTITUTE', 'REPLACE', 'CHAR',
+  'CODE', 'UNICHAR', 'UNICODE', 'CLEAN', 'EXACT', 'REPT', 'VALUE', 'NUMBERVALUE',
+  'DATE', 'TIME', 'YEAR', 'MONTH', 'DAY', 'HOUR', 'MINUTE', 'SECOND', 'WEEKDAY', 'WEEKNUM', 'ISOWEEKNUM', 'EDATE', 'EOMONTH',
+  'DATEDIF', 'DAYS', 'DATEVALUE', 'TIMEVALUE']) LIFT[name] = ALL;
+
+const liftsAt = (name: string, i: number): boolean => {
+  const at = LIFT[name];
+  return at === ALL || (!!at && at.includes(i));
+};
+
+const listCache = new WeakMap<Node, boolean>();
+
+/** One value of a list as an operator sees it beside a list of another size: a single row or column is repeated. */
+function pick(g: Grid, r: number, c: number): Value {
+  const row = g.length === 1 ? g[0] : g[r];
+  if (!row) return E.NA;
+  const v = row.length === 1 ? row[0] : row[c];
+  return v === undefined ? E.NA : v;
+}
+
+const first = (g: Grid | CellError): Value => (g instanceof CellError ? g : g[0]?.[0] ?? null);
 
 class Ev {
   private steps = 0;
@@ -181,7 +249,7 @@ class Ev {
     const c1 = Math.max(n.a.col, n.b.col);
     const r0 = Math.min(n.a.row, n.b.row);
     const r1 = Math.max(n.a.row, n.b.row);
-    const limit = this.ctx.bounds(s);
+    const limit = this.ctx.bounds(s, { c0, r0, c1, r1 });
     const grid: Grid = [];
     // Cells beyond the used area are empty, so stop there: "A:A"-sized ranges stay cheap.
     for (let r = r0; r <= r1; r++) {
@@ -205,27 +273,104 @@ class Ev {
    */
   block(n: Node, depth = 0): Grid | CellError {
     if (depth > MAX_DEPTH * 2) return E.NUM;
-    if (n.t === 'range') return this.range(n);
-    if (n.t === 'array') return n.rows.map(row => row.map(x => this.scalar(x, depth + 1)));
-    if (n.t === 'call' && LIST_FUNCTIONS[n.name]) return LIST_FUNCTIONS[n.name](this, n.args, depth);
+    switch (n.t) {
+      case 'range': return this.range(n);
+      case 'array': return n.rows.map(row => row.map(x => this.scalar(x, depth + 1)));
+      case 'grid': return n.g;
+      case 'spill': {
+        const s = this.sheetOf(n.sheet);
+        return s < 0 ? E.REF : this.ctx.spill(s, n.ref.col, n.ref.row);
+      }
+      case 'bin':
+        if (Ev.isList(n)) {
+          const l = this.block(n.l, depth + 1);
+          if (l instanceof CellError) return l;
+          const r = this.block(n.r, depth + 1);
+          if (r instanceof CellError) return r;
+          return zip(l, r, (a, b) => this.binary(n.op, a, b));
+        }
+        break;
+      case 'un':
+        if (Ev.isList(n.x)) {
+          const g = this.block(n.x, depth + 1);
+          return g instanceof CellError ? g : g.map(row => row.map(v => unary(n.op, v)));
+        }
+        break;
+      case 'call': {
+        const lifted = this.lift(n, depth);
+        if (lifted) return lifted;
+        if (LIST_FUNCTIONS[n.name]) return LIST_FUNCTIONS[n.name](this, n.args, depth);
+        break;
+      }
+    }
     const v = this.scalar(n, depth);
     return v instanceof CellError ? v : [[v]];
   }
 
+  /**
+   * A one-value function given a list where it takes one value (LEN(A1:A5), IF(B2:B9>5,"big","small")): run once for
+   * each value, giving a list. Null when no such argument is a list.
+   */
+  private lift(n: { name: string; args: Node[] }, depth: number): Grid | CellError | null {
+    if (!LIFT[n.name] || !n.args.some((a, i) => liftsAt(n.name, i) && Ev.isList(a))) return null;
+    const parts: Array<Grid | null> = [];
+    let rows = 1;
+    let cols = 1;
+    for (const [i, a] of n.args.entries()) {
+      if (liftsAt(n.name, i) && Ev.isList(a)) {
+        // A list that is an error as a whole goes in as that error (IFNA(XLOOKUP(...),"none") gives "none").
+        const found = this.block(a, depth + 1);
+        const g = found instanceof CellError ? [[found]] : found;
+        if (!g.length || !g[0].length) return E.CALC;
+        parts.push(g);
+        rows = Math.max(rows, g.length);
+        cols = Math.max(cols, g[0].length);
+      } else parts.push(null);
+    }
+    if (rows * cols > MAX_LIST) return E.NUM;
+    // Other lists (a lookup table) are worked out once, not once for every value.
+    const fixed = n.args.map((a, i): Node => {
+      if (parts[i] || !Ev.isList(a)) return a;
+      const g = this.block(a, depth + 1);
+      return g instanceof CellError ? { t: 'err', e: g } : { t: 'grid', g };
+    });
+    const listFn = LIST_FUNCTIONS[n.name];
+    const out: Grid = [];
+    for (let r = 0; r < rows; r++) {
+      const row: Value[] = [];
+      for (let c = 0; c < cols; c++) {
+        const args = fixed.map((a, i): Node => (parts[i] ? { t: 'val', v: pick(parts[i]!, r, c) } : a));
+        row.push(listFn ? first(listFn(this, args, depth)) : callFunction(this, { name: n.name, args }, depth));
+      }
+      out.push(row);
+    }
+    return out;
+  }
+
   /** True when the node gives a list of values rather than one (so a function takes all of it, as it takes a range). */
   static isList(n: Node): boolean {
-    return n.t === 'range' || n.t === 'array' || (n.t === 'call' && !!LIST_FUNCTIONS[n.name]);
+    const known = listCache.get(n);
+    if (known !== undefined) return known;
+    let list: boolean;
+    switch (n.t) {
+      case 'range': case 'array': case 'grid': case 'spill': list = true; break;
+      case 'bin': list = Ev.isList(n.l) || Ev.isList(n.r); break;
+      case 'un': list = Ev.isList(n.x); break;
+      case 'call': list = !!LIST_FUNCTIONS[n.name] || (!!LIFT[n.name] && n.args.some((a, i) => liftsAt(n.name, i) && Ev.isList(a))); break;
+      default: list = false;
+    }
+    listCache.set(n, list);
+    return list;
   }
 
   /** A single value; a range on its own is an error (there is no implicit "same row" rule here). */
   scalar(n: Node, depth = 0): Value {
     if (depth > MAX_DEPTH * 2) return E.NUM;
     switch (n.t) {
-      // A list where one value is wanted: its first value (until a result can fill the cells beside it).
-      case 'array': {
-        const g = this.block(n, depth);
-        return g instanceof CellError ? g : g[0]?.[0] ?? null;
-      }
+      // A list where one value is wanted: its first value.
+      case 'array': case 'spill': return first(this.block(n, depth));
+      case 'val': return n.v;
+      case 'grid': return n.g[0]?.[0] ?? null;
       case 'num': return n.v;
       case 'str': return n.v;
       case 'bool': return n.v;
@@ -240,23 +385,20 @@ class Ev {
         if (g instanceof CellError) return g;
         return g.length === 1 && g[0].length === 1 ? g[0][0] : E.VALUE;
       }
-      case 'un': {
-        const v = this.scalar(n.x, depth + 1);
-        if (v instanceof CellError) return v;
-        const num = toNumber(v);
-        if (num instanceof CellError) return num;
-        return n.op === '-' ? -num : n.op === '%' ? clean(num / 100) : num;
-      }
-      case 'bin': return this.binary(n.op, this.scalar(n.l, depth + 1), this.scalar(n.r, depth + 1));
+      case 'un':
+        if (Ev.isList(n.x)) return first(this.block(n, depth));
+        return unary(n.op, this.scalar(n.x, depth + 1));
+      case 'bin':
+        if (Ev.isList(n)) return first(this.block(n, depth));
+        return this.binary(n.op, this.scalar(n.l, depth + 1), this.scalar(n.r, depth + 1));
       case 'call': {
-        if (!LIST_FUNCTIONS[n.name]) return callFunction(this, n, depth);
-        const g = this.block(n, depth);
-        return g instanceof CellError ? g : g[0]?.[0] ?? null;
+        if (!Ev.isList(n)) return callFunction(this, n, depth);
+        return first(this.block(n, depth));
       }
     }
   }
 
-  private binary(op: string, l: Value, r: Value): Value {
+  binary(op: string, l: Value, r: Value): Value {
     if (l instanceof CellError) return l;
     if (r instanceof CellError) return r;
     if (op === '&') return text(l) + text(r);
@@ -279,6 +421,28 @@ class Ev {
   }
 }
 
+function unary(op: '-' | '+' | '%', v: Value): Value {
+  if (v instanceof CellError) return v;
+  const num = toNumber(v);
+  if (num instanceof CellError) return num;
+  return op === '-' ? -num : op === '%' ? clean(num / 100) : num;
+}
+
+/** Two lists side by side, value by value; a single value, row or column is repeated to the other's size. */
+function zip(l: Grid, r: Grid, f: (a: Value, b: Value) => Value): Grid | CellError {
+  const rows = Math.max(l.length, r.length);
+  const cols = Math.max(l[0]?.length ?? 0, r[0]?.length ?? 0);
+  if (!rows || !cols) return E.CALC;
+  if (rows * cols > MAX_LIST) return E.NUM;
+  const out: Grid = [];
+  for (let i = 0; i < rows; i++) {
+    const row: Value[] = [];
+    for (let j = 0; j < cols; j++) row.push(f(pick(l, i, j), pick(r, i, j)));
+    out.push(row);
+  }
+  return out;
+}
+
 export function text(v: Value): string {
   if (v === null) return '';
   if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';
@@ -297,7 +461,11 @@ export function toNumber(v: Value): number | CellError {
   if (s === '') return E.VALUE;
   const pct = /^(-?[\d.,]+)%$/.exec(s);
   const n = Number((pct ? pct[1] : s).replace(/,/g, ''));
-  if (Number.isNaN(n) || !/^[-+]?[\d.,]+(e[-+]?\d+)?%?$/i.test(s)) return E.VALUE;
+  if (Number.isNaN(n) || !/^[-+]?[\d.,]+(e[-+]?\d+)?%?$/i.test(s)) {
+    // Text that reads as a date or a time counts as one, as in Excel ("13/10/2026"+7).
+    const d = readDateTime(s, dateOrder);
+    return d ? d.serial : E.VALUE;
+  }
   return pct ? n / 100 : n;
 }
 
@@ -396,7 +564,7 @@ function makeMatcher(criteria: Value): ((v: Value) => boolean) | CellError {
     const m = /^(<=|>=|<>|<|>|=)?(.*)$/s.exec(criteria)!;
     op = m[1] ?? '=';
     const rest = m[2];
-    const asNum = rest.trim() !== '' && !Number.isNaN(Number(rest)) ? Number(rest) : null;
+    const asNum = rest.trim() !== '' && !Number.isNaN(Number(rest)) ? Number(rest) : readDateTime(rest, dateOrder)?.serial ?? null;
     operand = asNum !== null ? asNum : rest;
   }
   // "<>" alone counts the cells that hold something; "=" or "" alone counts the empty ones.
@@ -534,18 +702,22 @@ const FUNCTIONS: Record<string, Fn> = {
   LEFT: (ev, a, d) => { const v = ev.scalar(a[0] ?? { t: 'str', v: '' }, d + 1); const n = num1(ev, a, 1, d, 1); return v instanceof CellError ? v : n instanceof CellError ? n : n < 0 ? E.VALUE : text(v).slice(0, n); },
   RIGHT: (ev, a, d) => { const v = ev.scalar(a[0] ?? { t: 'str', v: '' }, d + 1); const n = num1(ev, a, 1, d, 1); return v instanceof CellError ? v : n instanceof CellError ? n : n < 0 ? E.VALUE : n === 0 ? '' : text(v).slice(-n); },
   MID: (ev, a, d) => { const v = ev.scalar(a[0] ?? { t: 'str', v: '' }, d + 1); const s = num1(ev, a, 1, d); const n = num1(ev, a, 2, d); return v instanceof CellError ? v : s instanceof CellError ? s : n instanceof CellError ? n : s < 1 || n < 0 ? E.VALUE : text(v).slice(s - 1, s - 1 + n); },
+  // Any Excel format code: TEXT(A1,"dd/mm/yyyy"), TEXT(A1,"000-000"), TEXT(A1,"#,##0.00").
   TEXT: (ev, a, d) => {
     const v = ev.scalar(a[0] ?? { t: 'num', v: 0 }, d + 1);
-    const f = text(ev.scalar(a[1] ?? { t: 'str', v: '' }, d + 1));
+    const f = ev.scalar(a[1] ?? { t: 'str', v: '' }, d + 1);
     if (v instanceof CellError) return v;
-    const n = toNumber(v);
-    if (n instanceof CellError) return text(v);
-    const dec = (/\.(0+)/.exec(f)?.[1].length) ?? 0;
-    if (f.includes('%')) return formatNumber(n, { fmt: 'percent', dec });
-    if (f.includes(',')) return formatNumber(n, { fmt: 'comma', dec });
-    if (/^[$]/.test(f)) return formatNumber(n, { fmt: 'currency', dec });
-    if (/0/.test(f)) return formatNumber(n, { fmt: 'number', dec });
-    return text(n);
+    if (f instanceof CellError) return f;
+    const code = text(f);
+    if (typeof v === 'boolean') return text(v);
+    const n = typeof v === 'string' ? toNumber(v) : (v ?? 0);
+    if (code === '') return '';
+    try {
+      return capped(formatCode(n instanceof CellError ? (v as string) : n, code).text);
+    } catch (error) {
+      if (error instanceof CodeProblem) return E.VALUE;
+      throw error;
+    }
   },
   VLOOKUP: (ev, a, d) => {
     const key = ev.scalar(a[0] ?? { t: 'str', v: '' }, d + 1);
@@ -833,7 +1005,174 @@ const LIST_FUNCTIONS: Record<string, (ev: Ev, args: Node[], depth: number) => Gr
     }
     return l.down ? [ret[i]] : ret.map(r => [r[i]]);
   },
+  // Rows (or columns) of a list where `include` is TRUE: FILTER(A2:C99, B2:B99="Paid"), FILTER(A2:C99, (B2:B99>5)*(C2:C99<9)).
+  FILTER: (ev, a, d) => {
+    const arr = grid(ev, a[0], d);
+    if (arr instanceof CellError) return arr;
+    const inc = grid(ev, a[1], d);
+    if (inc instanceof CellError) return inc;
+    const rows = arr.length;
+    const cols = arr[0]?.length ?? 0;
+    let byRow: boolean;
+    if (inc[0].length === 1 && inc.length === rows) byRow = true;
+    else if (inc.length === 1 && inc[0].length === cols) byRow = false;
+    else return E.VALUE;
+    const keep: boolean[] = [];
+    for (const v of byRow ? inc.map(r => r[0]) : inc[0]) {
+      if (v instanceof CellError) return v;
+      if (typeof v === 'string') return E.VALUE;
+      keep.push(v === true || (typeof v === 'number' && v !== 0));
+    }
+    const out = byRow ? arr.filter((_, i) => keep[i]) : arr.map(r => r.filter((_, j) => keep[j]));
+    if (!out.length || !out[0].length) {
+      if (a[2] === undefined || a[2].t === 'blank') return E.CALC;
+      return grid(ev, a[2], d);
+    }
+    return out;
+  },
+  // SORT(list, [by which column], [1 smallest first / -1 largest first], [sort columns instead of rows]).
+  SORT: (ev, a, d) => {
+    const arr = grid(ev, a[0], d);
+    if (arr instanceof CellError) return arr;
+    const byCol = a[3] === undefined || a[3].t === 'blank' ? false : toBool(ev.scalar(a[3], d + 1));
+    if (byCol instanceof CellError) return byCol;
+    const lines = byCol ? transpose(arr) : arr;
+    const width = lines[0]?.length ?? 0;
+    const idx = numberList(ev, a[1], d, [1]);
+    const ord = numberList(ev, a[2], d, [1]);
+    if (idx instanceof CellError) return idx;
+    if (ord instanceof CellError) return ord;
+    const keys: Array<{ at: number; desc: boolean }> = [];
+    for (let i = 0; i < idx.length; i++) {
+      const at = Math.trunc(idx[i]);
+      const o = ord[i] ?? ord[0];
+      if (at < 1 || at > width || (o !== 1 && o !== -1)) return E.VALUE;
+      keys.push({ at: at - 1, desc: o === -1 });
+    }
+    const sorted = sortLines(lines, line => keys.map(k => ({ v: line[k.at], desc: k.desc })));
+    return byCol ? transpose(sorted) : sorted;
+  },
+  // SORTBY(list, by_list1, [order1], by_list2, [order2], ...): sorted by other columns that need not be shown.
+  SORTBY: (ev, a, d) => {
+    const arr = grid(ev, a[0], d);
+    if (arr instanceof CellError) return arr;
+    if (a.length < 2) return E.VALUE;
+    const bys: Array<{ line: Value[]; desc: boolean }> = [];
+    let byCol: boolean | null = null;
+    for (let i = 1; i < a.length; i += 2) {
+      const g = grid(ev, a[i], d);
+      if (g instanceof CellError) return g;
+      const o = a[i + 1] === undefined || a[i + 1].t === 'blank' ? 1 : toNumber(ev.scalar(a[i + 1], d + 1));
+      if (o instanceof CellError) return o;
+      if (o !== 1 && o !== -1) return E.VALUE;
+      const col = g[0].length === 1 && g.length === arr.length && (arr.length > 1 || g.length === 1);
+      const row = g.length === 1 && g[0].length === (arr[0]?.length ?? 0);
+      const asCol = col ? false : row ? true : null;
+      if (asCol === null || (byCol !== null && byCol !== asCol)) return E.VALUE;
+      byCol = asCol;
+      bys.push({ line: asCol ? g[0] : g.map(r => r[0]), desc: o === -1 });
+    }
+    const lines = byCol ? transpose(arr) : arr;
+    const order = lines.map((_, i) => i);
+    const sortedIdx = sortLines(order.map(i => [i]), line => bys.map(b => ({ v: b.line[line[0] as number], desc: b.desc })));
+    const sorted = sortedIdx.map(r => lines[r[0] as number]);
+    return byCol ? transpose(sorted) : sorted;
+  },
+  // UNIQUE(list, [compare columns], [only the ones that appear once]). Text is compared without case, as in Excel.
+  UNIQUE: (ev, a, d) => {
+    const arr = grid(ev, a[0], d);
+    if (arr instanceof CellError) return arr;
+    const byCol = a[1] === undefined || a[1].t === 'blank' ? false : toBool(ev.scalar(a[1], d + 1));
+    const once = a[2] === undefined || a[2].t === 'blank' ? false : toBool(ev.scalar(a[2], d + 1));
+    if (byCol instanceof CellError) return byCol;
+    if (once instanceof CellError) return once;
+    const lines = byCol ? transpose(arr) : arr;
+    const seen = new Map<string, { line: Value[]; count: number }>();
+    for (const line of lines) {
+      const key = line.map(v => (v === null ? 'b' : v instanceof CellError ? `e${v.code}` : typeof v === 'string' ? `s${v.toLowerCase()}` : typeof v === 'boolean' ? `l${v}` : `n${clean(v)}`)).join('\u0000');
+      const hit = seen.get(key);
+      if (hit) hit.count++;
+      else seen.set(key, { line, count: 1 });
+    }
+    const out = [...seen.values()].filter(x => !once || x.count === 1).map(x => x.line);
+    if (!out.length) return E.CALC;
+    return byCol ? transpose(out) : out;
+  },
+  // SEQUENCE(rows, [columns], [start], [step]): 1, 2, 3...
+  SEQUENCE: (ev, a, d) => {
+    const rows = int(ev, a, 0, d, NaN);
+    const cols = int(ev, a, 1, d, 1);
+    const start = num1(ev, a[2]?.t === 'blank' ? [] : a, 2, d, 1);
+    const step = num1(ev, a[3]?.t === 'blank' ? [] : a, 3, d, 1);
+    if (rows instanceof CellError) return rows;
+    if (cols instanceof CellError) return cols;
+    if (start instanceof CellError) return start;
+    if (step instanceof CellError) return step;
+    if (!(rows >= 1) || !(cols >= 1)) return rows === 0 || cols === 0 ? E.CALC : E.VALUE;
+    if (rows * cols > MAX_LIST) return E.NUM;
+    const out: Grid = [];
+    for (let r = 0; r < rows; r++) {
+      const row: Value[] = [];
+      for (let c = 0; c < cols; c++) row.push(clean(start + step * (r * cols + c)));
+      out.push(row);
+    }
+    return out;
+  },
+  TRANSPOSE: (ev, a, d) => {
+    const arr = grid(ev, a[0], d);
+    return arr instanceof CellError ? arr : transpose(arr);
+  },
 };
+
+function transpose(g: Grid): Grid {
+  const cols = g[0]?.length ?? 0;
+  const out: Grid = [];
+  for (let c = 0; c < cols; c++) out.push(g.map(row => row[c] ?? null));
+  return out;
+}
+
+/** An argument that may be one number or a list of them ({1,3}); `fallback` when it is left out. */
+function numberList(ev: Ev, n: Node | undefined, d: number, fallback: number[]): number[] | CellError {
+  if (n === undefined || n.t === 'blank') return fallback;
+  const g = grid(ev, n, d);
+  if (g instanceof CellError) return g;
+  const out: number[] = [];
+  for (const row of g) for (const v of row) {
+    const x = toNumber(v);
+    if (x instanceof CellError) return x;
+    out.push(x);
+  }
+  return out.length ? out : fallback;
+}
+
+/**
+ * Sorts rows by keys, as Excel's SORT does: numbers, then text (case ignored), then TRUE/FALSE, then errors; largest
+ * first turns that round; empty cells always go last. Rows with equal keys keep their order.
+ */
+function sortLines(lines: Grid, keysOf: (line: Value[]) => Array<{ v: Value; desc: boolean }>): Grid {
+  const kind = (v: Value) => (typeof v === 'number' ? 0 : typeof v === 'string' ? 1 : typeof v === 'boolean' ? 2 : 3);
+  const keyed = lines.map((line, i) => ({ line, i, keys: keysOf(line) }));
+  keyed.sort((x, y) => {
+    for (let k = 0; k < x.keys.length; k++) {
+      const a = x.keys[k].v ?? null;
+      const b = y.keys[k].v ?? null;
+      const desc = x.keys[k].desc;
+      if (a === null || b === null) {
+        if (a === null && b === null) continue;
+        return a === null ? 1 : -1;
+      }
+      let c = kind(a) - kind(b);
+      if (!c) {
+        if (typeof a === 'number' && typeof b === 'number') c = a - b;
+        else if (typeof a === 'string' && typeof b === 'string') c = a.localeCompare(b, undefined, { sensitivity: 'base' });
+        else if (typeof a === 'boolean' && typeof b === 'boolean') c = Number(a) - Number(b);
+      }
+      if (c) return desc ? -c : c;
+    }
+    return x.i - y.i;
+  });
+  return keyed.map(k => k.line);
+}
 
 const TEXT_FUNCTIONS: Record<string, Fn> = {
   TEXTBEFORE: (ev, a, d) => textAround(ev, a, d, false),
@@ -941,7 +1280,10 @@ const TEXT_FUNCTIONS: Record<string, Fn> = {
     const v = ev.scalar(a[0] ?? { t: 'blank' }, d + 1);
     if (v instanceof CellError || typeof v === 'number') return v;
     if (typeof v === 'boolean') return E.VALUE;
-    return readNumber(v ?? '');
+    const n = readNumber(v ?? '');
+    // Text that is a date or a time gives its number of days, as in Excel (VALUE("13/10/2026") is 46308).
+    if (n instanceof CellError && v) return readDateTime(v, dateOrder)?.serial ?? n;
+    return n;
   },
   NUMBERVALUE: (ev, a, d) => {
     const s = str(ev, a, 0, d);
@@ -1000,13 +1342,308 @@ const TEXT_FUNCTIONS: Record<string, Fn> = {
 };
 Object.assign(FUNCTIONS, TEXT_FUNCTIONS);
 
+// ---- SUMPRODUCT, dates and times ------------------------------------------------------------------------------------
+
+/** A date argument as a serial: a number, or text that reads as a date. Negative is #NUM!, as in Excel. */
+function serialArg(ev: Ev, a: Node[], i: number, d: number, fallback?: number): number | CellError {
+  const n = num1(ev, a[i]?.t === 'blank' ? [] : a, i, d, fallback);
+  if (n instanceof CellError) return n;
+  return n < 0 || n > 2_958_465.99999 ? E.NUM : n;
+}
+
+const dayOf = (n: number): number => Math.floor(n);
+/** Seconds into the day, to the nearest second (so 0.999999 is the next day's 0:00:00). */
+const secondsOf = (n: number): number => Math.round((n - Math.floor(n)) * 86400) % 86400;
+
+/** The same day `months` later (or the month's last day when it has fewer). */
+function addMonths(serial: number, months: number): number {
+  const p = partsOf(serial);
+  const total = p.y * 12 + (p.m - 1) + months;
+  const y = Math.floor(total / 12);
+  const m = (total % 12) + 1;
+  if (y < 1900 || y > 9999) return NaN;
+  return serialOf(y, m, 1) + Math.min(p.d, daysInMonth(y, m)) - 1;
+}
+
+/** Holidays for WORKDAY and NETWORKDAYS, as whole days. */
+function holidays(ev: Ev, n: Node | undefined, d: number): Set<number> | CellError {
+  const out = new Set<number>();
+  if (n === undefined || n.t === 'blank') return out;
+  const g = grid(ev, n, d);
+  if (g instanceof CellError) return g;
+  for (const row of g) for (const v of row) {
+    if (v === null) continue;
+    const x = toNumber(v);
+    if (x instanceof CellError) return x;
+    out.add(Math.floor(x));
+  }
+  return out;
+}
+
+const weekend = (serial: number): boolean => {
+  const wd = partsOf(serial).wd;
+  return wd === 0 || wd === 6;
+};
+
+/** The weekday of a serial with WEEKDAY's return types (1: Sunday is 1, 2: Monday is 1, 3: Monday is 0, 11-17). */
+function weekday(serial: number, type: number): number | CellError {
+  const wd = partsOf(serial).wd;
+  if (type === 1 || type === 17) return wd + 1;
+  if (type === 2 || type === 11) return ((wd + 6) % 7) + 1;
+  if (type === 3) return (wd + 6) % 7;
+  if (type >= 12 && type <= 16) return ((wd - (type - 10) + 7) % 7) + 1;
+  return E.NUM;
+}
+
+function isoWeek(serial: number): number {
+  const p = partsOf(serial);
+  const t = new Date(Date.UTC(p.y, p.m - 1, p.d));
+  const dn = (t.getUTCDay() + 6) % 7;
+  t.setUTCDate(t.getUTCDate() - dn + 3);
+  const firstThu = new Date(Date.UTC(t.getUTCFullYear(), 0, 4));
+  return 1 + Math.round(((t.getTime() - firstThu.getTime()) / 86_400_000 - 3 + ((firstThu.getUTCDay() + 6) % 7)) / 7);
+}
+
+const DATE_FUNCTIONS: Record<string, Fn> = {
+  // Lists multiplied value by value, then added up; text and blanks count as 0.
+  SUMPRODUCT: (ev, a, d) => {
+    if (!a.length) return E.VALUE;
+    const grids: Grid[] = [];
+    for (const n of a) {
+      const g = grid(ev, n, d);
+      if (g instanceof CellError) return g;
+      if (grids.length && (g.length !== grids[0].length || g[0].length !== grids[0][0].length)) return E.VALUE;
+      grids.push(g);
+    }
+    let total = 0;
+    for (let r = 0; r < grids[0].length; r++) {
+      for (let c = 0; c < grids[0][0].length; c++) {
+        let p = 1;
+        for (const g of grids) {
+          const v = g[r][c];
+          if (v instanceof CellError) return v;
+          p *= typeof v === 'number' ? v : 0;
+        }
+        total += p;
+      }
+    }
+    return clean(total);
+  },
+  TODAY: () => nowSerial(false),
+  NOW: () => nowSerial(true),
+  // DATE(year, month, day): months and days past their ends roll over; a year under 1900 has 1900 added, as in Excel.
+  DATE: (ev, a, d) => {
+    const y = int(ev, a, 0, d, NaN);
+    const m = int(ev, a, 1, d, NaN);
+    const day = int(ev, a, 2, d, NaN);
+    if (y instanceof CellError) return y;
+    if (m instanceof CellError) return m;
+    if (day instanceof CellError) return day;
+    if (Number.isNaN(y) || Number.isNaN(m) || Number.isNaN(day)) return E.VALUE;
+    const year = y >= 0 && y < 1900 ? y + 1900 : y;
+    if (year < 0 || year > 9999) return E.NUM;
+    const s = serialOf(year, m, 1) + day - 1;
+    return Number.isNaN(s) || s < 0 || s > 2_958_465 ? E.NUM : s;
+  },
+  TIME: (ev, a, d) => {
+    const h = int(ev, a, 0, d, NaN);
+    const m = int(ev, a, 1, d, NaN);
+    const sec = int(ev, a, 2, d, NaN);
+    if (h instanceof CellError) return h;
+    if (m instanceof CellError) return m;
+    if (sec instanceof CellError) return sec;
+    const total = h * 3600 + m * 60 + sec;
+    if (!(total >= 0)) return E.NUM;
+    return clean((total % 86400) / 86400);
+  },
+  YEAR: (ev, a, d) => { const n = serialArg(ev, a, 0, d, 0); return n instanceof CellError ? n : partsOf(dayOf(n)).y; },
+  MONTH: (ev, a, d) => { const n = serialArg(ev, a, 0, d, 0); return n instanceof CellError ? n : partsOf(dayOf(n)).m; },
+  DAY: (ev, a, d) => { const n = serialArg(ev, a, 0, d, 0); return n instanceof CellError ? n : partsOf(dayOf(n)).d; },
+  HOUR: (ev, a, d) => { const n = serialArg(ev, a, 0, d, 0); return n instanceof CellError ? n : Math.floor(secondsOf(n) / 3600); },
+  MINUTE: (ev, a, d) => { const n = serialArg(ev, a, 0, d, 0); return n instanceof CellError ? n : Math.floor((secondsOf(n) % 3600) / 60); },
+  SECOND: (ev, a, d) => { const n = serialArg(ev, a, 0, d, 0); return n instanceof CellError ? n : secondsOf(n) % 60; },
+  WEEKDAY: (ev, a, d) => {
+    const n = serialArg(ev, a, 0, d, 0);
+    const type = int(ev, a, 1, d, 1);
+    if (n instanceof CellError) return n;
+    if (type instanceof CellError) return type;
+    return weekday(n, type);
+  },
+  // WEEKNUM: the week holding 1 January is week 1; weeks start on Sunday (type 1), Monday (2 or 11), ... ; 21 is ISO.
+  WEEKNUM: (ev, a, d) => {
+    const n = serialArg(ev, a, 0, d, 0);
+    const type = int(ev, a, 1, d, 1);
+    if (n instanceof CellError) return n;
+    if (type instanceof CellError) return type;
+    if (type === 21) return isoWeek(n);
+    const start = type === 1 || type === 17 ? 0 : type === 2 || type === 11 ? 1 : type >= 12 && type <= 16 ? type - 10 : -1;
+    if (start < 0) return E.NUM;
+    const day = dayOf(n);
+    const jan1 = serialOf(partsOf(day).y, 1, 1);
+    const offset = (partsOf(jan1).wd - start + 7) % 7;
+    return Math.floor((day - jan1 + offset) / 7) + 1;
+  },
+  ISOWEEKNUM: (ev, a, d) => { const n = serialArg(ev, a, 0, d); return n instanceof CellError ? n : isoWeek(n); },
+  EDATE: (ev, a, d) => {
+    const n = serialArg(ev, a, 0, d);
+    const m = int(ev, a, 1, d, NaN);
+    if (n instanceof CellError) return n;
+    if (m instanceof CellError) return m;
+    const s = addMonths(dayOf(n), m);
+    return Number.isNaN(s) || s < 0 ? E.NUM : s;
+  },
+  EOMONTH: (ev, a, d) => {
+    const n = serialArg(ev, a, 0, d);
+    const m = int(ev, a, 1, d, NaN);
+    if (n instanceof CellError) return n;
+    if (m instanceof CellError) return m;
+    const p = partsOf(dayOf(n));
+    const total = p.y * 12 + (p.m - 1) + m + 1;
+    const s = serialOf(Math.floor(total / 12), (total % 12) + 1, 1) - 1;
+    return Number.isNaN(s) || s < 0 ? E.NUM : s;
+  },
+  // DATEDIF(start, end, "Y" | "M" | "D" | "YM" | "MD" | "YD"): whole years, months or days between two dates.
+  DATEDIF: (ev, a, d) => {
+    const s0 = serialArg(ev, a, 0, d);
+    const e0 = serialArg(ev, a, 1, d);
+    const unit = str(ev, a, 2, d);
+    if (s0 instanceof CellError) return s0;
+    if (e0 instanceof CellError) return e0;
+    if (unit instanceof CellError) return unit;
+    const s = dayOf(s0);
+    const e = dayOf(e0);
+    if (s > e) return E.NUM;
+    const ps = partsOf(s);
+    const pe = partsOf(e);
+    const months = (pe.y - ps.y) * 12 + (pe.m - ps.m) - (pe.d < ps.d ? 1 : 0);
+    switch (unit.toUpperCase()) {
+      case 'D': return e - s;
+      case 'M': return months;
+      case 'Y': return Math.floor(months / 12);
+      case 'YM': return months % 12;
+      case 'MD': {
+        if (pe.d >= ps.d) return pe.d - ps.d;
+        const pm = pe.m === 1 ? 12 : pe.m - 1;
+        const py = pe.m === 1 ? pe.y - 1 : pe.y;
+        return daysInMonth(py, pm) - ps.d + pe.d;
+      }
+      case 'YD': {
+        let from = serialOf(pe.y, ps.m, 1) + Math.min(ps.d, daysInMonth(pe.y, ps.m)) - 1;
+        if (from > e) from = serialOf(pe.y - 1, ps.m, 1) + Math.min(ps.d, daysInMonth(pe.y - 1, ps.m)) - 1;
+        return e - from;
+      }
+    }
+    return E.NUM;
+  },
+  DAYS: (ev, a, d) => {
+    const e = serialArg(ev, a, 0, d);
+    const s = serialArg(ev, a, 1, d);
+    if (e instanceof CellError) return e;
+    if (s instanceof CellError) return s;
+    return dayOf(e) - dayOf(s);
+  },
+  DATEVALUE: (ev, a, d) => {
+    const t = ev.scalar(a[0] ?? { t: 'blank' }, d + 1);
+    if (t instanceof CellError) return t;
+    if (typeof t !== 'string') return E.VALUE;
+    const r = readDateTime(t, dateOrder);
+    return r ? dayOf(r.serial) : E.VALUE;
+  },
+  TIMEVALUE: (ev, a, d) => {
+    const t = ev.scalar(a[0] ?? { t: 'blank' }, d + 1);
+    if (t instanceof CellError) return t;
+    if (typeof t !== 'string') return E.VALUE;
+    const r = readDateTime(t, dateOrder);
+    return r ? clean(r.serial - dayOf(r.serial)) : E.VALUE;
+  },
+  // Working days (Monday to Friday) from start to end, both counted, less any holidays.
+  NETWORKDAYS: (ev, a, d) => {
+    const s0 = serialArg(ev, a, 0, d);
+    const e0 = serialArg(ev, a, 1, d);
+    if (s0 instanceof CellError) return s0;
+    if (e0 instanceof CellError) return e0;
+    const off = holidays(ev, a[2], d);
+    if (off instanceof CellError) return off;
+    const s = dayOf(s0);
+    const e = dayOf(e0);
+    const step = s <= e ? 1 : -1;
+    let count = 0;
+    for (let day = s; step > 0 ? day <= e : day >= e; day += step) if (!weekend(day) && !off.has(day)) count++;
+    return step * count;
+  },
+  // The working day `days` working days after (or before) start, skipping weekends and holidays.
+  WORKDAY: (ev, a, d) => {
+    const s0 = serialArg(ev, a, 0, d);
+    const n = int(ev, a, 1, d, NaN);
+    if (s0 instanceof CellError) return s0;
+    if (n instanceof CellError) return n;
+    if (!Number.isFinite(n) || Math.abs(n) > 1_000_000) return E.NUM;
+    const off = holidays(ev, a[2], d);
+    if (off instanceof CellError) return off;
+    let day = dayOf(s0);
+    const step = n >= 0 ? 1 : -1;
+    for (let left = Math.abs(n); left > 0;) {
+      day += step;
+      if (day < 0 || day > 2_958_465) return E.NUM;
+      if (!weekend(day) && !off.has(day)) left--;
+    }
+    return day;
+  },
+};
+Object.assign(FUNCTIONS, DATE_FUNCTIONS);
+
 function callFunction(ev: Ev, n: { name: string; args: Node[] }, depth: number): Value {
   const fn = FUNCTIONS[n.name];
   return fn ? fn(ev, n.args, depth) : E.NAME;
 }
 
 export function evaluate(node: Node, ctx: Context): Value {
+  dateOrder = ctx.dateOrder ?? 'dmy';
   return new Ev(ctx).scalar(node);
+}
+
+/** True when a formula's answer can be a list (it may fill the cells around it). */
+export function givesList(node: Node): boolean {
+  return Ev.isList(node);
+}
+
+/**
+ * True when the formula works on lists anywhere (=A1:A3*2, SUM(IF(B2:B9>5,1)), FILTER(...)): an Excel file marks such
+ * a formula as a "dynamic array" one, or older Excel rules would read it as one value per row.
+ */
+export function worksOnLists(node: Node): boolean {
+  if (Ev.isList(node)) return true;
+  const walk = (n: Node): boolean => {
+    switch (n.t) {
+      case 'bin': return Ev.isList(n) || walk(n.l) || walk(n.r);
+      case 'un': return Ev.isList(n) || walk(n.x);
+      case 'call': return Ev.isList(n) || n.args.some(walk);
+      case 'array': return n.rows.some(r => r.some(walk));
+      default: return false;
+    }
+  };
+  return walk(node);
+}
+
+/** A cell's formula worked out: one value, or the list it fills the cells around it with. */
+export function evaluateCell(node: Node, ctx: Context): Value | Grid {
+  dateOrder = ctx.dateOrder ?? 'dmy';
+  const ev = new Ev(ctx);
+  if (!Ev.isList(node)) return ev.scalar(node);
+  const g = ev.block(node);
+  if (g instanceof CellError) return g;
+  return g.length && g[0].length ? g : E.CALC;
+}
+
+/** The first function a formula calls, read from its top (=DATE(...)+1 is DATE), for choosing a format. */
+export function leadingFunction(node: Node): string | null {
+  let n: Node = node;
+  for (;;) {
+    if (n.t === 'call') return n.name;
+    if (n.t === 'bin') n = n.l;
+    else if (n.t === 'un') n = n.x;
+    else return null;
+  }
 }
 
 export const FUNCTION_NAMES = [...Object.keys(FUNCTIONS), ...Object.keys(LIST_FUNCTIONS)].sort();

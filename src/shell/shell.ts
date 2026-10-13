@@ -526,7 +526,12 @@ export async function startDesktop(root: HTMLElement, store: Store, account: Acc
   const surface = (error: unknown) => {
     if (!shell.dialogs.isOpen) void shell.report('Something went wrong', error);
   };
-  on(window, 'error', (event: ErrorEvent) => surface(event.error ?? event.message), signal);
+  on(window, 'error', (event: ErrorEvent) => {
+    // The browser's note that a size watcher saw more changes in one frame than it could pass on (a viewer fitting a
+    // page to its window) is not a failure: nothing went wrong and nothing was lost, so it is not shown.
+    if (!event.error && /^ResizeObserver loop/.test(event.message)) return;
+    surface(event.error ?? event.message);
+  }, signal);
   on(window, 'unhandledrejection', (event: PromiseRejectionEvent) => surface(event.reason), signal);
   // The menu key and Escape close the Start menu and menus from anywhere, unless the Start menu used the Escape itself
   // (to close one of its All Programs columns).

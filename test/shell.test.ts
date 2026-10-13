@@ -257,6 +257,8 @@ test('no source file writes HTML, runs code from text, or leaves the site', () =
 // comment (the first version of this test stripped every "https://..." as a comment, so it could never fail).
 const OUTSIDE: Array<[string, RegExp, string]> = [
   ['http://www.w3.org/2000/svg', /./, 'the SVG namespace (not a request)'],
+  ['http://schemas.openxmlformats.org/', /apps[\\/]sheet[\\/]xlsx(-parts)?\.ts$/, 'names written inside an Excel file (XML namespaces and part types, not requests)'],
+  ['http://schemas.microsoft.com/office/spreadsheetml/', /apps[\\/]sheet[\\/]xlsx\.ts$/, 'the name Excel 365 gives its "dynamic array" mark inside a file (not a request)'],
   ['https://codemirror.net/', /apps[\\/]about\.ts$/, 'a link on the Credits page, opened only when clicked'],
   ['https://github.com/mlc-ai/web-llm', /apps[\\/]about\.ts$/, 'a link on the Credits page, opened only when clicked'],
   ['https://github.com/anthropics/anthropic-sdk-php', /apps[\\/]about\.ts$/, 'a link on the Credits page, opened only when clicked'],

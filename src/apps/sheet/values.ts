@@ -1,4 +1,7 @@
-// What a cell can hold, and how a value is shown as text (General, Number, Currency, Percent, Comma).
+// What a cell can hold, and how a value is shown as text (General, Number, Currency, Percent, Comma, or a format code
+// such as dd/mm/yyyy or #,##0.00, see numfmt.ts).
+import { formatCode, type Formatted } from './numfmt.ts';
+
 export class CellError {
   readonly code: string;
   constructor(code: string) {
@@ -15,6 +18,8 @@ export const E = {
   CIRC: new CellError('#CIRC!'),
   /** A list that came out empty (TEXTSPLIT with nothing left). */
   CALC: new CellError('#CALC!'),
+  /** A list result that cannot fill the cells it needs (something is typed in one, or it runs off the sheet). */
+  SPILL: new CellError('#SPILL!'),
 };
 
 /** null = an empty cell. */
@@ -27,15 +32,23 @@ export interface CellStyle {
   al?: 'l' | 'c' | 'r';
   /** Wrap text: long text and line breaks show on several lines, and the row grows to fit. */
   wrap?: boolean;
-  fmt?: 'number' | 'currency' | 'percent' | 'comma' | 'text';
+  /** 'custom': shown through `code`, a format code (dates, times, 000-000, [Red]...). */
+  fmt?: 'number' | 'currency' | 'percent' | 'comma' | 'text' | 'custom';
   dec?: number;
+  code?: string;
   fill?: string;
   color?: string;
-  bt?: boolean;
-  bb?: boolean;
-  bl?: boolean;
-  br?: boolean;
+  /** Borders, top, bottom, left, right: true is a thin line. */
+  bt?: Line;
+  bb?: Line;
+  bl?: Line;
+  br?: Line;
+  /** The border colour (black when not set). */
+  bc?: string;
 }
+
+/** A border line: thin (true), medium, thick or double, as Excel draws them. */
+export type Line = true | 'medium' | 'thick' | 'double';
 
 /** Rounds away binary noise, so 0.1 + 0.2 is 0.3, the way a spreadsheet shows it. */
 export const clean = (n: number): number => (Number.isFinite(n) ? parseFloat(n.toPrecision(15)) : n);
@@ -78,10 +91,22 @@ export function formatNumber(n: number, style: CellStyle | undefined, symbol = '
   return `${neg ? '-' : ''}${fmt === 'currency' ? symbol : ''}${body}`;
 }
 
+/** What a value looks like in a cell with this style, and the colour its format code asks for, if any. */
+export function formatValue(v: Value, style: CellStyle | undefined, symbol = '$'): Formatted {
+  if (v === null) return { text: '' };
+  if (v instanceof CellError) return { text: v.code };
+  if (style?.fmt === 'custom' && style.code) {
+    try {
+      return formatCode(v, style.code);
+    } catch {
+      // A code that does not read (from an edited file): shown as General.
+    }
+  }
+  if (typeof v === 'boolean') return { text: v ? 'TRUE' : 'FALSE' };
+  if (typeof v === 'number') return { text: formatNumber(v, style?.fmt === 'custom' ? undefined : style, symbol) };
+  return { text: v };
+}
+
 export function valueText(v: Value, style: CellStyle | undefined, symbol = '$'): string {
-  if (v === null) return '';
-  if (v instanceof CellError) return v.code;
-  if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';
-  if (typeof v === 'number') return formatNumber(v, style, symbol);
-  return v;
+  return formatValue(v, style, symbol).text;
 }

@@ -320,6 +320,8 @@ body.is-dragging .win-body { pointer-events: none; }
 
 .backdrop { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 12px; background: rgba(10, 20, 40, .35); }
 .dialog { width: min(420px, 100%); max-height: 100%; overflow: auto; background: var(--face); border: 3px solid #0b4fd6; border-radius: 8px; box-shadow: 4px 6px 22px rgba(0, 0, 0, .5); outline: none; }
+/* A dialog that holds a wide form (the spreadsheet's chart, print, page setup, validation and rule screens) is as wide as it. */
+.dialog:has(.chart-dialog, .pp-dialog, .ps-dialog, .dv-dialog, .cf-manage-wrap, .xlsx-report) { width: auto; max-width: 100%; }
 .dialog-title { padding: 6px 10px; color: #fff; font-weight: 700; text-shadow: 1px 1px 1px rgba(0, 0, 0, .5); background: linear-gradient(to bottom, #6db2ff, #0a5be0 50%, #0a45b0); }
 .dialog-body { padding: 12px; }
 .dialog-text { margin: 0; white-space: pre-line; overflow-wrap: anywhere; }
@@ -422,6 +424,9 @@ body.is-dragging .win-body { pointer-events: none; }
 .file-tab { border: 0; padding: 4px 16px; background: #1e7a45; color: #fff; font-weight: 600; cursor: pointer; border-radius: 3px 3px 0 0; }
 .file-tab:hover { background: #196a3c; }
 .home-tab { padding: 4px 14px; background: #f3f3f3; border: 1px solid #c8c8c8; border-bottom-color: #f3f3f3; margin-bottom: -1px; border-radius: 3px 3px 0 0; }
+.ribbon-tab { border: 1px solid transparent; border-bottom: 0; padding: 4px 14px; margin-bottom: -1px; background: none; color: #222; cursor: pointer; border-radius: 3px 3px 0 0; font-size: 13px; }
+.ribbon-tab:hover { background: #dcdcdc; }
+.ribbon-tab[aria-selected="true"] { background: #f3f3f3; border-color: #c8c8c8; border-bottom: 1px solid #f3f3f3; color: #1e7a45; font-weight: 600; }
 .ribbon { position: relative; display: flex; flex-wrap: wrap; align-items: stretch; gap: 0; padding: 4px 6px; background: #f3f3f3; border-bottom: 1px solid #c8c8c8; }
 .rgroup { display: flex; flex-direction: column; padding: 0 8px; border-right: 1px solid #d4d4d4; }
 .rgroup:last-child { border-right: 0; }
@@ -438,11 +443,37 @@ body.is-dragging .win-body { pointer-events: none; }
 .rb-a { font-weight: 700; }
 .rb-swatch { position: absolute; left: 6px; right: 14px; bottom: 3px; height: 3px; }
 .rb-select { height: 26px; font-size: 13px; border: 1px solid #bdbdbd; border-radius: 3px; background: #fff; }
+.fmt-dialog { width: min(360px, 80vw); }
+.fmt-dialog .dialog-label + .dialog-label { margin-top: 8px; }
+.fmt-list { height: auto; font: 13px "Segoe UI", Arial, sans-serif; }
+.fmt-sample-row { margin: 8px 0 0; font-size: 13px; }
+.fmt-sample { display: inline-block; min-width: 8em; padding: 2px 6px; border: 1px solid #d0d0d0; background: #fafafa; white-space: pre; }
 .palette { position: absolute; z-index: 30; width: 184px; padding: 6px; background: #fff; border: 1px solid #b5b5b5; box-shadow: 0 4px 12px rgba(0, 0, 0, .3); border-radius: 4px; }
 .palette-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; margin-top: 6px; }
 .palette-sw { height: 26px; border: 1px solid #999; border-radius: 3px; cursor: pointer; }
 .palette-sw:hover, .palette-sw:focus-visible { outline: 2px solid #1e7a45; }
 .palette-none { width: 100%; text-align: left; padding: 4px 6px; border: 0; background: #f0f0f0; cursor: pointer; border-radius: 3px; }
+.xlsx-report { width: min(480px, 82vw); max-height: 60vh; overflow: auto; }
+.xlsx-list { margin: 4px 0 10px; padding-left: 20px; font-size: 13px; line-height: 1.45; }
+.filter-box { position: absolute; z-index: 30; width: 250px; padding: 6px; display: flex; flex-direction: column; gap: 4px; background: #fff; color: #222; border: 1px solid #b5b5b5; box-shadow: 0 4px 12px rgba(0, 0, 0, .3); border-radius: 4px; font-size: 13px; }
+.filter-action { text-align: left; padding: 5px 6px; border: 0; background: none; color: #222; cursor: pointer; border-radius: 3px; font-size: 13px; }
+.filter-action:hover:not(:disabled), .filter-action:focus-visible { background: #e3efe7; }
+.filter-action:disabled { color: #8a8a8a; cursor: default; }
+.filter-search { margin: 2px 0; }
+.filter-list { max-height: 200px; overflow: auto; border: 1px solid #d0d0d0; padding: 2px 0; }
+.filter-value { display: flex; align-items: center; gap: 6px; padding: 2px 6px; cursor: pointer; white-space: nowrap; }
+.filter-value[hidden] { display: none; }
+.filter-value span { overflow: hidden; text-overflow: ellipsis; }
+.filter-all { font-weight: 600; }
+.filter-buttons, .find-buttons { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.find-panel { position: absolute; z-index: 25; right: 16px; top: 120px; width: min(340px, calc(100% - 32px)); padding: 10px; background: #fff; color: #222; border: 1px solid #b5b5b5; box-shadow: 0 4px 14px rgba(0, 0, 0, .3); border-radius: 4px; font-size: 13px; }
+.find-row { display: grid; grid-template-columns: 92px 1fr; align-items: center; gap: 6px; margin-bottom: 6px; }
+.find-row[hidden] { display: none; }
+.find-options { display: flex; flex-direction: column; gap: 4px; margin: 4px 0; }
+.find-options .find-row { margin-bottom: 0; }
+.find-hint { margin: 4px 0; font-size: 12px; color: #555; }
+.find-status { min-height: 1.3em; margin: 4px 0; color: #1b3f7a; }
+.sheet-filter-note { color: #1b3f7a; }
 .formula-bar { display: flex; align-items: flex-start; gap: 4px; padding: 3px 6px; background: #fff; border-bottom: 1px solid #c8c8c8; }
 .name-box { width: 96px; height: 24px; border: 1px solid #bdbdbd; padding: 0 6px; font: 13px "Segoe UI", Arial, sans-serif; }
 .fx { font-style: italic; font-weight: 700; color: #666; padding: 0 6px; border-left: 1px solid #ddd; border-right: 1px solid #ddd; }
@@ -461,6 +492,97 @@ body.is-dragging .win-body { pointer-events: none; }
 .sheet-status .spacer { flex: 1; }
 .zoom-btn { min-width: 22px; height: 20px; padding: 0; }
 .zoom-label { min-width: 40px; text-align: center; }
+
+/* Charts over the grid: a frame per chart, four corner handles while it is selected. */
+.chart-rb { flex-direction: column; height: auto; min-height: 46px; padding: 2px 6px; font-size: 12px; gap: 2px; }
+.chart-icon { width: 20px; height: 20px; }
+.chart-layer { position: absolute; inset: 0; z-index: 4; pointer-events: none; overflow: hidden; }
+.chart-clip { position: absolute; overflow: hidden; }
+.chart-frame { position: absolute; box-sizing: border-box; pointer-events: auto; cursor: move; outline: none; background: #fff; touch-action: none; }
+.chart-frame .chart-svg { display: block; }
+.chart-frame.selected, .chart-frame:focus-visible { box-shadow: 0 0 0 2px #1e7a45; }
+.chart-handle { position: absolute; display: none; width: 10px; height: 10px; box-sizing: border-box; background: #fff; border: 2px solid #1e7a45; border-radius: 2px; }
+.chart-frame.selected .chart-handle { display: block; }
+.chart-handle.nw { left: 0; top: 0; cursor: nwse-resize; }
+.chart-handle.ne { right: 0; top: 0; cursor: nesw-resize; }
+.chart-handle.sw { left: 0; bottom: 0; cursor: nesw-resize; }
+.chart-handle.se { right: 0; bottom: 0; cursor: nwse-resize; }
+@media (pointer: coarse) { .chart-handle { width: 18px; height: 18px; } }
+.chart-dialog { display: flex; flex-wrap: wrap; gap: 16px; width: min(860px, 86vw); max-height: 70vh; overflow: auto; }
+.chart-form { flex: 1 1 320px; min-width: 0; }
+.chart-preview { flex: 1 1 340px; min-width: 0; }
+.chart-preview svg { width: 100%; height: auto; border: 1px solid #d0d0d0; }
+.chart-row { display: grid; grid-template-columns: 150px minmax(0, 1fr); align-items: center; gap: 8px; margin-bottom: 6px; font-size: 13px; }
+.chart-check { display: flex; align-items: center; gap: 6px; margin: 4px 0 8px; font-size: 13px; }
+.chart-row[hidden], .chart-check[hidden] { display: none; }
+.chart-series-head { margin: 8px 0 4px; font-weight: 600; font-size: 13px; }
+.chart-swatch { display: inline-block; width: 12px; height: 12px; border: 1px solid #888; vertical-align: -1px; }
+
+/* Conditional formatting and data validation. */
+.cf-dialog { width: min(440px, 82vw); }
+.cf-pair { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.cf-pair .field { flex: 1; min-width: 70px; }
+.cf-n, .ps-num { flex: 0 0 auto; width: 80px; }
+.cf-sample { display: inline-block; padding: 2px 8px; border: 1px solid #c8c8c8; font-size: 13px; }
+.cf-look-row { margin: 8px 0 0; font-size: 13px; }
+.cf-manage-wrap { width: min(580px, 86vw); max-height: 62vh; overflow: auto; }
+.cf-rule { margin-bottom: 8px; padding: 8px; border: 1px solid #d0d0d0; border-radius: 4px; }
+.cf-rule-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13px; }
+.cf-rule-where { display: grid; grid-template-columns: 90px minmax(0, 1fr); align-items: center; gap: 6px; margin: 6px 0; font-size: 13px; }
+.cf-rule-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; }
+.cf-rule-tools label { margin-right: auto; }
+.dv-dialog, .ps-dialog { width: min(600px, 88vw); max-height: 70vh; overflow: auto; }
+.dv-set { margin: 0 0 10px; padding: 8px 10px; border: 1px solid #d0d0d0; border-radius: 4px; }
+.dv-set legend { padding: 0 4px; font-weight: 600; font-size: 13px; }
+.dv-text { width: 100%; box-sizing: border-box; resize: vertical; font: inherit; }
+.dv-prompt { position: absolute; z-index: 6; max-width: 260px; padding: 6px 8px; background: #fffbe6; color: #222; border: 1px solid #b9a64a; box-shadow: 0 2px 6px rgba(0, 0, 0, .2); font-size: 12px; line-height: 1.4; pointer-events: none; }
+.dv-prompt[hidden] { display: none; }
+.dv-prompt strong { display: block; margin-bottom: 2px; }
+.dv-list { position: absolute; z-index: 7; display: flex; flex-direction: column; max-height: 220px; overflow: auto; padding: 2px 0; background: #fff; color: #222; border: 1px solid #8a8a8a; box-shadow: 0 4px 12px rgba(0, 0, 0, .25); }
+.dv-item { padding: 4px 8px; border: 0; background: none; color: #222; text-align: left; white-space: nowrap; cursor: pointer; font: 13px "Segoe UI", Arial, sans-serif; }
+.dv-item:hover, .dv-item:focus { background: #1e7a45; color: #fff; outline: none; }
+.dv-item[aria-selected="true"]:not(:focus):not(:hover) { background: #e3efe7; }
+.dv-empty { margin: 6px 8px; color: #555; font-size: 13px; }
+
+/* Page setup and print preview. */
+.ps-margins { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; margin: 6px 0; }
+.ps-margin { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.ps-margin span { min-width: 52px; }
+.ps-hf-parts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin-bottom: 8px; }
+.pp-dialog { display: flex; flex-wrap: wrap; gap: 16px; width: min(780px, 90vw); max-height: 76vh; overflow: auto; }
+.pp-side { flex: 0 1 230px; display: flex; flex-direction: column; gap: 8px; min-width: 200px; }
+.pp-main { flex: 1 1 420px; display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 0; }
+.pp-view { display: flex; justify-content: center; align-items: center; width: 100%; min-height: 300px; box-sizing: border-box; padding: 12px; background: #8c8c8c; }
+.pp-view svg { max-width: 100%; height: auto; background: #fff; box-shadow: 0 2px 8px rgba(0, 0, 0, .4); }
+.pp-nav { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.pp-empty { color: #fff; font-size: 13px; text-align: center; }
+
+/* Printing a sheet: only its pages go to paper, each on a page of its own size (named pages). */
+.sheet-print { display: none; }
+@page sheet-a4-portrait { size: A4 portrait; margin: 0; }
+@page sheet-a4-landscape { size: A4 landscape; margin: 0; }
+@page sheet-letter-portrait { size: letter portrait; margin: 0; }
+@page sheet-letter-landscape { size: letter landscape; margin: 0; }
+@page sheet-legal-portrait { size: legal portrait; margin: 0; }
+@page sheet-legal-landscape { size: legal landscape; margin: 0; }
+@page sheet-a3-portrait { size: A3 portrait; margin: 0; }
+@page sheet-a3-landscape { size: A3 landscape; margin: 0; }
+@media print {
+  html:has(body.printing-sheet), body.printing-sheet { height: auto !important; overflow: visible !important; background: #fff !important; }
+  body.printing-sheet > *:not(.sheet-print) { display: none !important; }
+  body.printing-sheet > .sheet-print { display: block; }
+  .print-sheet-page { break-after: page; margin: 0; }
+  .print-sheet-page:last-child { break-after: auto; }
+  .print-sheet-page svg { display: block; }
+  .paper-a4-portrait { page: sheet-a4-portrait; }
+  .paper-a4-landscape { page: sheet-a4-landscape; }
+  .paper-letter-portrait { page: sheet-letter-portrait; }
+  .paper-letter-landscape { page: sheet-letter-landscape; }
+  .paper-legal-portrait { page: sheet-legal-portrait; }
+  .paper-legal-landscape { page: sheet-legal-landscape; }
+  .paper-a3-portrait { page: sheet-a3-portrait; }
+  .paper-a3-landscape { page: sheet-a3-landscape; }
+}
 
 /* ---- RISC-V Studio: a modern code tool (Xfce-style menus and dialogs, a dark editor) -------------------------------- */
 .studio {

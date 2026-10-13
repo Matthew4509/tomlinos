@@ -38,6 +38,21 @@ export function parseCellRef(text: string): Ref | null {
   return { col, row, absC: m[1] === '$', absR: m[3] === '$' };
 }
 
+const COLUMN = /^(\$?)([A-Za-z]{1,3})$/;
+
+/** "B" or "$B" as one end of a whole-column range (A:A); null when it is not a column on the sheet. */
+export function parseColRef(text: string): { col: number; absC: boolean } | null {
+  const m = COLUMN.exec(text);
+  if (!m) return null;
+  const col = colIndex(m[2]);
+  return col >= 0 && col < MAX_COLS ? { col, absC: m[1] === '$' } : null;
+}
+
+/** A:C as a range: the whole height of the sheet (rows fixed, so copying it never moves them). */
+export function wholeColumns(a: { col: number; absC: boolean }, b: { col: number; absC: boolean }): [Ref, Ref] {
+  return [{ col: a.col, row: 0, absC: a.absC, absR: true }, { col: b.col, row: MAX_ROWS - 1, absC: b.absC, absR: true }];
+}
+
 export function refText(r: Ref): string {
   return `${r.absC ? '$' : ''}${colName(r.col)}${r.absR ? '$' : ''}${r.row + 1}`;
 }
@@ -148,6 +163,24 @@ export function mapRefs(
   for (let k = 0; k < toks.length; k++) {
     const t = toks[k];
     if (t.type !== 'ident') continue;
+    // A:C (whole columns) is a range from the top of the sheet to the bottom, and is written back as columns.
+    const wa = toks[k + 1]?.type === 'colon' && toks[k + 2]?.type === 'ident' ? parseColRef(t.text) : null;
+    const wb = wa ? parseColRef(toks[k + 2].text) : null;
+    if (wa && wb && toks[k + 1].start === t.end && toks[k + 2].start === toks[k + 1].end) {
+      let sheet: string | undefined;
+      let first = k;
+      if (toks[k - 1]?.type === 'bang' && (toks[k - 2]?.type === 'ident' || toks[k - 2]?.type === 'sheetq')) {
+        sheet = sheetNameOf(toks[k - 2]);
+        first = k - 2;
+      }
+      const [ra, rb] = wholeColumns(wa, wb);
+      const result = fn(ra, rb, sheet);
+      const prefix = sheet !== undefined ? `${quoteSheet(sheet)}!` : '';
+      const colText = (r: Ref) => `${r.absC ? '$' : ''}${colName(r.col)}`;
+      edits.push({ start: toks[first].start, end: toks[k + 2].end, text: result && result[1] ? prefix + colText(result[0]) + ':' + colText(result[1]) : '#REF!' });
+      k += 2;
+      continue;
+    }
     const a = parseCellRef(t.text);
     if (!a || toks[k + 1]?.type === 'lp') continue;
     let sheet: string | undefined;

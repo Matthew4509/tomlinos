@@ -14,6 +14,8 @@ const IMAGE: FileType = { label: 'Picture', icon: 'image', apps: ['photos', 'pho
 const VIDEO: FileType = { label: 'Video', icon: 'video', apps: ['player'] };
 const AUDIO: FileType = { label: 'Music', icon: 'music', apps: ['player'] };
 const SHEET: FileType = { label: 'Spreadsheet', icon: 'sheet', apps: ['sheet'] };
+/** A zip of XML inside: not searched as text (search.ts reads only the text kinds). */
+const EXCEL: FileType = { label: 'Excel workbook', icon: 'sheet', apps: ['sheet'] };
 const CALC: FileType = { label: 'Calculator sheet', icon: 'calculator', apps: ['calculator'] };
 const ARCHIVE: FileType = { label: 'Compressed folder', icon: 'archive', apps: ['archive'] };
 const CODE: FileType = { label: 'Code or data file', icon: 'code', apps: ['editor', 'notepadpro'] };
@@ -38,6 +40,8 @@ const GROUPS: Array<[FileType, string[]]> = [
   [ASM, ['s', 'asm']],
   [PDF, ['pdf']],
   [SHEET, ['sheet', 'csv', 'tsv']],
+  // Excel workbooks open in the Spreadsheet (an .xls, Excel's old binary kind, opens to a message saying how to convert it).
+  [EXCEL, ['xlsx', 'xlsm', 'xls']],
   [CALC, ['calc']],
   [CALENDAR, ['ics']],
   [CONTACTS, ['vcf']],

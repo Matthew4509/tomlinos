@@ -1088,6 +1088,380 @@ await step('Spreadsheet: a pasted block keeps its lines in one cell, Alt+Enter a
   await page.locator('.dialog').getByRole('button', { name: 'Close without saving' }).click();
 });
 
+await step('Spreadsheet: FILTER and SORT fill the cells below them, a typed date stays a date, and More formats takes an Excel format code', async () => {
+  await closeAll();
+  await page.locator('.start-btn').click();
+  await page.locator('.start-filter').fill('spreadsheet');
+  await page.locator('.start-item', { hasText: 'Spreadsheet' }).click();
+  await page.locator('.sheet .grid-scroll').waitFor();
+  const bar = page.locator('.sheet .formula-input');
+  await goTo('A1');
+  await typeRow(['Ann', 'Paid', '120']);
+  await typeRow(['Bob', 'Due', '80']);
+  await typeRow(['Cara', 'Paid', '45']);
+  await typeRow(['Dan', 'Paid', '300']);
+  await goTo('E1');
+  await page.keyboard.type('=SORT(FILTER(A1:C4,B1:B4="Paid"),3,-1)');
+  await page.keyboard.press('Enter');
+  eq(await cell('E1'), 'Dan', 'the formula cell shows the first of the list');
+  eq(await cell('E3'), 'Cara', 'the list filled the cells below');
+  eq(await cell('G2'), '120', 'and to the right');
+  eq(await cell('E4'), 'empty', 'and stopped where the list ends');
+  await goTo('F2');
+  eq(await bar.inputValue(), '', 'a filled cell holds nothing itself');
+  eq(await bar.getAttribute('placeholder'), '=SORT(FILTER(A1:C4,B1:B4="Paid"),3,-1)', 'the formula bar shows the list\'s formula, greyed');
+  await page.keyboard.type('x');
+  await page.keyboard.press('Enter');
+  eq(await cell('E1'), '#SPILL!', 'typing in the list\'s cells stops it');
+  await goTo('F2');
+  await page.keyboard.press('Delete');
+  eq(await cell('E1'), 'Dan', 'clearing the cell lets it fill again');
+  eq(await cell('F2'), 'Paid', 'and the cell shows the list again');
+  await goTo('I1');
+  await page.keyboard.type('=SUM(E1#)');
+  await page.keyboard.press('Enter');
+  eq(await cell('I1'), '465', 'E1# is the whole list the formula fills');
+  // File > Read typed dates as: the test browser is set to US English, so day first is chosen here, as a person
+  // in a day-first country with such a browser would. (Left on month first, 13/10/2026 would stay text.)
+  const order = async label => {
+    await page.locator('.sheet .file-tab').click();
+    await page.locator('.menu-item', { hasText: 'Read typed dates as' }).click();
+    await page.getByRole('menuitemcheckbox', { name: label }).click();
+  };
+  await order(/Day first/);
+  // A typed date is a date: shown as typed, edited as a date, counted in days.
+  await goTo('A6');
+  await page.keyboard.type('13/10/2026');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('=A6+30');
+  await page.keyboard.press('Enter');
+  eq(await cell('A6'), '13/10/2026', 'the date as typed');
+  eq(await cell('A7'), '12/11/2026', 'a date plus 30 days shows as a date');
+  await goTo('A6');
+  eq(await bar.inputValue(), '13/10/2026', 'edited as a date');
+  eq(await page.locator('.sheet .rb-select').inputValue(), 'shortdate', 'the format box says Short date');
+  // Month first, then back to day first.
+  await order(/Month first/);
+  await goTo('A8');
+  await page.keyboard.type('10/13/2026');
+  await page.keyboard.press('Enter');
+  eq(await cell('A8'), '10/13/2026', 'read month first');
+  await page.locator('.sheet .file-tab').click();
+  await page.locator('.menu-item', { hasText: 'Read typed dates as' }).click();
+  eq(await page.getByRole('menuitemcheckbox', { name: /Month first/ }).getAttribute('aria-checked'), 'true', 'the menu shows the choice');
+  await page.keyboard.press('Escape');
+  await order(/Day first/);
+  await goTo('A8');
+  await page.keyboard.press('Delete');
+  // A number given a format from the box, then an Excel format code typed into More formats.
+  await goTo('B6');
+  await page.keyboard.type('46308');
+  await page.keyboard.press('Enter');
+  await goTo('B6');
+  await page.locator('.sheet .rb-select').selectOption('longdate');
+  eq(await cell('B6'), 'Tuesday, 13 October 2026', 'Long date');
+  await goTo('C6');
+  await page.keyboard.type('-1234.5');
+  await page.keyboard.press('Enter');
+  await goTo('C6');
+  await page.locator('.sheet .rb-select').selectOption('more');
+  const dlg = page.locator('.dialog', { hasText: 'More number formats' });
+  await dlg.waitFor();
+  await dlg.getByRole('textbox', { name: 'Format code' }).fill('#,##0.00;[Red](#,##0.00)');
+  eq(await dlg.locator('.fmt-sample').textContent(), '(1,234.50)', 'the sample shows the selected cell');
+  await dlg.getByRole('textbox', { name: 'Format code' }).fill('"open');
+  ok(await dlg.getByRole('button', { name: 'OK' }).isDisabled(), 'a code that does not read cannot be used');
+  await dlg.getByRole('listbox', { name: 'Common formats' }).selectOption('#,##0.00;[Red]-#,##0.00');
+  await dlg.getByRole('button', { name: 'OK' }).click();
+  eq(await cell('C6'), '-1,234.50', 'the code is used');
+  await goTo('C6');
+  ok((await page.locator('.sheet .rb-select').inputValue()) === 'custom', 'the box shows a custom format');
+  ok((await page.locator('.sheet .rb-select option[value=custom]').textContent()).includes('#,##0.00'), 'naming the code');
+  // The [Red] in the code really colours the text, and the list has its blue outline.
+  await goTo('F2');
+  await settle(150);
+  const look = await page.locator('.sheet .grid-canvas').evaluate(c => {
+    const ctx = c.getContext('2d');
+    const d = ctx.getImageData(0, 0, c.width, c.height).data;
+    let red = 0;
+    let blue = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i] > 200 && d[i + 1] < 60 && d[i + 2] < 60) red++;
+      if (d[i] > 30 && d[i] < 70 && d[i + 1] > 90 && d[i + 1] < 130 && d[i + 2] > 190) blue++;
+    }
+    return { red, blue };
+  });
+  ok(look.red > 10, `red text drawn (${look.red} pixels)`);
+  ok(look.blue > 40, `blue outline round the list (${look.blue} pixels)`);
+  if (process.env.SHOTS) await page.locator('.win', { has: page.locator('.sheet') }).screenshot({ path: `${process.env.SHOTS}/sheet-spill.png` });
+  await page.locator('.win', { has: page.locator('.sheet') }).getByRole('button', { name: 'Close' }).click();
+  await page.locator('.dialog').getByRole('button', { name: 'Close without saving' }).click();
+});
+
+await step('Spreadsheet: freeze, filter, merge, find and replace, then saved as an Excel workbook and opened again with all of it kept', async () => {
+  await closeAll();
+  await page.locator('.start-btn').click();
+  await page.locator('.start-filter').fill('spreadsheet');
+  await page.locator('.start-item', { hasText: 'Spreadsheet' }).click();
+  await page.locator('.sheet .grid-scroll').waitFor();
+  const sw = () => page.locator('.win', { has: page.locator('.sheet') });
+  const ribbonBtn = name => page.locator('.sheet .ribbon').getByRole('button', { name });
+  const gridBox = async () => page.locator('.sheet .grid-scroll').boundingBox();
+  await goTo('A1');
+  await typeRow(['Name', 'Status', 'Amount']);
+  await typeRow(['Ann', 'Paid', '120']);
+  await typeRow(['Bob', 'Due', '80']);
+  await typeRow(['Cara', 'Paid', '45']);
+  await typeRow(['Dan', 'Paid', '300']);
+  // Freeze the top row: scrolled far down, a click on the first row still lands on row 1.
+  await ribbonBtn(/^Freeze panes/).click();
+  await menuPick(['Freeze top row']);
+  eq(await ribbonBtn(/^Freeze panes/).getAttribute('aria-pressed'), 'true', 'the Freeze button shows it is on');
+  await page.locator('.sheet .grid-scroll').evaluate(el => { el.scrollTop = 3000; });
+  await settle(150);
+  let g = await gridBox();
+  await page.mouse.click(g.x + 46 + 30, g.y + 24 + 10);
+  eq(await page.locator('.sheet .name-box').inputValue(), 'A1', 'the frozen row stays in view while the rest scrolls');
+  await page.mouse.click(g.x + 46 + 30, g.y + 24 + 30);
+  ok((await page.locator('.sheet .name-box').inputValue()) !== 'A2', 'below the frozen row is the scrolled part, not row 2');
+  await page.locator('.sheet .grid-scroll').evaluate(el => { el.scrollTop = 0; });
+  // Filter: Ctrl+Shift+L puts ▾ buttons on the header row; the one on Status opens its list of values.
+  await goTo('B2');
+  await page.keyboard.press('Control+Shift+L');
+  eq(await ribbonBtn(/^Filter/).getAttribute('aria-pressed'), 'true', 'the Filter button shows it is on');
+  await settle(150);
+  g = await gridBox();
+  await page.mouse.click(g.x + 46 + 128 - 9, g.y + 24 + 11);
+  const box = page.locator('.sheet .filter-box');
+  await box.waitFor();
+  eq(await box.locator('.filter-value').allInnerTexts(), ['(Select all)', 'Due', 'Paid'], 'the values, in order');
+  await box.getByRole('checkbox', { name: 'Due' }).uncheck();
+  await box.getByRole('button', { name: 'OK' }).click();
+  eq(await page.locator('.sheet .sheet-filter-note').textContent(), '3 of 4 rows shown (filter)', 'the status bar says how many rows show');
+  await goTo('A2');
+  await page.keyboard.press('ArrowDown');
+  eq(await page.locator('.sheet .name-box').inputValue(), 'A4', 'the arrow key steps over the hidden row');
+  // Merge & Center: one cell over three columns; a click on any part of it selects the whole block.
+  await goTo('A7');
+  await page.keyboard.type('Total');
+  await page.keyboard.press('Enter');
+  await goTo('A7:C7');
+  await ribbonBtn(/^Merge cells/).click();
+  await menuPick(['Merge & Center']);
+  g = await gridBox();
+  // Row 3 is hidden by the filter, so row 7 sits five rows down.
+  await page.mouse.click(g.x + 46 + 64 + 30, g.y + 24 + 5 * 20 + 10);
+  eq(await page.locator('.sheet .name-box').inputValue(), 'A7:C7', 'clicking B7 selects the merged block');
+  eq(await page.locator('.sheet .formula-input').inputValue(), 'Total', 'whose value is the top-left cell\'s');
+  // Find and replace: Replace all on what is typed, then Find next goes to a match.
+  await page.keyboard.press('Control+H');
+  const panel = page.locator('.sheet .find-panel');
+  await panel.waitFor();
+  await panel.getByRole('textbox', { name: 'Find what' }).fill('Paid');
+  await panel.getByRole('textbox', { name: 'Replace with' }).fill('Settled');
+  await panel.getByRole('button', { name: 'Replace all' }).click();
+  ok((await panel.locator('.find-status').textContent()).startsWith('Replaced in 3 cells'), 'three cells changed');
+  eq(await cell('B2'), 'Settled', 'replaced');
+  await page.keyboard.press('Control+F');
+  await panel.getByRole('textbox', { name: 'Find what' }).fill('d?n');
+  await panel.getByRole('button', { name: 'Find next' }).click();
+  eq(await page.locator('.sheet .name-box').inputValue(), 'A5', 'Find next went to Dan (? is any one letter)');
+  await panel.getByRole('button', { name: 'Close' }).click();
+  ok(!(await panel.count()), 'the panel closes');
+  if (process.env.SHOTS) await sw().screenshot({ path: `${process.env.SHOTS}/sheet-layout.png` });
+  // Saved as .xlsx (the ending chooses the kind), closed, opened again from Documents: everything is still there.
+  await page.locator('.sheet .grid-scroll').focus();
+  await page.keyboard.press('Control+S');
+  const dlg = page.locator('.dialog');
+  await dlg.waitFor();
+  await dlg.locator('input').fill('orders-' + stamp + '.xlsx');
+  await dlg.getByRole('button', { name: 'Save' }).click();
+  await page.locator('.toast', { hasText: 'Saved “orders-' + stamp + '.xlsx' }).waitFor();
+  const download = page.waitForEvent('download');
+  await page.locator('.sheet .file-tab').click();
+  await menuPick(['Download as Excel workbook \\(\\.xlsx\\)']);
+  const file = await download;
+  eq(file.suggestedFilename(), 'orders-' + stamp + '.xlsx', 'the download is named for the workbook');
+  const bytes = readFileSync(await file.path());
+  eq(bytes.subarray(0, 2).toString('latin1'), 'PK', 'and is a zip, as an .xlsx is');
+  await sw().getByRole('button', { name: 'Close' }).click();
+  const w = await openDocuments();
+  await w.locator('.item', { hasText: 'orders-' + stamp }).first().dblclick();
+  await page.locator('.sheet .grid-scroll').waitFor();
+  ok(!(await page.locator('.dialog', { hasText: 'Opened' }).count()), 'nothing to report: our own .xlsx loses nothing');
+  eq(await cell('B4'), 'Settled', 'values kept');
+  eq(await page.locator('.sheet .sheet-filter-note').textContent(), '3 of 4 rows shown (filter)', 'the filter and its hidden row kept');
+  eq(await ribbonBtn(/^Freeze panes/).getAttribute('aria-pressed'), 'true', 'the frozen row kept');
+  await goTo('B7');
+  eq(await page.locator('.sheet .name-box').inputValue(), 'A7:C7', 'the merge kept');
+  // A file in Excel's old binary kind opens to a message saying how to convert it.
+  await sw().getByRole('button', { name: 'Close' }).click();
+  const old = join(appDir, 'old-' + stamp + '.xls');
+  writeFileSync(old, Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1, ...new Array(504).fill(0)]));
+  const w2 = await openDocuments();
+  const chooser = page.waitForEvent('filechooser');
+  await w2.getByRole('button', { name: 'Upload' }).click();
+  (await chooser).setFiles([old]);
+  await w2.locator('.item', { hasText: 'old-' + stamp }).first().waitFor({ timeout: 10000 });
+  await w2.locator('.item', { hasText: 'old-' + stamp }).first().dblclick();
+  await page.locator('.win .sheet [role=alert]', { hasText: 'older Excel file (.xls)' }).waitFor({ timeout: 8000 });
+  await sw().getByRole('button', { name: 'Close' }).click();
+});
+
+await step('Spreadsheet: a chart, conditional formatting, a drop-down list, print and a PDF, then saved as .xlsx and opened again with all of it kept', async () => {
+  await closeAll();
+  await page.locator('.start-btn').click();
+  await page.locator('.start-filter').fill('spreadsheet');
+  await page.locator('.start-item', { hasText: 'Spreadsheet' }).click();
+  await page.locator('.sheet .grid-scroll').waitFor();
+  const sw = () => page.locator('.win', { has: page.locator('.sheet') });
+  const tab = name => page.locator('.sheet .ribbon-tab', { hasText: new RegExp('^' + name + '$') });
+  const ribbonBtn = name => page.locator('.sheet .ribbon').getByRole('button', { name });
+  const dlg = page.locator('.dialog');
+  // The colour drawn in a cell, a little in from its left edge (columns 64 px, rows 20 px, after the headings).
+  const pixel = async (col, row) => page.evaluate(async ([c, r]) => {
+    await new Promise(done => requestAnimationFrame(() => done()));
+    const canvas = document.querySelector('.sheet .grid-canvas');
+    const dpr = devicePixelRatio || 1;
+    return [...canvas.getContext('2d').getImageData(Math.round((46 + 64 * c + 8) * dpr), Math.round((24 + 20 * r + 10) * dpr), 1, 1).data].slice(0, 3);
+  }, [col, row]);
+  await goTo('A1');
+  await typeRow(['Month', 'Sales', 'Costs']);
+  await typeRow(['Jan', '120', '80']);
+  await typeRow(['Feb', '150', '95']);
+  await typeRow(['Mar', '90', '70']);
+  await typeRow(['Apr', '200', '110']);
+  // Insert > Column: a chart of the block, drawn over the cells, and selected.
+  await goTo('A1:C5');
+  await tab('Insert').click();
+  await ribbonBtn(/^Insert a column chart/).click();
+  const frame = page.locator('.sheet .chart-frame');
+  await frame.waitFor();
+  eq(await frame.evaluate(el => el.classList.contains('selected')), true, 'the new chart is selected');
+  const texts = await frame.locator('text').allTextContents();
+  for (const t of ['Sales', 'Costs', 'Jan', 'Apr', '250']) ok(texts.includes(t), `the chart shows ${t}: ${texts.join(' ')}`);
+  // Dragged: it follows the pointer and stays where it is dropped.
+  const b0 = await frame.boundingBox();
+  await page.mouse.move(b0.x + b0.width / 2, b0.y + b0.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(b0.x + b0.width / 2 + 100, b0.y + b0.height / 2 + 20, { steps: 5 });
+  await page.mouse.up();
+  await settle(150);
+  const b1 = await frame.boundingBox();
+  ok(Math.abs(b1.x - b0.x - 100) < 3 && Math.abs(b1.y - b0.y - 20) < 3, `moved with the pointer: ${b0.x},${b0.y} to ${b1.x},${b1.y}`);
+  // Enter on the chart opens Change chart: a line chart with a title.
+  await frame.focus();
+  await page.keyboard.press('Enter');
+  await dlg.waitFor();
+  await dlg.getByRole('combobox', { name: 'Chart type' }).selectOption('line');
+  await dlg.getByRole('textbox', { name: 'Title', exact: true }).fill('Sales and costs');
+  await dlg.getByRole('button', { name: 'OK' }).click();
+  await page.waitForFunction(() => [...document.querySelectorAll('.sheet .chart-frame text')].some(t => t.textContent === 'Sales and costs'));
+  ok((await frame.locator('polyline').count()) >= 2, 'drawn as two lines');
+
+  // Home > Conditional formatting: costs over 100 in red; data bars on sales.
+  await tab('Home').click();
+  await goTo('C2:C5');
+  await ribbonBtn(/^Conditional formatting/).click();
+  await menuPick(['Highlight cells rules', 'Greater than\\.\\.\\.']);
+  await dlg.getByRole('textbox', { name: /Format cells that are greater than/ }).fill('100');
+  await dlg.getByRole('button', { name: 'OK' }).click();
+  await goTo('B2:B5');
+  await ribbonBtn(/^Conditional formatting/).click();
+  await menuPick(['Data bars', 'Green data bar']);
+  await goTo('A8');
+  eq(await pixel(2, 4), [255, 199, 206], 'C5 (110) has the light red fill');
+  eq(await pixel(2, 2), [255, 255, 255], 'C3 (95) has none');
+  const bar = await pixel(1, 4);
+  ok(bar[1] > bar[0] && bar[1] > bar[2], `B5 has a green data bar: ${bar}`);
+
+  // Data > Data validation: a list with an input message; a value not in it is refused; Alt+Down picks from it.
+  await tab('Data').click();
+  await goTo('D2:D5');
+  await ribbonBtn(/^Data validation/).click();
+  await menuPick(['Data validation\\.\\.\\.']);
+  await dlg.getByRole('combobox', { name: 'Allow' }).selectOption('list');
+  await dlg.getByRole('textbox', { name: 'Source' }).fill('Paid, Due');
+  await dlg.getByRole('textbox', { name: 'Input message title' }).fill('Status');
+  await dlg.getByRole('button', { name: 'OK' }).click();
+  await goTo('D3');
+  await page.locator('.sheet .dv-prompt', { hasText: 'Status' }).waitFor();
+  await page.keyboard.type('Maybe');
+  await page.keyboard.press('Enter');
+  await page.locator('.dialog', { hasText: 'not allowed here' }).waitFor();
+  await page.locator('.dialog').getByRole('button', { name: 'Cancel' }).click();
+  eq(await cell('D3'), 'empty', 'the refused value was not kept');
+  await goTo('D3');
+  await page.keyboard.press('Alt+ArrowDown');
+  await page.locator('.sheet .dv-list').getByRole('option', { name: 'Due' }).click();
+  eq(await cell('D3'), 'Due', 'picked from the list');
+
+  // Page Layout > Scale: fit on one page; Print shows the preview and puts the page, at paper size, up for printing.
+  await tab('Page Layout').click();
+  await ribbonBtn(/^Scale to fit/).click();
+  await menuPick(['Fit the sheet on one page']);
+  await page.keyboard.press('Control+P');
+  await dlg.locator('.pp-view svg').waitFor();
+  ok((await dlg.locator('.pp-count').textContent()).startsWith('Page 1 of 1'), 'one page');
+  ok((await dlg.locator('.pp-view text').allTextContents()).includes('Sales and costs'), 'the chart is on the page');
+  await page.evaluate(() => {
+    window.__printed = null;
+    window.print = () => {
+      const holder = document.querySelector('body > .sheet-print');
+      window.__printed = { pages: holder.children.length, cls: holder.firstElementChild.className, body: document.body.className };
+      // A copy stays for the browser's own print-to-PDF below (the real one is taken away after printing).
+      const copy = holder.cloneNode(true);
+      copy.classList.add('kept-for-test');
+      document.body.append(copy);
+    };
+  });
+  await dlg.getByRole('button', { name: 'Print' }).click();
+  const printed = await page.evaluate(() => window.__printed);
+  eq(printed.pages, 1, 'one page goes to the printer');
+  ok(/^print-sheet-page paper-(a4|letter)-portrait$/.test(printed.cls) && printed.body === 'printing-sheet', JSON.stringify(printed));
+  await page.waitForFunction(() => !document.body.classList.contains('printing-sheet') && !document.querySelector('.sheet-print:not(.kept-for-test)'));
+  // Chrome's own printing of that page: only it is printed (the desktop is hidden), on one sheet of paper.
+  await page.evaluate(() => document.body.classList.add('printing-sheet'));
+  const chromePdf = Buffer.from(await page.pdf({ preferCSSPageSize: true })).toString('latin1');
+  await page.evaluate(() => {
+    document.body.classList.remove('printing-sheet');
+    document.querySelector('.kept-for-test')?.remove();
+  });
+  eq((chromePdf.match(/\/Type\s*\/Page[^s]/g) ?? []).length, 1, 'the browser prints exactly one page');
+  // Download PDF: a PDF made here, one page.
+  await page.keyboard.press('Control+P');
+  await dlg.locator('.pp-view svg').waitFor();
+  const download = page.waitForEvent('download');
+  await dlg.getByRole('button', { name: 'Download PDF' }).click();
+  const file = await download;
+  ok(/\.pdf$/.test(file.suggestedFilename()), file.suggestedFilename());
+  const pdf = readFileSync(await file.path()).toString('latin1');
+  ok(pdf.startsWith('%PDF-1.4') && pdf.trimEnd().endsWith('%%EOF'), 'a whole PDF file');
+  eq((pdf.match(/\/Type \/Page /g) ?? []).length, 1, 'one page');
+
+  // Saved as .xlsx, closed, opened again: the chart, the rules and the list are all still there.
+  await page.locator('.sheet .grid-scroll').focus();
+  await page.keyboard.press('Control+S');
+  await dlg.waitFor();
+  await dlg.locator('input').fill('charts-' + stamp + '.xlsx');
+  await dlg.getByRole('button', { name: 'Save' }).click();
+  await page.locator('.toast', { hasText: 'Saved “charts-' + stamp + '.xlsx' }).waitFor();
+  if (process.env.SHOTS) await sw().screenshot({ path: `${process.env.SHOTS}/sheet-charts.png` });
+  await sw().getByRole('button', { name: 'Close' }).click();
+  const w = await openDocuments();
+  await w.locator('.item', { hasText: 'charts-' + stamp }).first().dblclick();
+  await page.locator('.sheet .grid-scroll').waitFor();
+  await page.locator('.sheet .chart-frame').waitFor();
+  ok(!(await page.locator('.dialog', { hasText: 'Opened' }).count()), 'nothing to report: our own .xlsx loses nothing');
+  ok((await page.locator('.sheet .chart-frame text').allTextContents()).includes('Sales and costs'), 'the chart and its title kept');
+  await goTo('A8');
+  eq(await pixel(2, 4), [255, 199, 206], 'the red highlight kept');
+  await goTo('D2');
+  await page.locator('.sheet .dv-prompt', { hasText: 'Status' }).waitFor();
+  eq(await cell('D3'), 'Due', 'values kept');
+  await sw().getByRole('button', { name: 'Close' }).click();
+});
+
 await step('phone size: windows fill the screen, taskbar is bigger, nothing scrolls sideways', async () => {
   await closeAll();
   await page.setViewportSize({ width: 390, height: 800 });
