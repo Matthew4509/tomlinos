@@ -69,7 +69,10 @@
           "displayLanguageSelector": false,
           "template": "installer/installer.nsi"
         }
-      }
+      },
+      "resources": [
+        "licences/THIRD-PARTY-NOTICES.txt"
+      ]
     },
     "updater": {
       "active": true,

@@ -18,4 +18,6 @@ export interface NativeHost {
   remember(path: string): void;
   /** File menu entries the program adds: `top` after Open, `bottom` at the end (updates, about, exit). */
   fileMenu(): { top: MenuItem[]; bottom: MenuItem[] };
+  /** The groups of the program's own Help tab (About, Licences, updates), after View. */
+  help(): Array<{ name: string; items: Array<{ label: string; title: string; run: () => void }> }>;
 }

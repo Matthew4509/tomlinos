@@ -2,6 +2,7 @@
 // TOMLIN OS sources, and strips the TypeScript types from exactly those files (no bundler, as the desktop's own
 // build). Imports written only for types, and the desktop apps the spreadsheet never loads, are left out.
 // Run from the repository folder:  node sheets/tools/build-web.mjs
+import { execFileSync } from 'node:child_process';
 import { stripTypeScriptTypes } from 'node:module';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
@@ -54,6 +55,9 @@ copyFileSync(join(repo, 'public', 'style.css'), join(out, 'style.css'));
 copyFileSync(join(sheets, 'page', 'sheets.css'), join(out, 'sheets.css'));
 copyFileSync(join(sheets, 'page', 'index.html'), join(out, 'index.html'));
 copyFileSync(join(sheets, 'src-tauri', 'icons', '128x128.png'), join(out, 'icon.png'));
+
+// Every part's licence, for Help > Licences and the notices file installed with the program (tools/licences.mjs).
+execFileSync(process.execPath, [join(sheets, 'tools', 'licences.mjs')], { stdio: 'inherit' });
 
 // Comments ship as written: none may quote or cite the person who asked for the code.
 const quotes = checkFolder(out, { release: true });

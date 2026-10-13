@@ -1268,11 +1268,13 @@ export const sheetApp: AppDef = {
         group('Zoom', btn('100%', 'Zoom to 100%', () => grid.setZoom(1), 'text-rb'), btn('Zoom out', 'Zoom out', () => grid.setZoom(grid.zoom() / 1.1), 'text-rb'), btn('Zoom in', 'Zoom in', () => grid.setZoom(grid.zoom() * 1.1), 'text-rb')),
         group('Window', freezeBtn),
       ],
+      // A program of its own adds a Help tab (About, Licences, updates); inside the desktop it has none.
+      help: (shell.native?.help() ?? []).map(g => group(g.name, ...g.items.map(i => btn(i.label, i.title, i.run, 'text-rb')))),
     };
     // Table Design: shown only while the active cell is in a table, as Excel's own tab for tables is.
     type Tab = keyof typeof tabGroups | 'table' | 'pivot';
     const TAB_ORDER: Tab[] = [...(Object.keys(tabGroups) as Tab[]), 'table', 'pivot'];
-    const TAB_NAMES: Record<Tab, string> = { home: 'Home', insert: 'Insert', layout: 'Page Layout', formulas: 'Formulas', data: 'Data', review: 'Review', view: 'View', table: 'Table Design', pivot: 'PivotTable Analyze' };
+    const TAB_NAMES: Record<Tab, string> = { home: 'Home', insert: 'Insert', layout: 'Page Layout', formulas: 'Formulas', data: 'Data', review: 'Review', view: 'View', help: 'Help', table: 'Table Design', pivot: 'PivotTable Analyze' };
     let tab: Tab = 'home';
     /** What the Table Design tab was last built for, so it is built again only when the table changes. */
     let tableKey = '';
@@ -1294,7 +1296,7 @@ export const sheetApp: AppDef = {
     };
     const ribbon = h('div', { class: 'ribbon', role: 'tabpanel', 'data-menus-stay': '' }, ...tabGroups.home);
     const tabButtons = TAB_ORDER.map(t => {
-      const b = h('button', { type: 'button', class: `ribbon-tab${t === 'table' || t === 'pivot' ? ' context-tab' : ''}`, role: 'tab', 'aria-selected': String(t === 'home'), hidden: t === 'table' || t === 'pivot' }, TAB_NAMES[t]);
+      const b = h('button', { type: 'button', class: `ribbon-tab${t === 'table' || t === 'pivot' ? ' context-tab' : ''}`, role: 'tab', 'aria-selected': String(t === 'home'), hidden: t === 'table' || t === 'pivot' || (t === 'help' && !shell.native) }, TAB_NAMES[t]);
       on(b, 'click', () => showTab(t), app.signal);
       return b;
     });

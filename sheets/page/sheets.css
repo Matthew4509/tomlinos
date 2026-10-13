@@ -79,3 +79,20 @@ input, textarea, [contenteditable="true"], .dialog-text, .update-notes, .about {
 .ribbon-arrow.left { left: 0; border-right: 1px solid #e0e0e0; }
 .ribbon-arrow.right { right: 0; border-left: 1px solid #e0e0e0; }
 .ribbon-arrow:hover { background: #ebebeb; color: var(--accent); }
+
+/* Help > Licences (host/licences.ts): the list of parts, then one part's licence in full. */
+.licences { width: min(760px, 86vw); }
+.dialog:has(.licences) { width: auto; }
+.lic-main, .lic-list { display: flex; flex-direction: column; gap: 2px; margin: 8px 0; }
+.lic-list { height: 38vh; overflow: auto; padding: 2px; border: 1px solid #e0e0e0; border-radius: 6px; }
+.lic-item { display: flex; justify-content: space-between; gap: 16px; padding: 6px 10px; border: 0; border-radius: 4px; background: none; color: var(--ink); text-align: left; cursor: pointer; }
+.lic-item:hover, .lic-item:focus-visible { background: #f0f0f0; }
+.lic-main .lic-item { background: #f7f7f7; }
+.lic-main .lic-item:hover { background: #ececec; }
+.lic-name { font-weight: 600; overflow-wrap: anywhere; }
+.lic-kind { color: var(--ink-soft); text-align: right; flex: none; max-width: 45%; overflow-wrap: anywhere; }
+.lic-count { margin: 4px 0 0; color: var(--ink-soft); font-size: 12px; }
+.lic-detail { max-height: 60vh; overflow: auto; }
+.lic-title { margin: 12px 0 4px; font-size: 16px; }
+.lic-facts { margin: 8px 0 12px; }
+.lic-text { margin: 0 0 12px; padding: 10px 12px; max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.45 Consolas, "Cascadia Mono", monospace; background: #f7f7f7; border: 1px solid #e5e5e5; border-radius: 6px; user-select: text; }

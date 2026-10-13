@@ -1,5 +1,5 @@
 Required Notice: Copyright (c) 2026 TOMLIN OS (https://github.com/Matthew4509/tomlinos)
-Required Notice: TOMLIN Sheets is the TOMLIN OS spreadsheet as a Windows program. It uses Microsoft Edge WebView2, which is part of Windows and is not part of this software.
+Required Notice: TOMLIN Sheets is the TOMLIN OS spreadsheet as a Windows program. It is built with open-source parts, each under its own licence; they are listed, with every licence text in full, in the program under Help > Licences and in the file licences\THIRD-PARTY-NOTICES.txt in the program's folder. It uses Microsoft Edge WebView2, which is part of Windows and is not part of this software.
 
 # PolyForm Noncommercial License 1.0.0
 

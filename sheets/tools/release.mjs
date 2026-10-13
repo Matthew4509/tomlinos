@@ -9,7 +9,7 @@
 // The update signing key is read from TAURI_PRIVATE_KEY / TAURI_KEY_PASSWORD, or from the folder sheets/release.local.json
 // names as "secrets" (updater.key and updater.key.password, kept outside every repository). That file, which git
 // ignores, also names the private list ("privateList") and the words that must never ship (see disclosure below).
-// Publishing is two steps afterwards (RELEASING.md): attach the two files to a GitHub release named sheets-v<version>,
+// Publishing is two steps afterwards (RELEASING.md): attach the update zip (only) to a GitHub release named sheets-v<version>,
 // then commit and push sheets/latest.json. Installed copies see the new version once latest.json is on GitHub.
 import { execFileSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -89,7 +89,7 @@ const signature = readFileSync(join(bundle, `${zip}.sig`), 'utf8').trim();
 
 // ---- 3. Nothing private ships -------------------------------------------------------------------------------------
 
-const problems = disclosure([join(sheets, 'web'), join(out, setupName), join(tauriDir, 'target', 'release', `${conf.package.productName}.exe`)]);
+const problems = disclosure([join(sheets, 'web'), join(tauriDir, 'licences'), join(out, setupName), join(tauriDir, 'target', 'release', `${conf.package.productName}.exe`)]);
 if (problems.length) {
   for (const p of problems) console.error(`  ${p}`);
   console.error(`\nRelease stopped: ${problems.length} finding(s). Nothing was written to latest.json.`);
@@ -113,11 +113,11 @@ writeFileSync(testFeed ? join(out, 'latest.json') : join(sheets, 'latest.json'),
 
 const mb = n => `${(n / 1048576).toFixed(1)} MB`;
 console.log(`\nTOMLIN Sheets ${version}${testFeed ? ' (TEST build, reads ' + testFeed + ')' : ''}`);
-console.log(`  ${relative(repo, join(out, setupName))}  ${mb(statSync(join(out, setupName)).size)}  (the installer people download)`);
-console.log(`  ${relative(repo, join(out, zipName))}  ${mb(statSync(join(out, zipName)).size)}  (what updates download)`);
+console.log(`  ${relative(repo, join(out, setupName))}  ${mb(statSync(join(out, setupName)).size)}  (the installer: KEEP PRIVATE, hand it out yourself)`);
+console.log(`  ${relative(repo, join(out, zipName))}  ${mb(statSync(join(out, zipName)).size)}  (what updates download: the only file for GitHub)`);
 console.log(`  ${testFeed ? relative(repo, join(out, 'latest.json')) : 'sheets/latest.json'}  (the update list)`);
 console.log('  Disclosure check: clean');
-if (!testFeed) console.log(`\nTo publish: GitHub release "${TAG}" with both files attached, then commit and push sheets/latest.json (RELEASING.md).`);
+if (!testFeed) console.log(`\nTo publish: GitHub release "${TAG}" with ONLY the .nsis.zip attached (not the Setup .exe), then commit and push sheets/latest.json (RELEASING.md).`);
 
 // ---- The check ----------------------------------------------------------------------------------------------------
 

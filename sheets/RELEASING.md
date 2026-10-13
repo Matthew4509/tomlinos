@@ -14,7 +14,7 @@ release.
    release), checks it carries the TOMLIN Sheets update signature (a changed or damaged download is refused), closes,
    updates itself without questions and opens again. Other windows with unsaved work are named first.
 
-So a release is: the two files on a GitHub release, then `latest.json` pushed. Until `latest.json` is pushed, nobody
+So a release is: the update zip on a GitHub release, then `latest.json` pushed. Until `latest.json` is pushed, nobody
 is offered the new version, so the files can be attached and checked first.
 
 ## Steps
@@ -22,13 +22,16 @@ is offered the new version, so the files can be attached and checked first.
 1. Raise the version in **both** `sheets/src-tauri/tauri.conf.json` (`package.version`) and
    `sheets/src-tauri/Cargo.toml`, and add a `## <version>` section at the top of `sheets/CHANGES.md`.
 2. From the repository folder: `node sheets/tools/release.mjs`. It builds the page and the program, signs the update,
-   checks every shipped file for private details and local paths (it stops on any), copies the two files into
-   `sheets/dist/<version>/` and writes `sheets/latest.json`.
+   checks every shipped file for private details and local paths (it stops on any), copies the installer and
+   the update zip into `sheets/dist/<version>/` and writes `sheets/latest.json`. It also gathers every
+   part's licence (tools/licences.mjs): Help > Licences in the program, and `licences\THIRD-PARTY-NOTICES.txt`
+   installed beside it.
 3. On GitHub: **Releases > Draft a new release**, tag `sheets-v<version>` (exactly, the address in `latest.json` uses
-   it), title `TOMLIN Sheets <version>`, attach both files from `sheets/dist/<version>/`:
-   - `TOMLIN-Sheets-Setup-<version>.exe`, the installer people download;
-   - `TOMLIN-Sheets-<version>-x64.nsis.zip`, what updates download.
-   Publish the release.
+   it), title `TOMLIN Sheets <version>`, attach **only** `TOMLIN-Sheets-<version>-x64.nsis.zip` (what updates
+   download) from `sheets/dist/<version>/`, and publish the release.
+   **Do not attach `TOMLIN-Sheets-Setup-<version>.exe`.** The installer is not published: hand it out yourself
+   (email, a private link, a USB stick). Note that this keeps it unlisted, not locked: the update zip holds the
+   whole program, and anyone who reads `latest.json` can find it.
 4. Commit `sheets/latest.json` (with the version change) and push. Installed copies see the update from then on.
 
 ## The signing key

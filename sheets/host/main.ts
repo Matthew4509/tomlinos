@@ -13,6 +13,7 @@ import { fromWindows, NativeFiles, toWindows } from './files.ts';
 import { tauri, invoke, type FileFilter } from './tauri.ts';
 import { checkForUpdates, startupUpdateCheck } from './updates.ts';
 import { PRODUCT, showAbout } from './about.ts';
+import { showLicences } from './licences.ts';
 import { readList, readValue, writeList, writeValue } from './prefs.ts';
 import { ribbonArrows } from './ribbon.ts';
 
@@ -281,11 +282,21 @@ const native: NativeHost = {
       { separator: true },
       { label: 'Check for updates...', action: () => void checkForUpdates(updateContext) },
       { label: `About ${PRODUCT}`, action: () => void showAbout(dialogs) },
+      { label: 'Licences', action: () => void showLicences(dialogs) },
       { separator: true },
       { label: 'Close window', hint: 'Ctrl+W', action: () => void closeWindow() },
       { label: `Exit ${PRODUCT}`, action: () => void exit() },
     ],
   }),
+  help: () => [
+    { name: 'Help', items: [
+      { label: `About ${PRODUCT}`, title: `About ${PRODUCT}: version, maker and licence (F1)`, run: () => void showAbout(dialogs) },
+      { label: 'Licences', title: 'Licences: every part the program is built with, each with its licence in full', run: () => void showLicences(dialogs) },
+    ] },
+    { name: 'Updates', items: [
+      { label: 'Check for updates', title: 'Check for updates: see whether a newer version is published', run: () => void checkForUpdates(updateContext) },
+    ] },
+  ],
 };
 
 const updateContext = { dialogs, toast, otherUnsaved, runGuards: () => runGuards() };
