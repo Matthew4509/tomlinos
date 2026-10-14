@@ -263,6 +263,7 @@ const OUTSIDE: Array<[string, RegExp, string]> = [
   ['https://github.com/mlc-ai/web-llm', /apps[\\/]about\.ts$/, 'a link on the Credits page, opened only when clicked'],
   ['https://github.com/anthropics/anthropic-sdk-php', /apps[\\/]about\.ts$/, 'a link on the Credits page, opened only when clicked'],
   ['https://${raw}', /notepadpro[\\/]markdown\.ts$/, 'a "www." autolink in a Markdown preview becomes https (then checked by safeHref)'],
+  ['https://${s}', /apps[\\/]projects[\\/]data\.ts$/, 'a project\'s site typed without https:// becomes a link (http and https only; opened only when clicked)'],
   ['http://,', /apps[\\/]link\.ts$/, 'words in a message ("starts with https:// or http://"), not an address'],
   ['https://huggingface.co', /assistant[\\/]hfsearch\.ts$/, 'Find AI models: the search and each model\'s details (allowed in connect-src), and the "Model card" link'],
   ['https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/', /assistant[\\/]modellibs\.ts$/, 'the MLC team\'s WebGPU programs, fetched by WebLLM when an added model starts (allowed in connect-src)'],

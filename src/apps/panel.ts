@@ -9,7 +9,7 @@
 // the panel closes them all, asking first if any has unsaved work.
 import { h, on } from '../core/dom.ts';
 import { readLocalJson } from '../core/local.ts';
-import { addDays, CALENDAR_PATH, dateKey, eventsOn, parseIcs, timeLabel, type CalEvent } from '../core/ical.ts';
+import { addDays, CALENDAR_PATH, dateKey, dayLabel, eventsOn, parseIcs, timeLabel, type CalEvent } from '../core/ical.ts';
 import type { Entry } from '../fs/fs.ts';
 import { icon, type IconName } from '../shell/icons.ts';
 import type { AppDef, AppHandle } from '../shell/types.ts';
@@ -17,6 +17,7 @@ import { APPS } from './catalog.ts';
 import { ChatSession } from './chat/session.ts';
 import { joinPath } from '../fs/names.ts';
 import { dayName, listPads, padLabel, PAD_FOLDER, savePad } from './panel/scratchpad.ts';
+import { nextFor, parseProjects, PROJECTS_PATH, shortTitle, sortProjects, type Project } from './projects/data.ts';
 
 interface Section {
   id: string;
@@ -232,6 +233,7 @@ export const panelApp: AppDef = {
 
     // ---- The Overview ---------------------------------------------------------------------------------------------
     const todayList = h('div', { class: 'panel-rows panel-scroll' });
+    const focusList = h('div', { class: 'panel-rows panel-focus' });
     const recentList = h('div', { class: 'panel-rows' });
     const chatArea = h('div', { class: 'win-body panel-host panel-chat' });
     const tile = (title: string, body: HTMLElement, ...actions: Array<[string, () => void] | HTMLElement>): HTMLElement => {
@@ -252,11 +254,15 @@ export const panelApp: AppDef = {
     const padList = h('div', { class: 'pad-list', role: 'listbox', 'aria-label': 'Saved scratch pads' });
     const padBody = h('div', { class: 'scratch-pad' }, h('div', { class: 'pad-edit' }, h('div', { class: 'pad-top' }, padName, padState), padText), padList);
 
+    // My Projects' starred projects and what is next for each; shown once there is a project at all.
+    const focusTile = tile('Focus', focusList, ['My Projects', () => void shell.openApp('projects')]);
+    focusTile.hidden = true;
     const chatCount = h('span', { class: 'panel-count', hidden: true });
     const expandBtn = h('button', { type: 'button', class: 'panel-see', 'aria-pressed': 'false' }, 'Expand');
     overview.append(
       h('div', { class: 'panel-stack panel-stack-left' },
         tile('Today & upcoming', todayList, ['Calendar', () => show('calendar')]),
+        focusTile,
         tile('Scratch pad', padBody, ['New', () => void newPad()], ['Save', () => void savePadNow()], ['Open full', () => void openPadFull()]),
         tile('Recent files', recentList, ['Files', () => show('files')])),
       h('div', { class: 'panel-stack panel-stack-chat' }, tile('Chat', chatArea, chatCount, expandBtn)));
@@ -399,6 +405,33 @@ export const panelApp: AppDef = {
       }
     }
 
+    let projectList: Project[] = [];
+    async function readProjects(): Promise<void> {
+      try {
+        projectList = parseProjects(await shell.fs.readText(PROJECTS_PATH));
+      } catch {
+        projectList = [];
+      }
+    }
+
+    function renderFocus(): void {
+      const todayKey = dateKey(new Date());
+      focusTile.hidden = !shell.hasApp('projects') || !projectList.length;
+      const starred = sortProjects(projectList.filter(p => p.focus && !p.finished));
+      focusList.replaceChildren(...starred.map(p => {
+        const n = nextFor(events, p.uid, todayKey);
+        const when = n ? (n.next === todayKey ? 'Today' : n.next === addDays(todayKey, 1) ? 'Tomorrow' : dayLabel(n.next)) : '';
+        const what = n ? shortTitle(n.event, p) : '';
+        const b = h('button', { type: 'button', class: 'panel-row panel-row-btn' },
+          h('span', { class: 'panel-star', 'aria-hidden': 'true' }, '★'),
+          h('span', { class: 'panel-row-main' }, p.name,
+            h('span', { class: 'panel-sub' }, n ? `Next: ${when} ${n.event.start || 'all day'}${what ? ' · ' + what : ''}` : 'Nothing booked')));
+        on(b, 'click', () => void shell.openApp('projects', `project:${p.uid}`), signal);
+        return b;
+      }));
+      if (!starred.length) focusList.append(h('p', { class: 'panel-empty' }, 'Star a project in My Projects to keep it here.'));
+    }
+
     async function renderRecent(): Promise<void> {
       const found: Array<{ folder: string; entry: Entry }> = [];
       for (const folder of RECENT_FOLDERS) {
@@ -425,8 +458,9 @@ export const panelApp: AppDef = {
       if (overviewBusy) return;
       overviewBusy = true;
       try {
-        await readCalendar();
+        await Promise.all([readCalendar(), readProjects()]);
         renderToday();
+        renderFocus();
         await renderRecent();
       } finally {
         overviewBusy = false;

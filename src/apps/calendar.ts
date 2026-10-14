@@ -5,15 +5,15 @@
 // The month is one keyboard stop: arrow keys move the day, Enter or a double-click adds an event on it.
 import { h, on } from '../core/dom.ts';
 import { baseName } from '../fs/names.ts';
-import { CALENDAR_PATH, addDays, addMonths, dateKey, eventsOn, isDate, isTime, monthCells, parseIcs, timeLabel, weekdayNames, writeIcs, type CalEvent, type Repeat } from '../core/ical.ts';
+import { CALENDAR_PATH, REMIND_CHOICES, addDays, addMonths, dateKey, eventsOn, isDate, isTime, monthCells, parseIcs, repeatLabel, timeLabel, weekdayNames, writeIcs, type CalEvent, type Repeat } from '../core/ical.ts';
 import { recordFile } from '../shell/recordfile.ts';
 import type { AppDef } from '../shell/types.ts';
 import { APPS } from './catalog.ts';
 
 export { CALENDAR_PATH };
 
-const REPEATS: Array<[Repeat, string]> = [['none', 'Does not repeat'], ['weekly', 'Every week'], ['monthly', 'Every month'], ['yearly', 'Every year']];
-const REMINDS: Array<[number, string]> = [[-1, 'No reminder'], [0, 'At the start'], [5, '5 minutes before'], [15, '15 minutes before'], [30, '30 minutes before'], [60, '1 hour before'], [1440, '1 day before']];
+const REPEATS: Array<[Repeat, string]> = [['none', 'Does not repeat'], ['daily', 'Every day'], ['weekly', 'Every week'], ['monthly', 'Every month'], ['yearly', 'Every year']];
+const REMINDS = REMIND_CHOICES;
 
 export const calendarApp: AppDef = {
   ...APPS.calendar,
@@ -76,7 +76,8 @@ export const calendarApp: AppDef = {
         const b = h('button', { type: 'button', class: 'cal-event' },
           h('span', { class: 'cal-event-time' }, timeLabel(e)),
           h('span', { class: 'cal-event-title' }, e.title),
-          e.repeat !== 'none' ? h('span', { class: 'hint' }, REPEATS.find(r => r[0] === e.repeat)![1]) : null);
+          e.where ? h('span', { class: 'hint' }, e.where) : null,
+          e.repeat !== 'none' ? h('span', { class: 'hint' }, repeatLabel(e)) : null);
         b.addEventListener('click', () => edit(e), { signal });
         return b;
       });
@@ -116,8 +117,25 @@ export const calendarApp: AppDef = {
       const allDay = h('input', { type: 'checkbox', checked: !e.start });
       const startIn = h('input', { type: 'time', class: 'field', value: e.start || '09:00', 'aria-label': 'Starts' });
       const endIn = h('input', { type: 'time', class: 'field', value: e.end, 'aria-label': 'Ends' });
+      const whereIn = h('input', { type: 'text', class: 'field', value: e.where ?? '', maxlength: 500, 'aria-label': 'Where' });
       const repeatSel = h('select', { class: 'field', 'aria-label': 'Repeats' }, ...REPEATS.map(([v, l]) => h('option', { value: v }, l)));
       repeatSel.value = e.repeat;
+      // Where a repeat ends ("for 3 days", "until ...") is set in My Projects; shown here, and kept while Repeats stays
+      // the same. A different repeat drops the count (3 days are not 3 weeks); "until" is a date, so it stays.
+      const limits = (): Pick<CalEvent, 'count' | 'until'> => {
+        const repeat = repeatSel.value as Repeat;
+        if (repeat === 'none') return { count: 0, until: '' };
+        return { count: repeat === e.repeat ? e.count ?? 0 : 0, until: e.until ?? '' };
+      };
+      const ends = h('p', { class: 'hint cal-ends' });
+      const syncEnds = () => {
+        const l = limits();
+        const label = l.count || l.until ? repeatLabel({ repeat: repeatSel.value as Repeat, ...l }) : '';
+        ends.textContent = label ? `Ends: ${label.slice(label.indexOf(',') + 2)}` : '';
+        ends.hidden = !label;
+      };
+      syncEnds();
+      repeatSel.addEventListener('change', syncEnds, { signal });
       const remindSel = h('select', { class: 'field', 'aria-label': 'Reminder' }, ...REMINDS.map(([v, l]) => h('option', { value: v }, l)));
       remindSel.value = String(REMINDS.some(r => r[0] === e.remind) ? e.remind : -1);
       const notesIn = h('textarea', { class: 'field', rows: 4, 'aria-label': 'Notes' });
@@ -136,7 +154,9 @@ export const calendarApp: AppDef = {
         h('label', { class: 'form-row' }, 'Date ', dateIn),
         h('label', { class: 'form-check' }, allDay, ' All day'),
         times,
+        h('label', { class: 'form-row' }, 'Where ', whereIn),
         h('label', { class: 'form-row' }, 'Repeats ', repeatSel),
+        ends,
         h('label', { class: 'form-row' }, 'Reminder ', remindSel),
         h('label', { class: 'form-row' }, 'Notes ', notesIn),
         problem,
@@ -150,7 +170,7 @@ export const calendarApp: AppDef = {
         if (!isDate(dateIn.value)) return void (problem.textContent = 'Choose a date.');
         if (!allDay.checked && !isTime(start)) return void (problem.textContent = 'Choose a start time, or tick All day.');
         if (end && (!isTime(end) || end <= start)) return void (problem.textContent = 'The end time must be after the start time (or leave it empty).');
-        const saved: CalEvent = { ...e, title: titleIn.value.trim(), date: dateIn.value, start, end, notes: notesIn.value, repeat: repeatSel.value as Repeat, remind: Number(remindSel.value) };
+        const saved: CalEvent = { ...e, title: titleIn.value.trim(), date: dateIn.value, start, end, notes: notesIn.value, where: whereIn.value.trim(), repeat: repeatSel.value as Repeat, ...limits(), remind: Number(remindSel.value) };
         if (await save(list => [...list.filter(x => x.uid !== saved.uid), saved], [saveBtn, del])) {
           chosen = saved.date;
           showMonthOf(chosen);

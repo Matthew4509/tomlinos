@@ -7,7 +7,7 @@ export type IconName =
   | 'trash' | 'trash-full' | 'files' | 'gear' | 'info' | 'app'
   | 'editor' | 'photos' | 'player' | 'pdfviewer' | 'sheet' | 'archive' | 'code' | 'chip' | 'logo' | 'user' | 'lock'
   | 'calendar' | 'contacts' | 'link' | 'keyboard' | 'terminal' | 'calculator' | 'photoedit' | 'mail' | 'planet' | 'assistant' | 'chat' | 'panel'
-  | 'printer' | 'modelsearch' | 'book'
+  | 'printer' | 'modelsearch' | 'book' | 'projects'
   | 'folder-desktop' | 'folder-documents' | 'folder-pictures' | 'folder-videos' | 'folder-music';
 
 type Shape = [string, Record<string, string>];
@@ -105,6 +105,15 @@ const SHAPES: Record<IconName, Shape[]> = {
     ['path', { d: 'M15 5v8M33 5v8', stroke: '#5f7290', 'stroke-width': '2.6', 'stroke-linecap': 'round', fill: 'none' }],
     ['path', { d: 'M12 25h5M21.5 25h5M31 25h5M12 31h5M21.5 31h5M31 31h5M12 37h5M21.5 37h5', stroke: '#7d9cd0', 'stroke-width': '2.6', 'stroke-linecap': 'round', fill: 'none' }],
     ['rect', { x: '29.5', y: '34', width: '8', height: '6', rx: '1', fill: 'url(#gi-blue)' }],
+  ],
+  // A clipboard with a ticked list and a star: My Projects.
+  projects: [
+    ['rect', { x: '8', y: '7', width: '32', height: '36', rx: '3', fill: 'url(#gi-card)', stroke: '#8a6a30', 'stroke-width': '1.5' }],
+    ['rect', { x: '12', y: '12', width: '24', height: '27', rx: '1.5', fill: 'url(#gi-paper)', stroke: '#9aa7bd', 'stroke-width': '1' }],
+    ['rect', { x: '17', y: '4', width: '14', height: '7', rx: '2', fill: 'url(#gi-gear)', stroke: '#5f7290', 'stroke-width': '1.2' }],
+    ['path', { d: 'M15 20l2 2 3.5-4M15 28l2 2 3.5-4', stroke: '#2e7d5b', 'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', fill: 'none' }],
+    ['path', { d: 'M23 20.5h9M23 28.5h5', stroke: '#7d9cd0', 'stroke-width': '2.2', 'stroke-linecap': 'round', fill: 'none' }],
+    ['path', { d: 'M33 27l1.6 3.3 3.6.5-2.6 2.5.6 3.6-3.2-1.7-3.2 1.7.6-3.6-2.6-2.5 3.6-.5z', fill: '#f2b51d', stroke: '#a8740a', 'stroke-width': '1', 'stroke-linejoin': 'round' }],
   ],
   // An address card with a head-and-shoulders figure.
   contacts: [

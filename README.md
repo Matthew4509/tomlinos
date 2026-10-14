@@ -13,8 +13,9 @@ desktop: they are saved on your server.
 - **Files and documents:** Explorer, Notepad and Notepad Pro, an editor with syntax highlighting, a spreadsheet,
   photos and a photo editor with layers (a light GIMP: selections, retouching, levels and curves, text layers,
   OpenRaster .ora files), a PDF viewer, a media player, archives (zip), and a recycle bin.
-- **Everyday tools:** Mail (IMAP/SMTP, from your server), Calendar, Contacts, Calculator, Terminal, Task Manager,
-  Shortcuts, and a Panel with today's events and a scratch pad.
+- **Everyday tools:** Mail (IMAP/SMTP, from your server), Calendar, My Projects (your projects and sites, with
+  one-click reminders into the calendar: repeat daily, run for a number of days, appointments), Contacts, Calculator,
+  Terminal, Task Manager, Shortcuts, and a Panel with today's events, your starred projects and a scratch pad.
 - **Chat:** between the accounts on your own server, sealed in the browser (end to end when everyone in the
   conversation has file encryption on; what that does and does not cover is under Security), with safety codes to check
   keys. You can

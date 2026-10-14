@@ -8,7 +8,7 @@ import { escapeValue, foldLine, idFromText, readLines, type ContentLine, unescap
 /** Where the Calendar keeps its events (read by the Calendar and by the reminders). */
 export const CALENDAR_PATH = '/Documents/Calendar.ics';
 
-export type Repeat = 'none' | 'weekly' | 'monthly' | 'yearly';
+export type Repeat = 'none' | 'daily' | 'weekly' | 'monthly' | 'yearly';
 
 export interface CalEvent {
   uid: string;
@@ -20,6 +20,14 @@ export interface CalEvent {
   end: string;
   notes: string;
   repeat: Repeat;
+  /** Repeats this many showings in all, the first included ("run for 3 days"); 0 or absent: no limit. */
+  count?: number;
+  /** The last day (YYYY-MM-DD) a repeat may show on ("stop repeating"); '' or absent: no end. */
+  until?: string;
+  /** Where it is (the file's LOCATION). */
+  where?: string;
+  /** The My Projects project it belongs to (its uid), if any. */
+  project?: string;
   /** Minutes before the start to show a reminder; -1 for none. All-day events remind at 09:00 on the day. */
   remind: number;
   /** What the file held for this event beyond the fields above (absent for an event made here). */
@@ -31,10 +39,11 @@ interface EventKeep {
   uid: string;
   /** Properties and inner parts (alarms) this calendar does not edit, as they were. */
   lines: string[];
-  /** The file's own time lines (DTSTART, DTEND, DURATION) and repeat lines, written back while unchanged here. */
+  /** The file's own time lines (DTSTART, DTEND, DURATION), repeat lines and place lines, written back while unchanged here. */
   time: string[];
   rule: string[];
-  was: { date: string; start: string; end: string; repeat: Repeat };
+  place: string[];
+  was: { date: string; start: string; end: string; repeat: Repeat; count: number; until: string; where: string };
   /** Everything in the file outside its events (time zones, the calendar's name), shared by all its events. */
   calendar: string[];
 }
@@ -94,13 +103,36 @@ function parseStamp(line: ContentLine): { date: string; time: string } | null {
 
 const stamp = (date: string, time: string) => date.replace(/-/g, '') + (time ? `T${time.replace(':', '')}00` : '');
 
-/** The repeat a rule maps to here; a rule this calendar cannot show (daily, every 2 weeks) still shows its first day. */
+/** The repeat a rule maps to here; a rule this calendar cannot show (hourly, say) still shows its first day. */
 function repeatOf(rule: string): Repeat {
-  const f = /(?:^|;)FREQ=(WEEKLY|MONTHLY|YEARLY)(?:;|$)/i.exec(rule);
+  const f = /(?:^|;)FREQ=(DAILY|WEEKLY|MONTHLY|YEARLY)(?:;|$)/i.exec(rule);
   return f ? (f[1].toLowerCase() as Repeat) : 'none';
 }
 
-const EDITED = new Set(['UID', 'SUMMARY', 'DESCRIPTION', 'DTSTART', 'DTEND', 'DURATION', 'RRULE', 'X-TOMLINOS-REMIND']);
+/** A rule's COUNT (0 when none) and UNTIL as a local day ('' when none). */
+function limitsOf(rule: string): { count: number; until: string } {
+  const c = /(?:^|;)COUNT=(\d{1,4})(?:;|$)/i.exec(rule);
+  const u = /(?:^|;)UNTIL=([0-9TZ]{8,16})(?:;|$)/i.exec(rule);
+  const count = c ? Number(c[1]) : 0;
+  const until = u ? parseStamp({ name: 'UNTIL', params: {}, value: u[1], raw: '' })?.date ?? '' : '';
+  return { count: count >= 1 ? count : 0, until };
+}
+
+/** The value of an RRULE line (after the colon). */
+const ruleValue = (raw: string) => raw.slice(raw.indexOf(':') + 1);
+
+/** The UNTIL value for the last day `until`: a date for an all-day event, the end of that day otherwise (in UTC when the
+ *  event's start is written in UTC or a named zone, as the standard asks). */
+function untilStamp(until: string, timed: boolean, utc: boolean): string {
+  if (!timed) return stamp(until, '');
+  if (!utc) return `${stamp(until, '23:59').slice(0, -2)}59`;
+  const [y, m, d] = until.split('-').map(Number);
+  return new Date(y, m - 1, d, 23, 59, 59).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+}
+
+const PROJECT_ID = /^[\w-]{1,64}$/;
+
+const EDITED = new Set(['UID', 'SUMMARY', 'DESCRIPTION', 'DTSTART', 'DTEND', 'DURATION', 'RRULE', 'LOCATION', 'X-TOMLINOS-REMIND', 'X-TOMLINOS-PROJECT']);
 const CALENDAR_OWN = new Set(['VERSION', 'PRODID']);
 
 export function parseIcs(text: string): CalEvent[] {
@@ -124,7 +156,7 @@ export function parseIcs(text: string): CalEvent[] {
     if (begin === 'VCALENDAR' && !cur) inCalendar = true;
     else if (end === 'VCALENDAR' && !cur) inCalendar = false;
     else if (begin === 'VEVENT' && !cur) {
-      cur = { notes: '', repeat: 'none', remind: -1, start: '', end: '', raw: [], recurrence: '', keep: { uid: '', lines: [], time: [], rule: [], was: { date: '', start: '', end: '', repeat: 'none' }, calendar } };
+      cur = { notes: '', repeat: 'none', remind: -1, start: '', end: '', raw: [], recurrence: '', keep: { uid: '', lines: [], time: [], rule: [], place: [], was: { date: '', start: '', end: '', repeat: 'none', count: 0, until: '', where: '' }, calendar } };
     } else if (end === 'VEVENT' && cur) {
       if (cur.date) {
         const keep = cur.keep;
@@ -134,8 +166,15 @@ export function parseIcs(text: string): CalEvent[] {
         const base = fileUid || idFromText(cur.raw.join('\n'), seen);
         const uid = cur.recurrence ? `${base}#${cur.recurrence}` : base;
         const e: CalEvent = { uid, title: cur.title || '(no title)', date: cur.date, start: cur.start ?? '', end: cur.end ?? '', notes: cur.notes ?? '', repeat: cur.repeat ?? 'none', remind: cur.remind ?? -1 };
+        // A limit only means something on a repeat this calendar shows.
+        if (e.repeat !== 'none') {
+          if (cur.count) e.count = cur.count;
+          if (cur.until) e.until = cur.until;
+        }
+        if (cur.where) e.where = cur.where;
+        if (cur.project) e.project = cur.project;
         keep.uid = fileUid || base;
-        keep.was = { date: e.date, start: e.start, end: e.end, repeat: e.repeat };
+        keep.was = { date: e.date, start: e.start, end: e.end, repeat: e.repeat, count: e.count ?? 0, until: e.until ?? '', where: e.where ?? '' };
         e.keep = keep;
         events.push(e);
       }
@@ -154,11 +193,21 @@ export function parseIcs(text: string): CalEvent[] {
         const s = parseStamp(line);
         if (s?.time) cur.end = s.time;
       } else if (line.name === 'RRULE') {
-        cur.repeat = repeatOf(line.value);
+        // One rule is shown and edited; a second (rare, and gone from the standard) is kept but not shown.
+        if (!cur.keep.rule.length) {
+          cur.repeat = repeatOf(line.value);
+          Object.assign(cur, limitsOf(line.value));
+        }
         cur.keep.rule.push(line.raw);
+      } else if (line.name === 'LOCATION') {
+        if (!cur.keep.place.length) cur.where = unescapeValue(line.value).slice(0, 500);
+        cur.keep.place.push(line.raw);
       } else if (line.name === 'X-TOMLINOS-REMIND') {
         const n = Number(line.value);
         if (Number.isInteger(n) && n >= -1 && n <= 10080) cur.remind = n;
+      } else if (line.name === 'X-TOMLINOS-PROJECT') {
+        const v = line.value.trim();
+        if (PROJECT_ID.test(v)) cur.project = v;
       }
       if (line.name === 'RECURRENCE-ID') cur.recurrence = line.value.trim().slice(0, 40);
       if (line.name === 'DTSTART' || line.name === 'DTEND' || line.name === 'DURATION') cur.keep.time.push(line.raw);
@@ -177,17 +226,38 @@ export function writeIcs(events: CalEvent[]): string {
   for (const e of events) {
     const k = e.keep;
     out.push('BEGIN:VEVENT', writeLine('UID', k?.uid || e.uid), writeLine('SUMMARY', escapeValue(e.title)));
-    if (k && k.time.length && k.was.date === e.date && k.was.start === e.start && k.was.end === e.end) {
-      for (const raw of k.time) out.push(foldLine(raw));
+    const timeKept = !!k && k.time.length > 0 && k.was.date === e.date && k.was.start === e.start && k.was.end === e.end;
+    if (timeKept) {
+      for (const raw of k!.time) out.push(foldLine(raw));
     } else {
       out.push(e.start ? `DTSTART:${stamp(e.date, e.start)}` : `DTSTART;VALUE=DATE:${stamp(e.date, '')}`);
       if (e.start && e.end) out.push(`DTEND:${stamp(e.date, e.end)}`);
     }
+    const count = e.repeat !== 'none' && e.count && e.count >= 1 ? Math.floor(e.count) : 0;
+    const until = e.repeat !== 'none' && e.until && isDate(e.until) ? e.until : '';
     if (k && k.rule.length && k.was.repeat === e.repeat) {
-      for (const raw of k.rule) out.push(foldLine(raw));
-    } else if (e.repeat !== 'none') out.push(`RRULE:FREQ=${e.repeat.toUpperCase()}`);
+      if (k.was.count === count && k.was.until === until) {
+        for (const raw of k.rule) out.push(foldLine(raw));
+      } else if (e.repeat !== 'none') {
+        // Only the end changed (Stop repeating): the file's own rule keeps its other parts (which weekdays, every 2 weeks).
+        const dtstart = timeKept ? k.time.find(raw => /^DTSTART[;:]/i.test(raw)) : undefined;
+        const utc = !!dtstart && (/TZID=/i.test(dtstart.slice(0, dtstart.indexOf(':'))) || /Z\s*$/i.test(dtstart));
+        const parts = ruleValue(k.rule[0]).split(';').filter(p => p && !/^(COUNT|UNTIL)=/i.test(p));
+        if (count) parts.push(`COUNT=${count}`);
+        else if (until) parts.push(`UNTIL=${untilStamp(until, !!e.start, utc)}`);
+        out.push(foldLine(`RRULE:${parts.join(';')}`));
+        for (const raw of k.rule.slice(1)) out.push(foldLine(raw));
+      }
+    } else if (e.repeat !== 'none') {
+      out.push(`RRULE:FREQ=${e.repeat.toUpperCase()}${count ? `;COUNT=${count}` : until ? `;UNTIL=${untilStamp(until, !!e.start, false)}` : ''}`);
+    }
     if (e.notes) out.push(writeLine('DESCRIPTION', escapeValue(e.notes)));
+    const where = (e.where ?? '').trim();
+    if (k && k.place.length && k.was.where === (e.where ?? '')) {
+      for (const raw of k.place) out.push(foldLine(raw));
+    } else if (where) out.push(writeLine('LOCATION', escapeValue(where)));
     if (e.remind >= 0) out.push(`X-TOMLINOS-REMIND:${e.remind}`);
+    if (e.project && PROJECT_ID.test(e.project)) out.push(`X-TOMLINOS-PROJECT:${e.project}`);
     for (const raw of k?.lines ?? []) out.push(foldLine(raw));
     out.push('END:VEVENT');
   }
@@ -195,18 +265,93 @@ export function writeIcs(events: CalEvent[]): string {
   return out.join('\r\n') + '\r\n';
 }
 
-/** Does the event fall on this day (YYYY-MM-DD), counting its repeats? A monthly event on the 31st skips short months. */
+const daysIn = (y: number, m: number) => new Date(Date.UTC(y, m, 0)).getUTCDate();
+
+/**
+ * Which showing of the event this day is (0 = its first day), counting its repeats but not its limits; -1 when it does
+ * not fall on this day. A monthly event on the 31st skips short months, a yearly one on 29 February skips other years.
+ */
+function showingIndex(e: CalEvent, day: string): number {
+  if (day === e.date) return 0;
+  if (e.repeat === 'none' || day < e.date) return -1;
+  const [y, m, d] = e.date.split('-').map(Number);
+  const [Y, M, D] = day.split('-').map(Number);
+  if (e.repeat === 'yearly') {
+    if (M !== m || D !== d) return -1;
+    if (!(m === 2 && d === 29)) return Y - y;
+    let n = 0;
+    for (let yy = y; yy < Y; yy++) if (daysIn(yy, 2) === 29) n++;
+    return n;
+  }
+  if (e.repeat === 'monthly') {
+    if (D !== d) return -1;
+    const months = (Y - y) * 12 + (M - m);
+    if (d <= 28) return months;
+    let n = 0;
+    for (let i = 0; i < months; i++) if (daysIn(y + Math.floor((m - 1 + i) / 12), ((m - 1 + i) % 12) + 1) >= d) n++;
+    return n;
+  }
+  const diff = Math.round((Date.UTC(Y, M - 1, D) - Date.UTC(y, m - 1, d)) / 86400000);
+  if (e.repeat === 'daily') return diff;
+  return diff % 7 === 0 ? diff / 7 : -1;
+}
+
+/** Does the event fall on this day (YYYY-MM-DD), counting its repeats and where they end ("for 3 days", "until")? */
 export function occursOn(e: CalEvent, day: string): boolean {
   if (day === e.date) return true;
   if (e.repeat === 'none' || day < e.date) return false;
-  const [y, m, d] = e.date.split('-').map(Number);
-  const [Y, M, D] = day.split('-').map(Number);
-  if (e.repeat === 'yearly') return M === m && D === d;
-  if (e.repeat === 'monthly') return D === d;
-  const a = Date.UTC(y, m - 1, d);
-  const b = Date.UTC(Y, M - 1, D);
-  return Math.round((b - a) / 86400000) % 7 === 0;
+  if (e.until && day > e.until) return false;
+  const n = showingIndex(e, day);
+  return n >= 0 && (!e.count || n < e.count);
 }
+
+/** The first day on or after `from` the event shows on, looking at most `within` days ahead; null when none. */
+export function nextShowing(e: CalEvent, from: string, within = 400): string | null {
+  if (e.date >= from) return e.date;
+  return e.repeat === 'none' ? null : nextAfter(e, from, within);
+}
+
+function nextAfter(e: CalEvent, from: string, within: number): string | null {
+  for (let i = 0, day = from; i < within; i++, day = addDays(day, 1)) {
+    if (e.until && day > e.until) return null;
+    if (occursOn(e, day)) return day;
+  }
+  return null;
+}
+
+/** Does the event still repeat after `day` (one more showing within a year)? */
+export const repeatsAfter = (e: CalEvent, day: string): boolean => e.repeat !== 'none' && nextShowing(e, addDays(day, 1), 370) !== null;
+
+/** The event with its repeats ended after `today` (its showings up to today stay), or unchanged when none are left. */
+export function stopRepeating(e: CalEvent, today: string): CalEvent {
+  if (!repeatsAfter(e, today)) return e;
+  return { ...e, count: 0, until: today > e.date ? today : e.date };
+}
+
+const EVERY: Record<Exclude<Repeat, 'none'>, [string, string, string]> = {
+  daily: ['Every day', 'day', 'days'],
+  weekly: ['Every week', 'week', 'weeks'],
+  monthly: ['Every month', 'month', 'months'],
+  yearly: ['Every year', 'year', 'years'],
+};
+
+/** "Every day", "Every day, for 3 days", "Every week, until Sat 17 Oct 2026"; '' for none. */
+export function repeatLabel(e: Pick<CalEvent, 'repeat' | 'count' | 'until'>): string {
+  if (e.repeat === 'none') return '';
+  const [every, one, many] = EVERY[e.repeat];
+  if (e.count) return `${every}, for ${e.count} ${e.count === 1 ? one : many}`;
+  if (e.until && isDate(e.until)) return `${every}, until ${dayLabel(e.until, true)}`;
+  return every;
+}
+
+/** "Sat 17 Oct", or with the year "Sat 17 Oct 2026", in the person's language. */
+export function dayLabel(day: string, year = false): string {
+  const [y, m, d] = day.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', ...(year ? { year: 'numeric' } : {}) });
+}
+
+/** The reminder choices offered wherever an event is made (minutes before the start; -1 none). */
+export const REMIND_CHOICES: Array<[number, string]> = [[-1, 'No reminder'], [0, 'At the start'], [5, '5 minutes before'], [15, '15 minutes before'], [30, '30 minutes before'], [60, '1 hour before'], [1440, '1 day before']];
 
 /** The events on a day, all-day first, then by start time. */
 export function eventsOn(events: CalEvent[], day: string): CalEvent[] {
