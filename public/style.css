@@ -2026,3 +2026,12 @@ textarea.field { resize: vertical; font: inherit; }
 .wp-hf-c { text-align: center; }
 .wp-hf-r { text-align: right; }
 .wp-status .zoom-label { min-width: 48px; }
+.wp-doc .wp-opaque { display: inline-block; padding: 0 5px; margin: 0 1px; border: 1px dashed #8a97ab; border-radius: 3px; background: #eef2f7; color: #44546a; font: 11px "Segoe UI", Arial, sans-serif; line-height: 1.5; text-indent: 0; vertical-align: baseline; white-space: nowrap; max-width: 280px; overflow: hidden; text-overflow: ellipsis; cursor: default; }
+.wp-doc .wp-opaque-block { margin: 4px 0; padding: 6px 10px; border: 1px dashed #8a97ab; border-radius: 3px; background: #eef2f7; color: #44546a; font: 12px "Segoe UI", Arial, sans-serif; }
+.wp-find-panel { display: flex; flex-direction: column; gap: 4px; padding: 5px 8px; background: #f3f3f3; border-bottom: 1px solid #c8c8c8; font-size: 13px; color: #222; }
+.wp-find-panel[hidden], .wp-find-row[hidden] { display: none; }
+.wp-find-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.wp-find-input { width: min(260px, 60vw); }
+.wp-find-count { min-width: 70px; color: #444; }
+.wp-doc .wp-found { background: #fff59d; }
+.wp-doc .wp-found-now { background: #ffb74d; }

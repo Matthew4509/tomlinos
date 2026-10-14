@@ -212,10 +212,10 @@ test('a file the way Word writes it reads as Word shows it', async () => {
   buildSchema(pm).nodeFromJSON(read.doc).check();
 });
 
-test('a picture in a kind Write cannot show, a text box, comments: listed, not lost silently', async () => {
+test('a text box, a comment, a footnote: kept (as grey labels) and listed, never lost silently', async () => {
   const body = '<w:p><w:r><w:drawing><wp:anchor xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><wps:txbx xmlns:wps="x"/></wp:anchor></w:drawing></w:r><w:r><w:commentReference w:id="1"/></w:r><w:r><w:footnoteReference w:id="2"/></w:r></w:p>';
   const read = await readDocx(await wordFile(body));
-  assert.ok(read.dropped.includes('text boxes'));
-  assert.ok(read.dropped.includes('comments'));
-  assert.ok(read.dropped.includes('footnotes and endnotes'));
+  assert.ok(read.kept.includes('text boxes'));
+  assert.ok(read.kept.includes('comments'));
+  assert.ok(read.kept.includes('footnotes and endnotes'));
 });

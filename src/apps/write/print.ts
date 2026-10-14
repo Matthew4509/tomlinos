@@ -87,7 +87,7 @@ export function snapshot(editor: HTMLElement, paper: HTMLElement, page: PageSetu
   const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
   for (let n = walker.nextNode() as Text | null; n; n = walker.nextNode() as Text | null) {
     const el = n.parentElement;
-    if (!el || el.closest('.wp-spacer, .wp-break, .column-resize-handle')) continue;
+    if (!el || el.closest('.wp-spacer, .wp-break, .column-resize-handle, .wp-opaque, .wp-opaque-block, .wp-find-panel')) continue;
     const cs = getComputedStyle(el);
     const size = pxToPt(parseFloat(cs.fontSize) || 14.67);
     const family = firstFace(cs.fontFamily);

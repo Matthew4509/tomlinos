@@ -12,6 +12,9 @@ export interface XmlEl {
   kids: XmlEl[];
   /** The text directly inside this element (not inside its children). */
   text: string;
+  /** Where the element starts and ends in the source (so a part can be copied out exactly as written). */
+  start?: number;
+  end?: number;
 }
 
 const NAMED: Record<string, string> = { lt: '<', gt: '>', amp: '&', quot: '"', apos: "'" };
@@ -115,6 +118,7 @@ export function parseXml(src: string): XmlEl {
       if (end < 0) throw new XmlProblem('A closing tag is not finished.');
       const name = localName(src.slice(lt + 2, end).trim());
       if (stack.length <= 1 || top.name !== name) throw new XmlProblem(`A closing tag </${name}> does not match.`);
+      top.end = end + 1;
       stack.pop();
       i = end + 1;
     } else {
@@ -134,7 +138,7 @@ export function parseXml(src: string): XmlEl {
       const space = body.search(/[\s]/);
       const rawName = space < 0 ? body : body.slice(0, space);
       if (!rawName) throw new XmlProblem('A tag has no name.');
-      const el: XmlEl = { name: localName(rawName), attrs: space < 0 ? {} : readAttrs(body.slice(space)), kids: [], text: '' };
+      const el: XmlEl = { name: localName(rawName), attrs: space < 0 ? {} : readAttrs(body.slice(space)), kids: [], text: '', start: lt, end: j + 1 };
       top.kids.push(el);
       if (!selfClosing) stack.push(el);
       i = j + 1;

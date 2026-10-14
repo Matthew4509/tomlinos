@@ -50,7 +50,8 @@ const xmlSafe = (s: string): string => s.replace(/[\u0000-\u0008\u000B\u000C\u00
 const BULLETS = ['•', 'o', '▪'];
 const ORDER_FORMATS = ['decimal', 'lowerLetter', 'lowerRoman'];
 
-function numberingXml(ordered: Array<{ numId: number; start: number }>): string {
+/** Our two list definitions (bullets, numbers) and one numbering per list, with ids from `abs` and `bulletNum` up. */
+function numberingParts(ordered: Array<{ numId: number; start: number }>, abs: number, bulletNum: number): { abstracts: string; nums: string } {
   const lvl = (i: number, bullet: boolean) => {
     const left = 720 * (i + 1);
     const text = bullet ? BULLETS[i % 3] : `%${i + 1}.`;
@@ -59,30 +60,45 @@ function numberingXml(ordered: Array<{ numId: number; start: number }>): string 
     return `<w:lvl w:ilvl="${i}"><w:start w:val="1"/><w:numFmt w:val="${bullet ? 'bullet' : ORDER_FORMATS[i % 3]}"/><w:lvlText w:val="${escapeAttr(text)}"/><w:lvlJc w:val="${bullet || i % 3 !== 2 ? 'left' : 'right'}"/><w:pPr><w:ind w:left="${left}" w:hanging="360"/></w:pPr>${font}</w:lvl>`;
   };
   const levels = (bullet: boolean) => Array.from({ length: 9 }, (_, i) => lvl(i, bullet)).join('');
-  let out = `${XML_HEAD}<w:numbering xmlns:w="${NS.w}">`;
-  out += `<w:abstractNum w:abstractNumId="0"><w:multiLevelType w:val="hybridMultilevel"/>${levels(true)}</w:abstractNum>`;
-  out += `<w:abstractNum w:abstractNumId="1"><w:multiLevelType w:val="hybridMultilevel"/>${levels(false)}</w:abstractNum>`;
-  out += '<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>';
+  const abstracts = `<w:abstractNum w:abstractNumId="${abs}"><w:multiLevelType w:val="hybridMultilevel"/>${levels(true)}</w:abstractNum>`
+    + `<w:abstractNum w:abstractNumId="${abs + 1}"><w:multiLevelType w:val="hybridMultilevel"/>${levels(false)}</w:abstractNum>`;
+  let out = `<w:num w:numId="${bulletNum}"><w:abstractNumId w:val="${abs}"/></w:num>`;
   for (const o of ordered) {
-    out += `<w:num w:numId="${o.numId}"><w:abstractNumId w:val="1"/>`;
+    out += `<w:num w:numId="${o.numId}"><w:abstractNumId w:val="${abs + 1}"/>`;
     // Each numbered list starts again from its own first number (9 levels, so a list inside it restarts too).
     for (let i = 0; i < 9; i++) out += `<w:lvlOverride w:ilvl="${i}"><w:startOverride w:val="${i === 0 ? o.start : 1}"/></w:lvlOverride>`;
     out += '</w:num>';
   }
-  return out + '</w:numbering>';
+  return { abstracts, nums: out };
 }
 
+function numberingXml(ordered: Array<{ numId: number; start: number }>): string {
+  const parts = numberingParts(ordered, 0, 1);
+  return `${XML_HEAD}<w:numbering xmlns:w="${NS.w}">${parts.abstracts}${parts.nums}</w:numbering>`;
+}
+
+/** The ids of the styles Write writes (and replaces in a file it opened, so the text looks as Write showed it). */
+const OUR_STYLE_IDS = ['Normal', 'Title', 'Heading1', 'Heading2', 'Heading3', 'ListParagraph', 'Header', 'Footer', 'TableNormal', 'TableGrid'];
+
 function stylesXml(): string {
+  return `${XML_HEAD}<w:styles xmlns:w="${NS.w}">` + docDefaults() + ourStyles() + '</w:styles>';
+}
+
+function docDefaults(): string {
   const n = STYLES.normal;
+  return ''
+    + `<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="${n.face}" w:eastAsia="${n.face}" w:hAnsi="${n.face}" w:cs="${n.face}"/><w:sz w:val="${n.size * 2}"/><w:szCs w:val="${n.size * 2}"/><w:lang w:val="en-GB" w:eastAsia="en-US" w:bidi="ar-SA"/></w:rPr></w:rPrDefault>`
+    + `<w:pPrDefault><w:pPr><w:spacing w:after="${twips(n.after)}" w:line="${Math.round(n.line * 240)}" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults>`;
+}
+
+function ourStyles(): string {
   const para = (id: StyleId, outline: number | null) => {
     const s = STYLES[id];
     const rpr = `<w:rPr><w:rFonts w:ascii="${s.face}" w:hAnsi="${s.face}" w:cs="${s.face}"/>${s.bold ? '<w:b/>' : ''}${s.colour ? `<w:color w:val="${s.colour.slice(1).toUpperCase()}"/>` : ''}<w:sz w:val="${s.size * 2}"/><w:szCs w:val="${s.size * 2}"/></w:rPr>`;
     const ppr = `<w:pPr>${outline !== null ? '<w:keepNext/><w:keepLines/>' : ''}<w:spacing w:before="${twips(s.before)}" w:after="${twips(s.after)}" w:line="${Math.round(s.line * 240)}" w:lineRule="auto"/>${outline !== null ? `<w:outlineLvl w:val="${outline}"/>` : ''}${id === 'title' ? '<w:contextualSpacing/>' : ''}</w:pPr>`;
     return `<w:style w:type="paragraph"${id === 'normal' ? ' w:default="1"' : ''} w:styleId="${s.wordId}"><w:name w:val="${s.wordName}"/>${id === 'normal' ? '' : '<w:basedOn w:val="Normal"/><w:next w:val="Normal"/>'}<w:qFormat/>${ppr}${rpr}</w:style>`;
   };
-  return `${XML_HEAD}<w:styles xmlns:w="${NS.w}">`
-    + `<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="${n.face}" w:eastAsia="${n.face}" w:hAnsi="${n.face}" w:cs="${n.face}"/><w:sz w:val="${n.size * 2}"/><w:szCs w:val="${n.size * 2}"/><w:lang w:val="en-GB" w:eastAsia="en-US" w:bidi="ar-SA"/></w:rPr></w:rPrDefault>`
-    + `<w:pPrDefault><w:pPr><w:spacing w:after="${twips(n.after)}" w:line="${Math.round(n.line * 240)}" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults>`
+  return ''
     + para('normal', null) + para('title', null) + para('h1', 0) + para('h2', 1) + para('h3', 2)
     + '<w:style w:type="paragraph" w:styleId="ListParagraph"><w:name w:val="List Paragraph"/><w:basedOn w:val="Normal"/><w:uiPriority w:val="34"/><w:qFormat/><w:pPr><w:ind w:left="720"/><w:contextualSpacing/></w:pPr></w:style>'
     + '<w:style w:type="paragraph" w:styleId="Header"><w:name w:val="header"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr></w:style>'
@@ -90,9 +106,9 @@ function stylesXml(): string {
     + '<w:style w:type="table" w:default="1" w:styleId="TableNormal"><w:name w:val="Normal Table"/><w:uiPriority w:val="99"/><w:semiHidden/><w:tblPr><w:tblInd w:w="0" w:type="dxa"/><w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:left w:w="108" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/><w:right w:w="108" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style>'
     + '<w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/><w:basedOn w:val="TableNormal"/><w:uiPriority w:val="39"/><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:tblPr><w:tblBorders>'
     + ['top', 'left', 'bottom', 'right', 'insideH', 'insideV'].map(s => `<w:${s} w:val="single" w:sz="4" w:space="0" w:color="auto"/>`).join('')
-    + '</w:tblBorders></w:tblPr></w:style>'
-    + '</w:styles>';
+    + '</w:tblBorders></w:tblPr></w:style>';
 }
+
 
 interface WriteCtx {
   page: PageSetup;
@@ -100,6 +116,10 @@ interface WriteCtx {
   media: Map<string, { rid: string; name: string; pic: Picture }>;
   ordered: Array<{ numId: number; start: number }>;
   nextNum: number;
+  /** The numbering every bulleted list uses. */
+  bulletNum: number;
+  /** How new pictures are named inside the file (a prefix of its own when the file already has pictures). */
+  mediaPrefix: string;
   drawingId: number;
   /** Width of the writing area, in pixels (a picture or table is never made wider). */
   bodyPx: number;
@@ -138,7 +158,7 @@ function pictureRun(node: NodeJSON, ctx: WriteCtx): string {
   if (!pic) return '';
   let media = ctx.media.get(id);
   if (!media) {
-    media = { rid: `rIdImg${ctx.media.size + 1}`, name: `image${ctx.media.size + 1}.${EXTENSION[pic.type]}`, pic };
+    media = { rid: `rId${ctx.mediaPrefix}Img${ctx.media.size + 1}`, name: `${ctx.mediaPrefix.toLowerCase()}image${ctx.media.size + 1}.${EXTENSION[pic.type]}`, pic };
     ctx.media.set(id, media);
   }
   let w = Number(node.attrs?.width) || pic.w;
@@ -168,6 +188,8 @@ function inlineXml(nodes: NodeJSON[] | undefined, ctx: WriteCtx): string {
       out += `<w:r>${rpr}${parts.map((p, i) => (i ? '<w:tab/>' : '') + (p ? `<w:t xml:space="preserve">${escapeXml(p)}</w:t>` : '')).join('')}</w:r>`;
     } else if (n.type === 'hard_break') {
       out += '<w:r><w:br/></w:r>';
+    } else if (n.type === 'opaque_inline') {
+      out += String(n.attrs?.xml ?? '');
     } else if (n.type === 'image') {
       out += pictureRun(n, ctx);
     }
@@ -199,7 +221,7 @@ function paragraphXml(p: NodeJSON, ctx: WriteCtx, list?: { numId: number; level:
 }
 
 function listXml(list: NodeJSON, ctx: WriteCtx, level: number): string {
-  let numId = 1;
+  let numId = ctx.bulletNum;
   if (list.type === 'ordered_list') {
     numId = ctx.nextNum++;
     ctx.ordered.push({ numId, start: Math.max(1, Number(list.attrs?.order) || 1) });
@@ -308,6 +330,7 @@ function blocksXml(blocks: NodeJSON[], ctx: WriteCtx): string {
     else if (b.type === 'bullet_list' || b.type === 'ordered_list') out += listXml(b, ctx, 0);
     else if (b.type === 'table') out += tableXml(b, ctx);
     else if (b.type === 'page_break') out += '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
+    else if (b.type === 'opaque_block') out += String(b.attrs?.xml ?? '');
   }
   return out;
 }
@@ -337,13 +360,18 @@ function headerXml(kind: 'hdr' | 'ftr', line: HeaderLine, bodyTwips: number): st
 const lineHas = (l: HeaderLine) => !!(l.l.trim() || l.c.trim() || l.r.trim());
 
 /** The document as the bytes of a .docx file. */
-export async function writeDocx(doc: NodeJSON, page: PageSetup, title = ''): Promise<Uint8Array<ArrayBuffer>> {
+export async function writeDocx(doc: NodeJSON, page: PageSetup, title = '', source?: DocxSource): Promise<Uint8Array<ArrayBuffer>> {
   const pt = PAPERS[page.paper];
   const wPt = page.orient === 'landscape' ? pt.h : pt.w;
   const hPt = page.orient === 'landscape' ? pt.w : pt.h;
   const m = page.margins;
   const bodyPx = ((wPt / 72) - m.l - m.r) * PX_PER_IN;
-  const ctx: WriteCtx = { page, media: new Map(), ordered: [], nextNum: 2, drawingId: 0, bodyPx };
+  // A file opened here keeps its own list definitions: ours are numbered after its highest ids.
+  const keptNumbering = source?.numbering ? partText(source, source.numbering) : null;
+  const most = (re: RegExp) => Math.max(0, ...[...(keptNumbering ?? '').matchAll(re)].map(m => Number(m[1])));
+  const abs = source ? most(/w:abstractNumId="(\d+)"/g) + 1 : 0;
+  const bulletNum = source ? most(/w:numId="(\d+)"/g) + 1 : 1;
+  const ctx: WriteCtx = { page, media: new Map(), ordered: [], nextNum: bulletNum + 1, bulletNum, drawingId: 0, bodyPx, mediaPrefix: source ? 'Tw' : '' };
   const body = blocksXml(doc.content ?? [], ctx);
   const hasHeader = lineHas(page.header);
   const hasFooter = lineHas(page.footer);
@@ -354,6 +382,11 @@ export async function writeDocx(doc: NodeJSON, page: PageSetup, title = ''): Pro
     + '<w:cols w:space="720"/><w:docGrid w:linePitch="360"/></w:sectPr>';
   const document = `${XML_HEAD}<w:document xmlns:w="${NS.w}" xmlns:r="${NS.r}" xmlns:wp="${NS.wp}" xmlns:a="${NS.a}" xmlns:pic="${NS.pic}"><w:body>${body}${sect}</w:body></w:document>`;
   const bodyTwips = inch((wPt / 72) - m.l - m.r);
+  if (source) {
+    const pageXml = `<w:pgSz w:w="${twips(wPt)}" w:h="${twips(hPt)}"${page.orient === 'landscape' ? ' w:orient="landscape"' : ''}/>`
+      + `<w:pgMar w:top="${inch(m.t)}" w:right="${inch(m.r)}" w:bottom="${inch(m.b)}" w:left="${inch(m.l)}" w:header="${inch(m.header)}" w:footer="${inch(m.footer)}" w:gutter="0"/>`;
+    return writeKept(source, ctx, body, pageXml, numberingParts(ctx.ordered, abs, bulletNum), bodyTwips);
+  }
 
   let rels = `${XML_HEAD}<Relationships xmlns="${NS.rel}">`
     + `<Relationship Id="rIdStyles" Type="${REL}/styles" Target="styles.xml"/>`
@@ -402,13 +435,147 @@ export async function writeDocx(doc: NodeJSON, page: PageSetup, title = ''): Pro
   return zipDeflate(entries);
 }
 
+// ---- Saving over a Word file opened here ------------------------------------------------------------------------
+
+/** A Word file as it was opened: every part, so saving over it keeps what Write did not change. */
+export interface DocxSource {
+  /** Every part, by its path in the zip. */
+  parts: Map<string, Uint8Array>;
+  /** The main part (word/document.xml almost always) and its relationships part. */
+  main: string;
+  rels: string;
+  styles: string | null;
+  numbering: string | null;
+  /** The main part's opening tag, with every namespace the kept parts use. */
+  rootTag: string;
+  /** The last section's settings as written (headers, footers, columns, line numbers...), or ''. */
+  sectPr: string;
+  /** The header and footer as Write read them: changed in Write, they are written anew; otherwise the file's own stay. */
+  header: HeaderLine;
+  footer: HeaderLine;
+}
+
+const partText = (source: DocxSource, path: string): string | null => {
+  const b = source.parts.get(path);
+  return b ? new TextDecoder('utf-8').decode(b).replace(/^﻿/, '') : null;
+};
+
+/** What comes after the paper size and margins in a section's settings (Word's file format fixes the order). */
+const AFTER_PAGE = ['pgBorders', 'lnNumType', 'pgNumType', 'cols', 'formProt', 'vAlign', 'noEndnote', 'titlePg', 'textDirection', 'bidi', 'rtlGutter', 'docGrid', 'printerSettings', 'sectPrChange'];
+
+/**
+ * Saving over a Word file opened here: every part of the file stays (its theme, fonts, settings, comments, footnotes,
+ * text boxes' pictures...), with the main text, Write's styles and lists, the page size and margins, and any new
+ * pictures (or a header and footer changed in Write) put in. Text boxes, shapes and the like that Write kept as grey
+ * labels go back exactly as they were, and the relationships they name are still there.
+ */
+function writeKept(source: DocxSource, ctx: WriteCtx, body: string, pageXml: string, numbering: { abstracts: string; nums: string }, bodyTwips: number): Promise<Uint8Array<ArrayBuffer>> {
+  const enc = new TextEncoder();
+  const dir = source.main.slice(0, source.main.lastIndexOf('/') + 1);
+  const out = new Map(source.parts);
+  const newRels: string[] = [];
+  const newTypes: string[] = [];
+
+  // The section: the file's own, with Write's paper and margins (and header and footer when changed in Write).
+  let sect = source.sectPr || '<w:sectPr></w:sectPr>';
+  sect = sect.replace(/^<w:sectPr([^>]*)\/>$/, '<w:sectPr$1></w:sectPr>');
+  if (/<w:pgSz\b/.test(sect)) sect = sect.replace(/<w:pgMar\b[^>]*\/>/, '').replace(/<w:pgSz\b[^>]*\/>/, () => pageXml);
+  else {
+    sect = sect.replace(/<w:pgMar\b[^>]*\/>/, '');
+    const m = new RegExp(`<w:(${AFTER_PAGE.join('|')})\\b|</w:sectPr>`).exec(sect);
+    sect = m ? sect.slice(0, m.index) + pageXml + sect.slice(m.index) : sect + pageXml;
+  }
+  const refs: string[] = [];
+  const page = ctx.page;
+  for (const [key, tag, kind] of [['header', 'headerReference', 'hdr'], ['footer', 'footerReference', 'ftr']] as const) {
+    if (JSON.stringify(page[key]) === JSON.stringify(source[key])) continue;
+    sect = sect.replace(new RegExp(`<w:${tag}\\b[^>]*/>`, 'g'), '');
+    if (!lineHas(page[key])) continue;
+    const name = `tw-${key}1.xml`;
+    out.set(dir + name, enc.encode(headerXml(kind, page[key], bodyTwips)));
+    newRels.push(`<Relationship Id="rIdTw${key}" Type="${REL}/${key}" Target="${name}"/>`);
+    newTypes.push(`<Override PartName="/${dir}${name}" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.${key}+xml"/>`);
+    refs.push(`<w:${tag} w:type="default" r:id="rIdTw${key}"/>`);
+  }
+  sect = sect.replace(/^<w:sectPr[^>]*>/, open => open + refs.join(''));
+
+  // The main part, under the file's own opening tag (with the namespaces Write's own parts need, added if missing).
+  let root = source.rootTag;
+  for (const [prefix, uri] of [['w', NS.w], ['r', NS.r], ['wp', NS.wp], ['a', NS.a], ['pic', NS.pic]]) {
+    if (!root.includes(`xmlns:${prefix}=`)) root = root.replace(/>$/, ` xmlns:${prefix}="${uri}">`);
+  }
+  out.set(source.main, enc.encode(`${XML_HEAD}${root}<w:body>${body}${sect}</w:body></w:document>`));
+
+  // Styles: the file's own, with Write's styles in place of the ones of the same ids.
+  const stylesPath = source.styles ?? `${dir}styles.xml`;
+  let styles = source.styles ? partText(source, source.styles) : null;
+  if (styles) {
+    try {
+      const text = styles;
+      const cut = children(parseXml(text), 'style').filter(st => OUR_STYLE_IDS.includes(at(st, 'styleId') ?? '')).sort((x, y) => (y.start ?? 0) - (x.start ?? 0));
+      let kept = text;
+      for (const st of cut) kept = kept.slice(0, st.start) + kept.slice(st.end);
+      styles = /<\/w:styles>\s*$/.test(kept) ? kept.replace(/<\/w:styles>\s*$/, `${ourStyles()}</w:styles>`) : null;
+    } catch {
+      styles = null;
+    }
+  }
+  if (!styles) {
+    styles = stylesXml();
+    if (!source.styles) {
+      newRels.push(`<Relationship Id="rIdTwStyles" Type="${REL}/styles" Target="styles.xml"/>`);
+      newTypes.push(`<Override PartName="/${stylesPath}" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>`);
+    }
+  }
+  out.set(stylesPath, enc.encode(styles));
+
+  // Numbering: the file's own, with Write's list definitions after it.
+  const numberingPath = source.numbering ?? `${dir}numbering.xml`;
+  let numberingText = source.numbering ? partText(source, source.numbering) : null;
+  if (numberingText && /<\/w:numbering>\s*$/.test(numberingText)) {
+    const firstNum = numberingText.search(/<w:num\b/);
+    numberingText = firstNum >= 0 ? numberingText.slice(0, firstNum) + numbering.abstracts + numberingText.slice(firstNum) : numberingText.replace(/<\/w:numbering>\s*$/, `${numbering.abstracts}</w:numbering>`);
+    numberingText = numberingText.replace(/<\/w:numbering>\s*$/, `${numbering.nums}</w:numbering>`);
+  } else {
+    numberingText = `${XML_HEAD}<w:numbering xmlns:w="${NS.w}">${numbering.abstracts}${numbering.nums}</w:numbering>`;
+    if (!source.numbering) {
+      newRels.push(`<Relationship Id="rIdTwNumbering" Type="${REL}/numbering" Target="numbering.xml"/>`);
+      newTypes.push(`<Override PartName="/${numberingPath}" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>`);
+    }
+  }
+  out.set(numberingPath, enc.encode(numberingText));
+
+  // Pictures in the text, as files of their own.
+  for (const media of ctx.media.values()) {
+    out.set(`${dir}media/${media.name}`, media.pic.bytes);
+    newRels.push(`<Relationship Id="${media.rid}" Type="${REL}/image" Target="media/${media.name}"/>`);
+  }
+  const relsText = partText(source, source.rels) ?? `${XML_HEAD}<Relationships xmlns="${NS.rel}"></Relationships>`;
+  out.set(source.rels, enc.encode(relsText.replace(/<\/Relationships>\s*$/, `${newRels.join('')}</Relationships>`)));
+
+  const typesText = partText(source, '[Content_Types].xml') ?? `${XML_HEAD}<Types xmlns="${NS.ct}"></Types>`;
+  for (const [ext, type] of [['png', 'image/png'], ['jpeg', 'image/jpeg'], ['gif', 'image/gif']]) {
+    if (!new RegExp(`Extension="${ext}"`, 'i').test(typesText)) newTypes.unshift(`<Default Extension="${ext}" ContentType="${type}"/>`);
+  }
+  out.set('[Content_Types].xml', enc.encode(typesText.replace(/<\/Types>\s*$/, `${newTypes.join('')}</Types>`)));
+
+  const when = Date.now();
+  const entries: ZipEntry[] = [{ name: '[Content_Types].xml', data: out.get('[Content_Types].xml')!, modified: when }];
+  for (const [name, data] of out) if (name !== '[Content_Types].xml') entries.push({ name, data, modified: when });
+  return zipDeflate(entries);
+}
+
 // ---- Reading ---------------------------------------------------------------------------------------------------------
 
 export interface DocxRead {
   doc: NodeJSON;
   page: PageSetup;
-  /** What the document has that Write cannot show (each said once, in words). */
+  /** What the document has that Write leaves out (each said once, in words): saving over the file loses these. */
   dropped: string[];
+  /** What Write keeps without showing it fully (grey labels in the text, written back unchanged). */
+  kept: string[];
+  /** The file as opened, to save over it without losing its other parts. */
+  source: DocxSource;
 }
 
 const at = (el: XmlEl | undefined, name: string): string | undefined => (el ? el.attrs[`w:${name}`] ?? el.attrs[name] : undefined);
@@ -696,11 +863,15 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
       throw error;
     }
   };
+  /** Each part's text as read, so a part Write keeps can be copied out of it exactly. */
+  const texts = new Map<string, string>();
   const readXml = async (path: string): Promise<XmlEl | null> => {
     const data = await readBytes(path);
     if (!data) return null;
     try {
-      return parseXml(new TextDecoder('utf-8').decode(data).replace(/^﻿/, ''));
+      const text = new TextDecoder('utf-8').decode(data).replace(/^﻿/, '');
+      texts.set(path, text);
+      return parseXml(text);
     } catch (error) {
       if (error instanceof XmlProblem) throw new DocxProblem(`Part of this Word file (${path}) is damaged: ${error.message}`);
       throw error;
@@ -716,6 +887,31 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
   const docXml = await readXml(main);
   if (!docXml || docXml.name !== 'document') throw new DocxProblem('This is not a Word document Write can open (it has no main document part).');
   const dir = main.slice(0, main.lastIndexOf('/') + 1);
+  const docSrc = texts.get(main) ?? '';
+  /** What the document has that Write keeps without showing (written back unchanged): each kind said once. */
+  const kept = new Set<string>();
+  const raw = (el: XmlEl): string => (el.start !== undefined && el.end !== undefined ? docSrc.slice(el.start, el.end) : '');
+  const words = (el: XmlEl): string => findAll(el, 't').map(t => t.text).join('').replace(/\s+/g, ' ').trim();
+  /** A run Write cannot show, kept whole: a grey label in the text, written back as it was. */
+  const keepRun = (run: XmlEl, k: XmlEl, label: string, what: string): NodeJSON => {
+    kept.add(what);
+    const rpr = child(run, 'rPr');
+    return { type: 'opaque_inline', attrs: { xml: `<w:r>${rpr ? raw(rpr) : ''}${raw(k)}</w:r>`, label } };
+  };
+  const keepWhole = (el: XmlEl, label: string, what: string): NodeJSON => {
+    kept.add(what);
+    return { type: 'opaque_inline', attrs: { xml: raw(el), label } };
+  };
+  const shapeLabel = (k: XmlEl): [string, string] => {
+    if (findAll(k, 'chart').length) return ['Chart', 'charts'];
+    const box = findAll(k, 'txbxContent')[0] ?? findAll(k, 'txbx')[0] ?? findAll(k, 'textbox')[0];
+    if (box) {
+      const w = words(box);
+      return [w ? `Text box: ${w.length > 40 ? `${w.slice(0, 40)}…` : w}` : 'Text box', 'text boxes'];
+    }
+    if (findAll(k, 'relIds').length) return ['SmartArt', 'SmartArt diagrams'];
+    return ['Shape', 'drawings and shapes'];
+  };
   const resolve = (target: string) => {
     if (target.startsWith('/')) return target.slice(1);
     const parts = (dir + target).split('/');
@@ -849,7 +1045,7 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
             if (k.name === 't') pushText(k.text, look);
             else if (k.name === 'tab' || k.name === 'ptab') pushText('\t', look);
             else if (k.name === 'noBreakHyphen') pushText('‑', look);
-            else if (k.name === 'sym') pushText('□', look);
+            else if (k.name === 'sym') cur().push(keepRun(el, k, 'Symbol', 'symbols from symbol fonts'));
             else if (k.name === 'br' || k.name === 'cr') {
               const type = at(k, 'type');
               if (type === 'page') parts.push('break', []);
@@ -861,7 +1057,8 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
               const extent = findAll(k, 'extent')[0];
               if (findAll(k, 'anchor').length) rd.dropped.add('text wrapping round pictures (they show in line with the text)');
               if (!rid) {
-                rd.dropped.add(findAll(k, 'chart').length ? 'charts' : findAll(k, 'txbx').length ? 'text boxes' : 'drawings and shapes');
+                const [label, what] = shapeLabel(k);
+                cur().push(keepRun(el, k, label, what));
                 continue;
               }
               const id = await pictureFor(rid);
@@ -874,17 +1071,20 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
               const data = findAll(k, 'imagedata')[0];
               const rid = data ? data.attrs['r:id'] ?? data.attrs.id : undefined;
               if (!rid) {
-                rd.dropped.add(findAll(k, 'textbox').length ? 'text boxes' : 'drawings and shapes');
+                const box = findAll(k, 'textbox')[0];
+                cur().push(keepRun(el, k, box ? `Text box: ${words(box).slice(0, 40)}` : 'Shape', box ? 'text boxes' : 'drawings and shapes'));
                 continue;
               }
               const id = await pictureFor(rid);
               if (id) cur().push({ type: 'image', attrs: { src: id, width: null, height: null, alt: '' } });
             } else if (k.name === 'AlternateContent') {
-              // Newer content with an older stand-in: a picture inside is kept; a text box or shape is listed.
-              if (findAll(k, 'txbx').length || findAll(k, 'textbox').length) rd.dropped.add('text boxes');
-              else rd.dropped.add('drawings and shapes');
-            } else if (k.name === 'footnoteReference' || k.name === 'endnoteReference') rd.dropped.add('footnotes and endnotes');
-            else if (k.name === 'commentReference') rd.dropped.add('comments');
+              // Newer content (a shape, a text box) with an older stand-in: kept as it is.
+              const [label, what] = shapeLabel(k);
+              cur().push(keepRun(el, k, label, what));
+            } else if (k.name === 'footnoteReference' || k.name === 'endnoteReference') {
+              const n = at(k, 'id') ?? '';
+              cur().push(keepRun(el, k, `${k.name === 'footnoteReference' ? 'Footnote' : 'Endnote'} ${n}`, 'footnotes and endnotes'));
+            } else if (k.name === 'commentReference') cur().push(keepRun(el, k, 'Comment', 'comments'));
           }
           break;
         }
@@ -899,11 +1099,13 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
           rd.dropped.add('tracked changes (shown with the changes accepted)');
           break;
         case 'oMath': case 'oMathPara':
-          rd.dropped.add('equations');
+          cur().push(keepWhole(el, `Equation${words(el) ? `: ${words(el).slice(0, 30)}` : ''}`, 'equations'));
           break;
-        case 'AlternateContent':
-          rd.dropped.add('drawings and shapes');
+        case 'AlternateContent': {
+          const [label, what] = shapeLabel(el);
+          cur().push(keepWhole(el, label, what));
           break;
+        }
         default:
           break;
       }
@@ -997,7 +1199,8 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
       } else if (el.name === 'tbl') {
         closeLists();
         if (depth > 6) {
-          rd.dropped.add('tables inside tables more than six deep');
+          kept.add('tables inside tables more than six deep');
+          out.push({ type: 'opaque_block', attrs: { xml: raw(el), label: 'Table (inside tables more than six deep)' } });
           continue;
         }
         out.push(await readTable(el, depth));
@@ -1005,7 +1208,10 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
         // The body's own page settings: read above.
       } else if (el.name === 'bookmarkStart' || el.name === 'bookmarkEnd' || el.name === 'proofErr' || el.name === 'permStart' || el.name === 'permEnd') {
         // Nothing to show.
-      } else if (el.name === 'altChunk') rd.dropped.add('parts brought in from other files');
+      } else if (el.name === 'altChunk') {
+        kept.add('parts brought in from other files');
+        out.push({ type: 'opaque_block', attrs: { xml: raw(el), label: 'Part brought in from another file' } });
+      }
     }
     return out;
   };
@@ -1061,8 +1267,30 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
 
   const blocks = await readBlocks(body, 0);
   const doc: NodeJSON = { type: 'doc', content: blocks.length ? blocks : [{ type: 'paragraph' }] };
-  if (findAll(body, 'commentRangeStart').length) rd.dropped.add('comments');
-  return { doc, page: cleanPage(page), dropped: [...rd.dropped] };
+  if (findAll(body, 'commentRangeStart').length) rd.dropped.add('where comments start and end (each comment stays, at its point)');
+  // Every part of the file, kept for saving over it.
+  const parts = new Map<string, Uint8Array>();
+  for (const e of entries) {
+    if (e.folder) continue;
+    const data = await readBytes(e.parts.join('/'));
+    if (data) parts.set(e.parts.join('/'), data);
+  }
+  const realPath = (path: string) => [...parts.keys()].find(k => k.toLowerCase() === path.toLowerCase()) ?? path;
+  const bodySect = body.kids.filter(k => k.name === 'sectPr').pop();
+  const stylesRel = partOf('styles');
+  const numberingRel = partOf('numbering');
+  const source: DocxSource = {
+    parts,
+    main: realPath(main),
+    rels: realPath(`${dir}_rels/${main.slice(dir.length)}.rels`),
+    styles: stylesRel ? realPath(resolve(stylesRel.target)) : null,
+    numbering: numberingRel ? realPath(resolve(numberingRel.target)) : null,
+    rootTag: docSrc.slice(docXml.start ?? 0, docSrc.indexOf('>', docXml.start ?? 0) + 1),
+    sectPr: bodySect ? raw(bodySect) : '',
+    header: { ...page.header },
+    footer: { ...page.footer },
+  };
+  return { doc, page: cleanPage(page), dropped: [...rd.dropped], kept: [...kept], source };
 }
 
 /** Puts a list paragraph into the right list (a new one, the open one, or one inside the last item). */

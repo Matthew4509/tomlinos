@@ -15,7 +15,11 @@ import { saveOver } from '../shell/savefile.ts';
 import type { AppDef, AppHandle } from '../shell/types.ts';
 import { APPS } from './catalog.ts';
 import { FONT_FACES, FONT_SIZES } from './sheet/fonts.ts';
-import { DocxProblem, readDocx, writeDocx } from './write/docx.ts';
+import { DocxProblem, readDocx, writeDocx, type DocxSource } from './write/docx.ts';
+import { findAll, findPlugin, replaceAll, type FindOptions, type Hit } from './write/find.ts';
+import { markdownLoses, readMarkdown, writeMarkdown } from './write/markdown.ts';
+import { OdtProblem, readOdt } from './write/odt.ts';
+import { readRtf, RtfProblem } from './write/rtf.ts';
 import { headerFooterDialog, marginsDialog, paragraphDialog, pictureSizeDialog, tableDialog } from './write/dialogs.ts';
 import { addPicture, picture } from './write/images.ts';
 import { drawFurniture, measure, pageOfCursor, sameSpacers, spacerDecorations } from './write/measure.ts';
@@ -122,9 +126,15 @@ async function run(app: AppHandle, pm: PM, arg: string | undefined): Promise<voi
   let path: string | null = null;
   let loadedId = '';
   let label = 'Document';
-  let kind: 'docx' | 'txt' = 'docx';
-  /** What opening a Word file left out: saving over it asks first while this is set. */
+  let kind: 'docx' | 'txt' | 'md' = 'docx';
+  /** What opening a file left out: saving over it asks first while this is set. */
   let lost: string[] = [];
+  /** What a Word file has that Write keeps as grey labels (written back unchanged). */
+  let keptParts: string[] = [];
+  /** A Word file as opened: saving it keeps its other parts (theme, comments, footnotes, text boxes...). */
+  let source: DocxSource | undefined;
+  /** Where a WordPad or LibreOffice file came from: its Word copy is saved there. */
+  let folderHint: string | null = null;
   let startDoc: NodeJSON = EMPTY_DOC;
 
   if (arg) {
@@ -135,25 +145,47 @@ async function run(app: AppHandle, pm: PM, arg: string | undefined): Promise<voi
       const bytes = await shell.fs.readFile(arg);
       const name = baseName(arg);
       const ext = splitExtension(name)[1].toLowerCase();
+      // WordPad (.rtf) and LibreOffice (.odt) files are read here and saved as Word documents beside them.
+      let readOnly = false;
       if (ext === '.docx') {
         const read = await readDocx(bytes);
         startDoc = read.doc;
         page = read.page;
         lost = read.dropped;
-      } else if (ext === '.txt' || ext === '.md' || ext === '.text' || ext === '') {
+        keptParts = read.kept;
+        source = read.source;
+      } else if (ext === '.rtf') {
+        const read = readRtf(bytes);
+        startDoc = read.doc;
+        lost = read.dropped;
+        readOnly = true;
+      } else if (ext === '.odt') {
+        const read = await readOdt(bytes);
+        startDoc = read.doc;
+        page = read.page;
+        lost = read.dropped;
+        readOnly = true;
+      } else if (ext === '.md' || ext === '.markdown') {
+        startDoc = readMarkdown(new TextDecoder('utf-8').decode(bytes));
+        kind = 'md';
+      } else if (ext === '.txt' || ext === '.text' || ext === '') {
         startDoc = docFromText(new TextDecoder('utf-8').decode(bytes));
         kind = 'txt';
       } else if (ext === '.doc') {
         throw new Problem('This is an older Word file (.doc), which Write cannot open. In Word, use File > Save As > Word Document (.docx), and open that file.');
       } else {
-        throw new Problem('Write opens Word documents (.docx) and plain text (.txt). This file is neither.');
+        throw new Problem('Write opens Word documents (.docx), WordPad files (.rtf), LibreOffice files (.odt), Markdown (.md) and plain text (.txt). This file is none of those.');
       }
-      path = arg;
-      loadedId = entry.id;
       label = name;
+      if (readOnly) folderHint = parentPath(arg);
+      else {
+        path = arg;
+        loadedId = entry.id;
+      }
     } catch (error) {
-      const why = error instanceof Problem || error instanceof DocxProblem ? error.message : 'This file could not be opened.';
-      if (!(error instanceof Problem || error instanceof DocxProblem)) await shell.report('Could not open the document', error);
+      const known = error instanceof Problem || error instanceof DocxProblem || error instanceof RtfProblem || error instanceof OdtProblem;
+      const why = known ? (error as Error).message : 'This file could not be opened.';
+      if (!known) await shell.report('Could not open the document', error);
       app.root.append(h('div', { class: 'app-message', role: 'alert' }, h('p', {}, why), h('p', { class: 'dialog-detail' }, 'The file was not changed.')));
       app.setTitle(baseName(arg));
       return;
@@ -322,6 +354,7 @@ async function run(app: AppHandle, pm: PM, arg: string | undefined): Promise<voi
     }
   };
   const cursorFirst = new pm.Plugin({ props: { handleKeyDown: (v: any) => (syncCursor(v), false) } });
+  const finder = findPlugin(pm);
   const state = pm.EditorState.create({
     doc,
     plugins: [
@@ -335,6 +368,7 @@ async function run(app: AppHandle, pm: PM, arg: string | undefined): Promise<voi
       pm.columnResizing({ View: TableView, cellMinWidth: 30 }),
       pm.tableEditing(),
       pagesPlugin,
+      finder.plugin,
     ],
   });
   let savedDoc = state.doc;
@@ -720,9 +754,22 @@ async function run(app: AppHandle, pm: PM, arg: string | undefined): Promise<voi
 
   // ---- Saving and opening ----------------------------------------------------------------------------------------------
 
-  const baseLabel = () => label.replace(/\.(docx|txt|md)$/i, '') || 'Document';
-  const fileBytes = async (as: 'docx' | 'txt'): Promise<Uint8Array> =>
-    as === 'txt' ? new TextEncoder().encode(plainText(view.state.doc.toJSON()).replace(/\n/g, '\r\n')) : writeDocx(view.state.doc.toJSON(), page, baseLabel());
+  const baseLabel = () => label.replace(/\.(docx|txt|md|markdown|rtf|odt)$/i, '') || 'Document';
+  const fileBytes = async (as: 'docx' | 'txt' | 'md'): Promise<Uint8Array> =>
+    as === 'txt' ? new TextEncoder().encode(plainText(view.state.doc.toJSON()).replace(/\n/g, '\r\n'))
+      : as === 'md' ? new TextEncoder().encode(writeMarkdown(view.state.doc.toJSON()))
+        : writeDocx(view.state.doc.toJSON(), page, baseLabel(), source);
+  /** Asks before a save to .txt or .md that leaves things out; false when the person says no. */
+  const okToSaveAs = async (as: 'docx' | 'txt' | 'md', name: string): Promise<boolean> => {
+    if (as === 'txt' && textLosesSomething()) {
+      return shell.dialogs.confirm({ title: 'Save as plain text?', text: `“${name}” is plain text, which keeps only the words: the formatting, tables and pictures are left out. Save as a Word document (.docx) instead to keep them.`, ok: 'Save the words only', cancel: 'Cancel' });
+    }
+    if (as === 'md') {
+      const loses = markdownLoses(view.state.doc.toJSON());
+      if (loses.length) return shell.dialogs.confirm({ title: 'Save as Markdown?', text: `Markdown keeps headings, bold, italic, lists and tables. These are left out of “${name}”: ${loses.join('; ')}. Save as a Word document (.docx) to keep them.`, ok: 'Save as Markdown', cancel: 'Cancel' });
+    }
+    return true;
+  };
   const isDirty = () => !view.state.doc.eq(savedDoc) || JSON.stringify(page) !== savedPage;
   function refresh(): void {
     app.setDirty(isDirty());
@@ -754,10 +801,7 @@ async function run(app: AppHandle, pm: PM, arg: string | undefined): Promise<voi
       if (answer === null) return false;
       if (answer === 'copy') return saveAs();
     }
-    if (kind === 'txt' && textLosesSomething()) {
-      const ok = await shell.dialogs.confirm({ title: 'Save as plain text?', text: `“${label}” is a plain text file, which keeps only the words: the formatting, tables and pictures are left out. Save as a Word document (.docx) instead to keep them.`, ok: 'Save the words only', cancel: 'Cancel' });
-      if (!ok) return false;
-    }
+    if (!(await okToSaveAs(kind, label))) return false;
     try {
       const docNow = view.state.doc;
       const pageNow = JSON.stringify(page);
@@ -777,23 +821,23 @@ async function run(app: AppHandle, pm: PM, arg: string | undefined): Promise<voi
   }
 
   async function saveAs(): Promise<boolean> {
-    const folder = path ? parentPath(path) : '/Documents';
+    const folder = path ? parentPath(path) : folderHint ?? '/Documents';
     let taken: string[] = [];
     try {
       taken = (await shell.fs.list(folder, true)).map(e => e.name);
     } catch {
       // Saving will say the folder is gone.
     }
-    const chosen = await pickSave(shell, { title: 'Save as', folder, name: uniqueName(`${baseLabel()}.${kind === 'txt' ? 'txt' : 'docx'}`, taken), ok: 'Save' });
+    const chosen = await pickSave(shell, { title: 'Save as', folder, name: uniqueName(`${baseLabel()}.${kind}`, taken), ok: 'Save' });
     if (!chosen) {
       view.focus();
       return false;
     }
-    // The ending chooses the kind: .txt is plain text, anything else a Word document.
+    // The ending chooses the kind: .txt is plain text, .md Markdown, anything else a Word document.
     let target = chosen.path;
-    const as: 'docx' | 'txt' = /\.txt$/i.test(target) ? 'txt' : 'docx';
+    const as: 'docx' | 'txt' | 'md' = /\.txt$/i.test(target) ? 'txt' : /\.(md|markdown)$/i.test(target) ? 'md' : 'docx';
     if (as === 'docx' && !/\.docx$/i.test(target)) target += '.docx';
-    if (as === 'txt' && textLosesSomething() && !(await shell.dialogs.confirm({ title: 'Save as plain text?', text: 'A .txt file keeps only the words: the formatting, tables and pictures are left out.', ok: 'Save the words only', cancel: 'Cancel' }))) return false;
+    if (!(await okToSaveAs(as, baseName(target)))) return false;
     try {
       const docNow = view.state.doc;
       const pageNow = JSON.stringify(page);
@@ -808,6 +852,7 @@ async function run(app: AppHandle, pm: PM, arg: string | undefined): Promise<voi
       label = entry.name;
       loadedId = entry.id;
       kind = as;
+      folderHint = null;
       savedDoc = docNow;
       savedPage = pageNow;
       lost = [];
@@ -821,13 +866,13 @@ async function run(app: AppHandle, pm: PM, arg: string | undefined): Promise<voi
   }
 
   async function openFromDesktop(): Promise<void> {
-    const chosen = await pickFile(shell, { title: 'Open a document', folder: path ? parentPath(path) : '/Documents', accept: ['docx', 'txt', 'md'], ok: 'Open' });
+    const chosen = await pickFile(shell, { title: 'Open a document', folder: path ? parentPath(path) : '/Documents', accept: ['docx', 'rtf', 'odt', 'md', 'markdown', 'txt'], ok: 'Open' });
     if (chosen) await shell.openApp('write', chosen);
   }
 
   /** A Word file from this computer: copied into Documents (so it can be saved), then opened in a window of its own. */
   function openFromComputer(): void {
-    const input = h('input', { type: 'file', accept: '.docx,.txt,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain', class: 'visually-hidden', tabindex: -1, 'aria-hidden': 'true' });
+    const input = h('input', { type: 'file', accept: '.docx,.rtf,.odt,.md,.markdown,.txt,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/rtf,application/vnd.oasis.opendocument.text,text/markdown,text/plain', class: 'visually-hidden', tabindex: -1, 'aria-hidden': 'true' });
     const done = new AbortController();
     on(input, 'change', async () => {
       const file = input.files?.[0];
@@ -873,6 +918,110 @@ async function run(app: AppHandle, pm: PM, arg: string | undefined): Promise<voi
     layout(4);
     void printPreview(shell, takeSnapshot, page, baseLabel(), `${baseLabel()}.pdf`).then(() => view.focus());
   };
+
+  // ---- Find and replace --------------------------------------------------------------------------------------------------
+
+  const findInput = h('input', { type: 'text', class: 'field wp-find-input', 'aria-label': 'Find', placeholder: 'Find', spellcheck: false, autocomplete: 'off' });
+  const replaceInput = h('input', { type: 'text', class: 'field wp-find-input', 'aria-label': 'Replace with', placeholder: 'Replace with', spellcheck: false, autocomplete: 'off' });
+  const caseBox = h('input', { type: 'checkbox' });
+  const wordBox = h('input', { type: 'checkbox' });
+  const findCount = h('span', { class: 'wp-find-count', role: 'status', 'aria-live': 'polite' });
+  const findButton = (text: string, title: string, run: () => void): HTMLButtonElement => {
+    const b = h('button', { type: 'button', class: 'btn', title }, text);
+    on(b, 'click', run, app.signal);
+    return b;
+  };
+  const replaceRow = h('div', { class: 'wp-find-row' }, replaceInput,
+    findButton('Replace', 'Replace this one, then go to the next', () => replaceOne()),
+    findButton('Replace all', 'Replace every one', () => replaceEvery()));
+  const findPanel = h('div', { class: 'wp-find-panel', role: 'search', hidden: true },
+    h('div', { class: 'wp-find-row' }, findInput,
+      findButton('▲', 'Previous (Shift+Enter)', () => go(-1)), findButton('▼', 'Next (Enter)', () => go(1)), findCount,
+      h('label', { class: 'chart-check' }, caseBox, ' Match case'), h('label', { class: 'chart-check' }, wordBox, ' Whole words'),
+      findButton('×', 'Close (Esc)', () => closeFind())),
+    replaceRow);
+  const findState = (): { query: string; opts: FindOptions; hits: Hit[]; current: number } => finder.key.getState(view.state);
+  const showCount = () => {
+    const s = findState();
+    findCount.textContent = !s.query ? '' : s.hits.length ? `${s.current + 1} of ${s.hits.length.toLocaleString()}` : 'Not found';
+  };
+  /** Searches again (each change to the words or the ticks), starting from the cursor. */
+  function runFind(): void {
+    const opts = { matchCase: caseBox.checked, wholeWord: wordBox.checked };
+    const query = findInput.value;
+    const hits = findAll(view.state.doc, query, opts);
+    const from = view.state.selection.from;
+    const current = hits.length ? Math.max(0, hits.findIndex(x => x.from >= from)) : -1;
+    view.dispatch(view.state.tr.setMeta(finder.key, { query, opts, hits, current }).setMeta('addToHistory', false));
+    showCount();
+  }
+  /** The next (1) or previous (-1) place, chosen in the text and scrolled to. */
+  function go(step: number): void {
+    const s = findState();
+    if (!s.hits.length) {
+      showCount();
+      return;
+    }
+    const current = s.current < 0 ? 0 : (s.current + step + s.hits.length) % s.hits.length;
+    const hit = s.hits[current];
+    view.dispatch(view.state.tr.setMeta(finder.key, { ...s, current }).setSelection(pm.TextSelection.create(view.state.doc, hit.from, hit.to)).scrollIntoView());
+    showCount();
+  }
+  function replaceOne(): void {
+    const s = findState();
+    if (!s.hits.length) return;
+    const hit = s.hits[Math.max(0, s.current)];
+    const sel = view.state.selection;
+    // The first press goes to the place; the next replaces it (as in Word).
+    if (sel.from !== hit.from || sel.to !== hit.to) {
+      go(s.current < 0 ? 1 : 0);
+      return;
+    }
+    view.dispatch(replaceAll(view.state, [hit], replaceInput.value));
+    const after = findState();
+    const next = after.hits.findIndex(x => x.from >= hit.from + replaceInput.value.length);
+    view.dispatch(view.state.tr.setMeta(finder.key, { ...after, current: next >= 0 ? next - 1 : after.hits.length - 1 }));
+    go(1);
+  }
+  function replaceEvery(): void {
+    const s = findState();
+    if (!s.hits.length) return;
+    const n = s.hits.length;
+    view.dispatch(replaceAll(view.state, s.hits, replaceInput.value));
+    showCount();
+    shell.toast(`Replaced ${n.toLocaleString()} ${n === 1 ? 'place' : 'places'}.`);
+  }
+  function openFind(replace: boolean): void {
+    findPanel.hidden = false;
+    replaceRow.hidden = !replace;
+    const { from, to } = view.state.selection;
+    const picked = view.state.doc.textBetween(from, to, ' ');
+    if (picked && picked.length < 100 && !picked.includes('\n')) findInput.value = picked;
+    findInput.focus();
+    findInput.select();
+    runFind();
+  }
+  function closeFind(): void {
+    findPanel.hidden = true;
+    view.dispatch(view.state.tr.setMeta(finder.key, { query: '', opts: { matchCase: false, wholeWord: false }, hits: [], current: -1 }).setMeta('addToHistory', false));
+    view.focus();
+  }
+  on(findInput, 'input', runFind, app.signal);
+  on(caseBox, 'change', runFind, app.signal);
+  on(wordBox, 'change', runFind, app.signal);
+  on(findPanel, 'keydown', (e: KeyboardEvent) => {
+    if (e.key === 'Enter' && e.target === findInput) {
+      e.preventDefault();
+      go(e.shiftKey ? -1 : 1);
+    } else if (e.key === 'Enter' && e.target === replaceInput) {
+      e.preventDefault();
+      replaceOne();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      closeFind();
+    }
+  }, app.signal);
 
   // ---- The ribbon --------------------------------------------------------------------------------------------------------
 
@@ -1093,6 +1242,7 @@ async function run(app: AppHandle, pm: PM, arg: string | undefined): Promise<voi
         sized(300, group('Font', faceBox, sizeBox, growBtn, shrinkBtn, h('span', { class: 'rb-break' }), boldBtn, italicBtn, underBtn, strikeBtn, supBtn, subBtn, colourBtn, highlightBtn, clearBtn)),
         sized(240, group('Paragraph', bulletBtn, numberBtn, outdentBtn, indentBtn, h('span', { class: 'rb-break' }), ...alignBtns, lineBtn)),
         group('Styles', ...styleBtns),
+        group('Editing', btn('⌕ Find', 'Find (Ctrl+F)', () => openFind(false), 'text-rb'), btn('Replace', 'Replace (Ctrl+H)', () => openFind(true), 'text-rb')),
       ];
     }
     if (t === 'insert') {
@@ -1231,7 +1381,7 @@ async function run(app: AppHandle, pm: PM, arg: string | undefined): Promise<voi
 
   // ---- Put together -------------------------------------------------------------------------------------------------------
 
-  app.root.append(tabsRow, ribbon, scroller, status, sizeList);
+  app.root.append(tabsRow, ribbon, findPanel, scroller, status, sizeList);
   setZoom(scroller.clientWidth && scroller.clientWidth < box().w + 32 ? Math.max(0.3, (scroller.clientWidth - 32) / box().w) : 1);
   refresh();
   syncToolbar();
@@ -1261,6 +1411,9 @@ async function run(app: AppHandle, pm: PM, arg: string | undefined): Promise<voi
     } else if (ctrl && !event.shiftKey && k === 'p') {
       event.preventDefault();
       print();
+    } else if (ctrl && !event.shiftKey && (k === 'f' || k === 'h')) {
+      event.preventDefault();
+      openFind(k === 'h');
     } else if (event.key === 'Escape' && palette) {
       closePalette();
       view.focus();
@@ -1274,13 +1427,20 @@ async function run(app: AppHandle, pm: PM, arg: string | undefined): Promise<voi
     view.destroy();
   });
 
-  if (lost.length) {
+  if (lost.length || keptParts.length) {
+    const parts: Node[] = [];
+    if (keptParts.length) {
+      parts.push(h('p', { class: 'dialog-text' }, 'Write keeps these as they are, shown as grey labels in the text; saving puts them back unchanged:'), h('ul', { class: 'xlsx-list' }, ...keptParts.map(d => h('li', {}, d))));
+    }
+    if (lost.length) {
+      parts.push(h('p', { class: 'dialog-text' }, 'These are left out (Write cannot show them yet):'), h('ul', { class: 'xlsx-list' }, ...lost.map(d => h('li', {}, d))));
+    }
+    const detail = source
+      ? (lost.length ? 'The file itself has not been changed. Saving over it would leave out what is listed as left out, so Save asks first.' : 'The file itself has not been changed.')
+      : 'The file itself has not been changed. Save makes a Word document (.docx) beside it.';
     void shell.dialogs.ask<true>({
       title: `Opened “${label}”`,
-      body: h('div', { class: 'xlsx-report' },
-        h('p', { class: 'dialog-text' }, 'This document has some things Write cannot show yet, so they were left out:'),
-        h('ul', { class: 'xlsx-list' }, ...lost.map(d => h('li', {}, d))),
-        h('p', { class: 'dialog-detail' }, 'The file itself has not been changed. Saving over it would leave these out of it too, so Save asks first.')),
+      body: h('div', { class: 'xlsx-report' }, ...parts, h('p', { class: 'dialog-detail' }, detail)),
       buttons: [{ label: 'OK', value: true, primary: true }],
       cancel: true,
     }).then(() => view.focus());

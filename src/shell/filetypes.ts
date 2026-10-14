@@ -9,7 +9,7 @@ export interface FileType {
   apps: string[];
 }
 
-const TEXT: FileType = { label: 'Text document', icon: 'text', apps: ['editor', 'notepadpro'] };
+const TEXT: FileType = { label: 'Text document', icon: 'text', apps: ['editor', 'notepadpro', 'write'] };
 const IMAGE: FileType = { label: 'Picture', icon: 'image', apps: ['photos', 'photoedit'] };
 /** OpenRaster: a zip of layers (GIMP, Krita and MyPaint use it). Only Photo Editor reads it; Photos does not list it. */
 const LAYERED: FileType = { label: 'Layered picture', icon: 'image', apps: ['photoedit'] };
@@ -20,6 +20,9 @@ const SHEET: FileType = { label: 'Spreadsheet', icon: 'sheet', apps: ['sheet'] }
 const EXCEL: FileType = { label: 'Excel workbook', icon: 'sheet', apps: ['sheet'] };
 /** A Word document (a zip of XML inside, like an Excel workbook): opened in TOMLIN Write. */
 const WORD: FileType = { label: 'Word document', icon: 'write', apps: ['write'] };
+/** WordPad's rich text and LibreOffice's text documents: opened in TOMLIN Write (and saved from it as Word documents). */
+const RICH: FileType = { label: 'Rich text document', icon: 'write', apps: ['write'] };
+const ODT: FileType = { label: 'OpenDocument text', icon: 'write', apps: ['write'] };
 const CALC: FileType = { label: 'Calculator sheet', icon: 'calculator', apps: ['calculator'] };
 const ARCHIVE: FileType = { label: 'Compressed folder', icon: 'archive', apps: ['archive'] };
 const CODE: FileType = { label: 'Code or data file', icon: 'code', apps: ['editor', 'notepadpro'] };
@@ -48,6 +51,8 @@ const GROUPS: Array<[FileType, string[]]> = [
   // Excel workbooks open in the Spreadsheet (an .xls, Excel's old binary kind, opens to a message saying how to convert it).
   [EXCEL, ['xlsx', 'xlsm', 'xls']],
   [WORD, ['docx']],
+  [RICH, ['rtf']],
+  [ODT, ['odt']],
   [CALC, ['calc']],
   [CALENDAR, ['ics']],
   [CONTACTS, ['vcf']],

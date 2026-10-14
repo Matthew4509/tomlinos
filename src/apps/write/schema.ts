@@ -255,6 +255,21 @@ export function buildSchema(pm: PM): any {
         parseDOM: [{ tag: 'div.wp-break' }, { tag: 'hr.wp-break' }],
         toDOM: () => ['div', { class: 'wp-break', 'aria-label': 'Page break' }],
       },
+      // Parts of a Word file Write cannot show (a text box, a chart, a comment, an equation): a grey label in the text,
+      // kept and written back exactly as they were. Never made from pasted HTML.
+      opaque_inline: {
+        inline: true,
+        group: 'inline',
+        atom: true,
+        attrs: { xml: { default: '' }, label: { default: '' } },
+        toDOM: (node: any) => ['span', { class: 'wp-opaque', contenteditable: 'false', title: `${node.attrs.label}: kept as it is in the Word file` }, node.attrs.label],
+      },
+      opaque_block: {
+        group: 'block',
+        atom: true,
+        attrs: { xml: { default: '' }, label: { default: '' } },
+        toDOM: (node: any) => ['div', { class: 'wp-opaque-block', contenteditable: 'false', title: 'Kept as it is in the Word file' }, node.attrs.label],
+      },
       text: { group: 'inline' },
       hard_break: {
         inline: true,

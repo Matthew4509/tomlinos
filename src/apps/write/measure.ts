@@ -151,13 +151,13 @@ function blockUnits(view: any, node: any, pos: number, f: Frame, out: Measured[]
   const name = node.type.name;
   if (name === 'paragraph') out.push(...paragraphUnits(view, node, pos, f));
   else if (name === 'table') out.push(...tableUnits(view, node, pos, f));
-  else if (name === 'page_break') {
+  else if (node.isAtom && node.isBlock) {
     const dom = view.nodeDOM(pos) as HTMLElement | null;
     if (!dom) return;
     const r = dom.getBoundingClientRect();
     const prev = dom.previousElementSibling;
     const spacer = isSpacer(prev) ? prev.getBoundingClientRect().height / f.k : 0;
-    out.push({ unit: { top: yOf(f, r.top) - spacer, height: Math.max(1, r.height / f.k), spacer, breakAfter: true }, place: () => ({ kind: 'at', pos }) });
+    out.push({ unit: { top: yOf(f, r.top) - spacer, height: Math.max(1, r.height / f.k), spacer, breakAfter: name === 'page_break' }, place: () => ({ kind: 'at', pos }) });
   } else {
     // Lists (and list items): their paragraphs and tables, in order.
     node.forEach((child: any, offset: number) => blockUnits(view, child, pos + 1 + offset, f, out));
