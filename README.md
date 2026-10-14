@@ -13,8 +13,10 @@ desktop: they are saved on your server.
 - **Files and documents:** Explorer, Notepad and Notepad Pro, an editor with syntax highlighting, a spreadsheet,
   photos and a photo editor with layers (a light GIMP: selections, retouching, levels and curves, text layers,
   OpenRaster .ora files), a PDF viewer, a media player, archives (zip), and a recycle bin.
-- **TOMLIN Write:** a document writer that opens and saves Word documents (.docx) and plain text: fonts, styles,
-  lists, tables, pictures, pages with margins and a header and footer, printing and PDF.
+- **TOMLIN Write:** a document writer that opens and saves Word documents (.docx), Markdown and plain text, and opens
+  WordPad (.rtf) and LibreOffice (.odt) files: fonts, styles, lists, tables, pictures, pages with margins, a header
+  and footer, footnotes and a contents page, find and replace, letters from Contacts or a spreadsheet, templates,
+  printing and PDF. A Word file from elsewhere keeps the parts Write cannot show when it is saved.
 - **Everyday tools:** Mail (IMAP/SMTP, from your server), Calendar, My Projects (your projects and sites, with
   one-click reminders into the calendar: repeat daily, run for a number of days, appointments), Contacts, Calculator,
   Terminal, Task Manager, Shortcuts, and a Panel with today's events, your starred projects and a scratch pad.
