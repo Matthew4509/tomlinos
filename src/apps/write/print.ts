@@ -17,7 +17,8 @@ import { picture } from './images.ts';
 export type Item =
   | { k: 'text'; x: number; base: number; text: string; size: number; face: string; kind: FontKind; bold: boolean; italic: boolean; underline: boolean; strike: boolean; colour: string; align?: 'r' | 'c' }
   | { k: 'rect'; x: number; y: number; w: number; h: number; fill: string | null; stroke: string | null; width: number }
-  | { k: 'image'; x: number; y: number; w: number; h: number; id: string };
+  | { k: 'image'; x: number; y: number; w: number; h: number; id: string }
+  | { k: 'dots'; x: number; y: number; w: number; colour: string };
 
 export interface Snapshot {
   pages: Item[][];
@@ -68,7 +69,7 @@ export function markerText(li: HTMLElement, editor: HTMLElement): string {
 }
 
 /** Reads the pages off the screen: the editor's element, the paper strip it sits on, and the page setup. */
-export function snapshot(editor: HTMLElement, paper: HTMLElement, page: PageSetup, box: PageBox, count: number): Snapshot {
+export function snapshot(editor: HTMLElement, paper: HTMLElement, page: PageSetup, box: PageBox, count: number, extra: HTMLElement[] = []): Snapshot {
   const f: Frame = frameOf(paper, box.w);
   const g: Geometry = geometryOf(box);
   const fills: Item[][] = Array.from({ length: count }, () => []);
@@ -82,12 +83,13 @@ export function snapshot(editor: HTMLElement, paper: HTMLElement, page: PageSetu
     return { i, x: pxToPt(x), y: pxToPt(y - pageTop(g, i)) };
   };
 
-  // Words.
+  // Words (in the writing, and in the footnotes at the foot of each page).
   const range = document.createRange();
-  const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+  for (const root of [editor, ...extra]) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   for (let n = walker.nextNode() as Text | null; n; n = walker.nextNode() as Text | null) {
     const el = n.parentElement;
-    if (!el || el.closest('.wp-spacer, .wp-break, .column-resize-handle, .wp-opaque, .wp-opaque-block, .wp-find-panel')) continue;
+    if (!el || el.closest('.wp-spacer, .wp-break, .column-resize-handle, .wp-opaque, .wp-opaque-block, .wp-find-panel, .wp-toc-dots')) continue;
     const cs = getComputedStyle(el);
     const size = pxToPt(parseFloat(cs.fontSize) || 14.67);
     const family = firstFace(cs.fontFamily);
@@ -135,6 +137,20 @@ export function snapshot(editor: HTMLElement, paper: HTMLElement, page: PageSetu
         front[at.i].push({ k: 'text', x: at.x, base: at.y + hgt * 0.79, text, size, face: family, kind, bold, italic, underline, strike, colour });
       }
     }
+  }
+  }
+
+  // The rule above each page's footnotes, and the dotted lines of a contents page.
+  for (const block of extra) {
+    const r = block.getBoundingClientRect();
+    const at = place(px(r.left), py(r.top) - 8);
+    fills[at.i].push({ k: 'rect', x: at.x, y: at.y, w: 144, h: 0.5, fill: '#000000', stroke: null, width: 0 });
+  }
+  for (const dots of editor.querySelectorAll<HTMLElement>('.wp-toc-dots')) {
+    const r = dots.getBoundingClientRect();
+    if (r.width < 4) continue;
+    const at = place(px(r.left), py(r.bottom) - 4);
+    lines[at.i].push({ k: 'dots', x: at.x, y: at.y, w: pxToPt(r.width / f.k), colour: '#000000' });
   }
 
   // List numbers and bullets, right-aligned just before each item's first line.
@@ -236,6 +252,7 @@ export async function pdfOf(snap: Snapshot, title: string): Promise<Uint8Array<A
     const page: PdfPage = doc.addPage(snap.size.w, snap.size.h);
     for (const it of items) {
       if (it.k === 'rect') page.rect(it.x, it.y, it.w, it.h, it.fill, it.stroke, it.width);
+      else if (it.k === 'dots') page.line([it.x, it.y, it.x + it.w, it.y], it.colour, 0.8, [0.8, 2.4]);
       else if (it.k === 'text') {
         // The painter puts y in the middle of the letters: a third of the size above the baseline.
         page.text(it.x, it.base - it.size * 0.36, it.text, { size: it.size, bold: it.bold, italic: it.italic, underline: it.underline, strike: it.strike, colour: it.colour, kind: it.kind, align: it.align === 'r' ? 'r' : it.align === 'c' ? 'c' : 'l' });
@@ -260,6 +277,7 @@ export function pageSvg(snap: Snapshot, i: number): SVGElement {
   root.append(svg('rect', { x: 0, y: 0, width: snap.size.w, height: snap.size.h, fill: '#ffffff' }));
   for (const it of snap.pages[i] ?? []) {
     if (it.k === 'rect') root.append(svg('rect', { x: it.x, y: it.y, width: it.w, height: it.h, fill: it.fill ?? 'none', stroke: it.stroke ?? 'none', 'stroke-width': it.width }));
+    else if (it.k === 'dots') root.append(svg('path', { d: `M${it.x} ${it.y}h${it.w}`, stroke: it.colour, 'stroke-width': 0.8, 'stroke-dasharray': '0.8 2.4', fill: 'none' }));
     else if (it.k === 'image') {
       const pic = picture(it.id);
       if (pic) root.append(svg('image', { href: pic.url, x: it.x, y: it.y, width: it.w, height: it.h, preserveAspectRatio: 'none' }));

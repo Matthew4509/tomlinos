@@ -15,19 +15,21 @@ import { saveOver } from '../shell/savefile.ts';
 import type { AppDef, AppHandle } from '../shell/types.ts';
 import { APPS } from './catalog.ts';
 import { FONT_FACES, FONT_SIZES } from './sheet/fonts.ts';
-import { DocxProblem, readDocx, writeDocx, type DocxSource } from './write/docx.ts';
+import { DocxProblem, headingsOf, readDocx, writeDocx, type DocxSource } from './write/docx.ts';
+import { CONTACT_COLUMNS, contactsList, fieldsIn, mergeAll, tableList, TEMPLATES, type MergeList } from './write/merge.ts';
+import { pageAt } from './write/layout.ts';
 import { findAll, findPlugin, replaceAll, type FindOptions, type Hit } from './write/find.ts';
 import { markdownLoses, readMarkdown, writeMarkdown } from './write/markdown.ts';
 import { OdtProblem, readOdt } from './write/odt.ts';
 import { readRtf, RtfProblem } from './write/rtf.ts';
 import { headerFooterDialog, marginsDialog, paragraphDialog, pictureSizeDialog, tableDialog } from './write/dialogs.ts';
 import { addPicture, picture } from './write/images.ts';
-import { drawFurniture, measure, pageOfCursor, sameSpacers, spacerDecorations } from './write/measure.ts';
+import { drawFurniture, frameOf, GAP, measure, pageOfCursor, sameSpacers, spacerDecorations } from './write/measure.ts';
 import {
   countWords, defaultPage, docFromText, EMPTY_DOC, LINE_CHOICES, MARGIN_PRESETS, pageBox, PAPERS, plainText, STYLE_IDS, STYLES,
   type NodeJSON, type PageSetup, type Paper, type StyleId,
 } from './write/model.ts';
-import { printPreview, snapshot } from './write/print.ts';
+import { pdfOf, printPreview, snapshot } from './write/print.ts';
 import { buildSchema, pastedHtml, type PM } from './write/schema.ts';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -112,7 +114,8 @@ export const writeApp: AppDef = {
   },
 };
 
-async function run(app: AppHandle, pm: PM, arg: string | undefined): Promise<void> {
+async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<void> {
+  let arg = argIn;
   const shell = app.shell;
   // Pasted HTML is read through the desktop's one Trusted Types policy (it allows no other).
   pm.setClipboardHtml(inertMarkup);
@@ -135,8 +138,34 @@ async function run(app: AppHandle, pm: PM, arg: string | undefined): Promise<voi
   let source: DocxSource | undefined;
   /** Where a WordPad or LibreOffice file came from: its Word copy is saved there. */
   let folderHint: string | null = null;
+  /** The page each heading is on, in order (for the contents page and a .docx's contents). */
+  let headingPages: number[] = [];
+  // Mail merge: the list chosen, and the row shown while previewing (-1: the fields show their names).
+  let mergeList: MergeList | null = null;
+  let previewAt = -1;
+  /** The editor, once made (its own parts are drawn while it is being made). */
+  let viewRef: any = null;
   let startDoc: NodeJSON = EMPTY_DOC;
 
+  // Write's own settings: spell checking on or off.
+  const SETTINGS = '/System/write.json';
+  let spell = true;
+  try {
+    const saved = JSON.parse(await shell.fs.readText(SETTINGS)) as { spell?: unknown };
+    if (saved.spell === false) spell = false;
+  } catch {
+    // Nothing kept yet: spelling is checked.
+  }
+
+  // File > New from a template opens a window with "template:letter" (and the like).
+  if (arg?.startsWith('template:')) {
+    const t = TEMPLATES[arg.slice(9) as keyof typeof TEMPLATES];
+    if (t) {
+      startDoc = structuredClone(t.doc);
+      label = t.name;
+    }
+    arg = undefined;
+  }
   if (arg) {
     try {
       const entry = await shell.fs.stat(arg);
@@ -355,6 +384,64 @@ async function run(app: AppHandle, pm: PM, arg: string | undefined): Promise<voi
   };
   const cursorFirst = new pm.Plugin({ props: { handleKeyDown: (v: any) => (syncCursor(v), false) } });
   const finder = findPlugin(pm);
+  /** A footnote's number in the text (numbered in order by the layout); a click edits its words. */
+  class FootnoteView {
+    dom: HTMLElement;
+    node: any;
+    constructor(node: any, _v: any, getPos: () => number | undefined) {
+      this.node = node;
+      this.dom = h('sup', { class: 'wp-fn', contenteditable: 'false', role: 'button', tabindex: -1 }, '#');
+      this.dom.title = `Footnote: ${node.attrs.text}`;
+      on(this.dom, 'click', () => void editFootnote(getPos()), app.signal);
+    }
+    update(node: any): boolean {
+      if (node.type !== this.node.type) return false;
+      this.node = node;
+      this.dom.title = `Footnote: ${node.attrs.text}`;
+      return true;
+    }
+    ignoreMutation(): boolean {
+      return true;
+    }
+  }
+  /** A mail merge field: «Name», or the row's value while previewing. */
+  class FieldView {
+    dom: HTMLElement;
+    node: any;
+    constructor(node: any) {
+      this.node = node;
+      this.dom = h('span', { class: 'wp-field', contenteditable: 'false', 'data-field': node.attrs.name }, `«${node.attrs.name}»`);
+      showField(this.dom);
+    }
+    update(node: any): boolean {
+      if (node.type !== this.node.type || node.attrs.name !== this.node.attrs.name) return false;
+      this.node = node;
+      return true;
+    }
+    ignoreMutation(): boolean {
+      return true;
+    }
+  }
+  /** The contents page: its title and one line per heading with its page, rebuilt by the layout. */
+  class TocView {
+    dom: HTMLElement;
+    node: any;
+    constructor(node: any) {
+      this.node = node;
+      this.dom = h('div', { class: 'wp-toc', contenteditable: 'false' });
+      fillToc(this.dom, node);
+    }
+    update(node: any): boolean {
+      if (node.type !== this.node.type) return false;
+      this.node = node;
+      fillToc(this.dom, node);
+      return true;
+    }
+    ignoreMutation(): boolean {
+      return true;
+    }
+  }
+
   const state = pm.EditorState.create({
     doc,
     plugins: [
@@ -387,8 +474,13 @@ async function run(app: AppHandle, pm: PM, arg: string | undefined): Promise<voi
 
   const view = new pm.EditorView(mount, {
     state,
-    attributes: { class: 'wp-doc', spellcheck: 'true', role: 'textbox', 'aria-multiline': 'true', 'aria-label': 'Document' },
-    nodeViews: { image: (node: any, v: any, getPos: () => number | undefined) => new PictureView(node, v, getPos) },
+    attributes: () => ({ class: 'wp-doc', spellcheck: spell ? 'true' : 'false', role: 'textbox', 'aria-multiline': 'true', 'aria-label': 'Document' }),
+    nodeViews: {
+      image: (node: any, v: any, getPos: () => number | undefined) => new PictureView(node, v, getPos),
+      footnote: (node: any, v: any, getPos: () => number | undefined) => new FootnoteView(node, v, getPos),
+      field: (node: any) => new FieldView(node),
+      toc: (node: any) => new TocView(node),
+    },
     // Pasted HTML is read from a copy that never runs or loads anything; style blocks and comments are dropped first.
     transformPastedHTML: pastedHtml,
     handlePaste: (_v: any, event: ClipboardEvent) => {
@@ -417,6 +509,7 @@ async function run(app: AppHandle, pm: PM, arg: string | undefined): Promise<voi
     },
   });
   const dom: HTMLElement = view.dom;
+  viewRef = view;
 
   // ---- Pages ---------------------------------------------------------------------------------------------------------
 
@@ -429,14 +522,26 @@ async function run(app: AppHandle, pm: PM, arg: string | undefined): Promise<voi
       layout(0);
     });
   }
-  function layout(round: number): void {
-    if (app.signal.aborted || !paper.isConnected) return;
+  function layout(round: number): boolean {
+    if (app.signal.aborted || !paper.isConnected) return false;
     const b = box();
     css(paper, { zoom: String(zoom) });
     css(dom, { 'padding-top': `${b.top}px`, 'padding-left': `${b.left}px`, 'padding-right': `${b.right}px`, 'padding-bottom': `${b.bottom}px`, width: `${b.w}px` });
-    const laid = measure(view, paper, b);
+    // Footnotes: numbered in order, and measured as they will stand at the foot of a page.
+    const fns = [...dom.querySelectorAll<HTMLElement>('.wp-fn')];
+    fns.forEach((el, i) => {
+      el.textContent = String(i + 1);
+    });
+    const noteTexts: string[] = [];
+    view.state.doc.descendants((n: any) => {
+      if (n.type === nodes.footnote) noteTexts.push(n.attrs.text);
+      return true;
+    });
+    const noteHeights = measureNotes(noteTexts, b);
+    const laid = measure(view, paper, b, noteHeights);
     pageCount = laid.pages.count;
-    drawFurniture(furniture, paper, page, b, pageCount);
+    drawFurniture(furniture, paper, page, b, pageCount, { heights: noteHeights, on: laid.notesOn, text: i => noteTexts[i] ?? '' });
+    refreshToc();
     css(dom, { 'min-height': `${pageCount * b.h + (pageCount - 1) * 24}px` });
     const current = (pagesKey.getState(view.state).find() as any[]).map(d => ({ pos: d.from, height: d.spec.height ?? 0 }));
     const decorations = spacerDecorations(pm, view.state.doc, laid.spacers);
@@ -444,8 +549,91 @@ async function run(app: AppHandle, pm: PM, arg: string | undefined): Promise<voi
       view.dispatch(view.state.tr.setMeta(pagesKey, decorations).setMeta('addToHistory', false));
       // The spaces moved the lines below them: measure once more to be sure (it settles in one or two rounds).
       if (round < 4) requestAnimationFrame(() => layout(round + 1));
+      syncStatus();
+      return true;
     }
     syncStatus();
+    return false;
+  }
+  /** Lays the pages out again and again until nothing moves (for printing straight after a change). */
+  function settle(): void {
+    for (let i = 0; i < 6 && layout(4); i++) {
+      // Each round measures what the last one changed.
+    }
+  }
+
+  // A hidden copy of the foot of a page, to measure each footnote's height there.
+  const noteRuler = h('div', { class: 'wp-notes wp-notes-ruler', 'aria-hidden': 'true' });
+  function measureNotes(texts: string[], b: ReturnType<typeof box>): number[] {
+    if (!texts.length) return [];
+    css(noteRuler, { width: `${b.w - b.left - b.right}px` });
+    noteRuler.replaceChildren(...texts.map((t, i) => h('p', { class: 'wp-note' }, h('sup', {}, String(i + 1)), ` ${t}`)));
+    paper.append(noteRuler);
+    const k = frameOf(paper, b.w).k;
+    const out = [...noteRuler.children].map(el => el.getBoundingClientRect().height / k);
+    noteRuler.remove();
+    return out;
+  }
+
+  function refreshToc(): void {
+    const b = box();
+    const f = frameOf(paper, b.w);
+    const g = { pageH: b.h, top: b.top, body: b.body, gap: GAP };
+    headingPages = [...dom.querySelectorAll<HTMLElement>('p.wp-h1, p.wp-h2, p.wp-h3')]
+      .filter(el => !el.closest('table') && el.textContent?.trim())
+      .map(el => pageAt(g, (el.getBoundingClientRect().top - f.top) / f.k) + 1);
+    for (const el of dom.querySelectorAll<HTMLElement>('.wp-toc')) fillTocPages(el);
+  }
+  function fillToc(el: HTMLElement, node: any): void {
+    const heads = headingsOf(viewRef ? viewRef.state.doc.toJSON() : { type: 'doc' });
+    const rows = heads.map((head, i) => {
+      const row = h('div', { class: `wp-toc-row wp-toc-${head.level}` }, h('span', { class: 'wp-toc-text' }, head.text), h('span', { class: 'wp-toc-dots' }), h('span', { class: 'wp-toc-page' }, String(headingPages[i] ?? '')));
+      on(row, 'click', () => goToHeading(i), app.signal);
+      return row;
+    });
+    el.replaceChildren(h('p', { class: 'wp-toc-title' }, node.attrs.title), ...(rows.length ? rows : [h('p', { class: 'wp-toc-empty' }, 'No headings yet: give some paragraphs the Heading 1, 2 or 3 style, and they are listed here with their pages.')]));
+  }
+  function fillTocPages(el: HTMLElement): void {
+    const heads = headingsOf(view.state.doc.toJSON());
+    const rows = el.querySelectorAll('.wp-toc-row');
+    if (rows.length !== heads.length || heads.some((head, i) => rows[i].querySelector('.wp-toc-text')?.textContent !== head.text)) {
+      // The headings changed: the whole list again (the layout measures once more after).
+      fillToc(el, { attrs: { title: el.querySelector('.wp-toc-title')?.textContent ?? 'Contents' } });
+      scheduleLayout();
+      return;
+    }
+    rows.forEach((row, i) => {
+      const pageEl = row.querySelector('.wp-toc-page');
+      if (pageEl) pageEl.textContent = String(headingPages[i] ?? '');
+    });
+  }
+  function goToHeading(i: number): void {
+    let n = -1;
+    let target = -1;
+    view.state.doc.descendants((node: any, pos: number) => {
+      if (target >= 0) return false;
+      if (node.type === nodes.table) return false;
+      if (node.type === nodes.paragraph && /^h[123]$/.test(node.attrs.style) && node.textContent.trim()) {
+        n++;
+        if (n === i) target = pos + 1;
+      }
+      return true;
+    });
+    if (target < 0) return;
+    view.dispatch(view.state.tr.setSelection(pm.TextSelection.create(view.state.doc, target)).scrollIntoView());
+    view.focus();
+  }
+
+  function showField(el: HTMLElement): void {
+    const name = el.getAttribute('data-field') ?? '';
+    const row = mergeList && previewAt >= 0 ? mergeList.rows[previewAt] : null;
+    const value = row ? row[name] ?? Object.entries(row).find(([k]) => k.toLowerCase().replace(/[\s_.-]/g, '') === name.toLowerCase().replace(/[\s_.-]/g, ''))?.[1] : undefined;
+    el.textContent = row ? value ?? '' : `«${name}»`;
+    el.classList.toggle('wp-field-shown', !!row);
+  }
+  function refreshFields(): void {
+    for (const el of dom.querySelectorAll<HTMLElement>('.wp-field')) showField(el);
+    scheduleLayout();
   }
 
   // ---- Commands --------------------------------------------------------------------------------------------------------
@@ -758,7 +946,7 @@ async function run(app: AppHandle, pm: PM, arg: string | undefined): Promise<voi
   const fileBytes = async (as: 'docx' | 'txt' | 'md'): Promise<Uint8Array> =>
     as === 'txt' ? new TextEncoder().encode(plainText(view.state.doc.toJSON()).replace(/\n/g, '\r\n'))
       : as === 'md' ? new TextEncoder().encode(writeMarkdown(view.state.doc.toJSON()))
-        : writeDocx(view.state.doc.toJSON(), page, baseLabel(), source);
+        : writeDocx(view.state.doc.toJSON(), page, baseLabel(), source, { headingPages });
   /** Asks before a save to .txt or .md that leaves things out; false when the person says no. */
   const okToSaveAs = async (as: 'docx' | 'txt' | 'md', name: string): Promise<boolean> => {
     if (as === 'txt' && textLosesSomething()) {
@@ -913,11 +1101,189 @@ async function run(app: AppHandle, pm: PM, arg: string | undefined): Promise<voi
     }
   }
 
-  const takeSnapshot = () => snapshot(dom, paper, page, box(), pageCount);
+  const takeSnapshot = () => snapshot(dom, paper, page, box(), pageCount, [...furniture.querySelectorAll<HTMLElement>('.wp-notes')]);
   const print = () => {
     layout(4);
     void printPreview(shell, takeSnapshot, page, baseLabel(), `${baseLabel()}.pdf`).then(() => view.focus());
   };
+
+  // ---- Footnotes, word count, spelling ---------------------------------------------------------------------------------
+
+  async function insertFootnote(): Promise<void> {
+    const text = await shell.dialogs.prompt({ title: 'Footnote', label: 'Its words, shown at the foot of the page', ok: 'Insert' });
+    if (text && text.trim()) view.dispatch(view.state.tr.replaceSelectionWith(nodes.footnote.create({ text: text.trim().slice(0, 4000), id: 0 })).scrollIntoView());
+    view.focus();
+  }
+  async function editFootnote(pos: number | undefined): Promise<void> {
+    if (pos === undefined) return;
+    const node = view.state.doc.nodeAt(pos);
+    if (!node || node.type !== nodes.footnote) return;
+    const text = await shell.dialogs.prompt({ title: 'Footnote', label: 'Its words (empty takes the footnote out)', value: node.attrs.text, ok: 'Save' });
+    if (text === null) {
+      view.focus();
+      return;
+    }
+    const now = view.state.doc.nodeAt(pos);
+    if (now && now.type === nodes.footnote) {
+      view.dispatch(text.trim() ? view.state.tr.setNodeMarkup(pos, undefined, { ...now.attrs, text: text.trim().slice(0, 4000) }) : view.state.tr.delete(pos, pos + 1));
+    }
+    view.focus();
+  }
+  function insertToc(): void {
+    const $f = view.state.selection.$from;
+    const at = $f.depth ? $f.before(1) : 0;
+    view.dispatch(view.state.tr.insert(at, nodes.toc.create({ title: 'Contents' })).scrollIntoView());
+    view.focus();
+  }
+  async function wordCount(): Promise<void> {
+    const d = view.state.doc;
+    const text = d.textBetween(0, d.content.size, '\n', ' ');
+    let paras = 0;
+    d.descendants((n: any) => {
+      if (n.type === nodes.paragraph && n.textContent.trim()) paras++;
+      return true;
+    });
+    const rows: Array<[string, string]> = [
+      ['Pages', pageCount.toLocaleString()], ['Words', countWords(text).toLocaleString()],
+      ['Characters (no spaces)', text.replace(/\s/g, '').length.toLocaleString()], ['Characters (with spaces)', text.replace(/\n/g, '').length.toLocaleString()],
+      ['Paragraphs', paras.toLocaleString()],
+    ];
+    await shell.dialogs.ask<true>({ title: 'Word count', body: h('table', { class: 'wp-count' }, ...rows.map(([k, v]) => h('tr', {}, h('th', {}, k), h('td', {}, v)))), buttons: [{ label: 'OK', value: true, primary: true }], cancel: true });
+    view.focus();
+  }
+  async function setSpell(onNow: boolean): Promise<void> {
+    spell = onNow;
+    dom.spellcheck = spell;
+    view.updateState(view.state);
+    syncToolbar();
+    try {
+      let saved: Record<string, unknown> = {};
+      try {
+        saved = JSON.parse(await shell.fs.readText(SETTINGS)) as Record<string, unknown>;
+      } catch {
+        // Nothing kept yet.
+      }
+      await shell.fs.writeText(SETTINGS, JSON.stringify({ ...saved, spell }), { hidden: true });
+      shell.toast(spell ? 'Spelling is checked as you type (words the browser does not know are underlined).' : 'Spelling is not checked.');
+    } catch (error) {
+      await shell.report('This window does that now, but the choice could not be kept for next time', error);
+    }
+    view.focus();
+  }
+
+  // ---- Mail merge ---------------------------------------------------------------------------------------------------
+
+  /** Letters from a list: the people in Contacts. */
+  async function listFromContacts(): Promise<void> {
+    try {
+      // Contacts keeps everyone in this one file (the Contacts app's own).
+      const text = await shell.fs.readText('/Documents/Contacts.vcf');
+      useList(contactsList(text));
+    } catch {
+      await shell.dialogs.alert('No contacts yet', 'Contacts keeps its people in Documents/Contacts.vcf, and there is no such file yet. Add people in Contacts first, or choose a spreadsheet.');
+    }
+  }
+  /** Letters from a list: a spreadsheet (.xlsx, .sheet, .csv), its first row naming the columns. */
+  async function listFromSheet(): Promise<void> {
+    const chosen = await pickFile(shell, { title: 'Choose a list (a spreadsheet)', folder: '/Documents', accept: ['xlsx', 'sheet', 'csv', 'tsv'], ok: 'Use it' });
+    if (!chosen) {
+      view.focus();
+      return;
+    }
+    try {
+      const { Workbook } = await import('./sheet/workbook.ts');
+      const wb = new Workbook();
+      const bytes = await shell.fs.readFile(chosen);
+      if (/\.xlsx$/i.test(chosen)) {
+        const { openXlsx } = await import('./sheet/xlsx.ts');
+        await openXlsx(wb, bytes);
+      } else if (/\.(csv|tsv)$/i.test(chosen)) wb.importText(0, 0, 0, new TextDecoder('utf-8').decode(bytes));
+      else wb.load(JSON.parse(new TextDecoder('utf-8').decode(bytes)));
+      const list = tableList(wb.exportText(0, wb.usedRange(0), '\t'), baseName(chosen));
+      if (!list.rows.length) {
+        await shell.dialogs.alert('That list is empty', `“${baseName(chosen)}” has no rows under its first row (the first row names the columns).`);
+        return;
+      }
+      useList(list);
+    } catch (error) {
+      await shell.report('Could not read that list', error);
+    }
+  }
+  function useList(list: MergeList): void {
+    mergeList = list;
+    previewAt = -1;
+    listLabel.textContent = `${list.from}: ${list.rows.length.toLocaleString()} ${list.rows.length === 1 ? 'row' : 'rows'}`;
+    refreshFields();
+    shell.toast(`${list.from}: ${list.rows.length.toLocaleString()} ${list.rows.length === 1 ? 'row' : 'rows'}. Insert fields where their values go, then make the letters.`);
+    view.focus();
+  }
+  function insertField(name: string): void {
+    view.dispatch(view.state.tr.replaceSelectionWith(nodes.field.create({ name })).scrollIntoView());
+    view.focus();
+  }
+  async function otherField(): Promise<void> {
+    const name = await shell.dialogs.prompt({ title: 'Insert a field', label: 'The column’s name, as in the first row of the list', ok: 'Insert' });
+    if (name && name.trim()) insertField(name.trim().slice(0, 40));
+    else view.focus();
+  }
+  function preview(step: number): void {
+    if (!mergeList?.rows.length) {
+      void shell.dialogs.alert('Choose a list first', 'Mailings > From Contacts, or From a spreadsheet: the preview shows each row’s values in the fields.');
+      return;
+    }
+    previewAt = step === 0 ? (previewAt >= 0 ? -1 : 0) : Math.max(0, Math.min(mergeList.rows.length - 1, (previewAt < 0 ? 0 : previewAt) + step));
+    previewLabel.textContent = previewAt >= 0 ? `Row ${previewAt + 1} of ${mergeList.rows.length}` : 'Field names';
+    refreshFields();
+    view.focus();
+  }
+  /** The letters: one per row, each on a new page; into a new document (saved in Documents) or one PDF. */
+  async function makeLetters(asPdf: boolean): Promise<void> {
+    if (!mergeList?.rows.length) {
+      await shell.dialogs.alert('Choose a list first', 'Mailings > From Contacts, or From a spreadsheet. Each row of the list makes one letter.');
+      return;
+    }
+    const json = view.state.doc.toJSON();
+    if (!fieldsIn(json).length && !(await shell.dialogs.confirm({ title: 'No fields in this letter', text: `Every one of the ${mergeList.rows.length} letters would be the same. Insert fields (Mailings > Insert field) where each person's details go.`, ok: 'Make them anyway', cancel: 'Cancel' }))) return;
+    const merged = mergeAll(json, mergeList.rows);
+    const name = `${baseLabel()} - letters`;
+    try {
+      if (!asPdf) {
+        let taken: string[] = [];
+        try {
+          taken = (await shell.fs.list('/Documents', true)).map(e => e.name);
+        } catch {
+          // Writing says so if Documents is not there.
+        }
+        const entry = await shell.fs.writeFile(joinPath('/Documents', uniqueName(`${name}.docx`, taken)), await writeDocx(merged, page, name), { mustBeNew: true });
+        shell.toast(`Made ${mergeList.rows.length} letters in “${entry.name}” (Documents).`);
+        await shell.openApp('write', joinPath('/Documents', entry.name));
+        return;
+      }
+      // The PDF: the letters are laid out in this window for a moment, read off the screen, then the letter comes back.
+      const keep = view.state;
+      const keepZoom = zoom;
+      try {
+        view.updateState(pm.EditorState.create({ doc: schema.nodeFromJSON(merged), plugins: keep.plugins }));
+        settle();
+        const bytes = await pdfOf(takeSnapshot(), name);
+        let taken: string[] = [];
+        try {
+          taken = (await shell.fs.list('/Documents', true)).map(e => e.name);
+        } catch {
+          // Writing says so if Documents is not there.
+        }
+        const entry = await shell.fs.writeFile(joinPath('/Documents', uniqueName(`${name}.pdf`, taken)), bytes, { mustBeNew: true });
+        shell.toast(`Made ${mergeList.rows.length} letters in “${entry.name}” (Documents).`, { label: 'Open', run: () => void shell.openPath(joinPath('/Documents', entry.name)) });
+      } finally {
+        view.updateState(keep);
+        zoom = keepZoom;
+        refresh();
+        scheduleLayout();
+      }
+    } catch (error) {
+      await shell.report('Could not make the letters', error);
+    }
+  }
 
   // ---- Find and replace --------------------------------------------------------------------------------------------------
 
@@ -1232,9 +1598,14 @@ async function run(app: AppHandle, pm: PM, arg: string | undefined): Promise<voi
   // Picture.
   const picAlignBtns = (['left', 'center', 'right'] as const).map(a => btn(alignIcon(a), `Picture ${a === 'center' ? 'in the centre' : `at the ${a}`} of its line`, () => exec(paraCmd({ align: a === 'left' ? null : a }))));
 
-  type Tab = 'home' | 'insert' | 'layout' | 'table' | 'picture' | 'help';
-  const TAB_NAMES: Record<Tab, string> = { home: 'Home', insert: 'Insert', layout: 'Layout', table: 'Table', picture: 'Picture', help: 'Help' };
-  const TAB_ORDER: Tab[] = ['home', 'insert', 'layout', 'table', 'picture', 'help'];
+  // Review and Mailings.
+  const spellBtn = btn('Spelling', 'Spelling: words the browser does not know are underlined (on or off, kept for next time)', () => void setSpell(!spell), 'text-rb');
+  const listLabel = h('span', { class: 'wp-tip' }, 'No list chosen');
+  const previewLabel = h('span', { class: 'wp-tip' }, 'Field names');
+
+  type Tab = 'home' | 'insert' | 'layout' | 'review' | 'mailings' | 'table' | 'picture' | 'help';
+  const TAB_NAMES: Record<Tab, string> = { home: 'Home', insert: 'Insert', layout: 'Layout', review: 'Review', mailings: 'Mailings', table: 'Table', picture: 'Picture', help: 'Help' };
+  const TAB_ORDER: Tab[] = ['home', 'insert', 'layout', 'review', 'mailings', 'table', 'picture', 'help'];
   const groupsOf = (t: Tab): HTMLElement[] => {
     if (t === 'home') {
       return [
@@ -1246,10 +1617,26 @@ async function run(app: AppHandle, pm: PM, arg: string | undefined): Promise<voi
       ];
     }
     if (t === 'insert') {
-      return [group('Pages', pageBreakBtn), group('Tables', tableBtn), sized(200, group('Pictures', picDeskBtn, picPcBtn)),
+      return [group('Pages', pageBreakBtn, btn('☰ Contents page', 'A contents page: the headings and their pages, kept up to date', insertToc, 'text-rb')), group('Tables', tableBtn),
+        group('Footnotes', btn('¹ Footnote', 'A footnote at the foot of the page (Ctrl+Alt+F); click its number to change it', () => void insertFootnote(), 'text-rb')), sized(200, group('Pictures', picDeskBtn, picPcBtn)),
         group('Tip', h('span', { class: 'wp-tip' }, 'Paste or drop a picture straight into the page.'))];
     }
     if (t === 'layout') return [group('Page setup', marginsBtn, orientBtn, sizeMenuBtn, breakBtn2), group('Header & footer', hfBtn, numbersBtn)];
+    if (t === 'review') {
+      return [group('Proofing', spellBtn, btn('Word count', 'Pages, words, characters and paragraphs', () => void wordCount(), 'text-rb')), group('Find', btn('⌕ Find', 'Find (Ctrl+F)', () => openFind(false), 'text-rb'), btn('Replace', 'Replace (Ctrl+H)', () => openFind(true), 'text-rb'))];
+    }
+    if (t === 'mailings') {
+      return [
+        sized(250, group('List', btn('From Contacts', 'One letter for each person in Contacts', () => void listFromContacts(), 'text-rb'), btn('From a spreadsheet...', 'One letter for each row of a spreadsheet (its first row names the columns)', () => void listFromSheet(), 'text-rb'), listLabel)),
+        group('Fields', menuBtn('Insert field', 'Insert a field: filled in from each row', () => [
+          ...(mergeList?.columns ?? CONTACT_COLUMNS).map(c => ({ label: c, action: () => insertField(c) })),
+          { separator: true },
+          { label: 'Another name...', action: () => void otherField() },
+        ])),
+        sized(220, group('Preview', btn('◂', 'Previous row', () => preview(-1)), btn('Preview', 'Show a row’s values in the fields (press again for the field names)', () => preview(0), 'text-rb'), btn('▸', 'Next row', () => preview(1)), previewLabel)),
+        group('Finish', btn('Letters as a document', 'Make one letter per row in a new document (saved in Documents)', () => void makeLetters(false), 'text-rb'), btn('Letters as a PDF', 'Make one letter per row in one PDF (saved in Documents)', () => void makeLetters(true), 'text-rb')),
+      ];
+    }
     if (t === 'table') {
       return [
         sized(260, group('Rows & columns',
@@ -1269,9 +1656,10 @@ async function run(app: AppHandle, pm: PM, arg: string | undefined): Promise<voi
       ];
     }
     return [h('div', { class: 'wp-help' },
-      h('p', {}, h('strong', {}, 'Writes and saves Word documents (.docx). '), 'Fonts, sizes, colours, highlight, bold, italic, underline; alignment, spacing, indents; Normal, Title and Heading 1–3; bullets and numbering; tables with merged and shaded cells; pictures in the line; page breaks; paper, margins and orientation; a header and footer with page numbers; print and PDF.'),
-      h('p', {}, h('strong', {}, 'Not here yet: '), 'Find and replace, footnotes, a contents page, columns, comments and tracked changes, text boxes and shapes, text wrapping round pictures, a different first-page header, equations, and the old .doc files. A Word file that has them still opens: Write lists what it cannot show, and asks before saving over the file.'),
-      h('p', {}, h('strong', {}, 'Keys: '), 'Ctrl+B, I, U; Ctrl+E centre, Ctrl+L left, Ctrl+R right, Ctrl+J justify; Ctrl+1, 2, 5 line spacing; Ctrl+Alt+1, 2, 3 headings; Ctrl+Shift+N Normal; Ctrl+Enter page break; Shift+Enter new line; Tab and Shift+Tab move a list item in and out; Ctrl+S save; Ctrl+P print.'))];
+      h('p', {}, h('strong', {}, 'Opens and saves: '), 'Word documents (.docx), Markdown (.md) and plain text (.txt). Opens WordPad files (.rtf) and LibreOffice files (.odt) and saves them as Word documents. A Word file from elsewhere keeps what Write cannot show (text boxes, shapes, charts, comments, equations: grey labels in the text) and gets it back unchanged when saved.'),
+      h('p', {}, h('strong', {}, 'Writes: '), 'fonts, sizes, colours, highlight; alignment, spacing, indents; Normal, Title and Heading 1–3; bullets and numbering; tables with joined and shaded cells; pictures in the line; page breaks; footnotes; a contents page; margins, paper and orientation; a header and footer with page numbers; find and replace; spelling (the browser’s own checker); letters from Contacts or a spreadsheet (Mailings); templates (File > New from a template); print and PDF.'),
+      h('p', {}, h('strong', {}, 'Not here: '), 'columns, comments and tracked changes of its own, text boxes and shapes of its own, text wrapping round pictures, a different first-page header, equations, grammar checking, and the old .doc files.'),
+      h('p', {}, h('strong', {}, 'Keys: '), 'Ctrl+B, I, U; Ctrl+E centre, Ctrl+L left, Ctrl+R right, Ctrl+J justify; Ctrl+1, 2, 5 line spacing; Ctrl+Alt+1, 2, 3 headings; Ctrl+Shift+N Normal; Ctrl+Enter page break; Shift+Enter new line; Ctrl+Alt+F footnote; Ctrl+F find, Ctrl+H replace; Tab and Shift+Tab move a list item in and out; Ctrl+S save; Ctrl+P print.'))];
   };
   let tab: Tab = 'home';
   const ribbon = h('div', { class: 'ribbon', role: 'tabpanel', 'data-menus-stay': '' }, ...groupsOf('home'));
@@ -1291,6 +1679,7 @@ async function run(app: AppHandle, pm: PM, arg: string | undefined): Promise<voi
 
   const fileItems = (): MenuItem[] => [
     { label: 'New', action: () => void shell.openApp('write') },
+    { label: 'New from a template', submenu: (Object.keys(TEMPLATES) as Array<keyof typeof TEMPLATES>).map(k => ({ label: TEMPLATES[k].label, action: () => void shell.openApp('write', `template:${k}`) })) },
     { label: 'Open...', action: () => void openFromDesktop() },
     { label: 'Open a Word file from your computer...', action: openFromComputer },
     { separator: true },
@@ -1368,6 +1757,7 @@ async function run(app: AppHandle, pm: PM, arg: string | undefined): Promise<voi
     if ((tab === 'table' && !inTable) || (tab === 'picture' && !onPicture)) showTab('home');
     else if (onPicture && tab === 'home' && pictureJustChosen()) showTab('picture');
     if (tab === 'table') press(borderBtn, !!tableHere()?.node.attrs.borders);
+    press(spellBtn, spell);
     syncStatus();
   }
   // Choosing a picture opens its tab once; after that the person picks the tab they want.
@@ -1411,7 +1801,10 @@ async function run(app: AppHandle, pm: PM, arg: string | undefined): Promise<voi
     } else if (ctrl && !event.shiftKey && k === 'p') {
       event.preventDefault();
       print();
-    } else if (ctrl && !event.shiftKey && (k === 'f' || k === 'h')) {
+    } else if (ctrl && event.altKey && k === 'f') {
+      event.preventDefault();
+      void insertFootnote();
+    } else if (ctrl && !event.shiftKey && !event.altKey && (k === 'f' || k === 'h')) {
       event.preventDefault();
       openFind(k === 'h');
     } else if (event.key === 'Escape' && palette) {

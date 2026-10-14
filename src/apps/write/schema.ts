@@ -255,6 +255,33 @@ export function buildSchema(pm: PM): any {
         parseDOM: [{ tag: 'div.wp-break' }, { tag: 'hr.wp-break' }],
         toDOM: () => ['div', { class: 'wp-break', 'aria-label': 'Page break' }],
       },
+      // A footnote: its number in the text (worked out from the order), its words at the foot of the page. `id` is the
+      // footnote's number in the Word file it came from (0: new), so an unchanged one is written back as it was.
+      footnote: {
+        inline: true,
+        group: 'inline',
+        atom: true,
+        attrs: { text: { default: '' }, id: { default: 0 } },
+        parseDOM: [{ tag: 'sup.wp-fn', getAttrs: (el: HTMLElement) => ({ text: (el.getAttribute('data-note') ?? '').slice(0, 4000), id: 0 }) }],
+        toDOM: (node: any) => ['sup', { class: 'wp-fn', 'data-note': node.attrs.text, contenteditable: 'false' }, '#'],
+      },
+      // A mail merge field: «Name», filled in from a row of the list when letters are made.
+      field: {
+        inline: true,
+        group: 'inline',
+        atom: true,
+        attrs: { name: { default: '' } },
+        parseDOM: [{ tag: 'span.wp-field', getAttrs: (el: HTMLElement) => ({ name: (el.getAttribute('data-field') ?? '').slice(0, 80) }) }],
+        toDOM: (node: any) => ['span', { class: 'wp-field', 'data-field': node.attrs.name, contenteditable: 'false' }, `«${node.attrs.name}»`],
+      },
+      // A contents page: the headings and the pages they are on, kept up to date by the window.
+      toc: {
+        group: 'block',
+        atom: true,
+        attrs: { title: { default: 'Contents' } },
+        parseDOM: [{ tag: 'div.wp-toc' }],
+        toDOM: () => ['div', { class: 'wp-toc', contenteditable: 'false' }],
+      },
       // Parts of a Word file Write cannot show (a text box, a chart, a comment, an equation): a grey label in the text,
       // kept and written back exactly as they were. Never made from pasted HTML.
       opaque_inline: {

@@ -15,6 +15,8 @@ export interface Unit {
   spacer: number;
   /** A page break: whatever follows starts a new page. */
   breakAfter?: boolean;
+  /** How tall the footnotes of this line are at the foot of the page (0 or absent: none). */
+  notes?: number;
 }
 
 export interface Geometry {
@@ -31,7 +33,12 @@ export interface Pages {
   /** The page each unit lands on (0 is the first). */
   pageOf: number[];
   count: number;
+  /** How much of each page's foot its footnotes take (their rule above included). */
+  notes: number[];
 }
+
+/** The space between the writing and a page's footnotes, with the short rule in it. */
+export const NOTE_RULE = 16;
 
 export const pageTop = (g: Geometry, i: number): number => i * (g.pageH + g.gap);
 export const bodyTop = (g: Geometry, i: number): number => pageTop(g, i) + g.top;
@@ -52,6 +59,9 @@ export function paginate(units: Unit[], g: Geometry): Pages {
   let page = 0;
   let forceNext = false;
   const slack = 0.5;
+  const notes: number[] = [];
+  // A page's writing ends where its footnotes (with this line's own) begin.
+  const room = (p: number, u: Unit) => bodyBottom(g, p) - (notes[p] ?? 0) - (u.notes ? u.notes + (notes[p] ? 0 : NOTE_RULE) : 0);
   for (const u of units) {
     const at = u.top + shift;
     let p = Math.max(page, pageAt(g, at));
@@ -61,10 +71,11 @@ export function paginate(units: Unit[], g: Geometry): Pages {
     if (forceNext && p === page) {
       p = page + 1;
       space = bodyTop(g, p) - at;
-    } else if (!forceNext && space === 0 && at + u.height > bodyBottom(g, p) + slack && at > bodyTop(g, p) + slack) {
+    } else if (!forceNext && space === 0 && at + u.height > room(p, u) + slack && at > bodyTop(g, p) + slack) {
       p++;
       space = bodyTop(g, p) - at;
     }
+    if (u.notes) notes[p] = (notes[p] ?? 0) + u.notes + (notes[p] ? 0 : NOTE_RULE);
     space = Math.max(0, Math.round(space * 100) / 100);
     spacers.push(space);
     pageOf.push(p);
@@ -72,5 +83,6 @@ export function paginate(units: Unit[], g: Geometry): Pages {
     page = p;
     forceNext = !!u.breakAfter;
   }
-  return { spacers, pageOf, count: page + 1 + (forceNext ? 1 : 0) };
+  const count = page + 1 + (forceNext ? 1 : 0);
+  return { spacers, pageOf, count, notes: Array.from({ length: count }, (_, i) => notes[i] ?? 0) };
 }

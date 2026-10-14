@@ -78,7 +78,7 @@ function numberingXml(ordered: Array<{ numId: number; start: number }>): string 
 }
 
 /** The ids of the styles Write writes (and replaces in a file it opened, so the text looks as Write showed it). */
-const OUR_STYLE_IDS = ['Normal', 'Title', 'Heading1', 'Heading2', 'Heading3', 'ListParagraph', 'Header', 'Footer', 'TableNormal', 'TableGrid'];
+const OUR_STYLE_IDS = ['Normal', 'Title', 'Heading1', 'Heading2', 'Heading3', 'ListParagraph', 'Header', 'Footer', 'TableNormal', 'TableGrid', 'FootnoteText', 'FootnoteReference', 'TOCHeading', 'TOC1', 'TOC2', 'TOC3'];
 
 function stylesXml(): string {
   return `${XML_HEAD}<w:styles xmlns:w="${NS.w}">` + docDefaults() + ourStyles() + '</w:styles>';
@@ -106,9 +106,61 @@ function ourStyles(): string {
     + '<w:style w:type="table" w:default="1" w:styleId="TableNormal"><w:name w:val="Normal Table"/><w:uiPriority w:val="99"/><w:semiHidden/><w:tblPr><w:tblInd w:w="0" w:type="dxa"/><w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:left w:w="108" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/><w:right w:w="108" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style>'
     + '<w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/><w:basedOn w:val="TableNormal"/><w:uiPriority w:val="39"/><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:tblPr><w:tblBorders>'
     + ['top', 'left', 'bottom', 'right', 'insideH', 'insideV'].map(s => `<w:${s} w:val="single" w:sz="4" w:space="0" w:color="auto"/>`).join('')
-    + '</w:tblBorders></w:tblPr></w:style>';
+    + '</w:tblBorders></w:tblPr></w:style>'
+    + '<w:style w:type="paragraph" w:styleId="FootnoteText"><w:name w:val="footnote text"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:rPr><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr></w:style>'
+    + '<w:style w:type="character" w:styleId="FootnoteReference"><w:name w:val="footnote reference"/><w:rPr><w:vertAlign w:val="superscript"/></w:rPr></w:style>'
+    + `<w:style w:type="paragraph" w:styleId="TOCHeading"><w:name w:val="TOC Heading"/><w:basedOn w:val="Heading1"/><w:next w:val="Normal"/><w:pPr><w:outlineLvl w:val="9"/></w:pPr></w:style>`
+    + [1, 2, 3].map(n => `<w:style w:type="paragraph" w:styleId="TOC${n}"><w:name w:val="toc ${n}"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:pPr><w:spacing w:after="100"/>${n > 1 ? `<w:ind w:left="${(n - 1) * 220}"/>` : ''}</w:pPr></w:style>`).join('');
 }
 
+
+/** A merge field's name as Word takes it: letters, digits and _ - . (anything else becomes _). */
+export const fieldName = (name: string): string => name.trim().replace(/[^\p{L}\p{N}_.\-]/gu, '_').slice(0, 40);
+
+/** The document's headings (Heading 1 to 3, in order), for the contents page. */
+export function headingsOf(doc: NodeJSON): Array<{ level: number; text: string }> {
+  const out: Array<{ level: number; text: string }> = [];
+  const walk = (n: NodeJSON) => {
+    if (n.type === 'paragraph') {
+      const style = n.attrs?.style;
+      if (style === 'h1' || style === 'h2' || style === 'h3') {
+        const text = (n.content ?? []).map(c => (c.type === 'text' ? c.text ?? '' : '')).join('').trim();
+        if (text) out.push({ level: Number(String(style).slice(1)), text });
+      }
+      return;
+    }
+    if (n.type === 'table') return;
+    for (const c of n.content ?? []) walk(c);
+  };
+  walk(doc);
+  return out;
+}
+
+/** A contents page as Word writes one: a TOC field holding its last result (each heading, a dotted tab, its page). */
+function tocXml(node: NodeJSON, ctx: WriteCtx): string {
+  const heads = headingsOf({ type: 'doc', content: ctx.allBlocks });
+  const right = Math.round(ctx.bodyPx * 15);
+  const title = String(node.attrs?.title ?? 'Contents');
+  let out = '<w:sdt><w:sdtPr><w:docPartObj><w:docPartGallery w:val="Table of Contents"/><w:docPartUnique/></w:docPartObj></w:sdtPr><w:sdtContent>';
+  out += `<w:p><w:pPr><w:pStyle w:val="TOCHeading"/></w:pPr><w:r><w:t>${escapeXml(xmlSafe(title))}</w:t></w:r></w:p>`;
+  const begin = '<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> TOC \\o "1-3" \\h \\z \\u </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>';
+  if (!heads.length) out += `<w:p>${begin}<w:r><w:t>No headings yet: give some paragraphs the Heading 1, 2 or 3 style.</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>`;
+  heads.forEach((head, i) => {
+    const pageNo = ctx.headingPages[i];
+    out += `<w:p><w:pPr><w:pStyle w:val="TOC${head.level}"/><w:tabs><w:tab w:val="right" w:leader="dot" w:pos="${right}"/></w:tabs></w:pPr>${i === 0 ? begin : ''}`
+      + `<w:r><w:t xml:space="preserve">${escapeXml(xmlSafe(head.text))}</w:t></w:r><w:r><w:tab/></w:r><w:r><w:t>${pageNo ? pageNo : ''}</w:t></w:r>`
+      + `${i === heads.length - 1 ? '<w:r><w:fldChar w:fldCharType="end"/></w:r>' : ''}</w:p>`;
+  });
+  return `${out}</w:sdtContent></w:sdt>`;
+}
+
+/** The footnotes part: Word's two separators, then each note. `kept` is a file's own footnotes part to add them to. */
+function footnotesXml(notes: Array<{ id: number; text: string }>, kept: string | null): string {
+  const one = (n: { id: number; text: string }) => `<w:footnote w:id="${n.id}"><w:p><w:pPr><w:pStyle w:val="FootnoteText"/></w:pPr><w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:footnoteRef/></w:r><w:r><w:t xml:space="preserve"> ${escapeXml(xmlSafe(n.text))}</w:t></w:r></w:p></w:footnote>`;
+  if (kept && /<\/w:footnotes>\s*$/.test(kept)) return kept.replace(/<\/w:footnotes>\s*$/, `${notes.map(one).join('')}</w:footnotes>`);
+  const sep = (type: string, id: number, mark: string) => `<w:footnote w:type="${type}" w:id="${id}"><w:p><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:r><w:${mark}/></w:r></w:p></w:footnote>`;
+  return `${XML_HEAD}<w:footnotes xmlns:w="${NS.w}" xmlns:r="${NS.r}">${sep('separator', -1, 'separator')}${sep('continuationSeparator', 0, 'continuationSeparator')}${notes.map(one).join('')}</w:footnotes>`;
+}
 
 interface WriteCtx {
   page: PageSetup;
@@ -121,6 +173,14 @@ interface WriteCtx {
   /** How new pictures are named inside the file (a prefix of its own when the file already has pictures). */
   mediaPrefix: string;
   drawingId: number;
+  /** Footnotes written so far: new ones get the next number; one read from the file and unchanged keeps its own. */
+  notes: Array<{ id: number; text: string }>;
+  nextNote: number;
+  keptNotes: Map<number, string>;
+  /** The page each heading is on (in the order of the headings), for the contents page. */
+  headingPages: number[];
+  /** The whole document's blocks (the contents page lists every heading in it). */
+  allBlocks: NodeJSON[];
   /** Width of the writing area, in pixels (a picture or table is never made wider). */
   bodyPx: number;
 }
@@ -188,6 +248,19 @@ function inlineXml(nodes: NodeJSON[] | undefined, ctx: WriteCtx): string {
       out += `<w:r>${rpr}${parts.map((p, i) => (i ? '<w:tab/>' : '') + (p ? `<w:t xml:space="preserve">${escapeXml(p)}</w:t>` : '')).join('')}</w:r>`;
     } else if (n.type === 'hard_break') {
       out += '<w:r><w:br/></w:r>';
+    } else if (n.type === 'footnote') {
+      const textNow = String(n.attrs?.text ?? '');
+      const was = Number(n.attrs?.id) || 0;
+      // A footnote from the file, unchanged, points at its own note there (with its own formatting); any other is new.
+      let id = was && ctx.keptNotes.get(was) === textNow ? was : 0;
+      if (!id) {
+        id = ctx.nextNote++;
+        ctx.notes.push({ id, text: textNow });
+      }
+      out += `<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:footnoteReference w:id="${id}"/></w:r>`;
+    } else if (n.type === 'field') {
+      const name = fieldName(String(n.attrs?.name ?? ''));
+      if (name) out += `<w:fldSimple w:instr=" MERGEFIELD ${name} "><w:r>${runProps(n.marks)}<w:t>${escapeXml(`«${name}»`)}</w:t></w:r></w:fldSimple>`;
     } else if (n.type === 'opaque_inline') {
       out += String(n.attrs?.xml ?? '');
     } else if (n.type === 'image') {
@@ -318,6 +391,7 @@ function cellXml(cell: NodeJSON, ctx: WriteCtx, px: number[], col: number, span:
   let body = blocksXml(cell.content ?? [], inner);
   ctx.drawingId = inner.drawingId;
   ctx.nextNum = inner.nextNum;
+  ctx.nextNote = inner.nextNote;
   // A cell must end with a paragraph in Word.
   if (!body.endsWith('</w:p>')) body += '<w:p/>';
   return `<w:tc><w:tcPr>${tcpr}</w:tcPr>${body}</w:tc>`;
@@ -331,6 +405,7 @@ function blocksXml(blocks: NodeJSON[], ctx: WriteCtx): string {
     else if (b.type === 'table') out += tableXml(b, ctx);
     else if (b.type === 'page_break') out += '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
     else if (b.type === 'opaque_block') out += String(b.attrs?.xml ?? '');
+    else if (b.type === 'toc') out += tocXml(b, ctx);
   }
   return out;
 }
@@ -360,7 +435,7 @@ function headerXml(kind: 'hdr' | 'ftr', line: HeaderLine, bodyTwips: number): st
 const lineHas = (l: HeaderLine) => !!(l.l.trim() || l.c.trim() || l.r.trim());
 
 /** The document as the bytes of a .docx file. */
-export async function writeDocx(doc: NodeJSON, page: PageSetup, title = '', source?: DocxSource): Promise<Uint8Array<ArrayBuffer>> {
+export async function writeDocx(doc: NodeJSON, page: PageSetup, title = '', source?: DocxSource, extras: { headingPages?: number[] } = {}): Promise<Uint8Array<ArrayBuffer>> {
   const pt = PAPERS[page.paper];
   const wPt = page.orient === 'landscape' ? pt.h : pt.w;
   const hPt = page.orient === 'landscape' ? pt.w : pt.h;
@@ -371,7 +446,8 @@ export async function writeDocx(doc: NodeJSON, page: PageSetup, title = '', sour
   const most = (re: RegExp) => Math.max(0, ...[...(keptNumbering ?? '').matchAll(re)].map(m => Number(m[1])));
   const abs = source ? most(/w:abstractNumId="(\d+)"/g) + 1 : 0;
   const bulletNum = source ? most(/w:numId="(\d+)"/g) + 1 : 1;
-  const ctx: WriteCtx = { page, media: new Map(), ordered: [], nextNum: bulletNum + 1, bulletNum, drawingId: 0, bodyPx, mediaPrefix: source ? 'Tw' : '' };
+  const ctx: WriteCtx = { page, media: new Map(), ordered: [], nextNum: bulletNum + 1, bulletNum, drawingId: 0, bodyPx, mediaPrefix: source ? 'Tw' : '', notes: [], nextNote: 1, keptNotes: source?.notes ?? new Map(), headingPages: extras.headingPages ?? [], allBlocks: doc.content ?? [] };
+  if (source?.notes.size) ctx.nextNote = Math.max(...source.notes.keys()) + 1;
   const body = blocksXml(doc.content ?? [], ctx);
   const hasHeader = lineHas(page.header);
   const hasFooter = lineHas(page.footer);
@@ -394,6 +470,8 @@ export async function writeDocx(doc: NodeJSON, page: PageSetup, title = '', sour
     + `<Relationship Id="rIdSettings" Type="${REL}/settings" Target="settings.xml"/>`;
   if (hasHeader) rels += `<Relationship Id="rIdHeader1" Type="${REL}/header" Target="header1.xml"/>`;
   if (hasFooter) rels += `<Relationship Id="rIdFooter1" Type="${REL}/footer" Target="footer1.xml"/>`;
+  const hasNotes = ctx.notes.length > 0;
+  if (hasNotes) rels += `<Relationship Id="rIdFootnotes" Type="${REL}/footnotes" Target="footnotes.xml"/>`;
   for (const media of ctx.media.values()) rels += `<Relationship Id="${media.rid}" Type="${REL}/image" Target="media/${media.name}"/>`;
   rels += '</Relationships>';
 
@@ -406,6 +484,7 @@ export async function writeDocx(doc: NodeJSON, page: PageSetup, title = '', sour
     + '<Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>'
     + (hasHeader ? '<Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>' : '')
     + (hasFooter ? '<Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>' : '')
+    + (hasNotes ? '<Override PartName="/word/footnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"/>' : '')
     + '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>'
     + '<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>';
   const rootRels = `${XML_HEAD}<Relationships xmlns="${NS.rel}"><Relationship Id="rId1" Type="${REL}/officeDocument" Target="word/document.xml"/>`
@@ -414,7 +493,7 @@ export async function writeDocx(doc: NodeJSON, page: PageSetup, title = '', sour
   const core = `${XML_HEAD}<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">`
     + `${title ? `<dc:title>${escapeXml(xmlSafe(title.slice(0, 200)))}</dc:title>` : ''}<dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified></cp:coreProperties>`;
   const app = `${XML_HEAD}<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>TOMLIN Write</Application></Properties>`;
-  const settings = `${XML_HEAD}<w:settings xmlns:w="${NS.w}"><w:defaultTabStop w:val="720"/><w:characterSpacingControl w:val="doNotCompress"/><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat></w:settings>`;
+  const settings = `${XML_HEAD}<w:settings xmlns:w="${NS.w}"><w:defaultTabStop w:val="720"/>${hasNotes ? '<w:footnotePr><w:footnote w:id="-1"/><w:footnote w:id="0"/></w:footnotePr>' : ''}<w:characterSpacingControl w:val="doNotCompress"/><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat></w:settings>`;
 
   const enc = new TextEncoder();
   const at = Date.now();
@@ -431,6 +510,7 @@ export async function writeDocx(doc: NodeJSON, page: PageSetup, title = '', sour
   ];
   if (hasHeader) entries.push({ name: 'word/header1.xml', data: enc.encode(headerXml('hdr', page.header, bodyTwips)), modified: at });
   if (hasFooter) entries.push({ name: 'word/footer1.xml', data: enc.encode(headerXml('ftr', page.footer, bodyTwips)), modified: at });
+  if (hasNotes) entries.push({ name: 'word/footnotes.xml', data: enc.encode(footnotesXml(ctx.notes, null)), modified: at });
   for (const media of ctx.media.values()) entries.push({ name: `word/media/${media.name}`, data: media.pic.bytes, modified: at });
   return zipDeflate(entries);
 }
@@ -453,6 +533,9 @@ export interface DocxSource {
   /** The header and footer as Write read them: changed in Write, they are written anew; otherwise the file's own stay. */
   header: HeaderLine;
   footer: HeaderLine;
+  /** The file's footnotes part and the words of each note (by its number there). */
+  footnotes: string | null;
+  notes: Map<number, string>;
 }
 
 const partText = (source: DocxSource, path: string): string | null => {
@@ -544,6 +627,16 @@ function writeKept(source: DocxSource, ctx: WriteCtx, body: string, pageXml: str
     }
   }
   out.set(numberingPath, enc.encode(numberingText));
+
+  // New footnotes: added to the file's own footnotes part, or a part of their own.
+  if (ctx.notes.length) {
+    const path = source.footnotes ?? `${dir}footnotes.xml`;
+    out.set(path, enc.encode(footnotesXml(ctx.notes, source.footnotes ? partText(source, source.footnotes) : null)));
+    if (!source.footnotes) {
+      newRels.push(`<Relationship Id="rIdTwFootnotes" Type="${REL}/footnotes" Target="footnotes.xml"/>`);
+      newTypes.push(`<Override PartName="/${path}" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"/>`);
+    }
+  }
 
   // Pictures in the text, as files of their own.
   for (const media of ctx.media.values()) {
@@ -942,6 +1035,15 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
   rd.readStyles(stylesPart ? await readXml(resolve(stylesPart.target)) : null);
   const numberingPart = partOf('numbering');
   rd.readNumbering(numberingPart ? await readXml(resolve(numberingPart.target)) : null);
+  // The footnotes' words (by their numbers), so each reference becomes a footnote that shows them.
+  const footnoteTexts = new Map<number, string>();
+  const footnotesPart = partOf('footnotes');
+  const footnotesXmlRead = footnotesPart ? await readXml(resolve(footnotesPart.target)) : null;
+  for (const fn of footnotesXmlRead ? children(footnotesXmlRead, 'footnote') : []) {
+    const id = Number(at(fn, 'id'));
+    if (!Number.isFinite(id) || id <= 0 || at(fn, 'type')) continue;
+    footnoteTexts.set(id, children(fn, 'p').map(p => findAll(p, 't').map(t => t.text).join('')).join(' ').replace(/\s+/g, ' ').trim());
+  }
 
   /** A picture's bytes by relationship id, kept as a picture in the store; null when it is not one Write can show. */
   const pictureFor = async (rid: string): Promise<string | null> => {
@@ -1027,7 +1129,8 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
       else cur().push(marks.length ? { type: 'text', text, marks } : { type: 'text', text });
     };
     // A field (a page number, a date, a contents list) shows as the text Word last put in it: its code is in
-    // w:instrText, never in w:t, so only the shown result is read.
+    // w:instrText, never in w:t, so only the shown result is read. A mail merge field becomes a field.
+    let mergeSkip = false;
     const stack: Array<{ el: XmlEl; i: number }> = [{ el: p, i: 0 }];
     while (stack.length) {
       const top = stack[stack.length - 1];
@@ -1042,7 +1145,17 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
           const base = rStyle ? { ...styleRun, ...(rd.resolved(rStyle)?.run ?? {}) } : styleRun;
           const look = rd.runLook(child(el, 'rPr'), base);
           for (const k of el.kids) {
-            if (k.name === 't') pushText(k.text, look);
+            if (k.name === 'instrText') {
+              // A mail merge field written as a complex field: its shown result is skipped.
+              const m = /MERGEFIELD\s+"?([^"\s\\]+)/i.exec(k.text);
+              if (m) {
+                const marks = marksFor(look, style);
+                cur().push(marks.length ? { type: 'field', attrs: { name: m[1].slice(0, 40) }, marks } : { type: 'field', attrs: { name: m[1].slice(0, 40) } });
+                mergeSkip = true;
+              }
+            } else if (k.name === 'fldChar' && at(k, 'fldCharType') === 'end') mergeSkip = false;
+            else if (mergeSkip) continue;
+            else if (k.name === 't') pushText(k.text, look);
             else if (k.name === 'tab' || k.name === 'ptab') pushText('\t', look);
             else if (k.name === 'noBreakHyphen') pushText('‑', look);
             else if (k.name === 'sym') cur().push(keepRun(el, k, 'Symbol', 'symbols from symbol fonts'));
@@ -1081,6 +1194,9 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
               // Newer content (a shape, a text box) with an older stand-in: kept as it is.
               const [label, what] = shapeLabel(k);
               cur().push(keepRun(el, k, label, what));
+            } else if (k.name === 'footnoteReference' && footnoteTexts.has(Number(at(k, 'id')))) {
+              const id = Number(at(k, 'id'));
+              cur().push({ type: 'footnote', attrs: { text: footnoteTexts.get(id) ?? '', id } });
             } else if (k.name === 'footnoteReference' || k.name === 'endnoteReference') {
               const n = at(k, 'id') ?? '';
               cur().push(keepRun(el, k, `${k.name === 'footnoteReference' ? 'Footnote' : 'Endnote'} ${n}`, 'footnotes and endnotes'));
@@ -1088,7 +1204,15 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
           }
           break;
         }
-        case 'hyperlink': case 'smartTag': case 'customXml': case 'ins': case 'moveTo': case 'sdtContent': case 'fldSimple': case 'dir': case 'bdo':
+        case 'fldSimple': {
+          const m = /MERGEFIELD\s+"?([^"\s\\]+)/i.exec(el.attrs['w:instr'] ?? el.attrs.instr ?? '');
+          if (m) {
+            const marks = marksFor(rd.runLook(child(child(el, 'r'), 'rPr'), styleRun), style);
+            cur().push(marks.length ? { type: 'field', attrs: { name: m[1].slice(0, 40) }, marks } : { type: 'field', attrs: { name: m[1].slice(0, 40) } });
+          } else stack.push({ el, i: 0 });
+          break;
+        }
+        case 'hyperlink': case 'smartTag': case 'customXml': case 'ins': case 'moveTo': case 'sdtContent': case 'dir': case 'bdo':
           if (el.name === 'ins' || el.name === 'moveTo') rd.dropped.add('tracked changes (shown with the changes accepted)');
           stack.push({ el, i: 0 });
           break;
@@ -1142,7 +1266,9 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
     const queue = [...container.kids];
     while (queue.length) {
       const el = queue.shift()!;
-      if (el.name === 'sdt') queue.unshift(...(child(el, 'sdtContent')?.kids ?? []));
+      const gallery = el.name === 'sdt' ? at(child(child(child(el, 'sdtPr'), 'docPartObj'), 'docPartGallery'), 'val') : undefined;
+      if (gallery === 'Table of Contents') items.push(el);
+      else if (el.name === 'sdt') queue.unshift(...(child(el, 'sdtContent')?.kids ?? []));
       else if (el.name === 'customXml' || el.name === 'ins') queue.unshift(...el.kids);
       else items.push(el);
     }
@@ -1208,6 +1334,13 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
         // The body's own page settings: read above.
       } else if (el.name === 'bookmarkStart' || el.name === 'bookmarkEnd' || el.name === 'proofErr' || el.name === 'permStart' || el.name === 'permEnd') {
         // Nothing to show.
+      } else if (el.name === 'sdt') {
+        // A contents page: Write makes its own from the headings (the first line, if it is a title, is kept as its title).
+        closeLists();
+        const first = children(child(el, 'sdtContent'), 'p')[0];
+        const firstStyle = at(child(child(first, 'pPr'), 'pStyle'), 'val') ?? '';
+        const title = first && /toc ?heading/i.test(firstStyle) ? findAll(first, 't').map(t => t.text).join('').trim() : '';
+        out.push({ type: 'toc', attrs: { title: title || 'Contents' } });
       } else if (el.name === 'altChunk') {
         kept.add('parts brought in from other files');
         out.push({ type: 'opaque_block', attrs: { xml: raw(el), label: 'Part brought in from another file' } });
@@ -1289,6 +1422,8 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
     sectPr: bodySect ? raw(bodySect) : '',
     header: { ...page.header },
     footer: { ...page.footer },
+    footnotes: footnotesPart ? realPath(resolve(footnotesPart.target)) : null,
+    notes: footnoteTexts,
   };
   return { doc, page: cleanPage(page), dropped: [...rd.dropped], kept: [...kept], source };
 }

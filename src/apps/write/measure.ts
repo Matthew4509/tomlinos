@@ -167,14 +167,32 @@ function blockUnits(view: any, node: any, pos: number, f: Frame, out: Measured[]
 export interface Laid {
   pages: Pages;
   spacers: Array<{ pos: number; height: number }>;
+  /** For each page, the footnotes on it (their numbers less one, in the order of the text). */
+  notesOn: number[][];
 }
 
-/** Measures the document as the editor shows it and works out the spacers its pages need. */
-export function measure(view: any, paper: HTMLElement, box: PageBox): Laid {
+/**
+ * Measures the document as the editor shows it and works out the spacers its pages need. `noteHeights` are the
+ * footnotes' heights at the foot of a page, in the order their numbers appear in the text.
+ */
+export function measure(view: any, paper: HTMLElement, box: PageBox, noteHeights: number[] = []): Laid {
   const f = frameOf(paper, box.w);
   const measured: Measured[] = [];
   view.state.doc.forEach((node: any, offset: number) => blockUnits(view, node, offset, f, measured));
+  // Each footnote belongs to the line (or table row) its number is on.
+  const unitNotes: number[][] = measured.map(() => []);
+  [...(view.dom as HTMLElement).querySelectorAll('.wp-fn')].forEach((el, i) => {
+    const r = el.getBoundingClientRect();
+    const mid = yOf(f, (r.top + r.bottom) / 2);
+    let best = -1;
+    for (let k = 0; k < measured.length; k++) if (measured[k].unit.top <= mid + 1) best = k;
+    if (best < 0) return;
+    measured[best].unit.notes = (measured[best].unit.notes ?? 0) + (noteHeights[i] ?? 0);
+    unitNotes[best].push(i);
+  });
   const pages = paginate(measured.map(m => m.unit), geometryOf(box));
+  const notesOn: number[][] = Array.from({ length: pages.count }, () => []);
+  unitNotes.forEach((list, k) => notesOn[pages.pageOf[k]]?.push(...list));
   const spacers: Array<{ pos: number; height: number }> = [];
   pages.spacers.forEach((height, i) => {
     if (height <= 0) return;
@@ -183,7 +201,7 @@ export function measure(view: any, paper: HTMLElement, box: PageBox): Laid {
     if (place.kind === 'at') spacers.push({ pos: place.pos, height });
     else for (const pos of place.pos) spacers.push({ pos, height });
   });
-  return { pages, spacers };
+  return { pages, spacers, notesOn };
 }
 
 /** The spacers as editor decorations (each a block of empty space the person cannot type into). */
@@ -203,7 +221,7 @@ export const sameSpacers = (a: Array<{ pos: number; height: number }>, b: Array<
  * and the next, the bottom margin, the grey gap and the next top margin (covering anything that runs through, such as
  * a table's lines). The paper is made as tall as its pages.
  */
-export function drawFurniture(layer: HTMLElement, paper: HTMLElement, page: PageSetup, box: PageBox, count: number): void {
+export function drawFurniture(layer: HTMLElement, paper: HTMLElement, page: PageSetup, box: PageBox, count: number, notes?: { heights: number[]; on: number[][]; text: (i: number) => string }): void {
   const g = geometryOf(box);
   const total = count * box.h + (count - 1) * GAP;
   css(paper, { width: `${box.w}px`, height: `${total}px` });
@@ -221,6 +239,14 @@ export function drawFurniture(layer: HTMLElement, paper: HTMLElement, page: Page
   for (let i = 0; i < count; i++) {
     line('header', i);
     line('footer', i);
+    // The footnotes at the foot of the writing, under a short rule.
+    const on = notes?.on[i] ?? [];
+    if (on.length) {
+      const height = on.reduce((sum, n) => sum + (notes!.heights[n] ?? 0), 0);
+      const block = h('div', { class: 'wp-notes' }, ...on.map(n => h('p', { class: 'wp-note' }, h('sup', {}, String(n + 1)), ` ${notes!.text(n)}`)));
+      css(block, { top: `${pageTop(g, i) + box.top + box.body - height}px`, left: `${box.left}px`, width: `${box.w - box.left - box.right}px` });
+      parts.push(block);
+    }
     if (i < count - 1) {
       const from = pageTop(g, i) + box.top + box.body;
       const bottomMargin = h('div', { class: 'wp-mask' });

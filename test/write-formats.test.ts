@@ -58,14 +58,18 @@ test('a Word file from elsewhere keeps every part through a save: text box, comm
   const read = await readDocx(original);
   const { schema } = await schemaP;
   schema.nodeFromJSON(read.doc).check();
-  assert.ok(read.kept.includes('text boxes') && read.kept.includes('comments') && read.kept.includes('footnotes and endnotes'), read.kept.join(', '));
+  assert.ok(read.kept.includes('text boxes') && read.kept.includes('comments'), read.kept.join(', '));
   const labels: string[] = [];
+  const notes: unknown[] = [];
   const walk = (n: NodeJSON) => {
     if (n.type === 'opaque_inline') labels.push(String(n.attrs?.label));
+    if (n.type === 'footnote') notes.push(n.attrs);
     n.content?.forEach(walk);
   };
   walk(read.doc);
-  assert.deepEqual(labels, ['Text box: Inside the box', 'Comment', 'Footnote 1']);
+  assert.deepEqual(labels, ['Text box: Inside the box', 'Comment']);
+  // The footnote reads as a footnote, with its words; unchanged, it points at its own note again.
+  assert.deepEqual(notes, [{ text: 'The note', id: 1 }]);
   assert.deepEqual(read.page.header, { l: '', c: '', r: 'Their header' });
   // An edit in Write: a new paragraph at the end.
   read.doc.content!.push({ type: 'paragraph', attrs: { style: 'normal' }, content: [{ type: 'text', text: 'Added in Write' }] });
