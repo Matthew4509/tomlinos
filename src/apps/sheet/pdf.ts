@@ -1,6 +1,7 @@
-// A small PDF writer for printed sheets: each page is drawn through the Painter (paint.ts) into PDF drawing commands,
-// with text in Helvetica (one of the fonts every PDF reader has, so none is embedded) in the Windows character set.
-// A character Helvetica cannot show is written as "?". Pages are packed with deflate where the browser offers it.
+// A small PDF writer for printed sheets and documents: each page is drawn through the Painter (paint.ts) into PDF
+// drawing commands, with text in Helvetica, Times or Courier (fonts every PDF reader has, so none is embedded) in the
+// Windows character set. A character those fonts cannot show is written as "?". Pictures go in as JPEG (the reader
+// unpacks them itself). Pages are packed with deflate where the browser offers it.
 // Our own code; no browser needed (Node has CompressionStream too).
 import { textWidth, type Painter, type TextLook } from './paint.ts';
 
@@ -48,6 +49,8 @@ export class PdfPage implements Painter {
   readonly w: number;
   readonly h: number;
   readonly ops: string[] = [];
+  /** The pictures this page draws (their names in the document), for its list of resources. */
+  readonly images = new Set<string>();
   private depth = 0;
 
   constructor(w: number, h: number) {
@@ -130,6 +133,12 @@ export class PdfPage implements Painter {
     }
   }
 
+  /** A picture added to the document (PdfDocument.addJpeg) drawn into this box. */
+  image(x: number, y: number, w: number, h: number, name: string): void {
+    this.images.add(name);
+    this.ops.push(`q ${n(w)} 0 0 ${n(h)} ${n(x)} ${n(this.y(y + h))} cm /${name} Do Q`);
+  }
+
   clip(x: number, y: number, w: number, h: number): void {
     this.depth++;
     this.ops.push(`q ${n(x)} ${n(this.y(y + h))} ${n(Math.max(0, w))} ${n(Math.max(0, h))} re W n`);
@@ -162,6 +171,15 @@ async function deflate(data: Uint8Array): Promise<Uint8Array | null> {
 export class PdfDocument {
   readonly pages: PdfPage[] = [];
   title = '';
+  producer = 'TOMLIN OS Spreadsheet';
+  private readonly jpegs: Array<{ name: string; data: Uint8Array; w: number; h: number }> = [];
+
+  /** A JPEG picture (three colours, as a canvas writes one) the pages can draw by the name this returns. */
+  addJpeg(data: Uint8Array, w: number, h: number): string {
+    const name = `Im${this.jpegs.length + 1}`;
+    this.jpegs.push({ name, data, w, h });
+    return name;
+  }
 
   addPage(w: number, h: number): PdfPage {
     const page = new PdfPage(w, h);
@@ -203,17 +221,23 @@ export class PdfDocument {
     obj(1, '<< /Type /Catalog /Pages 2 0 R >>');
     obj(2, `<< /Type /Pages /Kids [${kids}] /Count ${this.pages.length} >>`);
     fonts.forEach((name, i) => obj(3 + i, `<< /Type /Font /Subtype /Type1 /BaseFont /${name} /Encoding /WinAnsiEncoding >>`));
-    obj(info, `<< /Producer (TOMLIN OS Spreadsheet)${this.title ? ` /Title ${pdfString(this.title.slice(0, 200))}` : ''} >>`);
+    obj(info, `<< /Producer ${pdfString(this.producer)}${this.title ? ` /Title ${pdfString(this.title.slice(0, 200))}` : ''} >>`);
     const fontRefs = fonts.map((_, i) => `/F${i + 1} ${3 + i} 0 R`).join(' ');
+    // The pictures follow the pages, one object each.
+    const imageId = new Map(this.jpegs.map((im, k) => [im.name, first + this.pages.length * 2 + k]));
     for (const [i, page] of this.pages.entries()) {
       const id = first + i * 2;
-      obj(id, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${n(page.w)} ${n(page.h)}] /Resources << /Font << ${fontRefs} >> >> /Contents ${id + 1} 0 R >>`);
+      const xobjects = [...page.images].filter(name => imageId.has(name)).map(name => `/${name} ${imageId.get(name)} 0 R`).join(' ');
+      obj(id, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${n(page.w)} ${n(page.h)}] /Resources << /Font << ${fontRefs} >>${xobjects ? ` /XObject << ${xobjects} >>` : ''} >> /Contents ${id + 1} 0 R >>`);
       const raw = latin1(page.content());
       const packed = await deflate(raw);
       if (packed) obj(id + 1, `<< /Length ${packed.length} /Filter /FlateDecode >>`, packed);
       else obj(id + 1, `<< /Length ${raw.length} >>`, raw);
     }
-    const count = first + this.pages.length * 2;
+    for (const im of this.jpegs) {
+      obj(imageId.get(im.name)!, `<< /Type /XObject /Subtype /Image /Width ${im.w} /Height ${im.h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${im.data.length} >>`, im.data);
+    }
+    const count = first + this.pages.length * 2 + this.jpegs.length;
     const xref = length;
     let table = `xref\n0 ${count}\n0000000000 65535 f \n`;
     for (let id = 1; id < count; id++) table += `${String(offsets[id] ?? 0).padStart(10, '0')} 00000 n \n`;

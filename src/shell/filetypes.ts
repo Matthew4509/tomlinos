@@ -18,6 +18,8 @@ const AUDIO: FileType = { label: 'Music', icon: 'music', apps: ['player'] };
 const SHEET: FileType = { label: 'Spreadsheet', icon: 'sheet', apps: ['sheet'] };
 /** A zip of XML inside: not searched as text (search.ts reads only the text kinds). */
 const EXCEL: FileType = { label: 'Excel workbook', icon: 'sheet', apps: ['sheet'] };
+/** A Word document (a zip of XML inside, like an Excel workbook): opened in TOMLIN Write. */
+const WORD: FileType = { label: 'Word document', icon: 'write', apps: ['write'] };
 const CALC: FileType = { label: 'Calculator sheet', icon: 'calculator', apps: ['calculator'] };
 const ARCHIVE: FileType = { label: 'Compressed folder', icon: 'archive', apps: ['archive'] };
 const CODE: FileType = { label: 'Code or data file', icon: 'code', apps: ['editor', 'notepadpro'] };
@@ -45,6 +47,7 @@ const GROUPS: Array<[FileType, string[]]> = [
   [SHEET, ['sheet', 'csv', 'tsv']],
   // Excel workbooks open in the Spreadsheet (an .xls, Excel's old binary kind, opens to a message saying how to convert it).
   [EXCEL, ['xlsx', 'xlsm', 'xls']],
+  [WORD, ['docx']],
   [CALC, ['calc']],
   [CALENDAR, ['ics']],
   [CONTACTS, ['vcf']],

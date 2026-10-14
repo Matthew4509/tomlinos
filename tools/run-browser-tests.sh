@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs all ten browser suites, ONE AFTER ANOTHER, each against its own PHP server on a NEW empty data folder, and
+# Runs all eleven browser suites, ONE AFTER ANOTHER, each against its own PHP server on a NEW empty data folder, and
 # prints a summary. Exits 1 if any suite failed or stopped before its summary line. Needs `npm run build` first.
 # (Running them all at once can overload a computer and fail steps at random; one at a time, a red result means
 # something. Takes about 20 minutes.)
@@ -25,7 +25,7 @@ if netstat -ano 2>/dev/null | grep -qE "[:.]$PORT +.*LISTEN"; then
   exit 2
 fi
 status=0
-for suite in desktop accounts vault features apps printer privacy aichat safety projects; do
+for suite in desktop accounts vault features apps printer privacy aichat safety projects write; do
   DATA="$PARENT/tomlinos-test-$(date +%Y%m%d-%H%M%S)-$suite"
   mkdir -p "$DATA" "$DATA-models"
   # Model saves follow pinned versions: the stand-in for Hugging Face comes with its own pins.

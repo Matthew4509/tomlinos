@@ -258,8 +258,13 @@ test('no source file writes HTML, runs code from text, or leaves the site', () =
 const OUTSIDE: Array<[string, RegExp, string]> = [
   ['http://www.w3.org/2000/svg', /./, 'the SVG namespace (not a request)'],
   ['http://schemas.openxmlformats.org/', /apps[\\/]sheet[\\/]xlsx(-parts)?\.ts$/, 'names written inside an Excel file (XML namespaces and part types, not requests)'],
+  ['http://schemas.openxmlformats.org/', /apps[\\/]write[\\/]docx\.ts$/, 'names written inside a Word file (XML namespaces and part types, not requests)'],
+  ['http://purl.org/dc/', /apps[\\/]write[\\/]docx\.ts$/, 'the names of a Word file\'s title and dates inside it (XML namespaces, not requests)'],
+  ['http://www.w3.org/2001/XMLSchema-instance', /apps[\\/]write[\\/]docx\.ts$/, 'an XML namespace inside a Word file (not a request)'],
+  ['http://schemas.microsoft.com/office/word', /apps[\\/]write[\\/]docx\.ts$/, 'the name Word gives its compatibility setting inside a file (not a request)'],
   ['http://schemas.microsoft.com/office/spreadsheetml/', /apps[\\/]sheet[\\/]xlsx\.ts$/, 'the name Excel 365 gives its "dynamic array" mark inside a file (not a request)'],
   ['https://codemirror.net/', /apps[\\/]about\.ts$/, 'a link on the Credits page, opened only when clicked'],
+  ['https://prosemirror.net/', /apps[\\/]about\.ts$/, 'a link on the Credits page, opened only when clicked'],
   ['https://github.com/mlc-ai/web-llm', /apps[\\/]about\.ts$/, 'a link on the Credits page, opened only when clicked'],
   ['https://github.com/anthropics/anthropic-sdk-php', /apps[\\/]about\.ts$/, 'a link on the Credits page, opened only when clicked'],
   ['https://${raw}', /notepadpro[\\/]markdown\.ts$/, 'a "www." autolink in a Markdown preview becomes https (then checked by safeHref)'],

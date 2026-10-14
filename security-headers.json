@@ -55,7 +55,7 @@
     "https://huggingface.co": "Chat Agents: a built-in AI model that is NOT saved on this TOMLIN OS, or one a person added, is fetched from Hugging Face, where its makers publish it; Find AI models searches it. Only model files and the search; nothing typed to an AI is sent.",
     "https://*.hf.co": "Chat Agents: Hugging Face hands its model files out from its file servers (us.aws.cdn.hf.co and the like), to which huggingface.co redirects.",
     "https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/": "Chat Agents: the model's small WebGPU program, published by the WebLLM project (the MLC team) on GitHub, for a model not saved on this TOMLIN OS. Only that project's folder, not all of GitHub.",
-    "'script'": "Trusted Types: the browser refuses any string put into the page as HTML or script (the usual way injected code gets in). The one exception is src/core/inert.ts, which reads an email's HTML into a document that is never shown.",
+    "'script'": "Trusted Types: the browser refuses any string put into the page as HTML or script (the usual way injected code gets in). The one exception is src/core/inert.ts, which reads an email's HTML, or HTML pasted into TOMLIN Write, into a document that is never shown.",
     "tomlinos-inert": "Trusted Types: the only policy allowed, the one in src/core/inert.ts; no other code can create one."
   },
   "headers": {

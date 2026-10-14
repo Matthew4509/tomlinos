@@ -1,0 +1,21 @@
+{
+  "name": "tomlinos-vendor-prosemirror",
+  "private": true,
+  "description": "Builds public/vendor/prosemirror.js (one ES module) for TOMLIN Write. Run: npm install && node build.mjs",
+  "type": "module",
+  "devDependencies": {
+    "esbuild": "^0.28",
+    "prosemirror-commands": "^1",
+    "prosemirror-dropcursor": "^1",
+    "prosemirror-gapcursor": "^1",
+    "prosemirror-history": "^1",
+    "prosemirror-inputrules": "^1",
+    "prosemirror-keymap": "^1",
+    "prosemirror-model": "^1",
+    "prosemirror-schema-list": "^1",
+    "prosemirror-state": "^1",
+    "prosemirror-tables": "^1",
+    "prosemirror-transform": "^1",
+    "prosemirror-view": "^1"
+  }
+}

@@ -7,7 +7,7 @@ export type IconName =
   | 'trash' | 'trash-full' | 'files' | 'gear' | 'info' | 'app'
   | 'editor' | 'photos' | 'player' | 'pdfviewer' | 'sheet' | 'archive' | 'code' | 'chip' | 'logo' | 'user' | 'lock'
   | 'calendar' | 'contacts' | 'link' | 'keyboard' | 'terminal' | 'calculator' | 'photoedit' | 'mail' | 'planet' | 'assistant' | 'chat' | 'panel'
-  | 'printer' | 'modelsearch' | 'book' | 'projects'
+  | 'printer' | 'modelsearch' | 'book' | 'projects' | 'write'
   | 'folder-desktop' | 'folder-documents' | 'folder-pictures' | 'folder-videos' | 'folder-music';
 
 type Shape = [string, Record<string, string>];
@@ -239,6 +239,14 @@ const SHAPES: Record<IconName, Shape[]> = {
     ['path', { d: 'M13 20h14M13 15h10', stroke: '#8a97ab', 'stroke-width': '2', 'stroke-linecap': 'round', fill: 'none' }],
     ['circle', { cx: '32', cy: '32', r: '8', fill: 'url(#gi-sky)', 'fill-opacity': '.75', stroke: '#2f5fa5', 'stroke-width': '2.2' }],
     ['path', { d: 'M38 38l6 6', stroke: '#2f5fa5', 'stroke-width': '3.4', 'stroke-linecap': 'round', fill: 'none' }],
+  ],
+  // A page of writing: a blue heading line, grey text lines, and a blue capital W in the corner.
+  write: [
+    ...PAGE,
+    ['path', { d: 'M14 17h14', stroke: '#2f5fa5', 'stroke-width': '3', 'stroke-linecap': 'round', fill: 'none' }],
+    ['path', { d: 'M14 24h20M14 29h20M14 34h11', stroke: '#8a97ab', 'stroke-width': '2', 'stroke-linecap': 'round', fill: 'none' }],
+    ['rect', { x: '25', y: '30', width: '16', height: '13', rx: '2', fill: '#2f5fa5', stroke: '#1b3f7a', 'stroke-width': '1' }],
+    ['path', { d: 'M28 33l2 7 3-5 3 5 2-7', stroke: '#fff', 'stroke-width': '1.6', 'stroke-linejoin': 'round', 'stroke-linecap': 'round', fill: 'none' }],
   ],
   // A page with a small grid, the top row green.
   sheet: [

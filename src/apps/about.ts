@@ -29,6 +29,15 @@ export const CREDITS: Credit[] = [
     texts: 'vendor/codemirror-LICENSES.txt',
   },
   {
+    name: 'ProseMirror',
+    what: 'The editor inside TOMLIN Write: typing, formatting, lists, tables, undo, and reading pasted text.',
+    author: 'Marijn Haverbeke and contributors',
+    licence: 'MIT',
+    home: 'https://prosemirror.net/',
+    packages: 'vendor/prosemirror-packages.json',
+    texts: 'vendor/prosemirror-LICENSES.txt',
+  },
+  {
     name: 'WebLLM',
     what: "Runs the built-in AI (Chat › Agents) on this device's graphics chip.",
     author: 'The MLC team (Carnegie Mellon University and contributors)',
