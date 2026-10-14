@@ -3,13 +3,16 @@
 // loses its scripts, saving as .docx and opening it again, pages (lines that fill a page carry on at the top of the
 // next, nothing is written in the margins or the gap, a page break), the Layout tab (landscape, margins, page numbers
 // in the footer), Print and PDF (the PDF has the pages the screen shows), a table (rows, merging, shading, kept
-// through a save), a picture (inserted, resized, kept through a save), .txt, and a phone-sized screen.
+// through a save), a picture (inserted, resized, kept through a save), .txt, and a phone-sized screen. Then the other
+// files (Markdown, WordPad, a Word file with a text box kept through a save), find and replace, a footnote and a
+// contents page kept through a save, letters from a spreadsheet (a PDF and a document), a template, and spelling.
 // Needs the dev server on a FRESH, EMPTY data folder (the first step sets up the owner), and `npm run build` done.
 //   node test/browser-write.mjs [http://127.0.0.1:3043] [screenshot folder]
 import { chromium } from 'playwright-core';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { zipDeflate } from '../src/core/zip.ts';
 
 const BASE = process.argv[2] ?? 'http://127.0.0.1:3043';
 const SHOTS = process.argv[3] ?? null;
@@ -457,6 +460,161 @@ await step('on a phone-sized screen the window fits and the page fits its width'
   await shot('07-phone');
   await closeAllWrite();
   await page.setViewportSize({ width: 1400, height: 900 });
+});
+
+/** Files from this computer into Documents, through File Explorer's Upload. */
+async function upload(paths) {
+  await closeAllWrite();
+  await page.locator('#desktop .item', { hasText: 'My Files' }).first().dblclick();
+  const w = page.locator('.win', { has: page.locator('.explorer') }).first();
+  await w.waitFor();
+  await w.locator('.explorer-view').focus();
+  await page.keyboard.press('Control+L');
+  await w.locator('input.address').fill('/Documents');
+  await w.locator('input.address').press('Enter');
+  await w.locator('.crumb', { hasText: /^Documents$/ }).waitFor();
+  const chooser = page.waitForEvent('filechooser');
+  await w.getByRole('button', { name: 'Upload' }).click();
+  (await chooser).setFiles(paths);
+  for (const p of paths) await w.locator('.item', { hasText: p.split(/[\\/]/).pop().replace(/\.[^.]+$/, '') }).first().waitFor({ timeout: 15000 });
+  await w.getByRole('button', { name: 'Close', exact: true }).first().click();
+}
+const enc = new TextEncoder();
+const W_NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"';
+const BOX = '<mc:AlternateContent><mc:Choice Requires="wps"><w:drawing><wps:wsp><wps:txbx><w:txbxContent><w:p><w:r><w:t>Inside the box</w:t></w:r></w:p></w:txbxContent></wps:txbx></wps:wsp></w:drawing></mc:Choice></mc:AlternateContent>';
+
+await step('Markdown, WordPad and a Word file with a text box open formatted; the text box is kept through a save', async () => {
+  writeFileSync(join(dir, 'notes.md'), '# Plan\n\n- **one**\n- two\n');
+  writeFileSync(join(dir, 'wordpad.rtf'), String.raw`{\rtf1\ansi{\fonttbl{\f0 Calibri;}{\f1 Symbol;}}\pard\f0\fs22 Hello \b WordPad\b0\par{\pntext\f1\'B7\tab}First\par}`);
+  writeFileSync(join(dir, 'elsewhere.docx'), await zipDeflate([
+    { name: '[Content_Types].xml', data: enc.encode('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'), modified: 0 },
+    { name: '_rels/.rels', data: enc.encode('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'), modified: 0 },
+    { name: 'word/document.xml', data: enc.encode(`<?xml version="1.0"?><w:document ${W_NS}><w:body><w:p><w:r><w:t xml:space="preserve">From elsewhere </w:t></w:r><w:r>${BOX}</w:r></w:p><w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr></w:body></w:document>`), modified: 0 },
+  ]));
+  await upload([join(dir, 'notes.md'), join(dir, 'wordpad.rtf'), join(dir, 'elsewhere.docx')]);
+  await newDoc();
+  await reopen('notes.md');
+  await W().locator('.wp-doc p.wp-h1', { hasText: 'Plan' }).waitFor();
+  eq(await W().locator('.wp-doc ul > li').count(), 2, 'Markdown list');
+  eq(await W().locator('.wp-doc strong').innerText(), 'one', 'Markdown bold');
+  await closeAllWrite();
+  await newDoc();
+  await reopen('wordpad.rtf');
+  await W().locator('.wp-doc strong', { hasText: 'WordPad' }).waitFor();
+  eq(await W().locator('.wp-doc ul > li').innerText(), 'First', 'WordPad bullet');
+  await doc().focus();
+  await page.keyboard.press('Control+S');
+  eq(await D().locator('input[aria-label="File name"]').inputValue(), 'wordpad.docx', 'a WordPad file is saved as a Word document');
+  await page.keyboard.press('Escape');
+  await closeAllWrite();
+  await newDoc();
+  await reopen('elsewhere.docx');
+  await D().getByText('Write keeps these as they are').waitFor();
+  await D().getByRole('button', { name: 'OK' }).click();
+  await W().locator('.wp-doc .wp-opaque', { hasText: 'Text box: Inside the box' }).waitFor();
+  await doc().focus();
+  await page.keyboard.press('Control+End');
+  await page.keyboard.type(' and more');
+  await page.keyboard.press('Control+S');
+  await toast('Saved “elsewhere.docx”');
+  await closeAllWrite();
+  await newDoc();
+  await reopen('elsewhere.docx');
+  await D().getByRole('button', { name: 'OK' }).click();
+  await W().locator('.wp-doc .wp-opaque', { hasText: 'Text box' }).waitFor();
+  ok((await doc().innerText()).includes('and more'), 'the typing was saved with it');
+});
+
+await step('find and replace: every "cat" becomes "fox", formatting and all', async () => {
+  await newDoc();
+  await page.keyboard.type('cat cat dog ');
+  await page.keyboard.press('Control+B');
+  await page.keyboard.type('cat');
+  await page.keyboard.press('Control+H');
+  await W().getByLabel('Find', { exact: true }).fill('cat');
+  ok((await W().locator('.wp-find-count').innerText()).includes('of 3'), 'three found');
+  eq(await doc().locator('.wp-found').count(), 3, 'marked in the text');
+  await W().getByLabel('Replace with').fill('fox');
+  await W().locator('.wp-find-panel').getByRole('button', { name: 'Replace all' }).click();
+  await toast('Replaced 3 places');
+  eq((await doc().innerText()).trim(), 'fox fox dog fox', 'replaced');
+  eq(await doc().locator('strong').innerText(), 'fox', 'the bold one stays bold');
+  await W().getByLabel('Find', { exact: true }).press('Escape');
+  ok(await W().locator('.wp-find-panel').isHidden(), 'Esc closes the bar');
+});
+
+await step('a footnote stands at the foot of its page; a contents page lists the headings; both kept through a save', async () => {
+  await newDoc();
+  await W().locator('.wp-style-rb', { hasText: 'Heading 1' }).click();
+  await page.keyboard.type('Alpha');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('A claim');
+  await page.keyboard.press('Control+Alt+F');
+  await D().locator('input').fill('Smith, 2024, page 7');
+  await D().getByRole('button', { name: 'Insert' }).click();
+  await page.keyboard.press('Enter');
+  await W().locator('.wp-style-rb', { hasText: 'Heading 1' }).click();
+  await page.keyboard.type('Beta');
+  await settle();
+  eq(await doc().locator('.wp-fn').innerText(), '1', 'numbered');
+  ok((await W().locator('.wp-notes').innerText()).includes('Smith, 2024, page 7'), 'at the foot of the page');
+  await page.keyboard.press('Control+Home');
+  await tab('Insert');
+  await W().getByRole('button', { name: /A contents page/ }).click();
+  await settle();
+  await settle();
+  eq(await doc().locator('.wp-toc-row .wp-toc-text').allInnerTexts(), ['Alpha', 'Beta'], 'headings listed');
+  eq(await doc().locator('.wp-toc-row .wp-toc-page').first().innerText(), '1', 'with their page');
+  await shot('08-footnote-contents');
+  await saveAs('notes-walk');
+  await toast('Saved “notes-walk.docx”');
+  await closeAllWrite();
+  await newDoc();
+  await reopen('notes-walk.docx');
+  await W().locator('.wp-doc .wp-toc-row').first().waitFor();
+  eq(await W().locator('.wp-doc .wp-fn').count(), 1, 'footnote kept');
+  ok((await W().locator('.wp-notes').innerText()).includes('Smith, 2024'), 'its words kept');
+});
+
+await step('letters from a spreadsheet: a field, a preview, then the letters as a PDF and as a document', async () => {
+  writeFileSync(join(dir, 'people.csv'), 'Name,City\nAnn Lee,Perth\nBob Stone,Hobart\n');
+  await upload([join(dir, 'people.csv')]);
+  await newDoc();
+  await page.keyboard.type('Dear ');
+  await tab('Mailings');
+  await rb('From a spreadsheet...').click();
+  await D().locator('.pick-row', { hasText: 'people' }).first().dblclick();
+  await W().locator('.wp-tip', { hasText: 'people.csv: 2 rows' }).waitFor();
+  await doc().focus();
+  await page.keyboard.press('Control+End');
+  await W().getByRole('button', { name: 'Insert a field: filled in from each row' }).click();
+  await page.locator('.menu').getByText('Name', { exact: true }).click();
+  eq(await doc().locator('.wp-field').innerText(), '«Name»', 'the field');
+  await rb('Preview').click();
+  eq(await doc().locator('.wp-field').innerText(), 'Ann Lee', 'previewing row 1');
+  await rb('Letters as a PDF').click();
+  await toast('Made 2 letters');
+  eq(await doc().locator('.wp-field').count(), 1, 'the letter itself is back');
+  await rb('Letters as a document').click();
+  await page.waitForFunction(() => [...document.querySelectorAll('.win')].some(w => w.textContent.includes('letters.docx') && w.querySelector('.wp-doc')));
+  const letters = page.locator('.win', { hasText: 'letters.docx' }).last();
+  await letters.locator('.wp-break').waitFor();
+  const text = await letters.locator('.wp-doc').innerText();
+  ok(text.includes('Dear Ann Lee') && text.includes('Dear Bob Stone'), 'one letter each: ' + text);
+});
+
+await step('a template, and spelling on and off', async () => {
+  await newDoc();
+  await W().getByRole('button', { name: 'File' }).click();
+  await page.locator('.menu').getByText('New from a template').hover();
+  await page.locator('.menu').getByText('Letter', { exact: true }).click();
+  await page.waitForFunction(() => [...document.querySelectorAll('.wp-doc')].some(d => d.textContent.includes('Dear Their name,')));
+  eq(await W().locator('.wp-doc').getAttribute('spellcheck'), 'true', 'spelling checked at first');
+  await tab('Review');
+  await rb('Spelling').click();
+  eq(await W().locator('.wp-doc').getAttribute('spellcheck'), 'false', 'off');
+  await rb('Spelling').click();
+  eq(await W().locator('.wp-doc').getAttribute('spellcheck'), 'true', 'on again');
 });
 
 await step('no errors in the console', async () => {

@@ -10,6 +10,8 @@ const CODE_FACE = 'Consolas';
 /** Inline Markdown as text runs: **bold**, *italic* / _italic_, ~~struck~~, `code`, [words](address), \escapes. */
 export function inlineMd(text: string, base: MarkJSON[] = []): NodeJSON[] {
   const out: NodeJSON[] = [];
+  // A very long line is taken as it is: looking for the end of each * in it could take minutes.
+  if (text.length > 20000) return [base.length ? { type: 'text', text, marks: base } : { type: 'text', text }];
   const push = (t: string, marks: MarkJSON[]) => {
     if (!t) return;
     const sorted = [...marks].sort((a, b) => a.type.localeCompare(b.type));
@@ -98,8 +100,9 @@ const para = (text: string, attrs: Record<string, unknown> = {}, base: MarkJSON[
   // Two spaces (or a backslash) at a line's end is a line break inside the paragraph.
   const lines = text.split('\n');
   lines.forEach((line, i) => {
-    const hard = i < lines.length - 1 && (/ {2,}$/.test(line) || /\\$/.test(line));
-    content.push(...inlineMd(line.replace(/ {2,}$|\\$/, '').trimEnd(), base));
+    // (Plain string checks, not patterns: a pattern over a line of thousands of spaces could take minutes.)
+    const hard = i < lines.length - 1 && (line.length - line.trimEnd().length >= 2 || line.endsWith('\\'));
+    content.push(...inlineMd((line.endsWith('\\') ? line.slice(0, -1) : line).trimEnd(), base));
     if (i < lines.length - 1) content.push(hard ? { type: 'hard_break' } : { type: 'text', text: ' ' });
   });
   const merged: NodeJSON[] = [];
@@ -133,14 +136,17 @@ export function readMarkdown(source: string): NodeJSON {
       for (const c of code) blocks.push(c ? { type: 'paragraph', attrs: { style: 'normal', after: 0 }, content: [{ type: 'text', text: c, marks: [{ type: 'font', attrs: { face: CODE_FACE } }] }] } : { type: 'paragraph', attrs: { style: 'normal', after: 0 } });
       continue;
     }
-    const heading = /^(#{1,6})\s+(.*?)\s*#*\s*$/.exec(line);
+    const heading = /^(#{1,6})\s/.exec(line);
     if (heading) {
       const level = heading[1].length;
-      blocks.push(para(heading[2], { style: level === 1 ? 'h1' : level === 2 ? 'h2' : 'h3' }));
+      // The heading's words, without the #s some people also put at its end.
+      let words = line.slice(level).trim();
+      while (words.endsWith('#')) words = words.slice(0, -1);
+      blocks.push(para(words.trim(), { style: level === 1 ? 'h1' : level === 2 ? 'h2' : 'h3' }));
       i++;
       continue;
     }
-    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) {
+    if (/^([-*_])\1{2,}$/.test(line.replace(/\s+/g, ''))) {
       // A line across the page: nothing to show in a document that has none; the paragraphs stay apart.
       i++;
       continue;

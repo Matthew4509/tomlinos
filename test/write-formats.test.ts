@@ -216,6 +216,14 @@ test('Markdown both ways: headings, bold, italic, code, lists in lists, numbered
   assert.deepEqual(markdownLoses({ type: 'doc', content: [{ type: 'paragraph', attrs: { align: 'center' }, content: [{ type: 'text', text: 'x', marks: [{ type: 'color', attrs: { value: '#ff0000' } }] }] }] }).length, 2);
 });
 
+test('a hostile Markdown file (very long lines of spaces, dashes and stars) opens quickly', () => {
+  const started = Date.now();
+  const doc = readMarkdown(`# ${' '.repeat(80000)}x\n${'- '.repeat(40000)}x\n${'*a '.repeat(40000)}\nline${' '.repeat(80000)}y\n## Head ##\n`);
+  assert.ok(Date.now() - started < 1500, `took ${Date.now() - started} ms`);
+  assert.equal(doc.content!.at(-1)?.attrs?.style, 'h2');
+  assert.equal(plainText({ type: 'doc', content: [doc.content!.at(-1)!] }), 'Head');
+});
+
 test('find and replace: case, whole words, across formatting, never across paragraphs; replace keeps formatting', async () => {
   const { pm, schema } = await schemaP;
   const doc = schema.nodeFromJSON({ type: 'doc', content: [

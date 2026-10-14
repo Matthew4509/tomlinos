@@ -102,5 +102,8 @@ test('pasted CSS: lengths, colours, typefaces and paragraph settings are read fr
 
 test('pasted HTML: style blocks and comments go, style attributes are renamed (never applied), text is left alone', () => {
   const html = '<style>p{color:red}</style><!--[if gte mso 9]><xml>x</xml><![endif]--><p class=MsoNormal style="color:red" data-style="keep">a style=b <span STYLE = \'font-size:9pt\'>c</span></p>';
+  const started = Date.now();
+  pastedHtml('<style'.repeat(50000) + '<a '.repeat(100000) + '<!--'.repeat(50000));
+  assert.ok(Date.now() - started < 1000, 'a crafted clipboard is cleaned quickly');
   assert.equal(pastedHtml(html), '<p class=MsoNormal data-wp-style="color:red" data-style="keep">a style=b <span data-wp-style = \'font-size:9pt\'>c</span></p>');
 });

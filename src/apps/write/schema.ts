@@ -20,10 +20,37 @@ export const LINE_CSS = 1.15;
 
 /** Pasted HTML with every tag's style attribute renamed data-wp-style (read by the rules below, never applied). */
 export function pastedHtml(html: string): string {
-  return html
-    .replace(/<style[\s\S]*?<\/style>/gi, '')
-    .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/<[a-zA-Z][^>]*>/g, tag => tag.replace(/(\s)style(\s*=)/gi, '$1data-wp-style$2'));
+  // One pass over the text (patterns over thousands of unclosed tags could take minutes on a crafted clipboard).
+  const lower = html.toLowerCase();
+  let out = '';
+  let i = 0;
+  while (i < html.length) {
+    const lt = html.indexOf('<', i);
+    if (lt < 0) {
+      out += html.slice(i);
+      break;
+    }
+    out += html.slice(i, lt);
+    if (html.startsWith('<!--', lt)) {
+      const end = html.indexOf('-->', lt + 4);
+      i = end < 0 ? html.length : end + 3;
+      continue;
+    }
+    if (lower.startsWith('<style', lt) && !/[a-z0-9-]/.test(lower[lt + 6] ?? '')) {
+      const end = lower.indexOf('</style>', lt);
+      i = end < 0 ? html.length : end + 8;
+      continue;
+    }
+    const gt = html.indexOf('>', lt);
+    if (gt < 0) {
+      out += html.slice(lt);
+      break;
+    }
+    const tag = html.slice(lt, gt + 1);
+    out += /^<[a-zA-Z]/.test(tag) ? tag.replace(/(\s)style(\s*=)/gi, '$1data-wp-style$2') : tag;
+    i = gt + 1;
+  }
+  return out;
 }
 
 /** An element's CSS: its renamed (pasted) style attribute, or its own. */
