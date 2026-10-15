@@ -13,15 +13,18 @@ import type { AppDef } from '../shell/types.ts';
 import { APPS } from './catalog.ts';
 import { menuBar } from './sheet/classic-ui.ts';
 import { boxOfShapes, chainFrom, distToShape, inWindow, moveShape, scaleShape, touchesBox } from './cad/edit.ts';
-import { P, add, dist, mul, sub, unit, type Pt } from './cad/geom.ts';
+import { P, add, dist, mul, normAngle, sub, unit, type Pt } from './cad/geom.ts';
 import { cadIcon, type CadIcon } from './cad/icons.ts';
 import { parseNumber, parsePoint, parseSize } from './cad/input.ts';
 import {
-  COLOUR_NAMES, CONSTRUCTION, CadProblem, LAYER_COLOURS, LINE_TYPES, TYPE_NAMES, colourName, describe, type LineType, fmt, newDrawing, readTcad, writeTcad, type Drawing, type Ent, type Layer, type Shape, type Units,
+  COLOUR_NAMES, CONSTRUCTION, DIMENSIONS, TEXT, isNote, CadProblem, LAYER_COLOURS, LINE_TYPES, TYPE_NAMES, colourName, describe, type LineType, fmt, newDrawing, readTcad, writeTcad, type Drawing, type Ent, type Layer, type Shape, type Units,
 } from './cad/model.ts';
 import { SNAP_NAMES, SNAP_ORDER, findSnaps, type Snap, type SnapMode } from './cad/snap.ts';
-import { COMMAND_WORDS, TOOLS, type PolarAnswer, type Tool, type ToolCtx, type ToolId } from './cad/tools.ts';
+import { COMMAND_WORDS, TOOLS, type PolarAnswer, type TextAnswer, type TextAsk, type Tool, type ToolCtx, type ToolId } from './cad/tools.ts';
 import { explode, join } from './cad/modify.ts';
+import { decodeText, readDxf, writeDxf } from './cad/dxf.ts';
+import type { Align } from './cad/font.ts';
+import { defaultStyle, dimParts, textShapeStrokes, type DimShape } from './cad/notes.ts';
 import { MAX_SCALE, MIN_SCALE, fitView, render, toWorld, type View } from './cad/view.ts';
 
 const SETTINGS = '/System/cad.json';
@@ -35,6 +38,10 @@ interface Settings {
   ortho: boolean;
   gridOn: boolean;
   gridSnap: boolean;
+  /** DXF output: text as lines in TOMLIN's letters, construction lines in, hidden layers in. */
+  dxfTextAsLines: boolean;
+  dxfConstruction: boolean;
+  dxfHidden: boolean;
 }
 
 const DEFAULT_SNAPS: SnapMode[] = ['end', 'mid', 'centre', 'intersection', 'quadrant'];
@@ -55,11 +62,11 @@ export const cadApp: AppDef = {
     app.root.classList.add('cad');
 
     // ---- Settings kept between windows -----------------------------------------------------------------------------
-    const settings: Settings = { snaps: [...DEFAULT_SNAPS], arrows: false, white: false, large: false, layersPanel: true, ortho: false, gridOn: false, gridSnap: false };
+    const settings: Settings = { snaps: [...DEFAULT_SNAPS], arrows: false, white: false, large: false, layersPanel: true, ortho: false, gridOn: false, gridSnap: false, dxfTextAsLines: false, dxfConstruction: false, dxfHidden: false };
     try {
       const saved = JSON.parse(await shell.fs.readText(SETTINGS)) as Partial<Settings>;
       if (Array.isArray(saved.snaps)) settings.snaps = saved.snaps.filter((s): s is SnapMode => SNAP_ORDER.includes(s as SnapMode));
-      for (const k of ['arrows', 'white', 'large', 'layersPanel', 'ortho', 'gridOn', 'gridSnap'] as const) if (typeof saved[k] === 'boolean') settings[k] = saved[k];
+      for (const k of ['arrows', 'white', 'large', 'layersPanel', 'ortho', 'gridOn', 'gridSnap', 'dxfTextAsLines', 'dxfConstruction', 'dxfHidden'] as const) if (typeof saved[k] === 'boolean') settings[k] = saved[k];
     } catch {
       // Nothing kept yet: the usual settings.
     }
@@ -79,17 +86,27 @@ export const cadApp: AppDef = {
     let label = 'Drawing';
     let loadedId = '';
     let folderHint: string | null = null;
+    let dxfReport: { lines: string[]; leftOut: number } | null = null;
     if (arg) {
       try {
         const entry = await shell.fs.stat(arg);
         if (!entry || entry.kind !== 'file') throw new CadProblem('That file is not there any more. It may have been moved or deleted.');
-        const text = new TextDecoder().decode(await shell.fs.readFile(arg));
-        const read = readTcad(text);
+        const raw = await shell.fs.readFile(arg);
+        if (/\.dxf$/i.test(arg)) {
+          // A DXF is read into a new drawing: saving it makes a .tcad beside it (the DXF is never written over by Save).
+          const read = readDxf(raw);
+          drawing = read.drawing;
+          label = baseName(arg);
+          folderHint = parentPath(arg);
+          dxfReport = { lines: read.report, leftOut: read.leftOut };
+        } else {
+        const read = readTcad(new TextDecoder().decode(raw));
         drawing = read.drawing;
         path = arg;
         label = baseName(arg);
         loadedId = entry.id;
         if (read.skipped) shell.toast(`${read.skipped} item${read.skipped === 1 ? '' : 's'} of a kind this version does not know ${read.skipped === 1 ? 'was' : 'were'} left out.`);
+        }
       } catch (error) {
         const why = error instanceof CadProblem ? error.message : 'This drawing could not be read.';
         app.root.append(h('div', { class: 'app-message', role: 'alert' }, h('p', {}, why), h('p', { class: 'dialog-detail' }, 'The file was not changed.')));
@@ -245,6 +262,14 @@ export const cadApp: AppDef = {
         setView(fitView({ x0: Math.min(a.x, b.x), y0: Math.min(a.y, b.y), x1: Math.max(a.x, b.x), y1: Math.max(a.y, b.y) }, canvasW(), canvasH()));
       },
       askPolar,
+      askText,
+      askDim,
+      style: () => drawing.style,
+      noteLayer(kind) {
+        const name = kind === 'text' ? TEXT : DIMENSIONS;
+        const l = layerOf(name);
+        return l && l.on && !l.locked ? name : drawing.current;
+      },
       finished() {
         if (tool?.done) endTool(true);
       },
@@ -475,15 +500,32 @@ export const cadApp: AppDef = {
       say(`${removed.length} items joined into ${made.length} geometr${made.length === 1 ? 'y' : 'ies'} (${closed} closed)${leftOut ? `; ${leftOut} left as they were (ellipses, curves, circles or closed shapes are not joined)` : ''}.`);
     }
     function explodeChosen(): void {
-      const polys = chosenEnts().filter(e => e.type === 'poly');
-      if (!polys.length) return problem('Choose the polylines to break into lines and arcs first.');
+      const picks = chosenEnts().filter(e => e.type === 'poly' || isNote(e));
+      if (!picks.length) return problem('Choose the polylines, text or dimensions to break into lines and arcs first.');
       const added: Array<{ shape: Shape; layer: string }> = [];
-      for (const e of polys) {
-        const parts = explode(e);
-        if (typeof parts !== 'string') for (const shape of parts) added.push({ shape, layer: e.layer });
+      for (const e of picks) {
+        if (e.type === 'text') {
+          // Text becomes the strokes of its letters: lines and open polylines a cutter can follow.
+          for (const s of textShapeStrokes(e)) {
+            if (s.length === 2) {
+              if (dist(s[0], s[1]) > 1e-12) added.push({ shape: { type: 'line', a: s[0], b: s[1] }, layer: e.layer });
+            } else added.push({ shape: { type: 'poly', pts: s, bulges: s.map(() => 0), closed: false }, layer: e.layer });
+          }
+        } else if (e.type === 'dim') {
+          // A dimension becomes its lines, arcs and text (it no longer measures again when moved).
+          const parts = dimParts(e);
+          for (const p of parts.pieces) {
+            if (p.k === 'seg') added.push({ shape: { type: 'line', a: p.a, b: p.b }, layer: e.layer });
+            else if (p.k === 'arc') added.push({ shape: { type: 'arc', c: p.c, r: p.r, a0: p.a0, a1: p.a1 }, layer: e.layer });
+          }
+          for (const t of parts.texts) added.push({ shape: { type: 'text', p: t.p, text: t.text, h: t.h, angle: t.angle, align: t.align }, layer: e.layer });
+        } else {
+          const parts = explode(e);
+          if (typeof parts !== 'string') for (const shape of parts) added.push({ shape, layer: e.layer });
+        }
       }
-      ctx.change([], added, polys.map(e => e.id));
-      say(`${polys.length} polyline${polys.length === 1 ? '' : 's'} broken into ${added.length} lines and arcs.`);
+      ctx.change([], added, picks.map(e => e.id));
+      say(`${picks.length} item${picks.length === 1 ? '' : 's'} broken into ${added.length} pieces.`);
     }
     async function moveToLayer(target?: string): Promise<void> {
       const sel = chosenEnts();
@@ -614,7 +656,7 @@ export const cadApp: AppDef = {
       const body = h('div', { class: 'cad-dialog' }, ...rows, problemEl);
       try {
         for (;;) {
-          const ok = await shell.dialogs.ask<boolean>({ title, body, buttons: [{ label: 'OK', value: true, primary: true }, { label: 'Cancel', value: false }], cancel: false, focus: () => body.querySelector('input') });
+          const ok = await shell.dialogs.ask<boolean>({ title, body, buttons: [{ label: 'OK', value: true, primary: true }, { label: 'Cancel', value: false }], cancel: false, focus: () => body.querySelector('textarea, input') });
           if (!ok) return null;
           const out = read();
           if (typeof out !== 'string') return out;
@@ -637,6 +679,124 @@ export const cadApp: AppDef = {
         if (a === null || a === 0 || Math.abs(a) > 360) return 'The angle: above 0 and at most 360 (minus for clockwise).';
         return { count: n, angle: a, rotate: rotate.checked };
       });
+    }
+    async function askText(o: TextAsk): Promise<TextAnswer | null> {
+      const words = o.arc
+        ? h('input', { type: 'text', class: 'field', value: o.text, 'aria-label': 'Words', autocomplete: 'off' })
+        : h('textarea', { class: 'field cad-words', rows: '3', 'aria-label': 'Words', spellcheck: 'false' });
+      if (!o.arc) words.value = o.text;
+      const height = numberRow(`Height of the capitals (${unitWord()})`, Number(f(o.h)));
+      const rows: HTMLElement[] = [h('label', { class: 'cad-row cad-row-top' }, h('span', {}, 'Words'), words), height.row];
+      let angle: { input: HTMLInputElement; row: HTMLElement } | null = null;
+      const alignSel = h('select', { class: 'field', 'aria-label': 'Line up' },
+        h('option', { value: 'left' }, o.arc ? 'Starts at the point' : 'Left end at the point'),
+        h('option', { value: 'centre' }, 'Middle at the point'),
+        h('option', { value: 'right' }, o.arc ? 'Ends at the point' : 'Right end at the point'));
+      alignSel.value = o.align ?? 'left';
+      const readSel = h('select', { class: 'field', 'aria-label': 'Reads' },
+        h('option', { value: 'cw' }, 'Clockwise, round the outside (over the top)'),
+        h('option', { value: 'ccw' }, 'Anticlockwise, along the inside (under the bottom)'));
+      readSel.value = o.cw === false ? 'ccw' : 'cw';
+      if (!o.plain) {
+        if (!o.arc) {
+          angle = numberRow('Angle (degrees, anticlockwise)', Number(f(((o.angle ?? 0) * 180) / Math.PI)));
+          rows.push(angle.row);
+        }
+        rows.push(h('label', { class: 'cad-row' }, h('span', {}, 'Line up'), alignSel));
+        if (o.arc) rows.push(h('label', { class: 'cad-row' }, h('span', {}, 'Reads'), readSel));
+      }
+      rows.push(h('p', { class: 'dialog-detail' }, 'Drawn in TOMLIN CAD’s own single-line letters (each letter one stroke wide, as an engraving cutter follows it). Type %%d for °, %%c for Ø, %%p for ±.'));
+      return askForm<TextAnswer>(o.title, rows, () => {
+        const t = decodeText(words.value.replace(/\r/g, '').replace(/\s+$/, ''));
+        if (!t.trim()) return 'Type some words.';
+        if (t.length > 10000) return 'At most 10,000 letters.';
+        const hv = parseNumber(height.input.value);
+        if (hv === null || !(hv > 0)) return 'The height must be a number above 0.';
+        const av = angle ? parseNumber(angle.input.value) : 0;
+        if (av === null) return 'The angle must be a number of degrees.';
+        return { text: t, h: hv, angle: angle ? normAngle((av * Math.PI) / 180) : o.angle ?? 0, align: (o.plain ? 'left' : alignSel.value) as Align, cw: readSel.value === 'cw' };
+      });
+    }
+    async function askDim(d: DimShape): Promise<{ text: string; h: number; dp: number } | null> {
+      const leader = d.kind === 'leader';
+      const words = h('input', { type: 'text', class: 'field', value: d.text, 'aria-label': 'Words', autocomplete: 'off' });
+      const height = numberRow(`Height of the words (${unitWord()})`, Number(f(d.h)));
+      const places = numberRow('Decimal places', d.dp);
+      const rows: HTMLElement[] = [h('label', { class: 'cad-row' }, h('span', {}, leader ? 'Words' : 'Words (empty: the measured size; <> stands for it)'), words), height.row];
+      if (!leader) rows.push(places.row);
+      return askForm(leader ? 'Change the leader note' : 'Change the dimension', rows, () => {
+        const hv = parseNumber(height.input.value);
+        if (hv === null || !(hv > 0)) return 'The height must be a number above 0.';
+        const dp = leader ? d.dp : parseNumber(places.input.value);
+        if (dp === null || !Number.isInteger(dp) || dp < 0 || dp > 8) return 'Decimal places: a whole number from 0 to 8.';
+        const t = decodeText(words.value.trim());
+        if (leader && !t) return 'Type the note.';
+        return { text: t, h: hv, dp };
+      });
+    }
+    async function noteStyleDialog(): Promise<void> {
+      const st = drawing.style;
+      const textH = numberRow(`Text height (${unitWord()})`, Number(f(st.textH)));
+      const dimH = numberRow(`Dimension number height (${unitWord()})`, Number(f(st.dimH)));
+      const arrow = numberRow(`Arrow length (${unitWord()})`, Number(f(st.arrow)));
+      const dp = numberRow('Decimal places in dimensions', st.dp);
+      const note = h('p', { class: 'dialog-detail' }, 'For new text and dimensions in this drawing (kept in its file). To change one already drawn: Utils > Dimensions > Change text or a dimension, or double-click it.');
+      const out = await askForm('Sizes for text and dimensions', [textH.row, dimH.row, arrow.row, dp.row, note], () => {
+        const v = [textH, dimH, arrow].map(r => parseNumber(r.input.value));
+        if (v.some(x => x === null || !(x > 0))) return 'Each size must be a number above 0.';
+        const places = parseNumber(dp.input.value);
+        if (places === null || !Number.isInteger(places) || places < 0 || places > 8) return 'Decimal places: a whole number from 0 to 8.';
+        return { textH: v[0]!, dimH: v[1]!, arrow: v[2]!, dp: places };
+      });
+      if (!out) return;
+      drawing.style = out;
+      touched();
+      say('New text and dimensions take these sizes.');
+    }
+    async function outputDxf(): Promise<void> {
+      const asLines = h('input', { type: 'checkbox', checked: settings.dxfTextAsLines });
+      const xlines = h('input', { type: 'checkbox', checked: settings.dxfConstruction });
+      const hidden = h('input', { type: 'checkbox', checked: settings.dxfHidden });
+      const body = h('div', { class: 'cad-dialog' },
+        h('p', {}, 'Writes an AutoCAD R12 DXF: the plainest kind, which CAM programs old and new read. Ellipses and curves go as polylines of arcs; dimensions as plain lines and text. Your drawing is not changed (Save keeps everything as .tcad).'),
+        h('label', { class: 'cad-check' }, asLines, ' Text as lines in TOMLIN’s letters (exactly as on screen; for engraving). Off: as text the other program draws in its own letters.'),
+        h('label', { class: 'cad-check' }, xlines, ' Construction lines (as long lines across the drawing)'),
+        h('label', { class: 'cad-check' }, hidden, ' Items on hidden layers'));
+      const ok = await shell.dialogs.ask<boolean>({ title: 'Output a DXF', body, buttons: [{ label: 'Choose where...', value: true, primary: true }, { label: 'Cancel', value: false }], cancel: false });
+      setTimeout(keyboardBack, 0);
+      if (!ok) return;
+      settings.dxfTextAsLines = asLines.checked;
+      settings.dxfConstruction = xlines.checked;
+      settings.dxfHidden = hidden.checked;
+      keepSettings();
+      const out = writeDxf(drawing, { textAsLines: asLines.checked, construction: xlines.checked, hidden: hidden.checked });
+      if (!out.count) return problem('There is nothing to write: draw something first (or tick hidden layers or construction lines if that is all there is).');
+      const folder = path ? parentPath(path) : folderHint ?? '/Documents';
+      let taken: string[] = [];
+      try {
+        taken = (await shell.fs.list(folder, true)).map(e => e.name);
+      } catch {
+        // Saving will say the folder is gone.
+      }
+      const stem = label.replace(/\.(tcad|dxf)$/i, '');
+      const chosen = await pickSave(shell, { title: 'Output a DXF', folder, name: uniqueName(`${stem}.dxf`, taken), accept: ['dxf'], ok: 'Save' });
+      setTimeout(keyboardBack, 0);
+      if (!chosen) return;
+      let target = chosen.path;
+      if (!/\.dxf$/i.test(target)) target += '.dxf';
+      try {
+        let replacing = chosen.replace;
+        if (target !== chosen.path) {
+          const existing = await shell.fs.stat(target).catch(() => null);
+          if (existing && !(await shell.dialogs.confirm({ title: 'Replace it?', text: `“${baseName(target)}” already exists. Replace it with this one?`, ok: 'Replace', danger: true, cancel: 'Cancel' }))) return;
+          replacing = !!existing;
+        }
+        const entry = await shell.fs.writeFile(target, out.bytes, replacing ? {} : { mustBeNew: true });
+        for (const n of out.notes) say(n);
+        shell.toast(`Saved “${entry.name}”.`);
+      } catch (error) {
+        await shell.report('Could not save the DXF', error);
+      }
     }
     async function arrayRect(): Promise<void> {
       const sel = drawing.ents.filter(e => selected.has(e.id));
@@ -699,6 +859,7 @@ export const cadApp: AppDef = {
       const k = units === 'inch' ? 1 / 25.4 : 25.4;
       commit(() => {
         if (convert.checked) drawing.ents = drawing.ents.map(e => ({ ...scaleShape(e, P(0, 0), k), id: e.id, layer: e.layer }) as Ent);
+        drawing.style = convert.checked ? { ...drawing.style, textH: drawing.style.textH * k, dimH: drawing.style.dimH * k, arrow: drawing.style.arrow * k } : defaultStyle(units === 'inch');
         drawing.units = units;
       });
       if (convert.checked) setView({ cx: view.cx * k, cy: view.cy * k, scale: view.scale / k }, false);
@@ -713,7 +874,10 @@ export const cadApp: AppDef = {
         'Typed points: X and Y in their boxes (an empty box is 0), or in the X box x,y   @dx,dy (from the last point)   @length<angle. Numbers may be sums, such as 600/2+15.',
         'CAD menu: trim, extend, break (at a point or between two), fillet and chamfer (two lines or arcs, one corner of a polyline, or every corner), offset (lines, arcs, circles and polylines of them; not ellipses or curves), join lines and arcs into closed geometries, close, set the start point, reverse, explode, and arrows showing which way each runs.',
         'Layers: show, hide, lock, rename, colour, line type, delete, move items onto a layer. Utils: measure a distance or an angle, area and perimeter, list an item, information about the drawing.',
-        'Saves its own drawings (.tcad). Not here yet: text and dimensions; DXF out and in; printing. Never here: CAM (toolpaths, G-code), 3D.',
+        'Text (Geometry > Text): words in TOMLIN CAD’s own single-line letters, any height and angle, lined up left, middle or right, several lines, or round an arc or circle. CAD > Explode turns text into lines a cutter can follow.',
+        'Dimensions (Utils > Dimensions): linear (across or up), horizontal, vertical, aligned, radius, diameter, angle and leader notes, on the Dimensions layer. They measure their own points: move or scale one and its number follows (they are not tied to the shapes they measure). Double-click text or a dimension to change it.',
+        'DXF: File > Open reads DXF of any release saved as text (from CAM programs, AutoCAD and others); File > Output > CAD > DXF writes AutoCAD R12 DXF for the CAM program. What a DXF holds that TOMLIN CAD does not draw (hatches, pictures, 3D) is listed when it opens.',
+        'Saves its own drawings (.tcad). Not here yet: a CAM program’s own drawing files (open their DXF instead), outline (hollow) letters, printing and photo tracing. Never here: CAM (toolpaths, G-code), 3D.',
       ].join('\n\n'));
     }
     function showKeys(): void {
@@ -753,7 +917,7 @@ export const cadApp: AppDef = {
       } catch {
         // Saving will say the folder is gone.
       }
-      const stem = label.replace(/\.tcad$/i, '');
+      const stem = label.replace(/\.(tcad|dxf)$/i, '');
       const chosen = await pickSave(shell, { title: 'Save as', folder, name: uniqueName(`${stem}.tcad`, taken), accept: ['tcad'], ok: 'Save' });
       if (!chosen) return false;
       let target = chosen.path;
@@ -781,7 +945,7 @@ export const cadApp: AppDef = {
       }
     }
     async function openDrawing(): Promise<void> {
-      const chosen = await pickFile(shell, { title: 'Open a drawing', folder: path ? parentPath(path) : '/Documents', accept: ['tcad'], ok: 'Open' });
+      const chosen = await pickFile(shell, { title: 'Open a drawing (TOMLIN CAD or DXF)', folder: path ? parentPath(path) : folderHint ?? '/Documents', accept: ['tcad', 'dxf'], ok: 'Open' });
       if (!chosen) return;
       // A new window nothing was drawn in gives way to the drawing opened from it.
       const untouched = !path && !drawing.ents.length && !undoStack.length;
@@ -962,6 +1126,11 @@ export const cadApp: AppDef = {
       if (tool) return;
       const hit = hitAt(screenOf(e));
       if (!hit) return;
+      if (isNote(hit)) {
+        startTool('text-edit');
+        (tool as Tool | null)?.pick?.(hit, toWorld(view, canvasW(), canvasH(), screenOf(e)));
+        return afterInput();
+      }
       const chain = chainFrom(live(), hit);
       selected.clear();
       for (const c of chain) selected.add(c.id);
@@ -1028,10 +1197,12 @@ export const cadApp: AppDef = {
     });
 
     const row1 = h('div', { class: 'cad-tb', role: 'toolbar', 'aria-label': 'Standard and drawing tools' },
-      btn('new', 'New drawing', () => void shell.openApp('cad')), btn('open', 'Open... (Ctrl+O)', () => void openDrawing()), btn('save', 'Save (Ctrl+S)', () => void save()), sep(),
+      btn('new', 'New drawing', () => void shell.openApp('cad')), btn('open', 'Open... (Ctrl+O)', () => void openDrawing()), btn('save', 'Save (Ctrl+S)', () => void save()), btn('dxfOut', 'Output a DXF for the CAM program (File > Output > CAD > DXF)', () => void outputDxf()), sep(),
       btn('undo', 'Undo (Ctrl+Z)', undo), btn('redo', 'Redo (Ctrl+Y)', redo), sep(),
       toolBtn('line', 'line'), toolBtn('polyline', 'polyline'), toolBtn('rect', 'rect'), toolBtn('circle', 'circle-cr'), toolBtn('arc', 'arc-3p'), toolBtn('ellipse', 'ellipse'),
-      toolBtn('polygon', 'polygon-in'), toolBtn('slot', 'slot'), toolBtn('spline', 'spline'), toolBtn('point', 'point'));
+      toolBtn('polygon', 'polygon-in'), toolBtn('slot', 'slot'), toolBtn('spline', 'spline'), toolBtn('point', 'point'), sep(),
+      toolBtn('text', 'text'), toolBtn('textArc', 'text-arc'), toolBtn('dimLinear', 'dim-linear'), toolBtn('dimAligned', 'dim-aligned'), toolBtn('dimRadius', 'dim-radius'),
+      toolBtn('dimDiameter', 'dim-diameter'), toolBtn('dimAngle', 'dim-angle'), toolBtn('leader', 'leader'), toolBtn('textEdit', 'text-edit'));
     const row2 = h('div', { class: 'cad-tb', role: 'toolbar', 'aria-label': 'Edit and construction tools' },
       toolBtn('move', 'move'), toolBtn('copy', 'copy'), toolBtn('rotate', 'rotate'), toolBtn('mirror', 'mirror'), toolBtn('scale', 'scale'),
       btn('arrayLine', 'Rectangular array: rows and columns of the chosen items', () => void arrayRect()), toolBtn('arrayPolar', 'array-polar'),
@@ -1042,7 +1213,7 @@ export const cadApp: AppDef = {
     const row3 = h('div', { class: 'cad-tb', role: 'toolbar', 'aria-label': 'CAD tools' },
       toolBtn('trim', 'trim'), toolBtn('extend', 'extend'), toolBtn('breakPoint', 'break-point'), toolBtn('breakTwo', 'break-two'), sep(),
       toolBtn('fillet', 'fillet'), toolBtn('filletAll', 'fillet-all'), toolBtn('chamfer', 'chamfer'), toolBtn('offset', 'offset'), sep(),
-      btn('join', 'Join the chosen lines and arcs into geometries', joinChosen), btn('explode', 'Explode the chosen polylines into lines and arcs', explodeChosen),
+      btn('join', 'Join the chosen lines and arcs into geometries', joinChosen), btn('explode', 'Explode the chosen polylines, text or dimensions into lines and arcs', explodeChosen),
       toolBtn('closeGeo', 'close'), toolBtn('startPoint', 'start'), toolBtn('reverse', 'reverse'),
       btn('direction', 'Show which way lines and polylines run', () => setArrows(!settings.arrows), 'arrows'), sep(),
       toolBtn('angle', 'measure-angle'), toolBtn('area', 'area'), btn('info', 'Information about the drawing', information));
@@ -1286,6 +1457,8 @@ export const cadApp: AppDef = {
       { label: 'Save', hint: 'Ctrl+S', action: () => void save() },
       { label: 'Save as...', hint: 'Ctrl+Shift+S', action: () => void saveAs() },
       { separator: true },
+      sub_('Output', [sub_('CAD', [{ label: 'DXF...', action: () => void outputDxf() }])]),
+      { separator: true },
       { label: 'Close', action: () => app.close() },
     ];
     const editMenu = (): MenuItem[] => [
@@ -1322,7 +1495,7 @@ export const cadApp: AppDef = {
       item('offset'),
       { separator: true },
       { label: 'Join into geometries', disabled: !selected.size, action: joinChosen },
-      { label: 'Explode polylines', disabled: !selected.size, action: explodeChosen },
+      { label: 'Explode (polylines, text, dimensions)', disabled: !selected.size, action: explodeChosen },
       item('close'), item('start'), item('reverse'),
       { label: 'Show direction', checked: settings.arrows, action: () => setArrows(!settings.arrows) },
     ];
@@ -1354,12 +1527,22 @@ export const cadApp: AppDef = {
       sub_('Polygon', [item('polygon-in'), item('polygon-out')]),
       item('slot'), item('spline'), item('point'),
       { separator: true },
+      sub_('Text', [item('text'), item('text-arc'), item('text-edit')]),
+      { separator: true },
       sub_('Construction lines', [item('xline-h'), item('xline-v'), item('xline-angle'), item('xline-2p'), item('xline-offset')]),
       sub_('Tangent lines', [item('tan-point'), item('tan-two')]),
     ];
     const utilsMenu = (): MenuItem[] => [
       item('measure'), item('measure-angle'), item('area'), item('list'),
       { label: 'Information...', action: information },
+      { separator: true },
+      sub_('Dimensions', [
+        item('dim-linear'), item('dim-horizontal'), item('dim-vertical'), item('dim-aligned'),
+        item('dim-radius'), item('dim-diameter'), item('dim-angle'), item('leader'),
+        { separator: true },
+        item('text-edit'),
+        { label: 'Sizes for text and dimensions...', action: () => void noteStyleDialog() },
+      ]),
       { separator: true },
       sub_('Snaps', [
         ...SNAP_ORDER.filter(m => m !== 'grid').map(m => ({ label: SNAP_NAMES[m], checked: settings.snaps.includes(m), action: () => toggleSnap(m) })),
@@ -1536,7 +1719,11 @@ export const cadApp: AppDef = {
     drawLayers();
     refreshTitle();
     refreshStatus();
-    say(path ? `Opened ${label}.` : 'A new drawing, in millimetres. Choose a tool, or type one such as line.');
+    if (dxfReport) {
+      say(`Opened ${label} (a DXF; Save makes a TOMLIN CAD drawing beside it).`);
+      for (const line of dxfReport.lines) say(line);
+      if (dxfReport.leftOut) void shell.dialogs.alert(`Opened ${label}`, dxfReport.lines.join('\n\n'));
+    } else say(path ? `Opened ${label}.` : 'A new drawing, in millimetres. Choose a tool, or type one such as line.');
     canvas.focus({ preventScroll: true });
     paint();
   },

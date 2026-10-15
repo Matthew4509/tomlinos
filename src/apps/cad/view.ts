@@ -3,7 +3,7 @@
 // the shape a tool would make, the snap mark with its name, and the selection box.
 import { P, angleOf, at, type Box, type Piece, type Pt } from './geom.ts';
 import { directionMarks } from './modify.ts';
-import { piecesOf, type Ent, type Layer, type LineType, type Shape, type Units } from './model.ts';
+import { outlineOf, type Ent, type Layer, type LineType, type Shape, type Units } from './model.ts';
 import { SNAP_NAMES, type Snap } from './snap.ts';
 
 /** What part of the drawing shows: the drawing point at the middle of the area, and pixels per drawing unit. */
@@ -208,7 +208,7 @@ function stroke(c: CanvasRenderingContext2D, s: Shape, v: View, w: number, h: nu
     return;
   }
   c.beginPath();
-  for (const p of piecesOf(s)) tracePiece(c, p, v, w, h);
+  for (const p of outlineOf(s)) tracePiece(c, p, v, w, h);
   c.stroke();
 }
 

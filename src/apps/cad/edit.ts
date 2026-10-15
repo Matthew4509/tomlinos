@@ -5,7 +5,8 @@ import {
   P, add, angleOf, boxOf, dist, distTo, intersect, mirrorDir, mirrorPt, mul, normAngle, rotatePt, sample, stepsFor, sub,
   type Box, type Piece, type Pt,
 } from './geom.ts';
-import { endsOf, piecesOf, shapeBox, type Ent, type Shape } from './model.ts';
+import { endsOf, outlineOf, shapeBox, type Ent, type Shape } from './model.ts';
+import { distToText, readable } from './notes.ts';
 
 /** Applies a point change to every point of a shape that is a point (not a length or a direction). */
 function mapPoints(s: Shape, f: (p: Pt) => Pt): Shape {
@@ -23,6 +24,10 @@ function mapPoints(s: Shape, f: (p: Pt) => Pt): Shape {
     case 'point':
     case 'xline':
       return { ...s, p: f(s.p) };
+    case 'text':
+      return { ...s, p: f(s.p), ...(s.arc ? { arc: { ...s.arc, c: f(s.arc.c) } } : {}) };
+    case 'dim':
+      return { ...s, pts: s.pts.map(f) };
   }
 }
 
@@ -40,6 +45,10 @@ export function rotateShape<S extends Shape>(s: S, c: Pt, angle: number): S {
       return { ...moved, m: turn(moved.m) } as S;
     case 'xline':
       return { ...moved, d: turn(moved.d) } as S;
+    case 'text':
+      return { ...moved, angle: normAngle(moved.angle + angle) } as S;
+    case 'dim':
+      return { ...moved, dir: normAngle(moved.dir + angle) } as S;
     default:
       return moved as S;
   }
@@ -62,6 +71,20 @@ export function mirrorShape<S extends Shape>(s: S, a: Pt, b: Pt): S {
       return { ...moved, bulges: moved.bulges.map(v => -v) } as S;
     case 'xline':
       return { ...moved, d: mirrorDir(moved.d, axis) } as S;
+    case 'text': {
+      // Text is never seen backwards: it keeps reading left to right, lined up from its other end if it turned over.
+      if (moved.arc) return moved as S;
+      const a = normAngle(angleOf(mirrorDir(P(Math.cos(moved.angle), Math.sin(moved.angle)), axis)));
+      const r = readable(a);
+      const flip = Math.abs(r - a) > 1e-9;
+      return { ...moved, angle: r, align: flip && moved.align !== 'centre' ? (moved.align === 'left' ? 'right' : 'left') : moved.align } as S;
+    }
+    case 'dim': {
+      const dir = normAngle(angleOf(mirrorDir(P(Math.cos(moved.dir), Math.sin(moved.dir)), axis)));
+      // An angle is measured anticlockwise from its first arm: in a mirror the arms swap.
+      const pts = moved.kind === 'angle' ? [moved.pts[0], moved.pts[2], moved.pts[1], moved.pts[3]] : moved.pts;
+      return { ...moved, dir, pts } as S;
+    }
     default:
       return moved as S;
   }
@@ -75,6 +98,10 @@ export function scaleShape<S extends Shape>(s: S, c: Pt, k: number): S {
       return { ...moved, r: moved.r * k } as S;
     case 'ellipse':
       return { ...moved, m: mul(moved.m, k) } as S;
+    case 'text':
+      return { ...moved, h: moved.h * Math.abs(k), ...(moved.arc ? { arc: { ...moved.arc, r: moved.arc.r * Math.abs(k) } } : {}) } as S;
+    case 'dim':
+      return { ...moved, h: moved.h * Math.abs(k), arrow: moved.arrow * Math.abs(k) } as S;
     default:
       return moved as S;
   }
@@ -85,8 +112,9 @@ export function scaleShape<S extends Shape>(s: S, c: Pt, k: number): S {
 /** How far q is from the item. */
 export function distToShape(s: Shape, q: Pt): number {
   if (s.type === 'point') return dist(s.p, q);
+  if (s.type === 'text') return distToText(s, q);
   let best = Infinity;
-  for (const p of piecesOf(s)) best = Math.min(best, distTo(p, q));
+  for (const p of outlineOf(s)) best = Math.min(best, distTo(p, q));
   return best;
 }
 
@@ -94,7 +122,7 @@ export function distToShape(s: Shape, q: Pt): number {
 export function pieceNear(s: Shape, q: Pt): Piece | null {
   let best: Piece | null = null;
   let bestD = Infinity;
-  for (const p of piecesOf(s)) {
+  for (const p of outlineOf(s)) {
     const d = distTo(p, q);
     if (d < bestD) {
       bestD = d;
@@ -119,7 +147,7 @@ export function touchesBox(s: Shape, box: Box): boolean {
   if (b && (b.x1 < box.x0 || b.x0 > box.x1 || b.y1 < box.y0 || b.y0 > box.y1)) return false;
   const corners = [P(box.x0, box.y0), P(box.x1, box.y0), P(box.x1, box.y1), P(box.x0, box.y1)];
   const edges: Piece[] = corners.map((c, i) => ({ k: 'seg', a: c, b: corners[(i + 1) % 4] }));
-  for (const p of piecesOf(s)) {
+  for (const p of outlineOf(s)) {
     if (p.k !== 'xline' && sample(p, stepsFor(p)).some(q => inside(box, q))) return true;
     if (edges.some(e => intersect(p, e).length)) return true;
   }

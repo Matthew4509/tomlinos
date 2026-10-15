@@ -11,6 +11,7 @@ import { CadProblem, ellipse, newDrawing, piecesOf, polygon, readTcad, rectangle
 import { chainFrom, distToShape, inWindow, mirrorShape, rotateShape, scaleShape, touchesBox } from '../src/apps/cad/edit.ts';
 import { findSnaps } from '../src/apps/cad/snap.ts';
 import { TOOLS, type PolarAnswer, type ToolCtx } from '../src/apps/cad/tools.ts';
+import { defaultStyle, dimLabel, type DimShape, type TextShape } from '../src/apps/cad/notes.ts';
 
 const TOL = 1e-6;
 const near = (a: Pt, b: Pt, what: string, tol = TOL) => assert.ok(dist(a, b) <= tol, `${what}: expected ${b.x},${b.y}, got ${a.x},${a.y}`);
@@ -316,6 +317,10 @@ function fakeCtx(): ToolCtx & { items: Ent[]; said: string[]; problems: string[]
     list: () => {},
     zoomTo: () => {},
     askPolar: async (): Promise<PolarAnswer | null> => ({ count: 8, angle: 360, rotate: true }),
+    askText: async () => ({ text: 'HELLO', h: 5, angle: 0, align: 'left' as const, cw: true }),
+    askDim: async () => ({ text: 'about <>', h: 4, dp: 1 }),
+    style: () => defaultStyle(false),
+    noteLayer: (k: 'text' | 'dim') => (k === 'text' ? 'Text' : 'Dimensions'),
     finished: () => {},
   };
   return ctx;
@@ -477,4 +482,64 @@ test('magnetic snaps: on a side anywhere near its middle, the middle is taken; o
   near(corner.p, P(200, 200), 'the corner');
   // 10 off the side (not on it): the middle 10 away is beyond the ordinary reach, so nothing.
   assert.equal(q(210, 150), undefined);
+});
+
+test('text and dimension tools through their steps (session 7)', async () => {
+  const ctx = fakeCtx();
+  const tick = () => new Promise(r => setTimeout(r, 0));
+  // Text: a click, then the words from the box, on the Text layer.
+  const t = TOOLS.text.make(ctx);
+  t.point!(P(10, 20));
+  await tick();
+  const words = ctx.items.at(-1)! as TextShape & Ent;
+  assert.equal(words.text, 'HELLO');
+  assert.equal(words.layer, 'Text');
+  assert.ok(t.done);
+  // A linear dimension put below two points measures across; put to their side, it measures up.
+  const lin = TOOLS['dim-linear'].make(ctx);
+  lin.point!(P(0, 0));
+  lin.point!(P(600, 400));
+  lin.point!(P(300, -50));
+  assert.equal(dimLabel(ctx.items.at(-1) as DimShape), '600');
+  assert.equal(ctx.items.at(-1)!.layer, 'Dimensions');
+  lin.point!(P(0, 0));
+  lin.point!(P(600, 400));
+  lin.point!(P(700, 200));
+  assert.equal(dimLabel(ctx.items.at(-1) as DimShape), '400');
+  // Radius of a picked circle, number outside.
+  ctx.items.push({ type: 'circle', c: P(0, 0), r: 25, id: 900, layer: 'Geometry' } as Ent);
+  const rad = TOOLS['dim-diameter'].make(ctx);
+  rad.pick!(ctx.items.at(-1)!, P(25, 0));
+  rad.point!(P(60, 10));
+  assert.equal(dimLabel(ctx.items.at(-1) as DimShape), 'Ø50');
+  // The angle between two picked lines, on the side the arc is put.
+  ctx.items.push({ type: 'line', a: P(0, 0), b: P(100, 0), id: 901, layer: 'Geometry' } as Ent, { type: 'line', a: P(0, 0), b: P(100, 100), id: 902, layer: 'Geometry' } as Ent);
+  const ang = TOOLS['dim-angle'].make(ctx);
+  ang.pick!(ctx.items.find(e => e.id === 901)!, P(80, 0));
+  ang.pick!(ctx.items.find(e => e.id === 902)!, P(70, 70));
+  ang.point!(P(50, 15));
+  assert.equal(dimLabel(ctx.items.at(-1) as DimShape), '45°');
+  ang.pick!(ctx.items.find(e => e.id === 901)!, P(80, 0));
+  ang.pick!(ctx.items.find(e => e.id === 902)!, P(70, 70));
+  ang.point!(P(-10, 30));
+  assert.equal(dimLabel(ctx.items.at(-1) as DimShape), '135°', 'the other side of the second line');
+  // Leader: two points, Done, then the words.
+  const le = TOOLS.leader.make(ctx);
+  le.point!(P(0, 0));
+  le.point!(P(20, 20));
+  assert.equal(le.enter(), true, 'waits for the words');
+  await tick();
+  const note = ctx.items.at(-1) as DimShape;
+  assert.equal(note.kind, 'leader');
+  assert.equal(note.text, 'HELLO');
+  // Change a dimension's words: <> keeps the measured size in them.
+  const ed = TOOLS['text-edit'].make(ctx);
+  assert.equal(ed.pickFilter!(ctx.items.find(e => e.id === 901)!), false, 'only text and dimensions can be changed');
+  const target = ctx.items.find(e => e.type === 'dim' && e.kind === 'linear')!;
+  ed.pick!(target, P(0, 0));
+  await tick();
+  assert.equal(dimLabel(ctx.items.find(e => e.id === target.id) as DimShape), 'about 600');
+  // Trim and extend cannot pick text or dimensions.
+  assert.equal(TOOLS.trim.make(ctx).pickFilter!(words), false);
+  assert.equal(TOOLS.extend.make(ctx).pickFilter!(target), false);
 });

@@ -25,6 +25,8 @@ const RICH: FileType = { label: 'Rich text document', icon: 'write', apps: ['wri
 const ODT: FileType = { label: 'OpenDocument text', icon: 'write', apps: ['write'] };
 /** A TOMLIN CAD drawing (JSON inside). */
 const CAD: FileType = { label: 'TOMLIN CAD drawing', icon: 'cad', apps: ['cad'] };
+/** A DXF drawing (AutoCAD's exchange format): opened in TOMLIN CAD, which also writes it for CAM programs. */
+const DXF: FileType = { label: 'DXF drawing', icon: 'cad', apps: ['cad'] };
 const CALC: FileType = { label: 'Calculator sheet', icon: 'calculator', apps: ['calculator'] };
 const ARCHIVE: FileType = { label: 'Compressed folder', icon: 'archive', apps: ['archive'] };
 const CODE: FileType = { label: 'Code or data file', icon: 'code', apps: ['editor', 'notepadpro'] };
@@ -56,6 +58,7 @@ const GROUPS: Array<[FileType, string[]]> = [
   [RICH, ['rtf']],
   [ODT, ['odt']],
   [CAD, ['tcad']],
+  [DXF, ['dxf']],
   [CALC, ['calc']],
   [CALENDAR, ['ics']],
   [CONTACTS, ['vcf']],

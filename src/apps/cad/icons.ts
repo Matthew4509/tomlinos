@@ -93,6 +93,16 @@ const DRAW = {
   snapPerpendicular: () => [path('M2 13.5h12', '#707070', 1), path('M8 13.5V2.5', INK, 1), path('M8 10.5h3v3', GREEN, 1.5)],
   snapTangent: () => [circle(8, 9.5, 4.5, '#707070', 'none', 1), path('M1.5 5h13', GREEN, 1.6)],
   snapGrid: () => [path('M4 2v12M8 2v12M12 2v12M2 4h12M2 8h12M2 12h12', '#9a9a9a', 0.8), circle(8, 8, 1.7, GREEN, GREEN)],
+  text: () => [path('M3 13.5L8 2.5l5 11M5 9.5h6', BLUE, 1.5)],
+  textArc: () => [path('M1.5 14a7 7 0 0 1 13 0', '#909090', 1), path('M4.5 9l2-6 2 6M5.2 7h2.6M10 3.5h4M12 3.5V9', BLUE, 1.2)],
+  textEdit: () => [path('M1.5 13.5L5.5 3.5l4 10M3 9.5h5', BLUE, 1.3), path('M9.5 14l1-3 3.5-3.5 2 2-3.5 3.5z', GOLD, 1)],
+  dimLinear: () => [path('M2 3.5v10M14 3.5v10', '#808080', 1), path('M2.5 9.5h11', BLUE, 1.1), path('M2 9.5l3-1.6v3.2zM14 9.5l-3-1.6v3.2z', BLUE, 0.8, BLUE)],
+  dimAligned: () => [path('M2 9.5l3 3M9.5 2l3 3', '#808080', 1), path('M4 10.5l7-7', BLUE, 1.1), path('M3.5 11l1.3-3 1.7 1.7zM11.5 3l-1.3 3-1.7-1.7z', BLUE, 0.8, BLUE)],
+  dimRadius: () => [circle(6.5, 9.5, 5.5, '#808080', 'none', 1), path('M6.5 9.5l3.9-3.9', BLUE, 1.3), path('M10.4 5.6l-1 2.9-1.9-1.9z', BLUE, 0.8, BLUE), dot(6.5, 9.5, BLUE)],
+  dimDiameter: () => [circle(8, 8, 5.5, '#808080', 'none', 1), path('M4.6 11.4l6.8-6.8', BLUE, 1.3), path('M11.9 4.1l-1 2.9-1.9-1.9zM4.1 11.9l1-2.9 1.9 1.9z', BLUE, 0.8, BLUE)],
+  dimAngle: () => [path('M2 13.5h12.5M2 13.5L12 3.5', '#808080', 1), path('M10 13.5a8 8 0 0 0-2.4-5.7', BLUE, 1.3)],
+  leader: () => [path('M2.5 3l6 7.5h6', BLUE, 1.2), path('M2.5 3l3.2 1.8-1.6 1.3z', BLUE, 0.8, BLUE)],
+  dxfOut: () => [path('M2 1.5h7l3 3v10H2z', '#6b6b6b', 1, '#fff'), path('M6 9.5h8.5M12 7l2.5 2.5L12 12', GREEN, 1.4)],
 } satisfies Record<string, () => SVGElement[]>;
 
 export type CadIcon = keyof typeof DRAW;

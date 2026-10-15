@@ -2,11 +2,13 @@
 // to select), shows the shape it would make as the pointer moves, and makes it. Points come from clicks (snapped) or
 // the command line; a lone number where a point is asked means that far from the last point towards the pointer.
 import {
-  P, add, angleOf, arcThrough, ccwArc, circleTTR, circleTTT, circumcircle, dist, dot, mid, mul, normAngle, rotatePt, sub,
+  P, add, angleOf, arcThrough, ccwArc, circleTTR, circleTTT, circumcircle, dist, dot, lineLine, mid, mul, normAngle, polar, rotatePt, sub,
   tangentLines, tangentPoints, unit, type Piece, type Pt,
 } from './geom.ts';
+import type { Align } from './font.ts';
+import { angleArms, dimLabel, type DimShape, type NoteStyle } from './notes.ts';
 import { boxOfShapes, chainFrom, mirrorShape, moveShape, pieceNear, rotateShape, scaleShape } from './edit.ts';
-import { CONSTRUCTION, ellipse, pieceLength, piecesOf, polygon, rectangle, slot, type Ent, type Shape, type Units } from './model.ts';
+import { CONSTRUCTION, ellipse, isNote, pieceLength, piecesOf, polygon, rectangle, slot, type Ent, type Shape, type Units } from './model.ts';
 import { areaOf, breakAt, breakBetween, chamfer, closeShape, cornerBetween, extend, fillet, offset, polyCorners, reverse, setStart, trim } from './modify.ts';
 
 export interface Want {
@@ -24,6 +26,26 @@ export interface PolarAnswer {
   /** Degrees, anticlockwise; 360 spreads the copies all the way round. */
   angle: number;
   rotate: boolean;
+}
+
+/** What the text box asks: the words, their height, and (unless plain) their turn and lining up, or for text round an arc which way it reads. */
+export interface TextAsk {
+  title: string;
+  text: string;
+  h: number;
+  angle?: number;
+  align?: Align;
+  arc?: boolean;
+  cw?: boolean;
+  plain?: boolean;
+}
+
+export interface TextAnswer {
+  text: string;
+  h: number;
+  angle: number;
+  align: Align;
+  cw: boolean;
 }
 
 export interface ToolCtx {
@@ -46,6 +68,14 @@ export interface ToolCtx {
   list(e: Ent): void;
   zoomTo(a: Pt, b: Pt): void;
   askPolar(): Promise<PolarAnswer | null>;
+  /** The text box (words, height, turn, lining up). */
+  askText(o: TextAsk): Promise<TextAnswer | null>;
+  /** A dimension's own words, the height of its number and its decimal places. */
+  askDim(d: DimShape): Promise<{ text: string; h: number; dp: number } | null>;
+  /** Sizes for new text and dimensions. */
+  style(): NoteStyle;
+  /** The layer new text or dimensions go on (Text or Dimensions while there is one to draw on, else the current one). */
+  noteLayer(kind: 'text' | 'dim'): string;
   /** A tool that finished on its own (after a box was answered) tells the window here. */
   finished(): void;
 }
@@ -962,7 +992,7 @@ function replaceWith(ctx: ToolCtx, e: Ent, shapes: Shape[]): void {
   if (!shapes.length) ctx.change([], [], [e.id]);
   else ctx.change([{ id: e.id, shape: shapes[0] }], shapes.slice(1).map(shape => ({ shape, layer: e.layer })));
 }
-const notPoint = (e: Ent) => e.type !== 'point';
+const notPoint = (e: Ent) => e.type !== 'point' && !isNote(e);
 const lineArcPoly = (e: Ent) => e.type === 'line' || e.type === 'arc' || e.type === 'poly';
 
 function trimTool(ctx: ToolCtx): Tool {
@@ -1183,6 +1213,285 @@ function areaTool(ctx: ToolCtx): Tool {
   });
 }
 
+// ---- Text and dimensions ------------------------------------------------------------------------------------------
+
+/** A text or dimension (notes), or not. */
+const noteOnly = (e: Ent) => isNote(e);
+
+function textTool(ctx: ToolCtx): Tool {
+  let waiting = false;
+  let at: Pt | null = null;
+  const t: Tool = {
+    title: 'Text',
+    done: false,
+    prompt: () => (waiting ? 'Type the words in the box' : 'Where the text starts (its foot)'),
+    want: () => (waiting ? {} : { point: true }),
+    base: () => at,
+    point(p) {
+      if (waiting) return;
+      at = p;
+      waiting = true;
+      const st = ctx.style();
+      void ctx.askText({ title: 'Text', text: '', h: st.textH, angle: 0, align: 'left' }).then(answer => {
+        waiting = false;
+        t.done = true;
+        if (answer && at) ctx.add([{ type: 'text', p: at, text: answer.text, h: answer.h, angle: answer.angle, align: answer.align }], ctx.noteLayer('text'));
+        ctx.finished();
+      });
+    },
+    enter: () => false,
+    preview: () => [],
+  };
+  return t;
+}
+
+function textArcTool(ctx: ToolCtx): Tool {
+  let waiting = false;
+  let round: Extract<Piece, { k: 'arc' }> | null = null;
+  const t: Tool = {
+    title: 'Text round an arc',
+    done: false,
+    prompt: () => (waiting ? 'Type the words in the box' : round ? 'Click where the middle of the text goes' : 'Pick the arc or circle the text follows'),
+    want: () => (waiting ? {} : round ? { point: true } : { pick: true }),
+    base: () => round?.c ?? null,
+    pickFilter: e => round === null && (e.type === 'arc' || e.type === 'circle' || (e.type === 'poly' && e.bulges.some(b => b !== 0))),
+    pick(e, p) {
+      round = arcPieceOf(e, p);
+      if (!round) ctx.problem('Pick a round part (an arc, a circle, or a rounded side of a polyline).');
+    },
+    point(p) {
+      if (waiting || !round) return;
+      const r = round;
+      const on = polar(r.c, r.r, angleOf(sub(p, r.c)));
+      waiting = true;
+      const st = ctx.style();
+      // Above the centre the text reads clockwise round the outside; below it, anticlockwise along the inside.
+      void ctx.askText({ title: 'Text round an arc', text: '', h: st.textH, align: 'centre', arc: true, cw: p.y >= r.c.y }).then(answer => {
+        waiting = false;
+        t.done = true;
+        if (answer) ctx.add([{ type: 'text', p: on, text: answer.text.replace(/\n/g, ' '), h: answer.h, angle: 0, align: answer.align, arc: { c: r.c, r: r.r, cw: answer.cw } }], ctx.noteLayer('text'));
+        ctx.finished();
+      });
+    },
+    enter: () => false,
+    preview: () => [],
+  };
+  return t;
+}
+
+function editNoteTool(ctx: ToolCtx): Tool {
+  let waiting = false;
+  const t: Tool = {
+    title: 'Change text',
+    done: false,
+    prompt: () => (waiting ? 'Change it in the box' : 'Pick the text or dimension to change'),
+    want: () => (waiting ? {} : { pick: true }),
+    base: () => null,
+    pickFilter: noteOnly,
+    pick(e) {
+      if (waiting) return;
+      waiting = true;
+      const done = () => {
+        waiting = false;
+        t.done = true;
+        ctx.finished();
+      };
+      if (e.type === 'text') {
+        void ctx.askText({ title: 'Change text', text: e.text, h: e.h, angle: e.angle, align: e.align, arc: !!e.arc, cw: e.arc?.cw }).then(a => {
+          if (a) {
+            const { id: _id, layer: _layer, ...shape } = e;
+            ctx.change([{ id: e.id, shape: { ...shape, text: e.arc ? a.text.replace(/\n/g, ' ') : a.text, h: a.h, angle: e.arc ? e.angle : a.angle, align: a.align, ...(e.arc ? { arc: { ...e.arc, cw: a.cw } } : {}) } }], []);
+          }
+          done();
+        });
+      } else if (e.type === 'dim') {
+        void ctx.askDim(e).then(a => {
+          if (a) {
+            const { id: _id, layer: _layer, ...shape } = e;
+            ctx.change([{ id: e.id, shape: { ...shape, text: a.text, h: a.h, dp: a.dp } }], []);
+          }
+          done();
+        });
+      }
+    },
+    enter: () => false,
+    preview: () => [],
+  };
+  return t;
+}
+
+export type LinearKind = 'linear' | 'horizontal' | 'vertical' | 'aligned';
+
+/** Which way a linear dimension measures: across or up as asked, or (linear) by where it is put. */
+export function linearDir(kind: LinearKind, a: Pt, b: Pt, at: Pt): number {
+  if (kind === 'horizontal') return 0;
+  if (kind === 'vertical') return Math.PI / 2;
+  if (kind === 'aligned') return angleOf(sub(b, a));
+  // Put above or below the two points: it measures across; to their left or right: up.
+  const outX = Math.max(Math.min(a.x, b.x) - at.x, 0, at.x - Math.max(a.x, b.x));
+  const outY = Math.max(Math.min(a.y, b.y) - at.y, 0, at.y - Math.max(a.y, b.y));
+  return outX > outY ? Math.PI / 2 : 0;
+}
+
+function dimLinearTool(ctx: ToolCtx, kind: LinearKind): Tool {
+  const make = (a: Pt, b: Pt, at: Pt): DimShape => {
+    const st = ctx.style();
+    return { type: 'dim', kind: kind === 'aligned' ? 'aligned' : 'linear', pts: [a, b, at], dir: linearDir(kind, a, b, at), h: st.dimH, arrow: st.arrow, dp: st.dp, text: '' };
+  };
+  const names: Record<LinearKind, string> = { linear: 'Dimension: linear', horizontal: 'Dimension: horizontal', vertical: 'Dimension: vertical', aligned: 'Dimension: aligned' };
+  return stepTool(ctx, {
+    title: names[kind],
+    steps: [
+      { prompt: 'First point to measure from', want: { point: true } },
+      { prompt: 'Second point', want: { point: true } },
+      { prompt: kind === 'linear' ? 'Where the dimension line goes (above or below: across; left or right: up)' : 'Where the dimension line goes', want: { point: true } },
+    ],
+    preview: (g, c) => {
+      const a = ptOf(g[0])!;
+      const b = ptOf(g[1]);
+      return b ? [make(a, b, c)] : [line(a, c)];
+    },
+    make(g) {
+      const a = ptOf(g[0])!;
+      const b = ptOf(g[1])!;
+      if (dist(a, b) < 1e-12) return fail(ctx, 'The two points are the same: there is nothing to measure.');
+      const d = make(a, b, ptOf(g[2])!);
+      ctx.add([d], ctx.noteLayer('dim'));
+      ctx.say(`${names[kind]}: ${dimLabel(d)}`);
+      return true;
+    },
+    again: true,
+  });
+}
+
+function dimRoundTool(ctx: ToolCtx, diameter: boolean): Tool {
+  const title = diameter ? 'Dimension: diameter' : 'Dimension: radius';
+  const make = (r: Extract<Piece, { k: 'arc' }>, at: Pt): DimShape => {
+    const st = ctx.style();
+    const toward = dist(at, r.c) > 1e-12 ? sub(at, r.c) : P(1, 0);
+    return { type: 'dim', kind: diameter ? 'diameter' : 'radius', pts: [r.c, polar(r.c, r.r, angleOf(toward)), at], dir: 0, h: st.dimH, arrow: st.arrow, dp: st.dp, text: '' };
+  };
+  return stepTool(ctx, {
+    title,
+    steps: [
+      { prompt: 'Pick the arc or circle', want: { pick: true }, filter: round },
+      { prompt: 'Where the number goes (outside: a line out to it)', want: { point: true } },
+    ],
+    base: g => (g[0] ? arcPieceOf(picked(g[0]).e, picked(g[0]).at)?.c ?? null : null),
+    preview: (g, c) => {
+      const r = arcPieceOf(picked(g[0]).e, picked(g[0]).at);
+      return r ? [make(r, c)] : [];
+    },
+    make(g) {
+      const { e, at } = picked(g[0]);
+      const r = arcPieceOf(e, at);
+      if (!r) return fail(ctx, 'Pick a round part (an arc, a circle, or a rounded side of a polyline).');
+      const d = make(r, ptOf(g[1])!);
+      ctx.add([d], ctx.noteLayer('dim'));
+      ctx.say(`${title}: ${dimLabel(d)}`);
+      return true;
+    },
+    again: true,
+  });
+}
+
+/** A straight piece under a pick: its line (a point on it and its direction) and how far it reaches either way. */
+function straightOf(e: Ent, at: Pt): { p: Pt; d: Pt; ends: Pt[] } | null {
+  const piece = pieceNear(e, at);
+  if (!piece) return null;
+  if (piece.k === 'seg') return { p: piece.a, d: unit(sub(piece.b, piece.a)), ends: [piece.a, piece.b] };
+  if (piece.k === 'xline') return { p: piece.p, d: piece.d, ends: [] };
+  return null;
+}
+
+function dimAngleTool(ctx: ToolCtx): Tool {
+  const straight = (e: Ent) => e.type === 'line' || e.type === 'xline' || e.type === 'poly';
+  const make = (g: Given[], place: Pt): DimShape | string => {
+    const A = picked(g[0]);
+    const B = picked(g[1]);
+    const l1 = straightOf(A.e, A.at);
+    const l2 = straightOf(B.e, B.at);
+    if (!l1 || !l2) return 'Pick two straight lines (or straight sides of a polyline).';
+    const hit = lineLine(l1.p, l1.d, l2.p, l2.d);
+    if (!hit) return 'The two lines run side by side: they make no angle.';
+    const v = add(l1.p, mul(l1.d, hit[0]));
+    const [s, e] = angleArms(v, l1.d, l2.d, place);
+    // Each arm reaches as far as its line does on that side (the extension line runs on from there to the arc).
+    const reach = (arm: Pt) => {
+      const own = Math.abs(dot(arm, l1.d)) > Math.abs(dot(arm, l2.d)) ? l1 : l2;
+      return Math.max(0, ...own.ends.map(q => dot(sub(q, v), arm)));
+    };
+    const st = ctx.style();
+    return { type: 'dim', kind: 'angle', pts: [v, add(v, mul(s, reach(s) || 1e-9)), add(v, mul(e, reach(e) || 1e-9)), place], dir: 0, h: st.dimH, arrow: st.arrow, dp: Math.min(st.dp, 2), text: '' };
+  };
+  return stepTool(ctx, {
+    title: 'Dimension: angle',
+    steps: [
+      { prompt: 'Pick the first line', want: { pick: true }, filter: straight },
+      { prompt: 'Pick the second line', want: { pick: true }, filter: straight },
+      { prompt: 'Where the arc goes (between the arms you want measured)', want: { point: true } },
+    ],
+    base: () => null,
+    previewFrom: 2,
+    preview: (g, c) => {
+      const d = make(g, c);
+      return typeof d === 'string' ? [] : [d];
+    },
+    make(g) {
+      const d = make(g, ptOf(g[2])!);
+      if (typeof d === 'string') return fail(ctx, d);
+      if (dist(d.pts[3], d.pts[0]) < 1e-9) return fail(ctx, 'Put the arc away from the corner.');
+      ctx.add([d], ctx.noteLayer('dim'));
+      ctx.say(`Dimension: angle: ${dimLabel(d)}`);
+      return true;
+    },
+    again: true,
+  });
+}
+
+function leaderTool(ctx: ToolCtx): Tool {
+  const pts: Pt[] = [];
+  let waiting = false;
+  const finish = (): void => {
+    if (pts.length < 2) {
+      ctx.problem('A leader needs the arrow tip and at least one more point.');
+      t.done = true;
+      return;
+    }
+    waiting = true;
+    const st = ctx.style();
+    void ctx.askText({ title: 'Leader note', text: '', h: st.dimH, plain: true }).then(answer => {
+      waiting = false;
+      t.done = true;
+      if (answer) ctx.add([{ type: 'dim', kind: 'leader', pts: [...pts], dir: 0, h: answer.h, arrow: st.arrow, dp: st.dp, text: answer.text }], ctx.noteLayer('dim'));
+      ctx.finished();
+    });
+  };
+  const t: Tool = {
+    title: 'Leader note',
+    done: false,
+    prompt: () => (waiting ? 'Type the note in the box' : pts.length ? 'Next point (Done: the note goes at the last point)' : 'Where the arrow points'),
+    want: () => (waiting ? {} : { point: true }),
+    base: () => pts[pts.length - 1] ?? null,
+    point(p) {
+      if (waiting) return;
+      if (pts.length && dist(pts[pts.length - 1], p) < 1e-12) return ctx.problem('That is the same point as the last one.');
+      pts.push(p);
+    },
+    enter() {
+      if (waiting) return true;
+      finish();
+      return !t.done;
+    },
+    preview: c => {
+      if (!pts.length || waiting) return [];
+      const st = ctx.style();
+      return [{ type: 'dim', kind: 'leader', pts: [...pts, c], dir: 0, h: st.dimH, arrow: st.arrow, dp: st.dp, text: '' }];
+    },
+  };
+  return t;
+}
+
 // ---- Utils and View -----------------------------------------------------------------------------------------------
 
 function measureTool(ctx: ToolCtx): Tool {
@@ -1297,6 +1606,17 @@ export const TOOLS = {
   'measure-angle': { name: 'Measure an angle', make: angleTool },
   area: { name: 'Area and perimeter', make: areaTool },
   'zoom-window': { name: 'Zoom to a window', make: zoomWindowTool },
+  text: { name: 'Text', make: textTool },
+  'text-arc': { name: 'Text round an arc', make: textArcTool },
+  'text-edit': { name: 'Change text or a dimension', make: editNoteTool },
+  'dim-linear': { name: 'Dimension: linear (across or up)', make: (c: ToolCtx) => dimLinearTool(c, 'linear') },
+  'dim-horizontal': { name: 'Dimension: horizontal', make: (c: ToolCtx) => dimLinearTool(c, 'horizontal') },
+  'dim-vertical': { name: 'Dimension: vertical', make: (c: ToolCtx) => dimLinearTool(c, 'vertical') },
+  'dim-aligned': { name: 'Dimension: aligned (along the slope)', make: (c: ToolCtx) => dimLinearTool(c, 'aligned') },
+  'dim-radius': { name: 'Dimension: radius', make: (c: ToolCtx) => dimRoundTool(c, false) },
+  'dim-diameter': { name: 'Dimension: diameter', make: (c: ToolCtx) => dimRoundTool(c, true) },
+  'dim-angle': { name: 'Dimension: angle', make: dimAngleTool },
+  leader: { name: 'Leader note (an arrow and words)', make: leaderTool },
 } satisfies Record<string, { name: string; make: (ctx: ToolCtx) => Tool }>;
 
 export type ToolId = keyof typeof TOOLS;
@@ -1310,4 +1630,7 @@ export const COMMAND_WORDS: Record<string, ToolId> = {
   scale: 'scale', sc: 'scale', measure: 'measure', dist: 'measure', di: 'measure', list: 'list', li: 'list', zoom: 'zoom-window', z: 'zoom-window',
   trim: 'trim', tr: 'trim', extend: 'extend', ex: 'extend', break: 'break-point', br: 'break-point', fillet: 'fillet', f: 'fillet',
   chamfer: 'chamfer', cha: 'chamfer', offset: 'offset', o: 'offset', area: 'area', angle: 'measure-angle',
+  text: 'text', dtext: 'text', dt: 'text', t: 'text', ed: 'text-edit', dim: 'dim-linear', dli: 'dim-linear', dimlinear: 'dim-linear',
+  dal: 'dim-aligned', dimaligned: 'dim-aligned', dra: 'dim-radius', dimradius: 'dim-radius', ddi: 'dim-diameter', dimdiameter: 'dim-diameter',
+  dan: 'dim-angle', dimangular: 'dim-angle', le: 'leader', leader: 'leader',
 };

@@ -5,6 +5,7 @@ import {
   P, TAU, add, angleOf, at, boxOf, bulgeArc, curveThrough, dist, domain, ellN, isFull, joinBoxes, mid, mul, normAngle, pieceBox, polar, sub,
   type Box, type Piece, type Pt,
 } from './geom.ts';
+import { defaultStyle, dimLabel, notePieces, type DimShape, type NoteStyle, type TextShape } from './notes.ts';
 
 export type Units = 'mm' | 'inch';
 
@@ -34,7 +35,13 @@ export type Shape =
   | { type: 'spline'; fit: Pt[]; closed: boolean }
   | { type: 'point'; p: Pt }
   /** An endless construction line through p along the unit direction d. */
-  | { type: 'xline'; p: Pt; d: Pt };
+  | { type: 'xline'; p: Pt; d: Pt }
+  | TextShape
+  | DimShape;
+
+/** Text and dimensions: notes on the drawing, which snaps, trim, extend and offset leave alone. */
+export type Note = TextShape | DimShape;
+export const isNote = (s: Shape): s is Note => s.type === 'text' || s.type === 'dim';
 
 export type Ent = Shape & { id: number; layer: string };
 
@@ -44,6 +51,8 @@ export interface Drawing {
   /** New items go on this layer. */
   current: string;
   ents: Ent[];
+  /** Sizes for new text and dimensions. */
+  style: NoteStyle;
 }
 
 export const GEOMETRY = 'Geometry';
@@ -62,6 +71,7 @@ export function newDrawing(units: Units = 'mm'): Drawing {
     ],
     current: GEOMETRY,
     ents: [],
+    style: defaultStyle(units === 'inch'),
   };
 }
 
@@ -77,6 +87,7 @@ export const colourName = (c: string) => COLOUR_NAMES[c] ?? c;
 
 export const TYPE_NAMES: Record<Shape['type'], string> = {
   line: 'Line', arc: 'Arc', circle: 'Circle', ellipse: 'Ellipse', poly: 'Polyline', spline: 'Curve through points', point: 'Point', xline: 'Construction line',
+  text: 'Text', dim: 'Dimension',
 };
 
 // ---- Pieces and snap points ----------------------------------------------------------------------------------------
@@ -113,7 +124,24 @@ export function piecesOf(s: Shape): Piece[] {
       return [];
     case 'xline':
       return [{ k: 'xline', p: s.p, d: s.d }];
+    case 'text':
+    case 'dim':
+      return [];
   }
+}
+
+/** A text's or dimension's strokes, worked out once per item (items are replaced, never changed, when edited). */
+const noteOutlines = new WeakMap<Shape, Piece[]>();
+
+/** What an item is drawn with: its pieces, or a text's or dimension's lines and letters. */
+export function outlineOf(s: Shape): Piece[] {
+  if (!isNote(s)) return piecesOf(s);
+  let out = noteOutlines.get(s);
+  if (!out) {
+    out = notePieces(s);
+    noteOutlines.set(s, out);
+  }
+  return out;
 }
 
 export type SnapKind = 'end' | 'mid' | 'centre' | 'quadrant' | 'point';
@@ -166,7 +194,10 @@ export function snapPoints(s: Shape): Array<{ p: Pt; kind: SnapKind }> {
       out.push({ p: s.p, kind: 'point' });
       break;
     case 'xline':
+    case 'text':
       out.push({ p: s.p, kind: 'point' });
+      break;
+    case 'dim':
       break;
   }
   return out;
@@ -176,7 +207,7 @@ export function snapPoints(s: Shape): Array<{ p: Pt; kind: SnapKind }> {
 export function shapeBox(s: Shape): Box | null {
   if (s.type === 'point') return boxOf([s.p]);
   let box: Box | null = null;
-  for (const p of piecesOf(s)) box = joinBoxes(box, pieceBox(p));
+  for (const p of outlineOf(s)) box = joinBoxes(box, pieceBox(p));
   return box;
 }
 
@@ -283,6 +314,10 @@ export function pieceLength(p: Piece): number {
   return total;
 }
 
+export const DIM_NAMES: Record<DimShape['kind'], string> = {
+  linear: 'Linear dimension', aligned: 'Aligned dimension', radius: 'Radius dimension', diameter: 'Diameter dimension', angle: 'Angle dimension', leader: 'Leader note',
+};
+
 export function describe(e: Ent, u: Units): string[] {
   const unitName = u === 'mm' ? 'mm' : 'in';
   const lines = [`${TYPE_NAMES[e.type]} on layer ${e.layer}`];
@@ -313,6 +348,16 @@ export function describe(e: Ent, u: Units): string[] {
     case 'xline':
       lines.push(`Through ${fmtPt(e.p, u)} at ${deg(normAngle(angleOf(e.d)))}`);
       break;
+    case 'text': {
+      const where = e.arc
+        ? `round a circle of radius ${fmt(e.arc.r, u)} centred ${fmtPt(e.arc.c, u)}, reading ${e.arc.cw ? 'clockwise along the outside' : 'anticlockwise along the inside'}`
+        : `turned ${deg(normAngle(e.angle))}, lined up ${e.align === 'centre' ? 'on its middle' : `on its ${e.align} end`}`;
+      lines.push(`“${e.text.replace(/\n/g, ' / ')}”`, `At ${fmtPt(e.p, u)}, ${fmt(e.h, u)} ${unitName} high, ${where}`);
+      break;
+    }
+    case 'dim':
+      lines.push(`${DIM_NAMES[e.kind]}: ${dimLabel(e)}`, `Words ${fmt(e.h, u)} ${unitName} high, arrows ${fmt(e.arrow, u)} ${unitName}${e.kind === 'leader' ? '' : `, ${e.dp} decimal place${e.dp === 1 ? '' : 's'}`}`);
+      break;
   }
   return lines;
 }
@@ -323,11 +368,12 @@ export class CadProblem extends Error {}
 
 const MAX_ITEMS = 200_000;
 const MAX_POINTS = 2_000_000;
+const MAX_TEXT = 10_000;
 
 /** The drawing as a .tcad file: plain JSON, numbers at full precision. */
 export function writeTcad(d: Drawing): string {
   const items = d.ents.map(({ id: _id, ...rest }) => rest);
-  return JSON.stringify({ tomlinCad: 1, units: d.units, current: d.current, layers: d.layers, items });
+  return JSON.stringify({ tomlinCad: 1, units: d.units, current: d.current, layers: d.layers, style: d.style, items });
 }
 
 const num = (v: unknown): number => {
@@ -422,6 +468,31 @@ export function readTcad(text: string): { drawing: Drawing; skipped: number } {
           s = { type: 'xline', p: pt(r.p), d: P(d.x / l, d.y / l) };
           break;
         }
+        case 'text': {
+          if (typeof r.text !== 'string' || r.text.length > MAX_TEXT) throw new CadProblem('a text in it has no words or too many');
+          if (!(num(r.h) > 0)) throw new CadProblem('a text in it has no height');
+          const align = r.align === 'centre' || r.align === 'right' ? r.align : 'left';
+          const t: TextShape = { type: 'text', p: pt(r.p), text: r.text, h: num(r.h), angle: num(r.angle), align };
+          if (r.arc && typeof r.arc === 'object') {
+            const a = r.arc as Record<string, unknown>;
+            if (!(num(a.r) > 0)) throw new CadProblem('a text round a circle in it has no radius');
+            t.arc = { c: pt(a.c), r: num(a.r), cw: a.cw !== false };
+          }
+          s = t;
+          break;
+        }
+        case 'dim': {
+          const kind = typeof r.kind === 'string' && r.kind in DIM_NAMES ? (r.kind as DimShape['kind']) : null;
+          if (!kind) {
+            skipped++;
+            break;
+          }
+          const p = pts(r.pts, kind === 'leader' ? 2 : kind === 'angle' ? 4 : 3);
+          if (!(num(r.h) > 0) || !(num(r.arrow) >= 0)) throw new CadProblem('a dimension in it has no size for its words or arrows');
+          if (typeof r.text !== 'string' || r.text.length > MAX_TEXT) throw new CadProblem('a dimension in it has too many words');
+          s = { type: 'dim', kind, pts: p, dir: num(r.dir), h: num(r.h), arrow: num(r.arrow), dp: Math.max(0, Math.min(8, Math.round(num(r.dp)))), text: r.text };
+          break;
+        }
         default:
           skipped++;
       }
@@ -432,7 +503,16 @@ export function readTcad(text: string): { drawing: Drawing; skipped: number } {
     throw error;
   }
   const current = typeof o.current === 'string' && layers.some(l => l.name === o.current) ? o.current : layers[0].name;
-  return { drawing: { units, layers, current, ents }, skipped };
+  const style = defaultStyle(units === 'inch');
+  if (o.style && typeof o.style === 'object') {
+    const st = o.style as Record<string, unknown>;
+    for (const k of ['textH', 'dimH', 'arrow'] as const) {
+      const v = st[k];
+      if (typeof v === 'number' && Number.isFinite(v) && v > 0) style[k] = v;
+    }
+    if (typeof st.dp === 'number' && Number.isInteger(st.dp) && st.dp >= 0 && st.dp <= 8) style.dp = st.dp;
+  }
+  return { drawing: { units, layers, current, ents, style }, skipped };
 }
 
 export const centreOfBox = (b: Box): Pt => P((b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2);

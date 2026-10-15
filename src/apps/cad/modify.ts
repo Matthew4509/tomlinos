@@ -576,6 +576,9 @@ export function offset(s: Shape, d: number, side: Pt): Shape | string {
       return 'A curve through points cannot be offset yet.';
     case 'point':
       return 'A point cannot be offset.';
+    case 'text':
+    case 'dim':
+      return 'Text and dimensions are not offset.';
     case 'poly':
       return offsetPoly(s, d, side);
   }

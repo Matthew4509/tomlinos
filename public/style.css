@@ -2116,6 +2116,9 @@ textarea.field { resize: vertical; font: inherit; }
 .cad-row > span { flex: 1; min-width: 0; }
 .cad-row .field, .cad-num { flex: none; width: 110px; }
 .cad-check { display: flex; align-items: center; gap: 6px; }
+.cad-row-top { align-items: flex-start; }
+.cad-row textarea.field, .cad-row select.field, .cad-row input[type="text"].field:not(.cad-num) { width: 260px; max-width: 55vw; }
+.cad-words { min-height: 4.5em; resize: vertical; font: 13px Consolas, "Courier New", monospace; }
 @media (max-width: 760px) { .cad-panel { width: 150px; } .cad-xy { min-width: 0; } }
 .cad-lock, .cad-more { flex: none; width: 20px; height: 18px; padding: 0; font-size: 12px; line-height: 1; background: none; color: #000; border: 1px solid transparent; border-radius: 0; }
 .cad-lock:hover, .cad-more:hover { border-color: #fff #808080 #808080 #fff; }

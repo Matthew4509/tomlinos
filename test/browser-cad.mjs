@@ -2,7 +2,8 @@
 // drawing area, the command line, the status bar), a closed 600 x 400 outline typed on the command line, undo and
 // redo, saving and opening again; snaps found with the pointer (middle, intersection, centre); the shapes (circle by
 // diameter, ellipse, polygon, slot, arcs, curves); construction lines and tangent lines; choosing by window, crossing
-// box and chain; move, mirror, the arrays; Utils > Measure; and no errors in the console.
+// box and chain; move, mirror, the arrays; Utils > Measure; text and dimensions (session 7); a DXF written and opened
+// again (session 8); and no errors in the console.
 // Needs the dev server on a FRESH, EMPTY data folder (the first step sets up the owner), and `npm run build` done.
 //   node test/browser-cad.mjs [http://127.0.0.1:3043] [screenshot folder]
 import { chromium } from 'playwright-core';
@@ -425,6 +426,113 @@ await step('session 6: lock, rename, colour, line type and a new layer; move ite
   await W().getByRole('button', { name: 'Information about the drawing' }).click();
   ok((await D().innerText()).includes('Layers: 5'), 'information: ' + (await D().innerText()));
   await D().getByRole('button').first().click();
+});
+
+await step('session 7: text, text round an arc, dimensions (linear, diameter, angle), a leader; changed by double-click; text exploded', async () => {
+  await closeAll();
+  await openCad();
+  await W().getByRole('button', { name: 'Rectangle: two corners' }).click();
+  await cmd('0,0', '600,400');
+  await page.keyboard.press('Escape');
+  await cmd('circle', '300,200', '50');
+  await page.keyboard.press('Escape');
+  // Text: a point, then the words in the box (two lines), on the Text layer.
+  await W().locator('.cad-tb .cad-btn[aria-label="Text"]').click();
+  await cmd('100,450');
+  await D().locator('textarea').fill('FRONT PANEL\nOak 18');
+  await D().getByRole('button', { name: 'OK' }).click();
+  eq(await count('Text'), 1, 'the text on the Text layer');
+  // A linear dimension measures across when put below, up when put to the side.
+  await W().getByRole('button', { name: 'Dimension: linear (across or up)' }).click();
+  await cmd('0,0', '600,0', '300,-50');
+  ok((await said(1)).endsWith(': 600'), 'across: ' + (await said(1)));
+  await cmd('600,0', '600,400', '680,200');
+  ok((await said(1)).endsWith(': 400'), 'up: ' + (await said(1)));
+  await page.keyboard.press('Escape');
+  // A new window opens zoomed in: the whole drawing must be on screen before points are clicked.
+  await W().getByRole('button', { name: 'Zoom fit: the whole drawing' }).click();
+  const at = await mapper();
+  // The circle's diameter, picked on its edge, the number outside.
+  await W().getByRole('button', { name: 'Dimension: diameter' }).click();
+  let p = at(350, 200);
+  await page.mouse.click(p.x, p.y);
+  await cmd('420,260');
+  ok((await said(1)).includes('Ø100'), 'diameter: ' + (await said(1)));
+  await page.keyboard.press('Escape');
+  // The corner of the rectangle: its bottom and right sides.
+  await W().getByRole('button', { name: 'Dimension: angle' }).click();
+  p = at(500, 0);
+  await page.mouse.click(p.x, p.y);
+  p = at(600, 100);
+  await page.mouse.click(p.x, p.y);
+  await cmd('560,40');
+  ok((await said(1)).includes('90°'), 'angle: ' + (await said(1)));
+  await page.keyboard.press('Escape');
+  // A leader: the arrow tip, where the words go, Done, then the words.
+  await W().getByRole('button', { name: 'Leader note (an arrow and words)' }).click();
+  await cmd('335,235', '420,330', '');
+  await D().locator('textarea').fill('Ø100 HOLE');
+  await D().getByRole('button', { name: 'OK' }).click();
+  eq(await count('Dimensions'), 5, 'four dimensions and a leader on Dimensions');
+  // Text round the circle, over the top.
+  await W().getByRole('button', { name: 'Text round an arc' }).click();
+  p = at(300, 250);
+  await page.mouse.click(p.x, p.y);
+  await cmd('300,260');
+  await D().locator('input[aria-label="Words"]').fill('TOP SIDE');
+  await D().getByRole('button', { name: 'OK' }).click();
+  eq(await count('Text'), 2, 'the arc text');
+  await shot('cad-text-dimensions');
+  // Double-click the across dimension's number: change its words (<> keeps the size).
+  p = at(300, -47);
+  await page.mouse.dblclick(p.x, p.y);
+  await D().locator('input[aria-label="Words"]').fill('<> OVERALL');
+  await D().getByRole('button', { name: 'OK' }).click();
+  await cmd('list');
+  p = at(300, -50);
+  await page.mouse.click(p.x, p.y);
+  ok((await D().innerText()).includes('Linear dimension: 600 OVERALL'), 'changed: ' + (await D().innerText()));
+  await D().getByRole('button').first().click();
+  await page.keyboard.press('Escape');
+  // Text exploded into strokes a cutter can follow; undo brings the text back.
+  p = at(103, 452);
+  await page.mouse.click(p.x, p.y);
+  eq(await chosen(), '1 chosen', 'the text chosen');
+  await W().getByRole('button', { name: 'Explode the chosen polylines, text or dimensions into lines and arcs' }).click();
+  ok((await count('Text')) > 20, 'exploded into strokes: ' + (await count('Text')));
+  await canvas().focus();
+  await page.keyboard.press('Control+z');
+  eq(await count('Text'), 2, 'undo puts the text back');
+});
+
+await step('session 8: File > Output > CAD > DXF, then the DXF opened again (layers, items, nothing left out); Save makes a .tcad', async () => {
+  await W().getByRole('menuitem', { name: 'File' }).click();
+  await page.locator('.menu').getByText('Output', { exact: true }).click();
+  await page.locator('.menu').getByText('CAD', { exact: true }).click();
+  await page.locator('.menu').getByText('DXF...', { exact: true }).click();
+  await D().getByRole('button', { name: 'Choose where...' }).click();
+  await D().locator('input[aria-label="File name"]').fill('panel.dxf');
+  await D().getByRole('button', { name: 'Save' }).click();
+  await page.locator('.toast', { hasText: 'panel.dxf' }).first().waitFor();
+  ok((await said(6)).includes('written (AutoCAD R12 DXF'), 'the notes: ' + (await said(6)));
+  await W().getByRole('menuitem', { name: 'File' }).click();
+  await page.locator('.menu').getByText('Open...', { exact: true }).click();
+  await D().locator('.pick-row', { hasText: 'panel.dxf' }).first().dblclick();
+  await page.locator('.win .win-bar', { hasText: 'panel.dxf' }).waitFor();
+  const names = await W().locator('.cad-layer-name').allInnerTexts().then(t => t.map(s => s.replace(' ✎', '')));
+  // Our layers are written in capitals (R12) and open under our own spelling, each once.
+  eq(names.filter(n => n !== '0'), ['Geometry', 'Construction', 'Dimensions', 'Text'], 'layers');
+  eq(await count('Geometry'), 2, 'the rectangle and the circle');
+  ok((await count('Dimensions')) > 20, 'dimensions as lines and text: ' + (await count('Dimensions')));
+  ok((await said(4)).includes('Read '), 'the report: ' + (await said(4)));
+  ok(!(await page.locator('.dialog').count()), 'nothing left out, so no report box');
+  await shot('cad-dxf-opened');
+  await page.keyboard.press('Control+Shift+S');
+  eq(await D().locator('input[aria-label="File name"]').inputValue(), 'panel.tcad', 'saving a DXF makes a .tcad');
+  await D().getByRole('button', { name: 'Cancel' }).click();
+  await cmd('measure', '0,0', '600,400');
+  ok((await said(1)).includes('Distance 721.11'), 'the corners are where they were: ' + (await said(1)));
+  await page.keyboard.press('Escape');
 });
 
 await step('View: grid, white background, large icons, help', async () => {
