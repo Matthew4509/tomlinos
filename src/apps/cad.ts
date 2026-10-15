@@ -26,6 +26,12 @@ import { decodeText, readDxf, writeDxf } from './cad/dxf.ts';
 import type { Align } from './cad/font.ts';
 import { defaultStyle, dimParts, textShapeStrokes, type DimShape } from './cad/notes.ts';
 import { MAX_SCALE, MIN_SCALE, fitView, render, toWorld, type View } from './cad/view.ts';
+import { OPACITIES, PHOTO_SIDE, photoBox, photoScale, pixelMatrix, placePhoto, type Photo } from './cad/photo.ts';
+import { CAD_PAPERS, CAD_SCALES, DEFAULT_SETUP, PT, drawCadPage, planPrint, scaleText, type CadPaper, type PageExtras, type PrintPlan, type PrintSetup } from './cad/print.ts';
+import { svg } from '../core/dom.ts';
+import type { Entry } from '../fs/fs.ts';
+import { SvgPainter, type Painter } from './sheet/paint.ts';
+import { PdfDocument, type PdfPage } from './sheet/pdf.ts';
 
 const SETTINGS = '/System/cad.json';
 
@@ -42,15 +48,57 @@ interface Settings {
   dxfTextAsLines: boolean;
   dxfConstruction: boolean;
   dxfHidden: boolean;
+  /** Drawings opened or saved lately, newest first. */
+  recent: string[];
+  /** How the last print was set up (the title is each drawing's own). */
+  print: Omit<PrintSetup, 'title'>;
+  /** A recovery copy of an unsaved drawing kept every two minutes. */
+  autosave: boolean;
 }
 
 const DEFAULT_SNAPS: SnapMode[] = ['end', 'mid', 'centre', 'intersection', 'quadrant'];
+const RECENT_MAX = 8;
+/** Recovery copies of unsaved drawings: kept while a window works, removed once it is saved or closed. */
+const RECOVERY = '/System/cad-recovery';
+const AUTOSAVE_MS = 2 * 60 * 1000;
+/** The recovery copies windows open now are keeping (in this page), which are not offered as left behind. */
+const liveRecovery = new Set<string>();
+/** The photo made ready for paper: its JPEG (for a PDF) and an address for it (for the preview and printing). */
+interface PaperPhoto {
+  jpeg: string;
+  url: string;
+}
+
+function toBase64(bytes: Uint8Array): string {
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+function fromBase64(b64: string): Uint8Array<ArrayBuffer> {
+  const s = atob(b64);
+  const out = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+  return out;
+}
+/** The print settings kept between windows, checked (anything odd goes back to the usual). */
+function readPrintSettings(v: unknown): Omit<PrintSetup, 'title'> {
+  const { title: _t, ...out } = DEFAULT_SETUP;
+  if (!v || typeof v !== 'object') return out;
+  const o = v as Record<string, unknown>;
+  if (typeof o.paper === 'string' && o.paper in CAD_PAPERS) out.paper = o.paper as CadPaper;
+  if (o.scale === 'fit' || (typeof o.scale === 'number' && Number.isFinite(o.scale) && o.scale > 0)) out.scale = o.scale as number | 'fit';
+  if (o.what === 'all' || o.what === 'view') out.what = o.what;
+  if (typeof o.drawnBy === 'string') out.drawnBy = o.drawnBy.slice(0, 80);
+  for (const k of ['landscape', 'colour', 'titleBlock', 'photo', 'construction'] as const) if (typeof o[k] === 'boolean') out[k] = o[k] as boolean;
+  return out;
+}
 
 
 interface Snapshot {
   ents: Ent[];
   layers: Layer[];
   current: string;
+  photo: Photo | null;
   version: number;
 }
 
@@ -62,11 +110,13 @@ export const cadApp: AppDef = {
     app.root.classList.add('cad');
 
     // ---- Settings kept between windows -----------------------------------------------------------------------------
-    const settings: Settings = { snaps: [...DEFAULT_SNAPS], arrows: false, white: false, large: false, layersPanel: true, ortho: false, gridOn: false, gridSnap: false, dxfTextAsLines: false, dxfConstruction: false, dxfHidden: false };
+    const settings: Settings = { snaps: [...DEFAULT_SNAPS], arrows: false, white: false, large: false, layersPanel: true, ortho: false, gridOn: false, gridSnap: false, dxfTextAsLines: false, dxfConstruction: false, dxfHidden: false, recent: [], print: readPrintSettings(null), autosave: true };
     try {
       const saved = JSON.parse(await shell.fs.readText(SETTINGS)) as Partial<Settings>;
       if (Array.isArray(saved.snaps)) settings.snaps = saved.snaps.filter((s): s is SnapMode => SNAP_ORDER.includes(s as SnapMode));
-      for (const k of ['arrows', 'white', 'large', 'layersPanel', 'ortho', 'gridOn', 'gridSnap', 'dxfTextAsLines', 'dxfConstruction', 'dxfHidden'] as const) if (typeof saved[k] === 'boolean') settings[k] = saved[k];
+      for (const k of ['arrows', 'white', 'large', 'layersPanel', 'ortho', 'gridOn', 'gridSnap', 'dxfTextAsLines', 'dxfConstruction', 'dxfHidden', 'autosave'] as const) if (typeof saved[k] === 'boolean') settings[k] = saved[k];
+      if (Array.isArray(saved.recent)) settings.recent = saved.recent.filter((r): r is string => typeof r === 'string').slice(0, RECENT_MAX);
+      settings.print = readPrintSettings(saved.print);
     } catch {
       // Nothing kept yet: the usual settings.
     }
@@ -87,6 +137,9 @@ export const cadApp: AppDef = {
     let loadedId = '';
     let folderHint: string | null = null;
     let dxfReport: { lines: string[]; leftOut: number } | null = null;
+    /** This window's recovery copy (set once it has kept one, or when it opened one). */
+    let recoveryPath: string | null = null;
+    let recovered = false;
     if (arg) {
       try {
         const entry = await shell.fs.stat(arg);
@@ -99,6 +152,23 @@ export const cadApp: AppDef = {
           label = baseName(arg);
           folderHint = parentPath(arg);
           dxfReport = { lines: read.report, leftOut: read.leftOut };
+        } else if (parentPath(arg) === RECOVERY) {
+          // A drawing kept before it was saved: it opens unsaved, and Save asks where (it never writes over the file it
+          // came from without asking).
+          const text = new TextDecoder().decode(raw);
+          const read = readTcad(text);
+          drawing = read.drawing;
+          let from: { path?: unknown; label?: unknown } = {};
+          try {
+            from = ((JSON.parse(text) as Record<string, unknown>).recovery ?? {}) as typeof from;
+          } catch {
+            // readTcad has read it already.
+          }
+          label = typeof from.label === 'string' && from.label ? from.label : 'Drawing';
+          folderHint = typeof from.path === 'string' ? parentPath(from.path) : null;
+          recoveryPath = arg;
+          liveRecovery.add(arg);
+          recovered = true;
         } else {
         const read = readTcad(new TextDecoder().decode(raw));
         drawing = read.drawing;
@@ -115,8 +185,10 @@ export const cadApp: AppDef = {
       }
     }
     let nextId = drawing.ents.reduce((m, e) => Math.max(m, e.id), 0) + 1;
-    let version = 0;
+    // A recovered drawing has changes that are not saved yet.
+    let version = recovered ? 1 : 0;
     let savedVersion = 0;
+    let autosavedVersion = recovered ? 1 : -1;
     let undoStack: Snapshot[] = [];
     let redoStack: Snapshot[] = [];
     const selected = new Set<number>();
@@ -157,7 +229,7 @@ export const cadApp: AppDef = {
     const f = (v: number) => fmt(v, drawing.units);
 
     // ---- Changes and undo ------------------------------------------------------------------------------------------
-    const snap = (): Snapshot => ({ ents: drawing.ents, layers: drawing.layers.map(l => ({ ...l })), current: drawing.current, version });
+    const snap = (): Snapshot => ({ ents: drawing.ents, layers: drawing.layers.map(l => ({ ...l })), current: drawing.current, photo: drawing.photo, version });
     function commit(apply: () => void): void {
       undoStack.push(snap());
       if (undoStack.length > 300) undoStack.shift();
@@ -172,6 +244,7 @@ export const cadApp: AppDef = {
       drawing.ents = s.ents;
       drawing.layers = s.layers.map(l => ({ ...l, on: showing.get(l.name) ?? l.on }));
       drawing.current = s.current;
+      drawing.photo = s.photo;
       version = s.version;
       for (const id of [...selected]) if (!drawing.ents.some(e => e.id === id)) selected.delete(id);
       afterChange();
@@ -272,6 +345,17 @@ export const cadApp: AppDef = {
       },
       finished() {
         if (tool?.done) endTool(true);
+      },
+      photo: () => drawing.photo,
+      setPhoto(ph, said) {
+        commit(() => {
+          drawing.photo = { ...ph, on: true };
+        });
+        say(said);
+        // Scaled a long way, the photo may now run off the area: show all of it.
+        const b = photoBox(ph);
+        const v = viewBox();
+        if (b.x0 < v.x0 || b.y0 < v.y0 || b.x1 > v.x1 || b.y1 > v.y1) zoomFit();
       },
     };
 
@@ -554,6 +638,9 @@ export const cadApp: AppDef = {
         `Layers: ${drawing.layers.length} (${drawing.layers.map(l => `${l.name}: ${colourName(l.colour).toLowerCase()}, ${l.on ? 'showing' : 'hidden'}${l.locked ? ', locked' : ''}`).join('; ')})`,
         box ? `Extents: from ${f(box.x0)}, ${f(box.y0)} to ${f(box.x1)}, ${f(box.y1)} (${f(box.x1 - box.x0)} x ${f(box.y1 - box.y0)} ${unitWord()})` : 'Extents: nothing drawn yet (construction lines have no ends)',
         `Chosen now: ${selected.size}`,
+        drawing.photo
+          ? `Photo: ${drawing.photo.name}, ${drawing.photo.px} x ${drawing.photo.py} pixels; bottom-left corner at ${f(drawing.photo.at.x)}, ${f(drawing.photo.at.y)}; ${Number(photoScale(drawing.photo).toPrecision(6))} ${unitWord()} a pixel; turned ${f((Math.atan2(drawing.photo.u.y, drawing.photo.u.x) * 180) / Math.PI)}°; ${drawing.photo.on ? `showing at ${Math.round(drawing.photo.opacity * 100)}%` : 'hidden'}`
+          : 'Photo: none',
       ];
       void shell.dialogs.alert('Information', lines.join('\n'));
     }
@@ -798,6 +885,434 @@ export const cadApp: AppDef = {
         await shell.report('Could not save the DXF', error);
       }
     }
+    // ---- The photo to trace -----------------------------------------------------------------------------------------
+    const PHOTO_EXTS = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'heic', 'heif'];
+    const NO_PHOTO = 'There is no photo under this drawing: View > Photo to trace > Open a photo first.';
+    /** A JPEG as an address pictures can load from (the desktop's rules allow blob: pictures, not data: ones). */
+    const jpegUrl = (b64: string) => URL.createObjectURL(new Blob([fromBase64(b64)], { type: 'image/jpeg' }));
+    let photoPicture: { jpeg: string; url: string; img: HTMLImageElement | null } | null = null;
+    signal.addEventListener('abort', () => {
+      if (photoPicture) URL.revokeObjectURL(photoPicture.url);
+    });
+    /** The photo for the drawing area once its pixels are ready (made from its JPEG the first time it is shown). */
+    function photoScene(): { ph: Photo; img: CanvasImageSource } | null {
+      const ph = drawing.photo;
+      if (!ph || !ph.on) return null;
+      if (photoPicture?.jpeg !== ph.jpeg) {
+        if (photoPicture) URL.revokeObjectURL(photoPicture.url);
+        const entry: { jpeg: string; url: string; img: HTMLImageElement | null } = { jpeg: ph.jpeg, url: jpegUrl(ph.jpeg), img: null };
+        photoPicture = entry;
+        const img = new Image();
+        img.onload = () => {
+          entry.img = img;
+          paint();
+        };
+        img.onerror = () => problem('The photo in this drawing cannot be shown: its picture is damaged. View > Photo to trace > Open a photo puts another in its place.');
+        img.src = entry.url;
+      }
+      return photoPicture.img ? { ph, img: photoPicture.img } : null;
+    }
+    /** A picture file as the JPEG kept in the drawing: its longer side at most PHOTO_SIDE pixels. */
+    async function photoFrom(raw: Uint8Array): Promise<{ jpeg: string; px: number; py: number }> {
+      let bitmap: ImageBitmap;
+      try {
+        bitmap = await createImageBitmap(new Blob([raw as Uint8Array<ArrayBuffer>]));
+      } catch {
+        throw new CadProblem('It is not a picture this browser can read (JPEG, PNG, WebP, GIF or BMP), or the file is damaged.');
+      }
+      const k = Math.min(1, PHOTO_SIDE / Math.max(bitmap.width, bitmap.height));
+      const px = Math.max(1, Math.round(bitmap.width * k));
+      const py = Math.max(1, Math.round(bitmap.height * k));
+      const cv = h('canvas', { width: String(px), height: String(py) });
+      const g = cv.getContext('2d');
+      if (!g) throw new CadProblem('The computer would not make room for the photo (it may be short of memory).');
+      g.fillStyle = '#ffffff';
+      g.fillRect(0, 0, px, py);
+      g.imageSmoothingQuality = 'high';
+      g.drawImage(bitmap, 0, 0, px, py);
+      bitmap.close();
+      const blob = await new Promise<Blob | null>(done => cv.toBlob(done, 'image/jpeg', 0.85));
+      if (!blob) throw new CadProblem('The photo could not be made into a JPEG (the computer may be short of memory).');
+      return { jpeg: toBase64(new Uint8Array(await blob.arrayBuffer())), px, py };
+    }
+    async function openPhoto(): Promise<void> {
+      if (drawing.photo && !(await shell.dialogs.confirm({ title: 'Replace the photo?', text: 'This drawing has a photo under it already. The new one takes its place (Undo brings the old one back).', ok: 'Replace it', cancel: 'Cancel' }))) return;
+      const chosen = await pickFile(shell, { title: 'Open a photo to trace over', folder: path ? parentPath(path) : folderHint ?? '/Pictures', accept: PHOTO_EXTS, ok: 'Open' });
+      setTimeout(keyboardBack, 0);
+      if (!chosen) return;
+      if (/\.(heic|heif)$/i.test(chosen)) {
+        await shell.dialogs.alert('This photo cannot be read here', 'It is an iPhone HEIC photo, which a web browser cannot open. On the iPhone, share it as a JPEG (or set Settings > Camera > Formats to Most Compatible), then open that.');
+        return;
+      }
+      let picture: { jpeg: string; px: number; py: number };
+      try {
+        picture = await photoFrom(await shell.fs.readFile(chosen));
+      } catch (error) {
+        if (error instanceof CadProblem) await shell.dialogs.alert('This photo cannot be read', error.message);
+        else await shell.report('Could not open the photo', error);
+        return;
+      }
+      const place = placePhoto(picture.px, picture.py, viewBox());
+      commit(() => {
+        drawing.photo = { ...picture, ...place, opacity: 0.5, on: true, name: baseName(chosen) };
+      });
+      say(`The photo ${baseName(chosen)} is under the drawing. Next: View > Photo to trace > Scale by a length you know (click two marks a known distance apart, then type that distance).`);
+    }
+    /** Shown or hidden, and how strongly: kept in the file, not undone (a way of looking, as a layer's tick is). */
+    function setPhotoLook(patch: Partial<Photo>, said: string): void {
+      if (!drawing.photo) return problem(NO_PHOTO);
+      drawing.photo = { ...drawing.photo, ...patch };
+      touched();
+      say(said);
+    }
+    function removePhoto(): void {
+      if (!drawing.photo) return problem(NO_PHOTO);
+      commit(() => {
+        drawing.photo = null;
+      });
+      say('Photo removed (Undo brings it back).');
+    }
+    function photoTool(id: ToolId): void {
+      if (!drawing.photo) return problem(NO_PHOTO);
+      if (!drawing.photo.on) setPhotoLook({ on: true }, 'The photo is showing again.');
+      startTool(id);
+    }
+
+    // ---- Printing to scale -------------------------------------------------------------------------------------------
+    let printTitle: string | null = null;
+    const stemOf = (name: string) => name.replace(/\.(tcad|dxf)$/i, '');
+    const today = () => new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+    const pageExtras = (photo?: PageExtras['photo']): PageExtras => ({ photo, fileLabel: stemOf(label), date: today(), units: drawing.units });
+    /** The photo as it shows on screen over white (faint as it is set), for paper: as a JPEG and as an address. */
+    async function photoForPaper(ph: Photo): Promise<PaperPhoto> {
+      const url = jpegUrl(ph.jpeg);
+      let jpeg = ph.jpeg;
+      try {
+        const img = new Image();
+        img.src = url;
+        await img.decode();
+        const cv = h('canvas', { width: String(ph.px), height: String(ph.py) });
+        const g = cv.getContext('2d');
+        if (g) {
+          g.fillStyle = '#ffffff';
+          g.fillRect(0, 0, ph.px, ph.py);
+          g.globalAlpha = ph.opacity;
+          g.drawImage(img, 0, 0);
+          const blob = await new Promise<Blob | null>(done => cv.toBlob(done, 'image/jpeg', 0.85));
+          if (blob) jpeg = toBase64(new Uint8Array(await blob.arrayBuffer()));
+        }
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+      return { jpeg, url: jpegUrl(jpeg) };
+    }
+    /** One page as an SVG at paper size: the preview, and what the browser prints. */
+    function svgPage(plan: PrintPlan, i: number, paperPhoto: PaperPhoto | null): SVGElement {
+      const painter = new SvgPainter(plan.paperW * PT, plan.paperH * PT, { class: 'cad-print-svg' });
+      const photo = paperPhoto && plan.photo
+        ? (_p: Painter, on: { tl: Pt; tr: Pt; bl: Pt }, frame: { x: number; y: number; w: number; h: number }) => {
+          const ph = plan.photo!;
+          // A picture kept inside the frame: an inner SVG cuts off what is outside it.
+          painter.root.append(svg('svg', { x: frame.x, y: frame.y, width: frame.w, height: frame.h, viewBox: `${frame.x} ${frame.y} ${frame.w} ${frame.h}`, overflow: 'hidden' },
+            svg('image', { href: paperPhoto.url, width: ph.px, height: ph.py, preserveAspectRatio: 'none', transform: `matrix(${pixelMatrix(ph, on).join(' ')})` })));
+        }
+        : undefined;
+      drawCadPage(painter, drawing, plan, i, pageExtras(photo));
+      return painter.root;
+    }
+    /** Prints through the browser: each page as a picture at paper size, everything else hidden while it prints. */
+    async function printPages(plan: PrintPlan, paperPhoto: PaperPhoto | null): Promise<void> {
+      const holder = h('div', { class: 'sheet-print', 'aria-hidden': 'true' });
+      plan.pages.forEach((_, i) => {
+        const el = svgPage(plan, i, paperPhoto);
+        el.setAttribute('width', `${plan.paperW}mm`);
+        el.setAttribute('height', `${plan.paperH}mm`);
+        holder.append(h('div', { class: `print-sheet-page cad-paper-${plan.setup.paper}-${plan.setup.landscape ? 'landscape' : 'portrait'}` }, el));
+      });
+      document.body.append(holder);
+      // The photo loads from its address a moment later: printing waits for it (four seconds at most).
+      await Promise.all([...holder.querySelectorAll('image')].map(im => new Promise<void>(done => {
+        im.addEventListener('load', () => done(), { once: true });
+        im.addEventListener('error', () => done(), { once: true });
+        setTimeout(done, 4000);
+      })));
+      document.body.classList.add('printing-sheet');
+      const cleanup = () => {
+        holder.remove();
+        document.body.classList.remove('printing-sheet');
+      };
+      window.addEventListener('afterprint', cleanup, { once: true });
+      try {
+        window.print();
+      } finally {
+        setTimeout(() => {
+          if (holder.isConnected) cleanup();
+        }, 1000);
+      }
+    }
+    async function savePdf(plan: PrintPlan, paperPhoto: PaperPhoto | null): Promise<void> {
+      try {
+        const doc = new PdfDocument();
+        doc.title = plan.setup.title.trim() || stemOf(label);
+        const photoName = paperPhoto && plan.photo ? doc.addJpeg(fromBase64(paperPhoto.jpeg), plan.photo.px, plan.photo.py) : null;
+        plan.pages.forEach((_, i) => {
+          const page: PdfPage = doc.addPage(plan.paperW * PT, plan.paperH * PT);
+          drawCadPage(page, drawing, plan, i, pageExtras(photoName ? (_p, on, frame) => page.imageAt(on.tl, on.tr, on.bl, photoName, frame) : undefined));
+        });
+        const bytes = await doc.bytes();
+        const folder = path ? parentPath(path) : folderHint ?? '/Documents';
+        let taken: string[] = [];
+        try {
+          taken = (await shell.fs.list(folder, true)).map(e => e.name);
+        } catch {
+          // Saving will say the folder is gone.
+        }
+        const chosen = await pickSave(shell, { title: 'Save a PDF to scale', folder, name: uniqueName(`${stemOf(label)}.pdf`, taken), accept: ['pdf'], ok: 'Save' });
+        setTimeout(keyboardBack, 0);
+        if (!chosen) return;
+        let target = chosen.path;
+        let replacing = chosen.replace;
+        if (!/\.pdf$/i.test(target)) {
+          target += '.pdf';
+          const existing = await shell.fs.stat(target).catch(() => null);
+          if (existing && !(await shell.dialogs.confirm({ title: 'Replace it?', text: `“${baseName(target)}” already exists. Replace it with this one?`, ok: 'Replace', danger: true, cancel: 'Cancel' }))) return;
+          replacing = !!existing;
+        }
+        const entry = await shell.fs.writeFile(target, bytes, replacing ? {} : { mustBeNew: true });
+        say(`PDF of ${plan.pages.length} page${plan.pages.length === 1 ? '' : 's'} at ${scaleText(plan.n)} saved. Print it at actual size (100%), then measure the 50 mm bar.`);
+        shell.toast(`Saved “${entry.name}”.`, { label: 'Open', run: () => void shell.openPath(target) });
+      } catch (error) {
+        await shell.report('Could not make the PDF', error);
+      }
+    }
+    /** File > Print: the paper, the scale and a title, with a preview of each page; then print, or save a PDF. */
+    async function printDialog(): Promise<void> {
+      endTool(true);
+      const st: PrintSetup = { ...settings.print, title: printTitle ?? stemOf(label) };
+      const paperSel = h('select', { class: 'field', 'aria-label': 'Paper' }, ...(Object.keys(CAD_PAPERS) as CadPaper[]).map(k => h('option', { value: k }, CAD_PAPERS[k].label)));
+      paperSel.value = st.paper;
+      const orientSel = h('select', { class: 'field', 'aria-label': 'Which way round' }, h('option', { value: 'landscape' }, 'Landscape (wide)'), h('option', { value: 'portrait' }, 'Portrait (tall)'));
+      orientSel.value = st.landscape ? 'landscape' : 'portrait';
+      const scaleSel = h('select', { class: 'field', 'aria-label': 'Scale' }, h('option', { value: 'fit' }, 'Fit to one page'),
+        ...CAD_SCALES.map(n => h('option', { value: String(n) }, n === 1 ? '1:1 (full size)' : `1:${n}`)), h('option', { value: 'other' }, 'Other (1:n)'));
+      const otherIn = h('input', { type: 'text', inputmode: 'decimal', class: 'field cad-num', 'aria-label': 'Scale: the number after 1:', autocomplete: 'off' });
+      const otherRow = h('label', { class: 'cad-row' }, h('span', {}, 'Scale 1:'), otherIn);
+      if (st.scale === 'fit') scaleSel.value = 'fit';
+      else if (CAD_SCALES.includes(st.scale)) scaleSel.value = String(st.scale);
+      else {
+        scaleSel.value = 'other';
+        otherIn.value = String(st.scale);
+      }
+      const whatSel = h('select', { class: 'field', 'aria-label': 'What to print' }, h('option', { value: 'all' }, 'The whole drawing'), h('option', { value: 'view' }, 'What the window shows'));
+      whatSel.value = st.what;
+      const tick = (text: string, on1: boolean) => {
+        const box = h('input', { type: 'checkbox', checked: on1 });
+        return { box, row: h('label', { class: 'cad-check' }, box, ` ${text}`) };
+      };
+      const colour = tick('Each layer in its own colour (off: everything in black)', st.colour);
+      const titleBlock = tick('Title block along the bottom (with a 50 mm bar to check the scale)', st.titleBlock);
+      const photoTick = tick('The photo under the drawing', st.photo);
+      const xlineTick = tick('Construction lines', st.construction);
+      const titleIn = h('input', { type: 'text', class: 'field', value: st.title, 'aria-label': 'Title', autocomplete: 'off', maxlength: '120' });
+      const drawnIn = h('input', { type: 'text', class: 'field', value: st.drawnBy, 'aria-label': 'Drawn by', autocomplete: 'off', maxlength: '80' });
+      const preview = h('div', { class: 'cad-print-preview' });
+      const pageLabel = h('span', { class: 'cad-print-page' });
+      const prevBtn = h('button', { type: 'button', class: 'cad-mini' }, '◀ Page');
+      const nextBtn = h('button', { type: 'button', class: 'cad-mini' }, 'Page ▶');
+      const summary = h('p', { class: 'dialog-detail cad-print-summary', role: 'status' });
+      const problemEl = h('p', { class: 'dialog-problem', role: 'alert' });
+      const hasXlines = drawing.ents.some(e => e.type === 'xline');
+      const form = h('div', { class: 'cad-print-form' },
+        h('label', { class: 'cad-row' }, h('span', {}, 'Paper'), paperSel),
+        h('label', { class: 'cad-row' }, h('span', {}, 'Which way round'), orientSel),
+        h('label', { class: 'cad-row' }, h('span', {}, 'Scale'), scaleSel), otherRow,
+        h('label', { class: 'cad-row' }, h('span', {}, 'Print'), whatSel),
+        h('label', { class: 'cad-row' }, h('span', {}, 'Title'), titleIn),
+        h('label', { class: 'cad-row' }, h('span', {}, 'Drawn by'), drawnIn),
+        titleBlock.row, colour.row, drawing.photo ? photoTick.row : null, hasXlines ? xlineTick.row : null,
+        h('p', { class: 'dialog-detail' }, 'To come out to size: in the print box choose Actual size or Scale 100% (not Fit to page), and print a PDF the same way. Then measure the 50 mm bar with a ruler.'));
+      const body = h('div', { class: 'cad-dialog cad-print' }, form, h('div', { class: 'cad-print-side' }, preview, h('div', { class: 'cad-print-nav' }, prevBtn, pageLabel, nextBtn), summary), problemEl);
+      const paperPhoto = drawing.photo ? await photoForPaper(drawing.photo).catch(() => null) : null;
+      let pageAt = 0;
+      let plan: PrintPlan | string = '';
+      // Read through a call: the plan is set inside refresh(), which a plain read here would not see.
+      const planNow = (): PrintPlan | string => plan;
+      const read = (): PrintSetup | string => {
+        let scale: number | 'fit';
+        if (scaleSel.value === 'fit') scale = 'fit';
+        else if (scaleSel.value === 'other') {
+          const v = parseNumber(otherIn.value);
+          if (v === null || !(v > 0) || v > 1e6) return 'Type the scale as the number after 1: (25 for 1:25; 0.5 for twice full size).';
+          scale = v;
+        } else scale = Number(scaleSel.value);
+        return {
+          paper: paperSel.value as CadPaper, landscape: orientSel.value === 'landscape', scale, what: whatSel.value === 'view' ? 'view' : 'all',
+          colour: colour.box.checked, titleBlock: titleBlock.box.checked, title: titleIn.value.trim().slice(0, 120), drawnBy: drawnIn.value.trim().slice(0, 80),
+          photo: !!drawing.photo && photoTick.box.checked, construction: hasXlines && xlineTick.box.checked,
+        };
+      };
+      const refresh = () => {
+        otherRow.hidden = scaleSel.value !== 'other';
+        problemEl.textContent = '';
+        const setup = read();
+        plan = typeof setup === 'string' ? setup : planPrint(drawing, setup, viewBox());
+        if (typeof plan === 'string') {
+          preview.replaceChildren(h('p', { class: 'cad-print-none' }, plan));
+          summary.textContent = '';
+          pageLabel.textContent = '';
+          prevBtn.disabled = nextBtn.disabled = true;
+          return;
+        }
+        pageAt = Math.max(0, Math.min(pageAt, plan.pages.length - 1));
+        preview.replaceChildren(svgPage(plan, pageAt, paperPhoto));
+        const paperName = CAD_PAPERS[plan.setup.paper].label.replace(/ \(.*/, '');
+        summary.textContent = plan.pages.length > 1
+          ? `At ${scaleText(plan.n)} the drawing takes ${plan.pages.length} pages of ${paperName} (${plan.cols} across, ${plan.rows} down). Trim each page on its frame and tape them edge to edge.`
+          : `At ${scaleText(plan.n)} the drawing fits on one page of ${paperName}.${plan.setup.scale === 'fit' ? ' Fit is not a standard scale: measure the drawing’s own dimensions, not the paper.' : ''}`;
+        pageLabel.textContent = `Page ${pageAt + 1} of ${plan.pages.length}`;
+        prevBtn.disabled = pageAt === 0;
+        nextBtn.disabled = pageAt >= plan.pages.length - 1;
+      };
+      const done = new AbortController();
+      on(body, 'input', refresh, done.signal);
+      on(body, 'change', refresh, done.signal);
+      on(prevBtn, 'click', () => {
+        pageAt--;
+        refresh();
+      }, done.signal);
+      on(nextBtn, 'click', () => {
+        pageAt++;
+        refresh();
+      }, done.signal);
+      refresh();
+      try {
+        for (;;) {
+          const answer = await shell.dialogs.ask<'print' | 'pdf' | null>({
+            title: 'Print to scale', body,
+            buttons: [{ label: 'Print...', value: 'print', primary: true }, { label: 'Save as PDF...', value: 'pdf' }, { label: 'Cancel', value: null }],
+            cancel: null, focus: () => scaleSel,
+          });
+          if (!answer) return;
+          refresh();
+          const got = planNow();
+          if (typeof got === 'string') {
+            problemEl.textContent = got;
+            continue;
+          }
+          const { title, ...keep } = got.setup;
+          settings.print = keep;
+          printTitle = title;
+          keepSettings();
+          if (answer === 'print') await printPages(got, paperPhoto);
+          else await savePdf(got, paperPhoto);
+          return;
+        }
+      } finally {
+        done.abort();
+        if (paperPhoto) URL.revokeObjectURL(paperPhoto.url);
+        setTimeout(keyboardBack, 0);
+      }
+    }
+
+    // ---- Recent drawings, and recovery copies ---------------------------------------------------------------------
+    /** Puts a drawing at the top of File > Recent drawings (merged with what other windows added meanwhile). */
+    async function remember(p: string): Promise<void> {
+      shell.native?.remember(p);
+      let recent = settings.recent;
+      try {
+        const saved = JSON.parse(await shell.fs.readText(SETTINGS)) as Partial<Settings>;
+        if (Array.isArray(saved.recent)) recent = saved.recent.filter((r): r is string => typeof r === 'string');
+      } catch {
+        // Nothing kept yet.
+      }
+      settings.recent = [p, ...recent.filter(r => r !== p)].slice(0, RECENT_MAX);
+      keepSettings();
+    }
+    async function openRecent(p: string): Promise<void> {
+      const entry = await shell.fs.stat(p).catch(() => null);
+      if (!entry || entry.kind !== 'file') {
+        settings.recent = settings.recent.filter(r => r !== p);
+        keepSettings();
+        return problem(`${baseName(p)} is not in ${parentPath(p) || 'its folder'} any more (moved, renamed or deleted), so it was taken off the list.`);
+      }
+      const untouched = !path && !drawing.ents.length && !undoStack.length && !drawing.photo;
+      await shell.openApp('cad', p);
+      if (untouched) app.close();
+    }
+    /** Keeps a copy of a drawing with unsaved changes, so a flat battery or a closed page loses two minutes at most. */
+    async function autosave(): Promise<void> {
+      if (!settings.autosave || version === savedVersion || version === autosavedVersion) return;
+      const v = version;
+      try {
+        await shell.fs.ensureFolder(RECOVERY, { hidden: true });
+        recoveryPath ??= `${RECOVERY}/${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}.tcad`;
+        liveRecovery.add(recoveryPath);
+        await shell.fs.writeText(recoveryPath, writeTcad(drawing, { recovery: { label, path } }), { hidden: true });
+        autosavedVersion = v;
+      } catch {
+        // Not kept this time: it is tried again in two minutes.
+      }
+    }
+    /** The drawing was saved, or closed on purpose: its recovery copy is no longer needed. */
+    function dropRecovery(): void {
+      const p = recoveryPath;
+      recoveryPath = null;
+      autosavedVersion = -1;
+      if (!p) return;
+      liveRecovery.delete(p);
+      void shell.fs.remove([p]).catch(() => {
+        // Left behind: it is offered the next time TOMLIN CAD opens, and can be deleted there.
+      });
+    }
+    /** Copies kept by windows that stopped before their drawing was saved: offered to open (or delete). */
+    async function offerRecovery(asked: boolean): Promise<void> {
+      let left: Entry[] = [];
+      try {
+        left = (await shell.fs.list(RECOVERY, true)).filter(e => e.kind === 'file' && /\.tcad$/i.test(e.name) && !liveRecovery.has(`${RECOVERY}/${e.name}`));
+      } catch {
+        // No recovery folder yet: nothing was left behind.
+      }
+      if (!left.length) {
+        if (asked) await shell.dialogs.alert('Nothing to recover', 'Every drawing was saved or closed on purpose: there is no unsaved copy left behind.');
+        return;
+      }
+      left.sort((a, b) => b.modified - a.modified);
+      const lines: string[] = [];
+      for (const e of left) {
+        let name = 'Drawing';
+        try {
+          const r = (JSON.parse(await shell.fs.readText(`${RECOVERY}/${e.name}`)) as { recovery?: { label?: unknown } }).recovery;
+          if (typeof r?.label === 'string' && r.label) name = r.label;
+        } catch {
+          // Shown as "Drawing"; opening it says what is wrong.
+        }
+        lines.push(`${name}: kept ${new Date(e.modified).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`);
+      }
+      const one = left.length === 1;
+      const body = h('div', { class: 'cad-dialog' },
+        h('p', {}, `TOMLIN CAD stopped before ${one ? 'this drawing was' : 'these drawings were'} saved (a flat battery, or the page was closed). The last copy kept of ${one ? 'it' : 'each'}:`),
+        h('ul', { class: 'cad-recover-list' }, ...lines.map(t => h('li', {}, t))),
+        h('p', { class: 'dialog-detail' }, `${one ? 'It opens' : 'Each opens'} as a drawing not saved yet: Save asks where to keep it.`));
+      const answer = await shell.dialogs.ask<'open' | 'delete' | null>({
+        title: 'Drawings not saved', body,
+        buttons: [{ label: one ? 'Open it' : 'Open them', value: 'open', primary: true }, { label: one ? 'Delete it' : 'Delete them', value: 'delete', danger: true }, { label: 'Later', value: null }],
+        cancel: null,
+      });
+      if (answer === 'open') {
+        const untouched = !path && !drawing.ents.length && !undoStack.length && !drawing.photo;
+        for (const e of left) await shell.openApp('cad', `${RECOVERY}/${e.name}`);
+        if (untouched) app.close();
+      } else if (answer === 'delete') {
+        await shell.fs.remove(left.map(e => `${RECOVERY}/${e.name}`)).catch(error => shell.report('Could not delete them', error));
+      }
+    }
+    function setAutosave(on1: boolean): void {
+      settings.autosave = on1;
+      keepSettings();
+      say(on1 ? 'A recovery copy of unsaved changes is kept every two minutes.' : 'No recovery copies: only Save keeps your drawing.');
+      if (!on1) dropRecovery();
+    }
+
     async function arrayRect(): Promise<void> {
       const sel = drawing.ents.filter(e => selected.has(e.id));
       if (!sel.length) return problem('Choose the items to copy first (click them or drag a box), then Edit > Arrays > Rectangular.');
@@ -877,7 +1392,9 @@ export const cadApp: AppDef = {
         'Text (Geometry > Text): words in TOMLIN CAD’s own single-line letters, any height and angle, lined up left, middle or right, several lines, or round an arc or circle. CAD > Explode turns text into lines a cutter can follow.',
         'Dimensions (Utils > Dimensions): linear (across or up), horizontal, vertical, aligned, radius, diameter, angle and leader notes, on the Dimensions layer. They measure their own points: move or scale one and its number follows (they are not tied to the shapes they measure). Double-click text or a dimension to change it.',
         'DXF: File > Open reads DXF of any release saved as text (from CAM programs, AutoCAD and others); File > Output > CAD > DXF writes AutoCAD R12 DXF for the CAM program. What a DXF holds that TOMLIN CAD does not draw (hatches, pictures, 3D) is listed when it opens.',
-        'Saves its own drawings (.tcad). Not here yet: a CAM program’s own drawing files (open their DXF instead), outline (hollow) letters, printing and photo tracing. Never here: CAM (toolpaths, G-code), 3D.',
+        'Photo to trace (View > Photo to trace, or the photo button): open a phone photo under the drawing, scale it by clicking two marks a known distance apart (a tape measure in the photo) and typing that distance, line up an edge that should run straight, move it, and draw over it. It stays in the .tcad, can be hidden or made fainter, and never goes into a DXF. Take the photo square on: TOMLIN CAD does not straighten a photo taken at a slant.',
+        'Print to scale (File > Print to scale, Ctrl+P): A4 to A1, Letter and Tabloid; Fit, 1:1, 1:2, 1:5, 1:10 and more, or any 1:n; too big for one sheet, it prints across several to tape together. A title block carries the title, scale, date, page and a 50 mm bar to check with a ruler. Print at actual size (100%). The same pages save as a PDF.',
+        'Saves its own drawings (.tcad), with File > Recent drawings, and keeps a recovery copy of unsaved changes every two minutes (offered back the next time TOMLIN CAD opens, if a flat battery or a closed page stopped it). Not here yet: a CAM program’s own drawing files (open their DXF instead) and outline (hollow) letters. Never here: CAM (toolpaths, G-code), 3D.',
       ].join('\n\n'));
     }
     function showKeys(): void {
@@ -885,7 +1402,7 @@ export const cadApp: AppDef = {
         'Points: type X, Enter, Y, Enter (an empty box is 0). Or type a whole point in the X box: 600,400   @dx,dy (from the last point)   @length<angle.',
         'Done, a right-click, or Enter in the drawing: finish a tool (a polyline, a curve), or start the last tool again.   Escape: stop the tool, or clear the choice.',
         'F3 snaps on and off   F7 grid   F8 ortho (straight across or up)   F9 snap to the grid   Tab: the next snap under the pointer.',
-        'Ctrl+Z undo   Ctrl+Y redo   Ctrl+A choose all   Delete: delete the chosen items   Ctrl+S save   Ctrl+Shift+S save as   Ctrl+O open.',
+        'Ctrl+Z undo   Ctrl+Y redo   Ctrl+A choose all   Delete: delete the chosen items   Ctrl+S save   Ctrl+Shift+S save as   Ctrl+O open   Ctrl+P print to scale.',
         'Mouse wheel: zoom at the pointer.   Middle button drag, or the Pan tool: move the view.   Double-click an item: choose its chain.',
         'Alt and the underlined letter, or F10: the menus.   Start typing anywhere in the drawing to use the command line.',
       ].join('\n\n'));
@@ -902,6 +1419,8 @@ export const cadApp: AppDef = {
         loadedId = entry.id;
         savedVersion = v;
         refreshTitle();
+        if (version === savedVersion) dropRecovery();
+        void remember(path);
         shell.toast(`Saved “${entry.name}”.`);
         return true;
       } catch (error) {
@@ -937,6 +1456,8 @@ export const cadApp: AppDef = {
         folderHint = null;
         savedVersion = v;
         refreshTitle();
+        if (version === savedVersion) dropRecovery();
+        void remember(target);
         shell.toast(`Saved “${entry.name}”.`);
         return true;
       } catch (error) {
@@ -948,7 +1469,7 @@ export const cadApp: AppDef = {
       const chosen = await pickFile(shell, { title: 'Open a drawing (TOMLIN CAD or DXF)', folder: path ? parentPath(path) : folderHint ?? '/Documents', accept: ['tcad', 'dxf'], ok: 'Open' });
       if (!chosen) return;
       // A new window nothing was drawn in gives way to the drawing opened from it.
-      const untouched = !path && !drawing.ents.length && !undoStack.length;
+      const untouched = !path && !drawing.ents.length && !undoStack.length && !drawing.photo;
       await shell.openApp('cad', chosen);
       if (untouched) app.close();
     }
@@ -969,7 +1490,18 @@ export const cadApp: AppDef = {
     }
     function zoomFit(): void {
       const shown = drawing.ents.filter(e => layerOf(e.layer)?.on);
-      setView(fitView(boxOfShapes(shown), canvasW(), canvasH()));
+      let b = boxOfShapes(shown);
+      if (drawing.photo?.on) {
+        const pb = photoBox(drawing.photo);
+        b = b ? { x0: Math.min(b.x0, pb.x0), y0: Math.min(b.y0, pb.y0), x1: Math.max(b.x1, pb.x1), y1: Math.max(b.y1, pb.y1) } : pb;
+      }
+      setView(fitView(b, canvasW(), canvasH()));
+    }
+    /** The part of the drawing the window shows. */
+    function viewBox(): { x0: number; y0: number; x1: number; y1: number } {
+      const a = toWorld(view, canvasW(), canvasH(), P(0, 0));
+      const b = toWorld(view, canvasW(), canvasH(), P(canvasW(), canvasH()));
+      return { x0: Math.min(a.x, b.x), y0: Math.min(a.y, b.y), x1: Math.max(a.x, b.x), y1: Math.max(a.y, b.y) };
     }
     function zoomBy(k: number, at?: Pt): void {
       const w = canvasW();
@@ -1016,7 +1548,7 @@ export const cadApp: AppDef = {
         }
         render(c, w, hgt, view, {
           ents: drawing.ents, layers: layerMap(), selected, hover, preview, snap: snaps.length && pointerIn ? snaps[snapAt % snaps.length] : null,
-          box, grid: gridSpacing, gridOn: settings.gridOn, white: settings.white, units: drawing.units, arrows: settings.arrows,
+          box, grid: gridSpacing, gridOn: settings.gridOn, white: settings.white, units: drawing.units, arrows: settings.arrows, photo: photoScene(),
         });
       });
     }
@@ -1196,8 +1728,16 @@ export const cadApp: AppDef = {
       refreshPrompt();
     });
 
+    // The photo button opens the photo's menu (open, scale, line up, move, show).
+    const photoBtn = h('button', { type: 'button', class: 'cad-btn', title: 'Photo to trace: open, scale, line up, move', 'aria-label': 'Photo to trace', 'aria-haspopup': 'menu' }, cadIcon('photo'));
+    on(photoBtn, 'mousedown', (e: MouseEvent) => e.preventDefault(), signal);
+    on(photoBtn, 'click', () => {
+      const r = photoBtn.getBoundingClientRect();
+      shell.menus.show(photoMenu(), r.left, r.bottom, { returnFocus: canvas });
+    }, signal);
     const row1 = h('div', { class: 'cad-tb', role: 'toolbar', 'aria-label': 'Standard and drawing tools' },
-      btn('new', 'New drawing', () => void shell.openApp('cad')), btn('open', 'Open... (Ctrl+O)', () => void openDrawing()), btn('save', 'Save (Ctrl+S)', () => void save()), btn('dxfOut', 'Output a DXF for the CAM program (File > Output > CAD > DXF)', () => void outputDxf()), sep(),
+      btn('new', 'New drawing', () => void shell.openApp('cad')), btn('open', 'Open... (Ctrl+O)', () => void openDrawing()), btn('save', 'Save (Ctrl+S)', () => void save()), btn('dxfOut', 'Output a DXF for the CAM program (File > Output > CAD > DXF)', () => void outputDxf()),
+      btn('print', 'Print or save a PDF to scale (Ctrl+P)', () => void printDialog()), photoBtn, sep(),
       btn('undo', 'Undo (Ctrl+Z)', undo), btn('redo', 'Redo (Ctrl+Y)', redo), sep(),
       toolBtn('line', 'line'), toolBtn('polyline', 'polyline'), toolBtn('rect', 'rect'), toolBtn('circle', 'circle-cr'), toolBtn('arc', 'arc-3p'), toolBtn('ellipse', 'ellipse'),
       toolBtn('polygon', 'polygon-in'), toolBtn('slot', 'slot'), toolBtn('spline', 'spline'), toolBtn('point', 'point'), sep(),
@@ -1453,13 +1993,32 @@ export const cadApp: AppDef = {
     const fileMenu = (): MenuItem[] => [
       { label: 'New', action: () => void shell.openApp('cad') },
       { label: 'Open...', hint: 'Ctrl+O', action: () => void openDrawing() },
+      sub_('Recent drawings', settings.recent.length
+        ? settings.recent.map(r => ({ label: `${baseName(r)}   (${parentPath(r) || '/'})`, action: () => void openRecent(r) }))
+        : [{ label: 'None yet', disabled: true }]),
       { separator: true },
       { label: 'Save', hint: 'Ctrl+S', action: () => void save() },
       { label: 'Save as...', hint: 'Ctrl+Shift+S', action: () => void saveAs() },
       { separator: true },
-      sub_('Output', [sub_('CAD', [{ label: 'DXF...', action: () => void outputDxf() }])]),
+      { label: 'Print to scale...', hint: 'Ctrl+P', action: () => void printDialog() },
+      sub_('Output', [sub_('CAD', [{ label: 'DXF...', action: () => void outputDxf() }]), { label: 'PDF to scale...', action: () => void printDialog() }]),
+      { separator: true },
+      { label: 'Keep a recovery copy every 2 minutes', checked: settings.autosave, action: () => setAutosave(!settings.autosave) },
+      { label: 'Drawings not saved...', action: () => void offerRecovery(true) },
       { separator: true },
       { label: 'Close', action: () => app.close() },
+    ];
+    const photoMenu = (): MenuItem[] => [
+      { label: 'Open a photo...', action: () => void openPhoto() },
+      { separator: true },
+      { label: 'Scale by a length you know', disabled: !drawing.photo, action: () => photoTool('photo-scale') },
+      { label: 'Line up an edge (straight across or up)', disabled: !drawing.photo, action: () => photoTool('photo-turn') },
+      { label: 'Move', disabled: !drawing.photo, action: () => photoTool('photo-move') },
+      { separator: true },
+      { label: 'Show the photo', checked: !!drawing.photo?.on, disabled: !drawing.photo, action: () => setPhotoLook({ on: !drawing.photo?.on }, drawing.photo?.on ? 'The photo is hidden (it stays in the drawing).' : 'The photo is showing.') },
+      sub_('How strongly it shows', OPACITIES.map(o => ({ label: `${Math.round(o * 100)}%`, checked: drawing.photo?.opacity === o, disabled: !drawing.photo, action: () => setPhotoLook({ opacity: o, on: true }, `The photo shows at ${Math.round(o * 100)}%.`) }))),
+      { separator: true },
+      { label: 'Remove the photo', disabled: !drawing.photo, danger: true, action: removePhoto },
     ];
     const editMenu = (): MenuItem[] => [
       { label: 'Undo', hint: 'Ctrl+Z', disabled: !undoStack.length, action: undo },
@@ -1516,6 +2075,8 @@ export const cadApp: AppDef = {
       { label: 'Large icons', checked: settings.large, action: () => setLarge(!settings.large) },
       { label: 'Layers panel', checked: settings.layersPanel, action: () => setPanel(!settings.layersPanel) },
       { label: 'Show direction', checked: settings.arrows, action: () => setArrows(!settings.arrows) },
+      { separator: true },
+      sub_('Photo to trace', photoMenu()),
     ];
     const geometryMenu = (): MenuItem[] => [
       item('line'), item('polyline'),
@@ -1644,6 +2205,10 @@ export const cadApp: AppDef = {
         e.preventDefault();
         return void openDrawing();
       }
+      if (ctrl && k === 'p') {
+        e.preventDefault();
+        return void printDialog();
+      }
       if (ctrl && !inInput && (k === 'z' || k === 'y')) {
         e.preventDefault();
         return k === 'y' || e.shiftKey ? redo() : undo();
@@ -1719,12 +2284,30 @@ export const cadApp: AppDef = {
     drawLayers();
     refreshTitle();
     refreshStatus();
-    if (dxfReport) {
+    if (arg && !recovered) void remember(arg);
+    const autosaveTimer = window.setInterval(() => void autosave(), AUTOSAVE_MS);
+    signal.addEventListener('abort', () => clearInterval(autosaveTimer));
+    // The lid closing or the page going to the background keeps a copy at once.
+    on(document, 'visibilitychange', () => {
+      if (document.visibilityState === 'hidden') void autosave();
+    }, signal);
+    app.onClose(async () => {
+      if (version === savedVersion) {
+        dropRecovery();
+        return true;
+      }
+      const ok = await shell.dialogs.confirm({ title: 'Close without saving?', text: `“${label}” has changes that are not saved. If you close it they will be lost.`, ok: 'Close without saving', danger: true, cancel: 'Keep it open' });
+      if (ok) dropRecovery();
+      return ok;
+    });
+    if (recovered) say(`Recovered ${label}: a copy kept before it was saved. Save it to keep it (Save asks where).`);
+    else if (dxfReport) {
       say(`Opened ${label} (a DXF; Save makes a TOMLIN CAD drawing beside it).`);
       for (const line of dxfReport.lines) say(line);
       if (dxfReport.leftOut) void shell.dialogs.alert(`Opened ${label}`, dxfReport.lines.join('\n\n'));
     } else say(path ? `Opened ${label}.` : 'A new drawing, in millimetres. Choose a tool, or type one such as line.');
     canvas.focus({ preventScroll: true });
     paint();
+    if (!arg) void offerRecovery(false);
   },
 };

@@ -3,9 +3,13 @@
 // redo, saving and opening again; snaps found with the pointer (middle, intersection, centre); the shapes (circle by
 // diameter, ellipse, polygon, slot, arcs, curves); construction lines and tangent lines; choosing by window, crossing
 // box and chain; move, mirror, the arrays; Utils > Measure; text and dimensions (session 7); a DXF written and opened
-// again (session 8); and no errors in the console.
+// again (session 8); a photo traced over, printing to scale, recent drawings and a recovery copy (session 9); and no
+// errors in the console.
 // Needs the dev server on a FRESH, EMPTY data folder (the first step sets up the owner), and `npm run build` done.
 //   node test/browser-cad.mjs [http://127.0.0.1:3043] [screenshot folder]
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { chromium } from 'playwright-core';
 
 const BASE = process.argv[2] ?? 'http://127.0.0.1:3043';
@@ -535,6 +539,196 @@ await step('session 8: File > Output > CAD > DXF, then the DXF opened again (lay
   await page.keyboard.press('Escape');
 });
 
+/** A file from this computer into a folder of the desktop, through File Explorer's Upload. */
+async function upload(file, folder) {
+  await page.locator('#desktop .item', { hasText: 'My Files' }).first().dblclick();
+  const w = page.locator('.win', { has: page.locator('.explorer') }).first();
+  await w.waitFor();
+  await w.locator('.explorer-view').focus();
+  await page.keyboard.press('Control+L');
+  await w.locator('input.address').fill(folder);
+  await w.locator('input.address').press('Enter');
+  await w.locator('.crumb', { hasText: new RegExp(`^${folder.slice(1)}$`) }).waitFor();
+  const chooser = page.waitForEvent('filechooser');
+  await w.getByRole('button', { name: 'Upload' }).click();
+  (await chooser).setFiles([file]);
+  await w.locator('.item', { hasText: file.split(/[\\/]/).pop().replace(/\.[^.]+$/, '') }).first().waitFor({ timeout: 15000 });
+  await w.getByRole('button', { name: 'Close', exact: true }).first().click();
+}
+
+await step('session 9: a crooked photo lined up, scaled from a known length and moved to 0,0, then traced; kept in the .tcad; printed to scale (pages, preview, PDF); recent drawings; a recovery copy offered after the page closed', async () => {
+  await closeAll();
+  // A "photo" of a benchtop 1600 x 800 mm, 800 pixels wide, taken 3 degrees crooked: its bottom corners are red dots.
+  const PX = 1200;
+  const PY = 800;
+  const phi = (3 * Math.PI) / 180;
+  const BL = [200, 600];
+  const BR = [200 + 800 * Math.cos(phi), 600 - 800 * Math.sin(phi)];
+  const jpeg = await page.evaluate(({ PX, PY, BL, BR, phi }) => {
+    const c = document.createElement('canvas');
+    c.width = PX;
+    c.height = PY;
+    const g = c.getContext('2d');
+    g.fillStyle = '#d8c8a8';
+    g.fillRect(0, 0, PX, PY);
+    const up = [-400 * Math.sin(phi), -400 * Math.cos(phi)];
+    g.fillStyle = '#7a5a30';
+    g.beginPath();
+    g.moveTo(BL[0], BL[1]);
+    g.lineTo(BR[0], BR[1]);
+    g.lineTo(BR[0] + up[0], BR[1] + up[1]);
+    g.lineTo(BL[0] + up[0], BL[1] + up[1]);
+    g.closePath();
+    g.fill();
+    g.fillStyle = '#ff0000';
+    for (const q of [BL, BR]) {
+      g.beginPath();
+      g.arc(q[0], q[1], 6, 0, 7);
+      g.fill();
+    }
+    return c.toDataURL('image/jpeg', 0.92).split(',')[1];
+  }, { PX, PY, BL, BR, phi });
+  const dir = mkdtempSync(join(tmpdir(), 'cad-walk-'));
+  try {
+    writeFileSync(join(dir, 'bench.jpg'), Buffer.from(jpeg, 'base64'));
+    await upload(join(dir, 'bench.jpg'), '/Pictures');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  await openCad();
+  const photoMenu = async item => {
+    await W().getByRole('button', { name: 'Photo to trace' }).click();
+    await page.locator('.menu').getByText(item, { exact: true }).click();
+  };
+  await photoMenu('Open a photo...');
+  await D().locator('.pick-row', { hasText: 'bench.jpg' }).first().dblclick();
+  await W().locator('.cad-said', { hasText: 'is under the drawing' }).waitFor();
+  /** The photo's corner, size of a pixel and turn, as Utils > Information gives them. */
+  const info = async () => {
+    await W().getByRole('button', { name: 'Information about the drawing' }).click();
+    const t = await D().innerText();
+    await D().getByRole('button').first().click();
+    const m = /bottom-left corner at (-?[\d.]+), (-?[\d.]+); ([\d.e-]+) mm a pixel; turned (-?[\d.]+)°/.exec(t);
+    ok(m, 'the photo in Information: ' + t);
+    return { at: [Number(m[1]), Number(m[2])], s: Number(m[3]), turn: Number(m[4]) };
+  };
+  /** Where a pixel of the photo is on the drawing. */
+  const worldOf = (ph, [i, j]) => {
+    const a = (ph.turn * Math.PI) / 180;
+    const lx = i * ph.s;
+    const ly = (PY - j) * ph.s;
+    return [ph.at[0] + lx * Math.cos(a) - ly * Math.sin(a), ph.at[1] + lx * Math.sin(a) + ly * Math.cos(a)];
+  };
+  /** Starts a photo tool and clicks photo pixels with the snaps off (the points are on the photo, not on anything drawn). */
+  const clickPixels = async (ph, item, pixels) => {
+    await W().getByRole('button', { name: 'Zoom fit: the whole drawing' }).click();
+    // Worked out first: finding the screen's scale uses the Line tool.
+    const at = await mapper();
+    await photoMenu(item);
+    await canvas().focus();
+    await page.keyboard.press('F3');
+    for (const px of pixels) {
+      const [x, y] = worldOf(ph, px);
+      const q = at(x, y);
+      await page.mouse.click(q.x, q.y);
+    }
+    await page.keyboard.press('F3');
+  };
+  let ph = await info();
+  eq(ph.turn, 0, 'laid straight');
+  // Line up the crooked bottom edge: the photo turns 3 degrees back.
+  await clickPixels(ph, 'Line up an edge (straight across or up)', [BL, BR]);
+  ok((await said(4)).includes('clockwise: that edge now runs straight across'), 'lined up: ' + (await said(4)));
+  ph = await info();
+  ok(Math.abs(ph.turn + 3) < 0.3, 'turned back about 3°: ' + ph.turn);
+  // Scale: the two corners are 1600 mm apart, so a pixel is 2 mm.
+  await clickPixels(ph, 'Scale by a length you know', [BL, BR]);
+  await cmd('1600');
+  ok((await said(4)).includes('1600 apart'), 'scaled: ' + (await said(4)));
+  ph = await info();
+  ok(Math.abs(ph.s - 2) < 0.02, 'about 2 mm a pixel: ' + ph.s);
+  // Move: the bottom-left corner to 0,0. The other corner is then at 1600,0.
+  await clickPixels(ph, 'Move', [BL]);
+  await cmd('0,0');
+  ph = await info();
+  const bl = worldOf(ph, BL);
+  const br = worldOf(ph, BR);
+  ok(Math.hypot(bl[0], bl[1]) < 2, 'its corner at 0,0: ' + bl);
+  ok(Math.abs(br[0] - 1600) < 3 && Math.abs(br[1]) < 3, 'the other corner at 1600,0: ' + br);
+  // Trace the benchtop over it.
+  await W().getByRole('button', { name: 'Rectangle: two corners' }).click();
+  await cmd('0,0', '1600,800');
+  await page.keyboard.press('Escape');
+  await W().getByRole('button', { name: 'Zoom fit: the whole drawing' }).click();
+  await shot('cad-photo-traced');
+  // Kept in the .tcad; and on File > Recent drawings.
+  await page.keyboard.press('Control+Shift+S');
+  await D().locator('input[aria-label="File name"]').fill('bench.tcad');
+  await D().getByRole('button', { name: 'Save' }).click();
+  await page.locator('.toast', { hasText: 'bench.tcad' }).first().waitFor();
+  await W().getByRole('menuitem', { name: 'File' }).click();
+  await page.locator('.menu').getByText('Recent drawings', { exact: true }).click();
+  ok(await page.locator('.menu').getByText(/^bench\.tcad/).first().isVisible(), 'bench.tcad is on the recent list');
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await closeAll();
+  await openCad();
+  await W().getByRole('menuitem', { name: 'File' }).click();
+  await page.locator('.menu').getByText('Recent drawings', { exact: true }).click();
+  await page.locator('.menu').getByText(/^bench\.tcad/).first().click();
+  await page.locator('.win .win-bar', { hasText: 'bench.tcad' }).waitFor();
+  const again = await info();
+  ok(Math.abs(again.s - ph.s) < 1e-6 && Math.abs(again.turn - ph.turn) < 1e-6, 'the photo came back from the file where it was');
+
+  // Print to scale: at 1:1 the 1600 x 800 top takes 30 A4 pages; at 1:10 one, with the photo under it.
+  await canvas().focus();
+  await page.keyboard.press('Control+p');
+  await D().locator('.cad-print-svg').waitFor();
+  await D().locator('select[aria-label="Scale"]').selectOption('1');
+  ok((await D().locator('.cad-print-summary').innerText()).includes('takes 30 pages'), 'at 1:1: ' + (await D().locator('.cad-print-summary').innerText()));
+  eq(await D().locator('.cad-print-page').innerText(), 'Page 1 of 30', 'the page count');
+  await D().getByRole('button', { name: 'Page ▶' }).click();
+  eq(await D().locator('.cad-print-page').innerText(), 'Page 2 of 30', 'the next page');
+  await D().locator('select[aria-label="Scale"]').selectOption('10');
+  ok((await D().locator('.cad-print-summary').innerText()).includes('fits on one page'), 'at 1:10: ' + (await D().locator('.cad-print-summary').innerText()));
+  await D().getByLabel('The photo under the drawing').check();
+  await D().locator('.cad-print-svg image').waitFor({ state: 'attached' });
+  ok((await D().locator('.cad-print-svg').innerHTML()).includes('1:10'), 'the title block says 1:10');
+  await shot('cad-print');
+  await D().getByRole('button', { name: 'Save as PDF...' }).click();
+  eq(await D().locator('input[aria-label="File name"]').inputValue(), 'bench.pdf', 'named after the drawing');
+  await D().getByRole('button', { name: 'Save' }).click();
+  await page.locator('.toast', { hasText: 'bench.pdf' }).first().waitFor();
+  ok((await said(1)).includes('at 1:10 saved'), 'the PDF: ' + (await said(1)));
+
+  // A change not saved, a recovery copy kept (as when the lid closes), then the page closes: it is offered back.
+  await cmd('line', '0,0', '1600,800', '');
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+    document.dispatchEvent(new Event('visibilitychange'));
+    delete document.visibilityState;
+  });
+  await page.waitForTimeout(1500);
+  page.on('dialog', d => void d.accept());
+  await page.reload();
+  await page.locator('.gate input[type=password]').first().fill(PASS, { timeout: 15000 }).catch(() => {});
+  if (await page.locator('.gate-go').isVisible().catch(() => false)) await page.locator('.gate-go').click();
+  await page.locator('#desktop .item').first().waitFor({ timeout: 20000 });
+  if (!(await page.locator('.start-filter').isVisible())) await page.locator('.start-btn').click();
+  await page.locator('.start-filter').fill('tomlin cad');
+  await page.locator('.start-menu [data-label="tomlin cad"]').first().click();
+  await page.locator('.dialog', { hasText: 'Drawings not saved' }).waitFor({ timeout: 15000 });
+  ok((await D().innerText()).includes('bench.tcad: kept'), 'the copy is named: ' + (await D().innerText()));
+  await D().getByRole('button', { name: 'Open it' }).click();
+  await page.locator('.win .win-bar', { hasText: 'bench.tcad' }).waitFor();
+  ok((await said(3)).includes('Recovered bench.tcad'), 'said: ' + (await said(3)));
+  eq(await count('Geometry'), 2, 'the top and the line drawn after the save');
+  // Closed on purpose: the copy goes, and is not offered again.
+  await closeAll();
+  await openCad();
+  ok(!(await page.locator('.dialog', { hasText: 'Drawings not saved' }).waitFor({ timeout: 2000 }).then(() => true, () => false)), 'nothing offered once it was closed on purpose');
+});
+
 await step('View: grid, white background, large icons, help', async () => {
   await canvas().focus();
   await page.keyboard.press('F7');
@@ -554,5 +748,6 @@ await step('no errors in the console', async () => {
 });
 
 console.log(`\n${passed} passed, ${failures.length} failed${failures.length ? ': ' + failures.join('; ') : ''}`);
-await browser.close().catch(() => {});
+// On Windows, closing the browser can hang after a page reload: wait 5 seconds at most.
+await Promise.race([browser.close().catch(() => {}), new Promise(done => setTimeout(done, 5000))]);
 process.exit(failures.length ? 1 : 0);

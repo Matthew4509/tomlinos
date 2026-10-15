@@ -4,6 +4,7 @@
 import { P, angleOf, at, type Box, type Piece, type Pt } from './geom.ts';
 import { directionMarks } from './modify.ts';
 import { outlineOf, type Ent, type Layer, type LineType, type Shape, type Units } from './model.ts';
+import { photoOnPage, pixelMatrix, type Photo } from './photo.ts';
 import { SNAP_NAMES, type Snap } from './snap.ts';
 
 /** What part of the drawing shows: the drawing point at the middle of the area, and pixels per drawing unit. */
@@ -57,6 +58,8 @@ export interface Scene {
   units: Units;
   /** Arrows along lines and polylines showing which way they run, and a ring at each polyline's start. */
   arrows: boolean;
+  /** The photo under the drawing (when it is showing and its pixels are ready). */
+  photo: { ph: Photo; img: CanvasImageSource } | null;
 }
 
 /** Dash patterns in pixels (the same on screen at every zoom). */
@@ -85,6 +88,16 @@ export function render(c: CanvasRenderingContext2D, w: number, h: number, v: Vie
   const scr = (p: Pt) => toScreen(v, w, h, p);
   const tl = toWorld(v, w, h, P(0, 0));
   const br = toWorld(v, w, h, P(w, h));
+
+  // The photo, under everything, as strongly as it is set to show.
+  if (s.photo) {
+    c.save();
+    c.globalAlpha = s.photo.ph.opacity;
+    c.imageSmoothingQuality = 'high';
+    c.transform(...pixelMatrix(s.photo.ph, photoOnPage(s.photo.ph, scr)));
+    c.drawImage(s.photo.img, 0, 0);
+    c.restore();
+  }
 
   // The grid: dots where the grid lines cross, if they are far enough apart to see.
   if (s.gridOn && s.grid > 0) {

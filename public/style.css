@@ -2119,6 +2119,45 @@ textarea.field { resize: vertical; font: inherit; }
 .cad-row-top { align-items: flex-start; }
 .cad-row textarea.field, .cad-row select.field, .cad-row input[type="text"].field:not(.cad-num) { width: 260px; max-width: 55vw; }
 .cad-words { min-height: 4.5em; resize: vertical; font: 13px Consolas, "Courier New", monospace; }
+
+/* TOMLIN CAD's print box: the settings beside a preview of each page; printing uses the sheet's print holder with pages of their own size. */
+.cad-print { flex-direction: row; flex-wrap: wrap; align-items: flex-start; gap: 16px; }
+.cad-print > .dialog-problem { flex-basis: 100%; }
+.cad-print-form { display: flex; flex-direction: column; gap: 8px; flex: 1 1 320px; min-width: 0; max-width: 430px; }
+.cad-print-form .cad-row select.field, .cad-print-form .cad-row input[type="text"].field:not(.cad-num) { width: 210px; max-width: 50vw; }
+.cad-print-side { display: flex; flex-direction: column; gap: 6px; flex: 1 1 300px; min-width: 0; }
+.cad-print-preview { display: flex; justify-content: center; align-items: center; min-height: 220px; padding: 10px; background: #8c8c8c; }
+.cad-print-preview > svg { display: block; max-width: 100%; max-height: 46vh; width: auto; height: auto; background: #fff; box-shadow: 0 2px 8px rgba(0, 0, 0, .4); }
+.cad-print-none { color: #fff; font-size: 13px; text-align: center; max-width: 320px; }
+.cad-print-nav { display: flex; align-items: center; justify-content: center; gap: 10px; font-size: 13px; }
+.cad-print-summary { margin: 0; }
+.cad-recover-list { margin: 0; padding-left: 20px; }
+@page cad-a4-portrait { size: 210mm 297mm; margin: 0; }
+@page cad-a4-landscape { size: 297mm 210mm; margin: 0; }
+@page cad-a3-portrait { size: 297mm 420mm; margin: 0; }
+@page cad-a3-landscape { size: 420mm 297mm; margin: 0; }
+@page cad-a2-portrait { size: 420mm 594mm; margin: 0; }
+@page cad-a2-landscape { size: 594mm 420mm; margin: 0; }
+@page cad-a1-portrait { size: 594mm 841mm; margin: 0; }
+@page cad-a1-landscape { size: 841mm 594mm; margin: 0; }
+@page cad-letter-portrait { size: 215.9mm 279.4mm; margin: 0; }
+@page cad-letter-landscape { size: 279.4mm 215.9mm; margin: 0; }
+@page cad-tabloid-portrait { size: 279.4mm 431.8mm; margin: 0; }
+@page cad-tabloid-landscape { size: 431.8mm 279.4mm; margin: 0; }
+@media print {
+  .cad-paper-a4-portrait { page: cad-a4-portrait; }
+  .cad-paper-a4-landscape { page: cad-a4-landscape; }
+  .cad-paper-a3-portrait { page: cad-a3-portrait; }
+  .cad-paper-a3-landscape { page: cad-a3-landscape; }
+  .cad-paper-a2-portrait { page: cad-a2-portrait; }
+  .cad-paper-a2-landscape { page: cad-a2-landscape; }
+  .cad-paper-a1-portrait { page: cad-a1-portrait; }
+  .cad-paper-a1-landscape { page: cad-a1-landscape; }
+  .cad-paper-letter-portrait { page: cad-letter-portrait; }
+  .cad-paper-letter-landscape { page: cad-letter-landscape; }
+  .cad-paper-tabloid-portrait { page: cad-tabloid-portrait; }
+  .cad-paper-tabloid-landscape { page: cad-tabloid-landscape; }
+}
 @media (max-width: 760px) { .cad-panel { width: 150px; } .cad-xy { min-width: 0; } }
 .cad-lock, .cad-more { flex: none; width: 20px; height: 18px; padding: 0; font-size: 12px; line-height: 1; background: none; color: #000; border: 1px solid transparent; border-radius: 0; }
 .cad-lock:hover, .cad-more:hover { border-color: #fff #808080 #808080 #fff; }

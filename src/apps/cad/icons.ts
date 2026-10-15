@@ -103,6 +103,8 @@ const DRAW = {
   dimAngle: () => [path('M2 13.5h12.5M2 13.5L12 3.5', '#808080', 1), path('M10 13.5a8 8 0 0 0-2.4-5.7', BLUE, 1.3)],
   leader: () => [path('M2.5 3l6 7.5h6', BLUE, 1.2), path('M2.5 3l3.2 1.8-1.6 1.3z', BLUE, 0.8, BLUE)],
   dxfOut: () => [path('M2 1.5h7l3 3v10H2z', '#6b6b6b', 1, '#fff'), path('M6 9.5h8.5M12 7l2.5 2.5L12 12', GREEN, 1.4)],
+  print: () => [rect(4, 1.5, 8, 4, '#6b6b6b', '#fff'), rect(1.5, 5.5, 13, 6, '#4a4a4a', '#c4c4c4', { rx: 1 }), rect(4, 9.5, 8, 5, '#6b6b6b', '#fff'), path('M5.5 11.5h5M5.5 13h3', '#808080', 0.8), dot(12.5, 7.5, GREEN)],
+  photo: () => [rect(1.5, 2.5, 13, 11, '#4a4a4a', '#cfe8ff'), path('M2 13l4-4.5 3 3 2-2 3 3.5', GREEN, 1, '#8fd08f'), circle(11, 5.5, 1.4, GOLD, '#f6cf5a', 0.8)],
 } satisfies Record<string, () => SVGElement[]>;
 
 export type CadIcon = keyof typeof DRAW;

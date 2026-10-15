@@ -12,6 +12,7 @@ import { chainFrom, distToShape, inWindow, mirrorShape, rotateShape, scaleShape,
 import { findSnaps } from '../src/apps/cad/snap.ts';
 import { TOOLS, type PolarAnswer, type ToolCtx } from '../src/apps/cad/tools.ts';
 import { defaultStyle, dimLabel, type DimShape, type TextShape } from '../src/apps/cad/notes.ts';
+import type { Photo } from '../src/apps/cad/photo.ts';
 
 const TOL = 1e-6;
 const near = (a: Pt, b: Pt, what: string, tol = TOL) => assert.ok(dist(a, b) <= tol, `${what}: expected ${b.x},${b.y}, got ${a.x},${a.y}`);
@@ -284,6 +285,7 @@ function fakeCtx(): ToolCtx & { items: Ent[]; said: string[]; problems: string[]
   const said: string[] = [];
   const problems: string[] = [];
   const undo: Ent[][] = [];
+  let photo: Photo | null = null;
   const ctx = {
     items, said, problems,
     units: () => 'mm' as const,
@@ -322,6 +324,11 @@ function fakeCtx(): ToolCtx & { items: Ent[]; said: string[]; problems: string[]
     style: () => defaultStyle(false),
     noteLayer: (k: 'text' | 'dim') => (k === 'text' ? 'Text' : 'Dimensions'),
     finished: () => {},
+    photo: () => photo,
+    setPhoto(ph: Photo, t: string) {
+      photo = ph;
+      said.push(t);
+    },
   };
   return ctx;
 }

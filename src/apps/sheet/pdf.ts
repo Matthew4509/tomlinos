@@ -139,6 +139,20 @@ export class PdfPage implements Painter {
     this.ops.push(`q ${n(w)} 0 0 ${n(h)} ${n(x)} ${n(this.y(y + h))} cm /${name} Do Q`);
   }
 
+  /**
+   * A picture laid with its top-left, top-right and bottom-left corners at these points (turned or stretched as they
+   * say), kept inside the box `within`.
+   */
+  imageAt(tl: { x: number; y: number }, tr: { x: number; y: number }, bl: { x: number; y: number }, name: string, within: { x: number; y: number; w: number; h: number }): void {
+    this.images.add(name);
+    // The picture's unit square (0,0 its bottom-left) to the page, in PDF's own upward y.
+    const a = tr.x - tl.x;
+    const b = -(tr.y - tl.y);
+    const c = tl.x - bl.x;
+    const d = bl.y - tl.y;
+    this.ops.push(`q ${n(within.x)} ${n(this.y(within.y + within.h))} ${n(within.w)} ${n(within.h)} re W n ${n(a)} ${n(b)} ${n(c)} ${n(d)} ${n(bl.x)} ${n(this.y(bl.y))} cm /${name} Do Q`);
+  }
+
   clip(x: number, y: number, w: number, h: number): void {
     this.depth++;
     this.ops.push(`q ${n(x)} ${n(this.y(y + h))} ${n(Math.max(0, w))} ${n(Math.max(0, h))} re W n`);

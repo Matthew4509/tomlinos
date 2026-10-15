@@ -6,6 +6,7 @@ import {
   type Box, type Piece, type Pt,
 } from './geom.ts';
 import { defaultStyle, dimLabel, notePieces, type DimShape, type NoteStyle, type TextShape } from './notes.ts';
+import { readPhoto, type Photo } from './photo.ts';
 
 export type Units = 'mm' | 'inch';
 
@@ -53,6 +54,8 @@ export interface Drawing {
   ents: Ent[];
   /** Sizes for new text and dimensions. */
   style: NoteStyle;
+  /** A photo under the drawing, to trace over (never written to a DXF). */
+  photo: Photo | null;
 }
 
 export const GEOMETRY = 'Geometry';
@@ -72,6 +75,7 @@ export function newDrawing(units: Units = 'mm'): Drawing {
     current: GEOMETRY,
     ents: [],
     style: defaultStyle(units === 'inch'),
+    photo: null,
   };
 }
 
@@ -371,9 +375,10 @@ const MAX_POINTS = 2_000_000;
 const MAX_TEXT = 10_000;
 
 /** The drawing as a .tcad file: plain JSON, numbers at full precision. */
-export function writeTcad(d: Drawing): string {
+/** The drawing as a .tcad file; `extra` adds notes of the window's own (a recovery copy's file name). */
+export function writeTcad(d: Drawing, extra: Record<string, unknown> = {}): string {
   const items = d.ents.map(({ id: _id, ...rest }) => rest);
-  return JSON.stringify({ tomlinCad: 1, units: d.units, current: d.current, layers: d.layers, style: d.style, items });
+  return JSON.stringify({ tomlinCad: 1, units: d.units, current: d.current, layers: d.layers, style: d.style, items, ...(d.photo ? { photo: d.photo } : {}), ...extra });
 }
 
 const num = (v: unknown): number => {
@@ -512,7 +517,7 @@ export function readTcad(text: string): { drawing: Drawing; skipped: number } {
     }
     if (typeof st.dp === 'number' && Number.isInteger(st.dp) && st.dp >= 0 && st.dp <= 8) style.dp = st.dp;
   }
-  return { drawing: { units, layers, current, ents, style }, skipped };
+  return { drawing: { units, layers, current, ents, style, photo: readPhoto(o.photo) }, skipped };
 }
 
 export const centreOfBox = (b: Box): Pt => P((b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2);

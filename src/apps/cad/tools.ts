@@ -9,6 +9,7 @@ import type { Align } from './font.ts';
 import { angleArms, dimLabel, type DimShape, type NoteStyle } from './notes.ts';
 import { boxOfShapes, chainFrom, mirrorShape, moveShape, pieceNear, rotateShape, scaleShape } from './edit.ts';
 import { CONSTRUCTION, ellipse, isNote, pieceLength, piecesOf, polygon, rectangle, slot, type Ent, type Shape, type Units } from './model.ts';
+import { movePhoto, scaleFromTwo, straightenTurn, turnPhoto, type Photo } from './photo.ts';
 import { areaOf, breakAt, breakBetween, chamfer, closeShape, cornerBetween, extend, fillet, offset, polyCorners, reverse, setStart, trim } from './modify.ts';
 
 export interface Want {
@@ -78,6 +79,10 @@ export interface ToolCtx {
   noteLayer(kind: 'text' | 'dim'): string;
   /** A tool that finished on its own (after a box was answered) tells the window here. */
   finished(): void;
+  /** The photo under the drawing, if there is one. */
+  photo(): Photo | null;
+  /** Changes the photo's place, size or turn (one step of undo) and says what was done. */
+  setPhoto(ph: Photo, said: string): void;
 }
 
 export interface Tool {
@@ -1552,6 +1557,83 @@ function zoomWindowTool(ctx: ToolCtx): Tool {
   });
 }
 
+// ---- The photo under the drawing ---------------------------------------------------------------------------------
+
+const NO_PHOTO = 'There is no photo under this drawing: View > Photo to trace > Open a photo first.';
+
+function photoScaleTool(ctx: ToolCtx): Tool {
+  return stepTool(ctx, {
+    title: 'Photo: scale by a length you know',
+    steps: [
+      { prompt: 'Click one end of a length you know on the photo (a tape mark, the edge of the part)', want: { point: true } },
+      { prompt: 'Click the other end', want: { point: true } },
+      { prompt: `How long it really is (${ctx.units() === 'mm' ? 'mm' : 'inches'})`, want: { number: true } },
+    ],
+    preview: (g, c) => (g.length === 1 ? [line(ptOf(g[0])!, c)] : []),
+    make(g) {
+      const ph = ctx.photo();
+      if (!ph) return fail(ctx, NO_PHOTO);
+      const a = ptOf(g[0])!;
+      const b = ptOf(g[1])!;
+      const len = (g[2] as { v: number }).v;
+      if (dist(a, b) < 1e-9) {
+        // Both clicks were the same point: start again from the first click.
+        g.splice(0);
+        return fail(ctx, 'The two points are the same: click both ends of the length you know.');
+      }
+      const next = scaleFromTwo(ph, a, b, len);
+      if (!next) return fail(ctx, 'The length must be a number above 0.');
+      ctx.setPhoto(next, `Photo scaled ${Number((len / dist(a, b)).toPrecision(4))} times: those two points are now ${ctx.fmt(len)} apart. Check it: Utils > Measure between two marks you know.`);
+      return true;
+    },
+  });
+}
+
+function photoTurnTool(ctx: ToolCtx): Tool {
+  return stepTool(ctx, {
+    title: 'Photo: line up an edge',
+    steps: [
+      { prompt: 'Click a point on an edge of the photo that should run straight across or straight up', want: { point: true } },
+      { prompt: 'Click another point along that edge, as far away as you can', want: { point: true } },
+    ],
+    preview: (g, c) => [line(ptOf(g[0])!, c)],
+    make(g) {
+      const ph = ctx.photo();
+      if (!ph) return fail(ctx, NO_PHOTO);
+      const a = ptOf(g[0])!;
+      const b = ptOf(g[1])!;
+      if (dist(a, b) < 1e-9) return fail(ctx, 'The two points are the same: click two points along the edge.');
+      const turn = straightenTurn(a, b);
+      if (Math.abs(turn) < 1e-9) {
+        ctx.say('That edge already runs straight: the photo was not turned.');
+        return true;
+      }
+      const across = Math.abs(Math.sin(Math.atan2(b.y - a.y, b.x - a.x) + turn)) < 0.5;
+      ctx.setPhoto(turnPhoto(ph, a, turn), `Photo turned ${ctx.fmt(Math.abs((turn * 180) / Math.PI))}° ${turn > 0 ? 'anticlockwise' : 'clockwise'}: that edge now runs straight ${across ? 'across' : 'up'}.`);
+      return true;
+    },
+  });
+}
+
+function photoMoveTool(ctx: ToolCtx): Tool {
+  return stepTool(ctx, {
+    title: 'Photo: move',
+    steps: [
+      { prompt: 'Click a point on the photo to move it by (a corner of the part)', want: { point: true } },
+      { prompt: 'Where that point goes (such as 0,0)', want: { point: true } },
+    ],
+    preview: (g, c) => [line(ptOf(g[0])!, c)],
+    make(g) {
+      const ph = ctx.photo();
+      if (!ph) return fail(ctx, NO_PHOTO);
+      const a = ptOf(g[0])!;
+      const b = ptOf(g[1])!;
+      ctx.setPhoto(movePhoto(ph, sub(b, a)), `Photo moved ${ctx.fmt(b.x - a.x)} across and ${ctx.fmt(b.y - a.y)} up.`);
+      return true;
+    },
+  });
+}
+
 export const TOOLS = {
   line: { name: 'Line', make: lineTool },
   polyline: { name: 'Polyline', make: polylineTool },
@@ -1617,6 +1699,9 @@ export const TOOLS = {
   'dim-diameter': { name: 'Dimension: diameter', make: (c: ToolCtx) => dimRoundTool(c, true) },
   'dim-angle': { name: 'Dimension: angle', make: dimAngleTool },
   leader: { name: 'Leader note (an arrow and words)', make: leaderTool },
+  'photo-scale': { name: 'Photo: scale by a length you know', make: photoScaleTool },
+  'photo-turn': { name: 'Photo: line up an edge', make: photoTurnTool },
+  'photo-move': { name: 'Photo: move', make: photoMoveTool },
 } satisfies Record<string, { name: string; make: (ctx: ToolCtx) => Tool }>;
 
 export type ToolId = keyof typeof TOOLS;
