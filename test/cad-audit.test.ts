@@ -132,6 +132,21 @@ test('DXF out: our layer 0 is the DXF layer 0; a size too big for a DXF is refus
   assert.throws(() => dxfNum(1e21), CadProblem);
 });
 
+test('DXF units: an inch drawing comes back in inches; a millimetre DXF is unchanged (no units line)', () => {
+  const opts = { textAsLines: false, construction: false, hidden: false };
+  const inch = newDrawing('inch');
+  inch.ents = [{ ...line(P(0, 0), P(24, 0)), id: 1, layer: 'Geometry' } as Ent];
+  const back = readDxf(writeDxf(inch, opts).bytes);
+  assert.equal(back.drawing.units, 'inch');
+  assert.equal((back.drawing.ents[0] as Extract<Ent, { type: 'line' }>).b.x, 24, '24 inches stays 24');
+  assert.match(back.report.join(' '), /inches \(as the file says\)/);
+  const mm = newDrawing();
+  mm.ents = [{ ...line(P(0, 0), P(600, 0)), id: 1, layer: 'Geometry' } as Ent];
+  const text = new TextDecoder('latin1').decode(writeDxf(mm, opts).bytes);
+  assert.ok(!text.includes('$INSUNITS'), 'a millimetre file has no units line');
+  assert.equal(readDxf(new TextEncoder().encode(text)).drawing.units, 'mm');
+});
+
 test('a damaged photo in a file is left out; Fit and construction lines print sensibly', () => {
   assert.equal(readPhoto({ jpeg: '/9j/' + 'A'.repeat(100) + '#bad', px: 10, py: 10, at: P(0, 0), u: P(10, 0) }), null);
   assert.ok(readPhoto({ jpeg: '/9j/' + 'A'.repeat(100), px: 10, py: 10, at: P(0, 0), u: P(10, 0) }), 'a good one still reads');

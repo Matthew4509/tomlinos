@@ -267,6 +267,13 @@ export function writeDxf(d: Drawing, o: DxfOptions): DxfWritten {
   tag(2, 'HEADER');
   tag(9, '$ACADVER');
   tag(1, 'AC1009');
+  // R12 has no units of its own. An inch drawing says so the way later DXFs do ($INSUNITS 1), so it opens again in
+  // inches here and in programs that read it; a millimetre drawing writes nothing extra (millimetres is what a DXF
+  // that does not say is read as).
+  if (d.units === 'inch') {
+    tag(9, '$INSUNITS');
+    tag(70, 1);
+  }
   tag(9, '$INSBASE');
   tag(10, 0);
   tag(20, 0);
