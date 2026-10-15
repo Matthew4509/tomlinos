@@ -2055,3 +2055,78 @@ textarea.field { resize: vertical; font: inherit; }
 .wp-note { margin: 0; }
 .wp-count th { text-align: left; padding: 2px 16px 2px 0; font-weight: normal; color: #555; }
 .wp-count td { text-align: right; font-variant-numeric: tabular-nums; }
+/* TOMLIN CAD: the classic grey CAD/CAM window of the early 2000s (menu bar, two toolbar rows, a tool column each side,
+   the Layers panel, a dark blue drawing area, a command line and a status bar). Every colour is set here, so the
+   desktop's light or dark theme never leaves grey text on grey. */
+.cad { display: flex; flex-direction: column; height: 100%; background: #d4d0c8; color: #000; font: 12px Tahoma, "Segoe UI", Arial, sans-serif; }
+.cad-menubar { flex: none; background: #d4d0c8; border-bottom: 1px solid #808080; }
+.cad .menubar { padding: 1px 2px; }
+.cad .menubar-item { padding: 2px 8px; border: 1px solid transparent; border-radius: 0; color: #000; font: 13px Tahoma, "Segoe UI", Arial, sans-serif; }
+.cad .menubar-item:hover, .cad .menubar-item[aria-expanded="true"] { background: #0a246a; border-color: #0a246a; color: #fff; }
+.cad-tb { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 0; padding: 2px 4px; border-bottom: 1px solid #b0aca4; border-top: 1px solid #fff; }
+.cad-btn { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; margin: 0; background: transparent; border: 1px solid transparent; border-radius: 0; color: #000; cursor: default; }
+.cad-btn:hover { border-color: #fff #808080 #808080 #fff; }
+.cad-btn:active, .cad-btn[aria-pressed="true"] { border-color: #808080 #fff #fff #808080; background: #e6e3dc; }
+.cad-btn:focus-visible { outline: 1px dotted #000; outline-offset: -4px; }
+.cad-large .cad-btn { width: 32px; height: 32px; }
+.cad-large .cad-btn .tb-icon { width: 24px; height: 24px; }
+.cad-sep { align-self: stretch; width: 2px; margin: 2px 4px; border-left: 1px solid #808080; border-right: 1px solid #fff; }
+.cad-body { flex: 1; min-height: 0; display: flex; }
+.cad-col { flex: none; display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 3px 2px; background: #d4d0c8; }
+.cad-col:first-child { border-right: 1px solid #808080; }
+.cad-snaps { border-left: 1px solid #808080; }
+.cad-snaps.all-off .cad-btn { opacity: .45; }
+.cad-panel { flex: none; width: 210px; margin: 2px; display: flex; flex-direction: column; background: #fff; border: 1px solid #808080; }
+.cad-panel[hidden] { display: none; }
+.cad-panel-hd { height: 20px; flex: none; display: flex; align-items: center; justify-content: space-between; padding: 0 4px 0 6px; background: #d4d0c8; border-bottom: 1px solid #808080; font-weight: 700; }
+.cad-x { width: 18px; height: 16px; padding: 0; line-height: 12px; font-size: 14px; background: #d4d0c8; color: #000; border: 1px solid; border-color: #fff #404040 #404040 #fff; border-radius: 0; }
+.cad-panel-tools { flex: none; display: flex; align-items: center; gap: 6px; padding: 2px 4px; background: #ece9d8; border-bottom: 1px solid #c8c4b8; }
+.cad-panel-hint { color: #444; font-size: 12px; }
+.cad-mini { flex: none; white-space: nowrap; padding: 1px 6px; font: 12px Tahoma, "Segoe UI", sans-serif; background: #d4d0c8; color: #000; border: 1px solid; border-color: #fff #404040 #404040 #fff; border-radius: 0; }
+.cad-layer-list { flex: 1; overflow: auto; padding: 3px 0; }
+.cad-layer { display: flex; align-items: center; gap: 5px; padding: 2px 6px; }
+.cad-layer.off .cad-layer-name { color: #707070; text-decoration: line-through; }
+.cad-tick { width: 14px; height: 14px; flex: none; padding: 0; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; line-height: 1; color: #004000; background: #fff; border: 1px solid #808080; border-radius: 0; }
+.cad-swatch { width: 12px; height: 12px; flex: none; border: 1px solid #404040; }
+.cad-layer-name { flex: 1; min-width: 0; text-align: left; padding: 1px 3px; background: none; border: 1px solid transparent; border-radius: 0; color: #000; font: 12px Tahoma, "Segoe UI", sans-serif; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cad-layer-name:hover { border-color: #0a246a; }
+.cad-layer-name.current { font-weight: 700; background: #dde4f4; }
+.cad-count { color: #555; font-size: 12px; }
+.cad-canvas-wrap { flex: 1; min-width: 0; position: relative; margin: 2px; border: 1px solid; border-color: #808080 #fff #fff #808080; overflow: hidden; background: #1e2088; }
+.cad-canvas { display: block; cursor: crosshair; outline: none; touch-action: none; }
+.cad-canvas.pan-mode { cursor: grab; }
+.cad-canvas.panning { cursor: grabbing; }
+.cad-canvas:focus-visible { outline: 2px solid #ffd040; outline-offset: -2px; }
+.cad-command { flex: none; border-top: 1px solid #808080; background: #fff; }
+.cad-history { height: 50px; overflow: auto; padding: 1px 6px; color: #303030; font: 12px Consolas, "Courier New", monospace; line-height: 16px; }
+.cad-problem { color: #a00000; }
+.cad-command-line { display: flex; align-items: center; gap: 6px; padding: 2px 6px; border-top: 1px solid #d4d0c8; }
+.cad-prompt { flex: none; max-width: 70%; color: #000; font: 12px Consolas, "Courier New", monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cad-input { flex: 1; min-width: 60px; height: 20px; padding: 0 4px; font: 13px Consolas, "Courier New", monospace; color: #000; background: #fff; border: 1px solid #7f9db9; border-radius: 0; }
+.cad-status { flex: none; display: flex; align-items: center; gap: 2px; height: 24px; padding: 1px 4px; background: #d4d0c8; border-top: 1px solid #fff; }
+.cad-cell { display: inline-flex; align-items: center; height: 19px; padding: 0 8px; border: 1px solid; border-color: #808080 #fff #fff #808080; color: #000; background: #d4d0c8; font: 12px Tahoma, "Segoe UI", sans-serif; white-space: nowrap; }
+.cad-msg { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: #0a246a; font-weight: 700; }
+.cad-cell-btn { cursor: default; border-radius: 0; }
+.cad-cell-btn:hover { background: #e6e3dc; }
+.cad-toggle[aria-pressed="false"] { color: #808080; border-color: #fff #808080 #808080 #fff; }
+.cad-toggle[aria-pressed="true"] { font-weight: 700; }
+.cad-xy { min-width: 98px; font-variant-numeric: tabular-nums; }
+.cad-dialog { display: flex; flex-direction: column; gap: 8px; }
+.cad-row { display: flex; align-items: center; gap: 12px; }
+.cad-row > span { flex: 1; min-width: 0; }
+.cad-row .field, .cad-num { flex: none; width: 110px; }
+.cad-check { display: flex; align-items: center; gap: 6px; }
+@media (max-width: 760px) { .cad-panel { width: 150px; } .cad-xy { min-width: 0; } }
+.cad-lock, .cad-more { flex: none; width: 20px; height: 18px; padding: 0; font-size: 12px; line-height: 1; background: none; color: #000; border: 1px solid transparent; border-radius: 0; }
+.cad-lock:hover, .cad-more:hover { border-color: #fff #808080 #808080 #fff; }
+.cad-lock { opacity: .45; }
+.cad-lock.on { opacity: 1; border-color: #808080 #fff #fff #808080; background: #e6e3dc; }
+.cad-layer.locked .cad-layer-name { font-style: italic; }
+.cad-swatch-dashed { background-image: repeating-linear-gradient(90deg, transparent 0 3px, rgba(0, 0, 0, .55) 3px 5px); }
+.cad-colours { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px 12px; }
+.cad-command-line [hidden] { display: none !important; }
+.cad-xyin { display: inline-flex; align-items: center; gap: 4px; }
+.cad-axis { font: 700 12px Tahoma, "Segoe UI", sans-serif; color: #000; }
+.cad-coord { width: 110px; height: 20px; padding: 0 4px; font: 13px Consolas, "Courier New", monospace; color: #000; background: #fff; border: 1px solid #7f9db9; border-radius: 0; }
+.cad-coord:focus { outline: 2px solid #ffd040; outline-offset: 0; }
+.cad-done { margin-left: auto; }

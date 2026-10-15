@@ -7,7 +7,7 @@ export type IconName =
   | 'trash' | 'trash-full' | 'files' | 'gear' | 'info' | 'app'
   | 'editor' | 'photos' | 'player' | 'pdfviewer' | 'sheet' | 'archive' | 'code' | 'chip' | 'logo' | 'user' | 'lock'
   | 'calendar' | 'contacts' | 'link' | 'keyboard' | 'terminal' | 'calculator' | 'photoedit' | 'mail' | 'planet' | 'assistant' | 'chat' | 'panel'
-  | 'printer' | 'modelsearch' | 'book' | 'projects' | 'write'
+  | 'printer' | 'modelsearch' | 'book' | 'projects' | 'write' | 'cad'
   | 'folder-desktop' | 'folder-documents' | 'folder-pictures' | 'folder-videos' | 'folder-music';
 
 type Shape = [string, Record<string, string>];
@@ -247,6 +247,13 @@ const SHAPES: Record<IconName, Shape[]> = {
     ['path', { d: 'M14 24h20M14 29h20M14 34h11', stroke: '#8a97ab', 'stroke-width': '2', 'stroke-linecap': 'round', fill: 'none' }],
     ['rect', { x: '25', y: '30', width: '16', height: '13', rx: '2', fill: '#2f5fa5', stroke: '#1b3f7a', 'stroke-width': '1' }],
     ['path', { d: 'M28 33l2 7 3-5 3 5 2-7', stroke: '#fff', 'stroke-width': '1.6', 'stroke-linejoin': 'round', 'stroke-linecap': 'round', fill: 'none' }],
+  ],
+  // A dark blue drawing board with a white outline and a hole, a red point at one corner.
+  cad: [
+    ['rect', { x: '4', y: '7', width: '40', height: '34', rx: '3', fill: '#1e2088', stroke: '#0e1050', 'stroke-width': '1.5' }],
+    ['path', { d: 'M11 33V15h26v18z', stroke: '#ffffff', 'stroke-width': '2.2', 'stroke-linejoin': 'round', fill: 'none' }],
+    ['circle', { cx: '24', cy: '24', r: '5', stroke: '#40e0ff', 'stroke-width': '2', fill: 'none' }],
+    ['circle', { cx: '11', cy: '33', r: '2.6', fill: '#e03030' }],
   ],
   // A page with a small grid, the top row green.
   sheet: [

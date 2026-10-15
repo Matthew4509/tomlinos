@@ -23,6 +23,8 @@ const WORD: FileType = { label: 'Word document', icon: 'write', apps: ['write'] 
 /** WordPad's rich text and LibreOffice's text documents: opened in TOMLIN Write (and saved from it as Word documents). */
 const RICH: FileType = { label: 'Rich text document', icon: 'write', apps: ['write'] };
 const ODT: FileType = { label: 'OpenDocument text', icon: 'write', apps: ['write'] };
+/** A TOMLIN CAD drawing (JSON inside). */
+const CAD: FileType = { label: 'TOMLIN CAD drawing', icon: 'cad', apps: ['cad'] };
 const CALC: FileType = { label: 'Calculator sheet', icon: 'calculator', apps: ['calculator'] };
 const ARCHIVE: FileType = { label: 'Compressed folder', icon: 'archive', apps: ['archive'] };
 const CODE: FileType = { label: 'Code or data file', icon: 'code', apps: ['editor', 'notepadpro'] };
@@ -53,6 +55,7 @@ const GROUPS: Array<[FileType, string[]]> = [
   [WORD, ['docx']],
   [RICH, ['rtf']],
   [ODT, ['odt']],
+  [CAD, ['tcad']],
   [CALC, ['calc']],
   [CALENDAR, ['ics']],
   [CONTACTS, ['vcf']],
