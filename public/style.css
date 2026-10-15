@@ -2086,7 +2086,7 @@ textarea.field { resize: vertical; font: inherit; }
 .cad-layer-list { flex: 1; overflow: auto; padding: 3px 0; }
 .cad-layer { display: flex; align-items: center; gap: 5px; padding: 2px 6px; }
 .cad-layer.off .cad-layer-name { color: #707070; text-decoration: line-through; }
-.cad-tick { width: 14px; height: 14px; flex: none; padding: 0; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; line-height: 1; color: #004000; background: #fff; border: 1px solid #808080; border-radius: 0; }
+.cad-tick { width: 14px; height: 14px; flex: none; padding: 0; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; line-height: 1; color: #004000; background: #fff; border: 1px solid #808080; border-radius: 0; }
 .cad-swatch { width: 12px; height: 12px; flex: none; border: 1px solid #404040; }
 .cad-layer-name { flex: 1; min-width: 0; text-align: left; padding: 1px 3px; background: none; border: 1px solid transparent; border-radius: 0; color: #000; font: 12px Tahoma, "Segoe UI", sans-serif; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cad-layer-name:hover { border-color: #0a246a; }

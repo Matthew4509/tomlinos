@@ -58,6 +58,13 @@ export interface Drawing {
   photo: Photo | null;
 }
 
+/**
+ * A polyline span bulging less than this is drawn straight: its arc would be centred millions of times its length
+ * away, and points worked out from so far off lose their last decimals (a 1000 long span bulging 1e-8 is 0.0000025 off
+ * straight).
+ */
+export const STRAIGHT_BULGE = 1e-8;
+
 export const GEOMETRY = 'Geometry';
 export const CONSTRUCTION = 'Construction';
 export const DIMENSIONS = 'Dimensions';
@@ -105,7 +112,7 @@ export function polyPieces(pts: Pt[], bulges: number[], closed: boolean): Piece[
     const b = pts[(i + 1) % n];
     if (dist(a, b) < 1e-12) continue;
     const bulge = bulges[i] ?? 0;
-    out.push(Math.abs(bulge) < 1e-12 ? { k: 'seg', a, b } : bulgeArc(a, b, bulge));
+    out.push(Math.abs(bulge) <= STRAIGHT_BULGE ? { k: 'seg', a, b } : bulgeArc(a, b, bulge));
   }
   return out;
 }
@@ -338,7 +345,11 @@ export function describe(e: Ent, u: Units): string[] {
       break;
     case 'ellipse':
       lines.push(`Centre ${fmtPt(e.c, u)}`, `Half-axes ${fmt(Math.hypot(e.m.x, e.m.y), u)} and ${fmt(Math.hypot(e.m.x, e.m.y) * e.ratio, u)} ${unitName}, turned ${deg(normAngle(angleOf(e.m)))}`);
-      if (!isFull(e.t0, e.t1)) lines.push(`Part from ${deg(normAngle(e.t0))} to ${deg(normAngle(e.t1))}`);
+      if (!isFull(e.t0, e.t1)) {
+        // The true directions from the centre to its two ends (not the ellipse's own parameter, which differs).
+        const piece: Piece = { k: 'ell', c: e.c, m: e.m, ratio: e.ratio, t0: e.t0, t1: e.t1 };
+        lines.push(`Part from ${deg(normAngle(angleOf(sub(at(piece, e.t0), e.c))))} to ${deg(normAngle(angleOf(sub(at(piece, e.t1), e.c))))}, anticlockwise`);
+      }
       break;
     case 'poly':
       lines.push(`${e.pts.length} points, ${e.closed ? 'closed' : 'open'}`, `Length ${fmt(length(), u)} ${unitName}`);
@@ -391,8 +402,11 @@ const pt = (v: unknown): Pt => {
   return P(num(o.x), num(o.y));
 };
 
-/** Reads a .tcad file: the drawing, and how many items were of a kind this version does not know (left out). */
-export function readTcad(text: string): { drawing: Drawing; skipped: number } {
+/**
+ * Reads a .tcad file: the drawing; how many items were of a kind this version does not know (left out); and how many
+ * were damaged (a number missing or impossible: left out, the rest opened), with the first reason.
+ */
+export function readTcad(text: string): { drawing: Drawing; skipped: number; damaged: number; why: string | null } {
   let data: unknown;
   try {
     data = JSON.parse(text);
@@ -420,88 +434,102 @@ export function readTcad(text: string): { drawing: Drawing; skipped: number } {
   let skipped = 0;
   let points = 0;
   let id = 1;
+  let damaged = 0;
+  let why: string | null = null;
+  /** Too many points in all refuses the whole file (one damaged item does not). */
+  let tooMany = false;
   const pts = (v: unknown, min: number): Pt[] => {
     if (!Array.isArray(v) || v.length < min) throw new CadProblem('a polyline or curve in it has too few points');
     points += v.length;
-    if (points > MAX_POINTS) throw new CadProblem('it holds more points than TOMLIN CAD opens');
+    if (points > MAX_POINTS) {
+      tooMany = true;
+      throw new CadProblem('it holds more points than TOMLIN CAD opens');
+    }
     return v.map(pt);
   };
   try {
     for (const raw of o.items) {
       const r = (raw ?? {}) as Record<string, unknown>;
-      const layer = typeof r.layer === 'string' && layers.some(l => l.name === r.layer) ? r.layer : layers[0].name;
-      let s: Shape | null = null;
-      switch (r.type) {
-        case 'line':
-          s = { type: 'line', a: pt(r.a), b: pt(r.b) };
-          break;
-        case 'arc': {
-          const a0 = num(r.a0);
-          const a1 = num(r.a1);
-          if (!(num(r.r) > 0) || !(a1 > a0) || a1 - a0 > TAU + 1e-9) throw new CadProblem('an arc in it has an impossible size');
-          s = { type: 'arc', c: pt(r.c), r: num(r.r), a0, a1 };
-          break;
-        }
-        case 'circle':
-          if (!(num(r.r) > 0)) throw new CadProblem('a circle in it has no size');
-          s = { type: 'circle', c: pt(r.c), r: num(r.r) };
-          break;
-        case 'ellipse': {
-          const ratio = num(r.ratio);
-          const t0 = num(r.t0);
-          const t1 = num(r.t1);
-          if (!(ratio > 0 && ratio <= 1) || !(t1 > t0) || t1 - t0 > TAU + 1e-9) throw new CadProblem('an ellipse in it has an impossible size');
-          s = { type: 'ellipse', c: pt(r.c), m: pt(r.m), ratio, t0, t1 };
-          break;
-        }
-        case 'poly': {
-          const p = pts(r.pts, 2);
-          const b = Array.isArray(r.bulges) ? r.bulges.map(num) : [];
-          s = { type: 'poly', pts: p, bulges: p.map((_, i) => (Math.abs(b[i] ?? 0) <= 1e6 ? (b[i] ?? 0) : 0)), closed: r.closed === true };
-          break;
-        }
-        case 'spline':
-          s = { type: 'spline', fit: pts(r.fit, 2), closed: r.closed === true };
-          break;
-        case 'point':
-          s = { type: 'point', p: pt(r.p) };
-          break;
-        case 'xline': {
-          const d = pt(r.d);
-          const l = Math.hypot(d.x, d.y);
-          if (!(l > 0)) throw new CadProblem('a construction line in it has no direction');
-          s = { type: 'xline', p: pt(r.p), d: P(d.x / l, d.y / l) };
-          break;
-        }
-        case 'text': {
-          if (typeof r.text !== 'string' || r.text.length > MAX_TEXT) throw new CadProblem('a text in it has no words or too many');
-          if (!(num(r.h) > 0)) throw new CadProblem('a text in it has no height');
-          const align = r.align === 'centre' || r.align === 'right' ? r.align : 'left';
-          const t: TextShape = { type: 'text', p: pt(r.p), text: r.text, h: num(r.h), angle: num(r.angle), align };
-          if (r.arc && typeof r.arc === 'object') {
-            const a = r.arc as Record<string, unknown>;
-            if (!(num(a.r) > 0)) throw new CadProblem('a text round a circle in it has no radius');
-            t.arc = { c: pt(a.c), r: num(a.r), cw: a.cw !== false };
-          }
-          s = t;
-          break;
-        }
-        case 'dim': {
-          const kind = typeof r.kind === 'string' && r.kind in DIM_NAMES ? (r.kind as DimShape['kind']) : null;
-          if (!kind) {
-            skipped++;
+      try {
+        const layer = typeof r.layer === 'string' && layers.some(l => l.name === r.layer) ? r.layer : layers[0].name;
+        let s: Shape | null = null;
+        switch (r.type) {
+          case 'line':
+            s = { type: 'line', a: pt(r.a), b: pt(r.b) };
+            break;
+          case 'arc': {
+            const a0 = num(r.a0);
+            const a1 = num(r.a1);
+            if (!(num(r.r) > 0) || !(a1 > a0) || a1 - a0 > TAU + 1e-9) throw new CadProblem('an arc in it has an impossible size');
+            s = { type: 'arc', c: pt(r.c), r: num(r.r), a0, a1 };
             break;
           }
-          const p = pts(r.pts, kind === 'leader' ? 2 : kind === 'angle' ? 4 : 3);
-          if (!(num(r.h) > 0) || !(num(r.arrow) >= 0)) throw new CadProblem('a dimension in it has no size for its words or arrows');
-          if (typeof r.text !== 'string' || r.text.length > MAX_TEXT) throw new CadProblem('a dimension in it has too many words');
-          s = { type: 'dim', kind, pts: p, dir: num(r.dir), h: num(r.h), arrow: num(r.arrow), dp: Math.max(0, Math.min(8, Math.round(num(r.dp)))), text: r.text };
-          break;
+          case 'circle':
+            if (!(num(r.r) > 0)) throw new CadProblem('a circle in it has no size');
+            s = { type: 'circle', c: pt(r.c), r: num(r.r) };
+            break;
+          case 'ellipse': {
+            const ratio = num(r.ratio);
+            const t0 = num(r.t0);
+            const t1 = num(r.t1);
+            if (!(ratio > 0 && ratio <= 1) || !(t1 > t0) || t1 - t0 > TAU + 1e-9) throw new CadProblem('an ellipse in it has an impossible size');
+            s = { type: 'ellipse', c: pt(r.c), m: pt(r.m), ratio, t0, t1 };
+            break;
+          }
+          case 'poly': {
+            const p = pts(r.pts, 2);
+            const b = Array.isArray(r.bulges) ? r.bulges.map(num) : [];
+            s = { type: 'poly', pts: p, bulges: p.map((_, i) => (Math.abs(b[i] ?? 0) <= 1e6 ? (b[i] ?? 0) : 0)), closed: r.closed === true };
+            break;
+          }
+          case 'spline':
+            s = { type: 'spline', fit: pts(r.fit, 2), closed: r.closed === true };
+            break;
+          case 'point':
+            s = { type: 'point', p: pt(r.p) };
+            break;
+          case 'xline': {
+            const d = pt(r.d);
+            const l = Math.hypot(d.x, d.y);
+            if (!(l > 0)) throw new CadProblem('a construction line in it has no direction');
+            s = { type: 'xline', p: pt(r.p), d: P(d.x / l, d.y / l) };
+            break;
+          }
+          case 'text': {
+            if (typeof r.text !== 'string' || r.text.length > MAX_TEXT) throw new CadProblem('a text in it has no words or too many');
+            if (!(num(r.h) > 0)) throw new CadProblem('a text in it has no height');
+            const align = r.align === 'centre' || r.align === 'right' ? r.align : 'left';
+            const t: TextShape = { type: 'text', p: pt(r.p), text: r.text, h: num(r.h), angle: num(r.angle), align };
+            if (r.arc && typeof r.arc === 'object') {
+              const a = r.arc as Record<string, unknown>;
+              if (!(num(a.r) > 0)) throw new CadProblem('a text round a circle in it has no radius');
+              t.arc = { c: pt(a.c), r: num(a.r), cw: a.cw !== false };
+            }
+            s = t;
+            break;
+          }
+          case 'dim': {
+            const kind = typeof r.kind === 'string' && r.kind in DIM_NAMES ? (r.kind as DimShape['kind']) : null;
+            if (!kind) {
+              skipped++;
+              break;
+            }
+            const p = pts(r.pts, kind === 'leader' ? 2 : kind === 'angle' ? 4 : 3);
+            if (!(num(r.h) > 0) || !(num(r.arrow) >= 0)) throw new CadProblem('a dimension in it has no size for its words or arrows');
+            if (typeof r.text !== 'string' || r.text.length > MAX_TEXT) throw new CadProblem('a dimension in it has too many words');
+            s = { type: 'dim', kind, pts: p, dir: num(r.dir), h: num(r.h), arrow: num(r.arrow), dp: Math.max(0, Math.min(8, Math.round(num(r.dp)))), text: r.text };
+            break;
+          }
+          default:
+            skipped++;
         }
-        default:
-          skipped++;
+        if (s) ents.push({ ...s, id: id++, layer });
+      } catch (error) {
+        // One damaged item is left out and counted; the rest of the drawing still opens.
+        if (!(error instanceof CadProblem) || tooMany) throw error;
+        damaged++;
+        why ??= error.message;
       }
-      if (s) ents.push({ ...s, id: id++, layer });
     }
   } catch (error) {
     if (error instanceof CadProblem) throw new CadProblem(`This drawing cannot be opened: ${error.message}.`);
@@ -517,7 +545,7 @@ export function readTcad(text: string): { drawing: Drawing; skipped: number } {
     }
     if (typeof st.dp === 'number' && Number.isInteger(st.dp) && st.dp >= 0 && st.dp <= 8) style.dp = st.dp;
   }
-  return { drawing: { units, layers, current, ents, style, photo: readPhoto(o.photo) }, skipped };
+  return { drawing: { units, layers, current, ents, style, photo: readPhoto(o.photo) }, skipped, damaged, why };
 }
 
 export const centreOfBox = (b: Box): Pt => P((b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2);

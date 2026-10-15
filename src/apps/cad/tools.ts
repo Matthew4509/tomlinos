@@ -55,14 +55,12 @@ export interface ToolCtx {
   ents(): Ent[];
   selection(): Ent[];
   select(ids: number[]): void;
-  /** Adds shapes as one step of undo; on the current layer unless one is named. */
-  add(shapes: Shape[], layer?: string): void;
+  /** Adds shapes as one step of undo, on the current layer unless one is named; the ids they were given. */
+  add(shapes: Shape[], layer?: string): number[] | void;
   /** The items that are showing (locked ones too): what snaps, trim and extend see. */
   visible(): Ent[];
   /** Changes items, adds new ones (on the layers given) and takes some away, as one step of undo. */
   change(changed: Array<{ id: number; shape: Shape }>, added: Array<{ shape: Shape; layer: string }>, removed?: number[]): void;
-  /** Takes back the last step of undo (the line tool's U). */
-  undoLast(): void;
   say(text: string): void;
   problem(text: string): void;
   fmt(v: number): string;
@@ -123,6 +121,8 @@ function arcPieceOf(e: Ent, at: Pt): Extract<Piece, { k: 'arc' }> | null {
 
 function lineTool(ctx: ToolCtx): Tool {
   const pts: Pt[] = [];
+  /** The ids of the lines this tool drew, so U takes back its own last one. */
+  const made: number[] = [];
   const t: Tool = {
     title: 'Line',
     done: false,
@@ -132,7 +132,7 @@ function lineTool(ctx: ToolCtx): Tool {
     point(p) {
       const last = pts[pts.length - 1];
       if (last && dist(last, p) < 1e-12) return ctx.problem('That is the same point as the last one.');
-      if (last) ctx.add([line(last, p)]);
+      if (last) made.push(...(ctx.add([line(last, p)]) ?? []));
       pts.push(p);
     },
     word(w) {
@@ -146,7 +146,9 @@ function lineTool(ctx: ToolCtx): Tool {
         return true;
       }
       if (w === 'u') {
-        if (pts.length > 1) ctx.undoLast();
+        // Takes back this tool's own last line (not whatever was done last in the window).
+        const id = made.pop();
+        if (id !== undefined && ctx.visible().some(e => e.id === id)) ctx.change([], [], [id]);
         pts.pop();
         return true;
       }
@@ -161,6 +163,7 @@ function lineTool(ctx: ToolCtx): Tool {
 function polylineTool(ctx: ToolCtx): Tool {
   const pts: Pt[] = [];
   const finish = (closed: boolean) => {
+    if (closed && pts.length > 3 && dist(pts[0], pts[pts.length - 1]) < 1e-9) pts.pop();
     if (pts.length >= (closed ? 3 : 2)) ctx.add([{ type: 'poly', pts: [...pts], bulges: pts.map(() => 0), closed }]);
     else ctx.problem(closed ? 'A closed polyline needs three points or more.' : 'A polyline needs two points or more.');
   };

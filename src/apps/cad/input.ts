@@ -5,6 +5,8 @@ import { P, add, polar, type Pt } from './geom.ts';
 
 /** A number or a small sum (+ - * / and brackets); null when it does not read as one. */
 export function parseNumber(text: string): number | null {
+  // "600 400" is two numbers, not 600400: a space between figures is refused, not squeezed out.
+  if (/[\d.]\s+[\d.]/.test(text)) return null;
   const s = text.replace(/\s+/g, '');
   if (!s || s.length > 200) return null;
   let i = 0;
@@ -85,7 +87,10 @@ export function parsePoint(text: string, last: Pt | null): PointRead {
     const l = parseNumber(angled[0]);
     const a = parseNumber(angled[1]);
     if (l === null || a === null) return { problem: `“${s}” is not a length<angle (for example @600<90).` };
-    return { p: polar(from, l, (a * Math.PI) / 180) };
+    // A quarter turn (90, 180, -90...) gives exactly 0 across or up, not 6e-17.
+    const q = ((a % 360) + 360) % 360;
+    const exact: Record<number, Pt> = { 0: P(l, 0), 90: P(0, l), 180: P(-l, 0), 270: P(0, -l) };
+    return { p: q in exact ? add(from, exact[q]) : polar(from, l, (a * Math.PI) / 180) };
   }
   const xy = split(body, ',');
   if (!xy) return null;

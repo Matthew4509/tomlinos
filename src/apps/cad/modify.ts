@@ -4,12 +4,13 @@
 // lines and arcs with a start and a direction, as a CAM program machines them), close, set the start point, reverse,
 // explode; and the area and length of a shape. Each returns the new shapes, or a sentence saying why it cannot.
 import {
-  TAU, add, angleOf, bulgeArc, ccwArc, circleTTR, cross, dist, dot, ellN, intersect, isFull, lerp, len, mul, normAngle, perp, polar, sub, unit,
+  TAU, add, angleIn, angleOf, bulgeArc, ccwArc, circleTTR, cross, dist, dot, ellN, intersect, isFull, lerp, len, mul, normAngle, perp, polar, sub, unit,
   type Piece, type Pt,
 } from './geom.ts';
-import { endsOf, piecesOf, type Ent, type Shape } from './model.ts';
+import { STRAIGHT_BULGE, endsOf, piecesOf, type Ent, type Shape } from './model.ts';
 
 const EPS = 1e-9;
+const NO_LENGTH = 'That line has no length (its two ends are the same point), so it has no direction: delete it, or draw it again.';
 /** Ends closer than this are joined (a ten-thousandth of a unit). */
 export const JOIN_TOL = 1e-4;
 
@@ -30,7 +31,7 @@ function spansOf(pts: Pt[], bulges: number[], closed: boolean): Span[] {
     const a = pts[i];
     const b = pts[(i + 1) % n];
     const bulge = bulges[i] ?? 0;
-    out.push({ a, b, bulge, arc: Math.abs(bulge) > 1e-12 && dist(a, b) > 1e-12 ? bulgeArc(a, b, bulge) : null });
+    out.push({ a, b, bulge, arc: Math.abs(bulge) > STRAIGHT_BULGE && dist(a, b) > 1e-12 ? bulgeArc(a, b, bulge) : null });
   }
   return out;
 }
@@ -238,6 +239,7 @@ export function trim(s: Shape, q: Pt, others: Shape[]): Shape[] | string {
 
 /** Splits an open shape in two at q. */
 export function breakAt(s: Shape, q: Pt): Shape[] | string {
+  if (s.type === 'line' && dist(s.a, s.b) <= EPS) return NO_LENGTH;
   const path = pathOf(s);
   if (!path) return CANNOT_WALK[s.type] ?? 'That cannot be broken.';
   if (path.closed) return 'A closed shape needs two points to break it: use Break between two points.';
@@ -297,6 +299,7 @@ export function extend(s: Shape, q: Pt, others: Shape[]): Shape | string {
   const none = 'Nothing is in the way of that end, so there is nothing to extend it to.';
   switch (s.type) {
     case 'line': {
+      if (dist(s.a, s.b) <= EPS) return NO_LENGTH;
       const atB = dist(q, s.b) <= dist(q, s.a);
       const from = atB ? s.b : s.a;
       const d = unit(atB ? sub(s.b, s.a) : sub(s.a, s.b));
@@ -367,27 +370,53 @@ export function extend(s: Shape, q: Pt, others: Shape[]): Shape | string {
   }
 }
 
+/**
+ * A closed polyline whose last point repeats its first (clicked back on the start, then closed) has a side of no
+ * length there: without it, the corner at the start is a corner like the others.
+ */
+export function withoutClosingRepeat<T extends Extract<Shape, { type: 'poly' }>>(s: T): T {
+  const n = s.pts.length;
+  if (!s.closed || n < 4 || dist(s.pts[0], s.pts[n - 1]) > EPS) return s;
+  return { ...s, pts: s.pts.slice(0, -1), bulges: s.bulges.slice(0, n - 1) };
+}
+
 // ---- Fillet and chamfer --------------------------------------------------------------------------------------------
 
 const lineDir = (s: Extract<Shape, { type: 'line' }>) => unit(sub(s.b, s.a));
 const sideOf = (a: Pt, d: Pt, q: Pt) => Math.sign(cross(d, sub(q, a)));
 
-/** Cuts or stretches a line so it runs from `to` towards the end on the q side. */
-function lineTo(s: Extract<Shape, { type: 'line' }>, to: Pt, q: Pt): Shape | null {
+/**
+ * Cuts or stretches a line so it runs from `to` towards the end on the q side; 'past' when `to` lies beyond that end
+ * (the round or cut is longer than the line, which would otherwise turn round on itself).
+ */
+function lineTo(s: Extract<Shape, { type: 'line' }>, to: Pt, q: Pt): Shape | null | 'past' {
   const d = sub(s.b, s.a);
   const tq = dot(sub(q, s.a), d) / dot(d, d);
   const tt = dot(sub(to, s.a), d) / dot(d, d);
-  const keep = tq >= tt ? s.b : s.a;
-  return dist(keep, to) > EPS ? { type: 'line', a: to, b: keep } : null;
+  const keepB = tq >= tt;
+  const keep = keepB ? s.b : s.a;
+  if (dist(keep, to) <= EPS) return null;
+  if (keepB ? tt > 1 + EPS : tt < -EPS) return 'past';
+  return { type: 'line', a: to, b: keep };
 }
 
-/** Cuts or stretches an arc so its end nearer `to` is at `to` (a point on its circle). */
-function arcTo(s: Extract<Shape, { type: 'arc' }>, to: Pt): Shape | null {
+/**
+ * Cuts or stretches an arc to `to` (a point on its circle). A touch inside the arc keeps the part that was picked (q);
+ * a touch beyond it stretches the nearer end.
+ */
+function arcTo(s: Extract<Shape, { type: 'arc' }>, to: Pt, q: Pt): Shape | null {
   const ang = angleOf(sub(to, s.c));
-  const nearEnd = dist(polar(s.c, s.r, s.a1), to) <= dist(polar(s.c, s.r, s.a0), to);
-  const arc = nearEnd ? ccwArc(s.c, s.r, s.a0, ang) : ccwArc(s.c, s.r, ang, s.a1);
+  let keepStart: boolean;
+  // Both measured anticlockwise from the arc's start: the pick is on the start's side when it comes before the touch.
+  if (angleIn(ang, s.a0, s.a1, 0)) keepStart = normAngle(angleOf(sub(q, s.c)) - s.a0) <= normAngle(ang - s.a0);
+  else keepStart = dist(polar(s.c, s.r, s.a1), to) <= dist(polar(s.c, s.r, s.a0), to);
+  const arc = keepStart ? ccwArc(s.c, s.r, s.a0, ang) : ccwArc(s.c, s.r, ang, s.a1);
   return arc.a1 - arc.a0 > 1e-9 && arc.a1 - arc.a0 < TAU - 1e-9 ? { type: 'arc', ...arc } : null;
 }
+
+const TOO_BIG_ROUND = (r: number) => `A round of radius ${r} is longer than one of the lines it joins: choose a smaller radius (or extend the line first).`;
+const TOO_BIG_CUT = 'The chamfer distances are longer than one of the lines: choose shorter distances (or extend the line first).';
+const shortLine = (s: Shape) => s.type === 'line' && dist(s.a, s.b) <= EPS;
 
 export interface TwoItemChange {
   /** The two items as they become (null: used up entirely). */
@@ -405,13 +434,19 @@ export function fillet(A: Shape, qa: Pt, B: Shape, qb: Pt, r: number): TwoItemCh
   const ok = (s: Shape) => s.type === 'line' || s.type === 'arc';
   if (!ok(A) || !ok(B)) return 'Fillet joins two lines or arcs (for a polyline, pick two of its straight sides, or use Fillet every corner).';
   if (r < 0) return 'The radius must be 0 or more.';
+  if (shortLine(A) || shortLine(B)) return 'One of those lines has no length (its two ends are the same point): delete it, or pick another.';
   if (A.type === 'line' && B.type === 'line') {
     const da = lineDir(A);
     const db = lineDir(B);
     if (Math.abs(cross(da, db)) < 1e-12) return 'The two lines are parallel, so they make no corner.';
     const t = cross(sub(B.a, A.a), db) / cross(da, db);
     const corner = add(A.a, mul(da, t));
-    if (r === 0) return { first: lineTo(A, corner, qa), second: lineTo(B, corner, qb), added: null };
+    if (r === 0) {
+      const first = lineTo(A, corner, qa);
+      const second = lineTo(B, corner, qb);
+      if (first === 'past' || second === 'past') return 'Pick each line on the part to keep, away from where they meet.';
+      return { first, second, added: null };
+    }
     // The round sits in the angle between the two kept arms: on qb's side of A and on qa's side of B.
     const ua = mul(da, Math.sign(dot(sub(qa, corner), da)) || 1);
     const ub = mul(db, Math.sign(dot(sub(qb, corner), db)) || 1);
@@ -426,6 +461,7 @@ export function fillet(A: Shape, qa: Pt, B: Shape, qb: Pt, r: number): TwoItemCh
     const arc = normAngle(e - s) <= Math.PI ? ccwArc(c, r, s, e) : ccwArc(c, r, e, s);
     const first = lineTo(A, ta, add(corner, mul(ua, back + 1)));
     const second = lineTo(B, tb, add(corner, mul(ub, back + 1)));
+    if (first === 'past' || second === 'past') return TOO_BIG_ROUND(r);
     return { first, second, added: { type: 'arc', ...arc } };
   }
   if (r === 0) return 'A sharp corner (radius 0) is made between two lines only.';
@@ -434,8 +470,9 @@ export function fillet(A: Shape, qa: Pt, B: Shape, qb: Pt, r: number): TwoItemCh
   const found = circleTTR(pa, pb, r, qa, qb);
   if (found === 'shape' || !found) return `No round of radius ${r} fits between those two.`;
   const [ta, tb] = found.touch;
-  const first = A.type === 'line' ? lineTo(A, ta, qa) : arcTo(A as Extract<Shape, { type: 'arc' }>, ta);
-  const second = B.type === 'line' ? lineTo(B, tb, qb) : arcTo(B as Extract<Shape, { type: 'arc' }>, tb);
+  const first = A.type === 'line' ? lineTo(A, ta, qa) : arcTo(A as Extract<Shape, { type: 'arc' }>, ta, qa);
+  const second = B.type === 'line' ? lineTo(B, tb, qb) : arcTo(B as Extract<Shape, { type: 'arc' }>, tb, qb);
+  if (first === 'past' || second === 'past') return TOO_BIG_ROUND(r);
   const s = angleOf(sub(ta, found.c));
   const e = angleOf(sub(tb, found.c));
   const arc = normAngle(e - s) <= Math.PI ? ccwArc(found.c, r, s, e) : ccwArc(found.c, r, e, s);
@@ -446,6 +483,7 @@ export function fillet(A: Shape, qa: Pt, B: Shape, qb: Pt, r: number): TwoItemCh
 export function chamfer(A: Shape, qa: Pt, B: Shape, qb: Pt, d1: number, d2: number): TwoItemChange | string {
   if (A.type !== 'line' || B.type !== 'line') return 'Chamfer cuts the corner between two lines (for a polyline, pick two of its straight sides, or use Chamfer every corner).';
   if (!(d1 > 0) || !(d2 > 0)) return 'The chamfer distances must be above 0.';
+  if (shortLine(A) || shortLine(B)) return 'One of those lines has no length (its two ends are the same point): delete it, or pick another.';
   const da = lineDir(A);
   const db = lineDir(B);
   if (Math.abs(cross(da, db)) < 1e-12) return 'The two lines are parallel, so they make no corner.';
@@ -455,7 +493,10 @@ export function chamfer(A: Shape, qa: Pt, B: Shape, qb: Pt, d1: number, d2: numb
   const ub = mul(db, Math.sign(dot(sub(qb, corner), db)) || 1);
   const pa = add(corner, mul(ua, d1));
   const pb = add(corner, mul(ub, d2));
-  return { first: lineTo(A, pa, add(corner, mul(ua, d1 + 1))), second: lineTo(B, pb, add(corner, mul(ub, d2 + 1))), added: { type: 'line', a: pa, b: pb } };
+  const first = lineTo(A, pa, add(corner, mul(ua, d1 + 1)));
+  const second = lineTo(B, pb, add(corner, mul(ub, d2 + 1)));
+  if (first === 'past' || second === 'past') return TOO_BIG_CUT;
+  return { first, second, added: { type: 'line', a: pa, b: pb } };
 }
 
 /**
@@ -463,6 +504,7 @@ export function chamfer(A: Shape, qa: Pt, B: Shape, qb: Pt, d1: number, d2: numb
  * whose sides are too short, or next to an arc, is left as it is and counted.
  */
 export function polyCorners(s: Extract<Shape, { type: 'poly' }>, how: { round: number } | { cut: [number, number] }, only?: number): { shape: Shape; done: number; skipped: number } {
+  s = withoutClosingRepeat(s);
   const n = s.pts.length;
   const spans = spansOf(s.pts, s.bulges, s.closed);
   const used = spans.map(() => 0);
@@ -539,6 +581,7 @@ export function polyCorners(s: Extract<Shape, { type: 'poly' }>, how: { round: n
 
 /** Which corner of a polyline lies between the sides picked at qa and qb (they must be next to each other). */
 export function cornerBetween(s: Extract<Shape, { type: 'poly' }>, qa: Pt, qb: Pt): number | null {
+  s = withoutClosingRepeat(s);
   const path = pathOf(s)!;
   const ia = Math.min(Math.floor(path.paramOf(qa)), path.hi - 1);
   const ib = Math.min(Math.floor(path.paramOf(qb)), path.hi - 1);
@@ -615,19 +658,21 @@ function offsetPoly(s: Extract<Shape, { type: 'poly' }>, d: number, side: Pt): S
   const endOf = (m: Moved) => ('line' in m ? m.line.b : m.circle.b);
   const whole = (m: Moved): Piece => ('line' in m ? { k: 'xline', p: m.line.a, d: unit(sub(m.line.b, m.line.a)) } : { k: 'arc', c: m.circle.c, r: m.circle.r, a0: 0, a1: TAU });
   /** Where two moved spans meet: their crossing nearest where they were, or the end itself if they already meet. */
-  const meet = (m1: Moved, m2: Moved): Pt => {
+  const meet = (m1: Moved, m2: Moved): Pt | null => {
     const e = endOf(m1);
     const st = startOf(m2);
     if (dist(e, st) < 1e-9) return e;
     const xs = intersect(whole(m1), whole(m2));
-    if (!xs.length) return lerp(e, st, 0.5);
+    if (!xs.length) return null;
     return xs.sort((a, b) => dist(a, e) + dist(a, st) - dist(b, e) - dist(b, st))[0];
   };
   const m = moved.length;
   const pts: Pt[] = [];
   for (let i = 0; i < m; i++) {
-    if (i === 0) pts.push(s.closed ? meet(moved[m - 1], moved[0]) : startOf(moved[0]));
-    else pts.push(meet(moved[i - 1], moved[i]));
+    const p = i === 0 ? (s.closed ? meet(moved[m - 1], moved[0]) : startOf(moved[0])) : meet(moved[i - 1], moved[i]);
+    // Two sides whose offsets never cross: the polyline doubles straight back on itself there.
+    if (!p) return 'That polyline turns straight back on itself at a corner, so an offset cannot follow it round. Offset its parts one by one.';
+    pts.push(p);
   }
   if (!s.closed) pts.push(endOf(moved[m - 1]));
   const bulges: number[] = [];
@@ -725,6 +770,7 @@ export function closeShape(s: Shape): Shape | string {
   if (s.closed) return 'That polyline is already closed.';
   if (s.pts.length < 3 && dist(s.pts[0], s.pts[s.pts.length - 1]) > JOIN_TOL) return 'A polyline needs three points or more to close.';
   if (dist(s.pts[0], s.pts[s.pts.length - 1]) <= JOIN_TOL) {
+    if (s.pts.length < 4) return 'Its ends already meet, and without the repeated point fewer than three are left: there is no shape to close.';
     return { ...s, pts: s.pts.slice(0, -1), bulges: s.bulges.slice(0, s.pts.length - 2).concat([s.bulges[s.pts.length - 2] ?? 0]), closed: true };
   }
   return { ...s, bulges: s.bulges.slice(0, s.pts.length - 1).concat([0]), closed: true };

@@ -269,8 +269,13 @@ test('a .tcad file reads back exactly, and a bad one is refused with a reason', 
   assert.deepEqual(back.drawing.layers, d.layers);
   assert.throws(() => readTcad('not json'), CadProblem);
   assert.throws(() => readTcad(JSON.stringify({ tomlinCad: 2, layers: [], items: [] })), CadProblem);
-  assert.throws(() => readTcad(JSON.stringify({ tomlinCad: 1, layers: [], items: [{ type: 'line', a: { x: 0, y: 'x' }, b: { x: 1, y: 1 } }] })), CadProblem);
-  assert.throws(() => readTcad(JSON.stringify({ tomlinCad: 1, layers: [], items: [{ type: 'circle', c: { x: 0, y: 0 }, r: -1 }] })), CadProblem);
+  // A damaged item is left out and counted, with the reason; the rest still opens.
+  const hurt = readTcad(JSON.stringify({ tomlinCad: 1, layers: [], items: [{ type: 'line', a: { x: 0, y: 'x' }, b: { x: 1, y: 1 } }, { type: 'circle', c: { x: 0, y: 0 }, r: -1 }, { type: 'point', p: { x: 1, y: 2 } }] }));
+  assert.equal(hurt.damaged, 2);
+  assert.match(String(hurt.why), /not a number/);
+  assert.equal(hurt.drawing.ents.length, 1, 'the point still opens');
+  // Too many points in all still refuses the whole file.
+  assert.throws(() => readTcad(JSON.stringify({ tomlinCad: 1, layers: [], items: Array.from({ length: 30 }, () => ({ type: 'poly', pts: Array.from({ length: 100000 }, () => ({ x: 0, y: 0 })), bulges: [], closed: false })) })), /more points/);
   const odd = readTcad(JSON.stringify({ tomlinCad: 1, layers: [{ name: 'A', colour: 'red' }], items: [{ type: 'hatch' }, { type: 'point', p: { x: 1, y: 2 }, layer: 'nope' }] }));
   assert.equal(odd.skipped, 1, 'an unknown kind is left out and counted');
   assert.equal(odd.drawing.ents[0].layer, 'A', 'an unknown layer falls back to the first');
@@ -298,7 +303,12 @@ function fakeCtx(): ToolCtx & { items: Ent[]; said: string[]; problems: string[]
     },
     add(shapes: Shape[], layer = 'Geometry') {
       undo.push([...items]);
-      for (const s of shapes) items.push({ ...s, id: next++, layer } as Ent);
+      const ids: number[] = [];
+      for (const s of shapes) {
+        ids.push(next);
+        items.push({ ...s, id: next++, layer } as Ent);
+      }
+      return ids;
     },
     change(changed: Array<{ id: number; shape: Shape }>, added: Array<{ shape: Shape; layer: string }>, removed: number[] = []) {
       undo.push([...items]);
@@ -308,10 +318,6 @@ function fakeCtx(): ToolCtx & { items: Ent[]; said: string[]; problems: string[]
         items[i] = { ...c.shape, id: c.id, layer: items[i].layer } as Ent;
       }
       for (const a of added) items.push({ ...a.shape, id: next++, layer: a.layer } as Ent);
-    },
-    undoLast() {
-      const before = undo.pop();
-      if (before) items.splice(0, items.length, ...before);
     },
     say: (t: string) => void said.push(t),
     problem: (t: string) => void problems.push(t),

@@ -131,7 +131,9 @@ test('.tcad keeps text, text round an arc, dimensions and the sizes for new ones
   const back = readTcad(writeTcad(d)).drawing;
   assert.deepEqual(back.ents, d.ents, 'every item back as it was');
   assert.deepEqual(back.style, d.style, 'the sizes kept');
-  assert.throws(() => readTcad(JSON.stringify({ tomlinCad: 1, layers: [{ name: 'A' }], items: [{ type: 'text', p: { x: 0, y: 0 }, text: 'x', h: -1, angle: 0 }] })), /no height/);
+  const bad = readTcad(JSON.stringify({ tomlinCad: 1, layers: [{ name: 'A' }], items: [{ type: 'text', p: { x: 0, y: 0 }, text: 'x', h: -1, angle: 0 }] }));
+  assert.equal(bad.damaged, 1, 'text with no height is left out');
+  assert.match(String(bad.why), /no height/);
 });
 
 // ---- DXF out --------------------------------------------------------------------------------------------------------
@@ -157,7 +159,9 @@ test('DXF out: R12, layers in capitals with their colours, every kind of item, t
   assert.ok(out.text.includes('%%c50 %%p0.1 90%%d'), 'diameter, plus-minus and degree as R12 codes');
   assert.ok(!/\r\n8\r\nCONSTRUCTION\r\n/.test(out.text), 'construction lines left out unless asked for');
   assert.ok(out.notes.some(n => n.includes('construction line')), 'and the notes say so');
-  assert.equal(r12Text('50%%'), '50%%%', 'a literal %% is kept as itself');
+  // %%% is one % sign in R12, so a %% in the words is written as two of them, and reads back as itself.
+  assert.equal(r12Text('50%%'), '50%%%%%%', 'a literal %% is kept as itself');
+  assert.equal(decodeText(r12Text('50%% A%%dB 100%%c')), '50%% A%%dB 100%%c');
   assert.equal(r12Name('Layer 5 (top)'), 'LAYER_5__TOP_');
   const withX = writeDxf(d, { textAsLines: true, construction: true, hidden: false });
   assert.ok(/\r\n8\r\nCONSTRUCTION\r\n/.test(withX.text), 'construction lines in when asked');

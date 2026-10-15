@@ -179,6 +179,8 @@ export const DXF_LINE_TYPES: Record<LineType, { name: string; text: string; mm: 
 /** A number as DXF writes it: no exponent, at most ten decimal places. */
 export function dxfNum(v: number): string {
   if (!Number.isFinite(v)) return '0.0';
+  // Above this, JavaScript writes an exponent, which an R12 reader refuses.
+  if (Math.abs(v) >= 1e15) throw new CadProblem('A number in the drawing is too big for a DXF (more than 1,000,000,000,000,000). Something drawn very far away, or scaled hugely, is the likely cause: Zoom fit shows it.');
   if (Math.abs(v) < 5e-11) return '0.0';
   const s = v.toFixed(10).replace(/0+$/, '');
   return s.endsWith('.') ? `${s}0` : s;
@@ -193,7 +195,8 @@ export function r12Name(name: string): string {
 /** Text with the signs R12 writes as codes (degree, diameter, plus-minus); a letter outside Windows' Western set becomes ?. */
 export function r12Text(s: string): string {
   return s
-    .replace(/%%/g, '%%%')
+    // %%% is one % sign, so a %% typed in the words is written as two of them.
+    .replace(/%%/g, '%%%%%%')
     .replace(/°/g, '%%d')
     .replace(/[Øø⌀]/g, '%%c')
     .replace(/±/g, '%%p')
@@ -240,6 +243,10 @@ export function writeDxf(d: Drawing, o: DxfOptions): DxfWritten {
   const names = new Map<string, string>();
   const used = new Set<string>(['0']);
   for (const l of d.layers) {
+    if (l.name === '0') {
+      names.set('0', '0');
+      continue;
+    }
     let n = r12Name(l.name);
     for (let i = 2; used.has(n); i++) n = `${r12Name(l.name).slice(0, 28)}_${i}`;
     used.add(n);
@@ -302,7 +309,8 @@ export function writeDxf(d: Drawing, o: DxfOptions): DxfWritten {
   tag(0, 'ENDTAB');
   tag(0, 'TABLE');
   tag(2, 'LAYER');
-  tag(70, d.layers.length + 1);
+  const ownZero = d.layers.find(l => l.name === '0');
+  tag(70, d.layers.length + (ownZero ? 0 : 1));
   const layerRow = (name: string, colour: number, on: boolean, locked: boolean, lt: string) => {
     tag(0, 'LAYER');
     tag(2, name);
@@ -310,7 +318,7 @@ export function writeDxf(d: Drawing, o: DxfOptions): DxfWritten {
     tag(62, on ? colour : -colour);
     tag(6, lt);
   };
-  layerRow('0', 7, true, false, 'CONTINUOUS');
+  if (!ownZero) layerRow('0', 7, true, false, 'CONTINUOUS');
   for (const l of d.layers) layerRow(names.get(l.name)!, aciOf(l.colour), l.on, l.locked, DXF_LINE_TYPES[l.lineType].name);
   tag(0, 'ENDTAB');
   tag(0, 'TABLE');
@@ -614,7 +622,7 @@ export function readDxf(bytes: Uint8Array): DxfRead {
     const at = headerTags.findIndex(t => t[0] === 9 && t[1] === name);
     return at >= 0 ? headerTags[at + 1]?.[1] : undefined;
   };
-  const insUnits = Number(hv('$INSUNITS') ?? 0);
+  const insUnits = Number(hv('$INSUNITS') ?? 0) || 0;
   let units: Units = 'mm';
   let k = 1;
   let unitsNote: string;
@@ -639,8 +647,34 @@ export function readDxf(bytes: Uint8Array): DxfRead {
       k = 1000;
       unitsNote = 'Units: the file is in metres; read as millimetres (each size times 1000).';
       break;
-    default:
+    case 14:
+      k = 100;
+      unitsNote = 'Units: the file is in decimetres; read as millimetres (each size times 100).';
+      break;
+    case 7:
+      k = 1e6;
+      unitsNote = 'Units: the file is in kilometres; read as millimetres (each size times 1,000,000).';
+      break;
+    case 9:
+      units = 'inch';
+      k = 0.001;
+      unitsNote = 'Units: the file is in mils (thousandths of an inch); read as inches (each size divided by 1000).';
+      break;
+    case 10:
+      units = 'inch';
+      k = 36;
+      unitsNote = 'Units: the file is in yards; read as inches (each size times 36).';
+      break;
+    case 3:
+      units = 'inch';
+      k = 63360;
+      unitsNote = 'Units: the file is in miles; read as inches (each size times 63,360).';
+      break;
+    case 0:
       unitsNote = 'Units: the file does not say, so its numbers were read as millimetres (600 is 600 mm). If it was drawn in inches, Utils > Units > Inches with "Change the sizes too" off keeps the numbers.';
+      break;
+    default:
+      unitsNote = `Units: the file gives unit number ${insUnits}, which TOMLIN CAD does not know, so its numbers were read as millimetres. If they were not, Utils > Units with "Change the sizes too" off keeps the numbers.`;
   }
 
   // Layers.
@@ -716,6 +750,7 @@ export function readDxf(bytes: Uint8Array): DxfRead {
           const a = ptOf(r, 10);
           const b = ptOf(r, 11);
           if (dist(a, b) > 1e-12) put({ type: 'line', a, b });
+          else counted(leftOut, 'line of no length');
           break;
         }
         case 'POINT':
@@ -724,11 +759,15 @@ export function readDxf(bytes: Uint8Array): DxfRead {
         case 'CIRCLE': {
           const rad = num(r, 40);
           if (rad > 0) put({ type: 'circle', c: flipX(ptOf(r, 10), f), r: rad });
+          else counted(leftOut, 'circle of no size');
           break;
         }
         case 'ARC': {
           const rad = num(r, 40);
-          if (!(rad > 0)) break;
+          if (!(rad > 0)) {
+            counted(leftOut, 'arc of no size');
+            break;
+          }
           let a0 = (num(r, 50) * Math.PI) / 180;
           let a1 = (num(r, 51) * Math.PI) / 180;
           if (f < 0) [a0, a1] = [Math.PI - a1, Math.PI - a0];
@@ -741,8 +780,13 @@ export function readDxf(bytes: Uint8Array): DxfRead {
         case 'ELLIPSE': {
           const c = ptOf(r, 10);
           const m = ptOf(r, 11);
-          const ratio = num(r, 40, 1);
-          if (!(ratio > 0 && ratio <= 1) || Math.hypot(m.x, m.y) < 1e-12) break;
+          // Other programs' rounding can make a circle-like ellipse's ratio a hair over 1.
+          let ratio = num(r, 40, 1);
+          if (ratio > 1 && ratio < 1 + 1e-6) ratio = 1;
+          if (!(ratio > 0 && ratio <= 1) || Math.hypot(m.x, m.y) < 1e-12) {
+            counted(leftOut, 'ellipse of impossible size');
+            break;
+          }
           let t0 = num(r, 41, 0);
           let t1 = num(r, 42, TAU);
           let span = normAngle(t1 - t0);
@@ -765,7 +809,7 @@ export function readDxf(bytes: Uint8Array): DxfRead {
           const closed = !!(num(r, 70) & 1);
           if (pts.length >= 2 && pts.every(p => Number.isFinite(p.x) && Number.isFinite(p.y))) {
             put({ type: 'poly', pts: pts.map(p => flipX(p, f)), bulges: bulges.map(b => (f < 0 ? -b : b)), closed });
-          }
+          } else counted(leftOut, 'polyline with fewer than two points');
           break;
         }
         case 'POLYLINE': {
@@ -786,12 +830,14 @@ export function readDxf(bytes: Uint8Array): DxfRead {
           }
           if (flags & 8) notes.add('3D polylines were laid flat (their heights dropped).');
           if (pts.length >= 2) put({ type: 'poly', pts, bulges, closed: !!(flags & 1) });
+          else counted(leftOut, 'polyline with fewer than two points');
           break;
         }
         case 'SPLINE': {
           const shape = splineOf(r, tol);
           if (shape === 'fit') {
-            const fit = r.tags.filter(t => t[0] === 11).map((t, j) => P(Number(t[1]), Number(r.tags.filter(x => x[0] === 21)[j]?.[1] ?? 0)));
+            const fy = r.tags.filter(x => x[0] === 21);
+            const fit = r.tags.filter(t => t[0] === 11).map((t, j) => P(Number(t[1]), Number(fy[j]?.[1] ?? 0)));
             if (fit.length >= 2) {
               put({ type: 'spline', fit, closed: !!(num(r, 70) & 1) });
               notes.add('Curves saved with only their fit points were drawn as smooth curves through those points (the shape may differ very slightly).');
@@ -823,7 +869,8 @@ export function readDxf(bytes: Uint8Array): DxfRead {
           break;
         }
         case 'LEADER': {
-          const pts = r.tags.filter(t => t[0] === 10).map((t, j) => P(Number(t[1]), Number(r.tags.filter(x => x[0] === 20)[j]?.[1] ?? 0)));
+          const ly = r.tags.filter(x => x[0] === 20);
+          const pts = r.tags.filter(t => t[0] === 10).map((t, j) => P(Number(t[1]), Number(ly[j]?.[1] ?? 0)));
           if (pts.length >= 2) put({ type: 'dim', kind: 'leader', pts, dir: 0, h: defaultStyle(units === 'inch').dimH, arrow: defaultStyle(units === 'inch').arrow, dp: 2, text: '' });
           break;
         }
@@ -859,6 +906,9 @@ export function readDxf(bytes: Uint8Array): DxfRead {
           const rot = (num(r, 50) * Math.PI) / 180;
           const cols = Math.max(1, Math.min(1000, Math.round(num(r, 70, 1)) || 1));
           const rows = Math.max(1, Math.min(1000, Math.round(num(r, 71, 1)) || 1));
+          // Each copy of a repeated insert counts against the limit before any is made (a tiny file can ask for millions).
+          total += inner.length * (rows * cols - 1);
+          if (total > MAX_ITEMS) throw new CadProblem(`it holds more than ${MAX_ITEMS.toLocaleString('en-GB')} items`);
           const colGap = num(r, 44);
           const rowGap = num(r, 45);
           const pos = flipX(ptOf(r, 10), f);
@@ -866,7 +916,8 @@ export function readDxf(bytes: Uint8Array): DxfRead {
             for (let col = 0; col < cols; col++) {
               const off = rotatePt(P(col * colGap, row * rowGap), P(0, 0), rot);
               for (const p of inner) {
-                const placed = placeShape(p.shape, b.base, f < 0 ? -sx : sx, sy, f < 0 ? Math.PI - rot : rot, add(pos, f < 0 ? P(-off.x, off.y) : off), tol);
+                // Seen from below, x is mirrored: the scale across turns over, and so does the turn.
+                const placed = placeShape(p.shape, b.base, f < 0 ? -sx : sx, sy, f < 0 ? -rot : rot, add(pos, f < 0 ? P(-off.x, off.y) : off), tol);
                 for (const s of placed.shapes) out.push({ shape: s, layer: p.layer === null || p.layer === '0' ? layer : p.layer });
                 if (placed.approximated) notes.add('Blocks stretched more one way than the other had their arcs redrawn as polylines of arcs within the arc tolerance.');
               }
@@ -918,7 +969,8 @@ export function readDxf(bytes: Uint8Array): DxfRead {
     const h = num(r, 40, 0);
     if (!(h > 0)) return null;
     const dir = get(r, 11) !== undefined ? ptOf(r, 11) : null;
-    const angle = dir && Math.hypot(dir.x, dir.y) > 1e-12 ? angleOf(dir) : num(r, 50);
+    // Code 50 is written in degrees by AutoCAD and others (the DXF reference's "radians" is a known slip).
+    const angle = dir && Math.hypot(dir.x, dir.y) > 1e-12 ? angleOf(dir) : (num(r, 50) * Math.PI) / 180;
     const attach = Math.max(1, Math.min(9, num(r, 71, 1)));
     const row = Math.ceil(attach / 3);
     const col = (attach - 1) % 3;
@@ -948,7 +1000,14 @@ export function readDxf(bytes: Uint8Array): DxfRead {
   };
   for (const l of layers) l.name = spelt(l.name)!;
   // Sizes in feet, centimetres or metres are brought to inches or millimetres.
-  const shapes = (k === 1 ? placed : placed.map(p => ({ shape: scaleShape(p.shape, P(0, 0), k), layer: p.layer }))).map(p => ({ shape: p.shape, layer: spelt(p.layer) }));
+  const scaled = (k === 1 ? placed : placed.map(p => ({ shape: scaleShape(p.shape, P(0, 0), k), layer: p.layer }))).map(p => ({ shape: p.shape, layer: spelt(p.layer) }));
+  // A size so far out it is no longer a number (1e306 metres, a block scaled 1e300 times) would make the drawing
+  // impossible to save and open again: such items are left out and counted.
+  const shapes = scaled.filter(p => {
+    if (allFinite(p.shape)) return true;
+    counted(leftOut, 'item too far out to keep (a size beyond any number)');
+    return false;
+  });
 
   const d = newDrawing(units);
   const known = new Set(layers.map(l => l.name));
@@ -985,6 +1044,14 @@ export function readDxf(bytes: Uint8Array): DxfRead {
   return { drawing: d, report, leftOut: left };
 }
 
+/** Every number in a shape is a real number (not Infinity or NaN). */
+export function allFinite(v: unknown): boolean {
+  if (typeof v === 'number') return Number.isFinite(v);
+  if (Array.isArray(v)) return v.every(allFinite);
+  if (v && typeof v === 'object') return Object.values(v).every(allFinite);
+  return true;
+}
+
 /** A SPLINE as a polyline of arcs from its control points; 'fit' when it has only fit points; null when unreadable. */
 function splineOf(r: Rec, tol: number): Shape | 'fit' | null {
   const degree = num(r, 71, 3);
@@ -994,14 +1061,22 @@ function splineOf(r: Rec, tol: number): Shape | 'fit' | null {
   const ys = r.tags.filter(t => t[0] === 20).map(t => Number(t[1]));
   const ctrl = xs.map((x, j) => P(x, ys[j] ?? 0));
   if (ctrl.length < 2) return r.tags.some(t => t[0] === 11) ? 'fit' : null;
-  if (!(degree >= 1 && degree <= 10) || knots.length !== ctrl.length + degree + 1) return null;
+  if (!(degree >= 1 && degree <= 10) || ctrl.length <= degree || knots.length !== ctrl.length + degree + 1) return null;
+  for (let j = 1; j < knots.length; j++) if (!(knots[j] >= knots[j - 1])) return null;
   const w = weights.length === ctrl.length ? weights : ctrl.map(() => 1);
   const lo = knots[degree];
   const hi = knots[ctrl.length];
   if (!(hi > lo)) return null;
   const evalAt = (t: number): Pt => {
-    let span = degree;
-    while (span < ctrl.length - 1 && t >= knots[span + 1]) span++;
+    // The last knot span starting at or before t (found by halving: a curve can have thousands of points).
+    let lo2 = degree;
+    let hi2 = ctrl.length - 1;
+    while (lo2 < hi2) {
+      const m = (lo2 + hi2 + 1) >> 1;
+      if (t >= knots[m]) lo2 = m;
+      else hi2 = m - 1;
+    }
+    const span = lo2;
     const d: Array<[number, number, number]> = [];
     for (let j = 0; j <= degree; j++) {
       const c = ctrl[span - degree + j];

@@ -180,7 +180,7 @@ test('several pages: each says its row and column, and the parts meet edge to ed
   close(pl.pages[0].box.x1, pl.pages[1].box.x0, 'page 1 ends where page 2 starts');
   const r = new Recorder();
   drawCadPage(r, d, pl, 1, extras);
-  assert.ok(r.texts.some(t => t === '2 of 3: row 1, col 2'), r.texts.join(' | '));
+  assert.ok(r.texts.some(t => t === '2/3: row 1, col 2'), r.texts.join(' | '));
   // The line runs right across the middle page (it is clipped by the frame, not cut short).
   const [x0, , x1] = r.lines[0];
   assert.ok(x0 < pl.area.x * PT && x1 > (pl.area.x + pl.area.w) * PT, 'drawn past both edges, the frame cuts it');
@@ -228,7 +228,7 @@ test('photo tools through their steps', async () => {
   const said: string[] = [];
   const problems: string[] = [];
   const ctx = {
-    units: () => 'mm' as const, ents: () => [], visible: () => [], selection: () => [], select() {}, add() {}, change() {}, undoLast() {},
+    units: () => 'mm' as const, ents: () => [], visible: () => [], selection: () => [], select() {}, add() {}, change() {},
     say: (t: string) => void said.push(t), problem: (t: string) => void problems.push(t), fmt: (v: number) => String(Math.round(v * 1000) / 1000),
     list() {}, zoomTo() {}, askPolar: async () => null, askText: async () => null, askDim: async () => null,
     style: () => ({ textH: 5, dimH: 3.5, arrow: 3, dp: 1 }), noteLayer: () => 'Text', finished() {},

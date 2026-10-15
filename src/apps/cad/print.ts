@@ -103,12 +103,14 @@ export function planPrint(d: Drawing, setup: PrintSetup, view: Box | null): Prin
       box = box ? { x0: Math.min(box.x0, pb.x0), y0: Math.min(box.y0, pb.y0), x1: Math.max(box.x1, pb.x1), y1: Math.max(box.y1, pb.y1) } : pb;
     }
   }
+  if (!box && ents.length) return 'Construction lines go on for ever, so they cannot set what is printed: draw something, or print What the window shows.';
   if (!box || (!ents.length && !photo)) return 'There is nothing to print: draw something first (items on hidden layers are not printed).';
   const unitMm = d.units === 'inch' ? 25.4 : 1;
   const bw = Math.max(box.x1 - box.x0, 1e-9);
   const bh = Math.max(box.y1 - box.y0, 1e-9);
   let n: number;
-  if (setup.scale === 'fit') n = Math.max((bw * unitMm) / area.w, (bh * unitMm) / area.h);
+  // Fit enlarges a small part at most 100 times (a single point would otherwise come out at 171000000000:1).
+  if (setup.scale === 'fit') n = Math.max((bw * unitMm) / area.w, (bh * unitMm) / area.h, 0.01);
   else {
     n = setup.scale;
     if (!(n > 0) || !Number.isFinite(n)) return 'The scale must be a number above 0 (5 for 1:5).';
@@ -279,7 +281,7 @@ function titleBlock(p: Painter, plan: PrintPlan, index: number, extras: PageExtr
   const title = plan.setup.title.trim() || extras.fileLabel;
   const barMm = 50;
   // Cells: title (what is left), the check bar, scale, units, date, page.
-  const fixed = [(barMm + 8) * PT, 22 * PT, 16 * PT, 26 * PT, (many ? 34 : 20) * PT];
+  const fixed = [(barMm + 8) * PT, 22 * PT, 16 * PT, 26 * PT, (many ? 42 : 20) * PT];
   const titleW = Math.max(30 * PT, w - fixed.reduce((a, b) => a + b, 0));
   const widths = [titleW, ...fixed];
   const scale = w / widths.reduce((a, b) => a + b, 0);
@@ -300,7 +302,7 @@ function titleBlock(p: Painter, plan: PrintPlan, index: number, extras: PageExtr
     ['Scale', scaleText(plan.n) + (plan.setup.scale === 'fit' ? ' (fit)' : '')],
     ['Units', extras.units === 'mm' ? 'mm' : 'inch'],
     ['Date', extras.date],
-    ['Page', many ? `${index + 1} of ${plan.pages.length}: row ${page.row}, col ${page.col}` : '1 of 1'],
+    ['Page', many ? `${index + 1}/${plan.pages.length}: row ${page.row}, col ${page.col}` : '1 of 1'],
   ];
   parts.forEach(([name, text], i) => {
     if (i) p.line([cx, y, cx, y + h], '#000000', line);

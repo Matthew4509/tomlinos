@@ -22,7 +22,7 @@ import {
 import { SNAP_NAMES, SNAP_ORDER, findSnaps, type Snap, type SnapMode } from './cad/snap.ts';
 import { COMMAND_WORDS, TOOLS, type PolarAnswer, type TextAnswer, type TextAsk, type Tool, type ToolCtx, type ToolId } from './cad/tools.ts';
 import { explode, join } from './cad/modify.ts';
-import { decodeText, readDxf, writeDxf } from './cad/dxf.ts';
+import { allFinite, decodeText, readDxf, writeDxf } from './cad/dxf.ts';
 import type { Align } from './cad/font.ts';
 import { defaultStyle, dimParts, textShapeStrokes, type DimShape } from './cad/notes.ts';
 import { MAX_SCALE, MIN_SCALE, fitView, render, toWorld, type View } from './cad/view.ts';
@@ -99,6 +99,8 @@ interface Snapshot {
   layers: Layer[];
   current: string;
   photo: Photo | null;
+  units: Units;
+  style: Drawing['style'];
   version: number;
 }
 
@@ -121,10 +123,25 @@ export const cadApp: AppDef = {
       // Nothing kept yet: the usual settings.
     }
     let settingsTimer = 0;
+    /** Each setting as this window last read or wrote it: only what changed here is written over another window's. */
+    const settingsSeen = new Map(Object.entries(settings).map(([k, v]) => [k, JSON.stringify(v)]));
     function keepSettings(): void {
       clearTimeout(settingsTimer);
       settingsTimer = window.setTimeout(() => {
-        void shell.fs.writeText(SETTINGS, JSON.stringify(settings), { hidden: true }).catch(() => {
+        void (async () => {
+          let kept: Record<string, unknown> = {};
+          try {
+            kept = JSON.parse(await shell.fs.readText(SETTINGS)) as Record<string, unknown>;
+          } catch {
+            // Nothing kept yet.
+          }
+          for (const [k, v] of Object.entries(settings)) {
+            const now = JSON.stringify(v);
+            if (now !== settingsSeen.get(k) || !(k in kept)) kept[k] = v;
+            settingsSeen.set(k, now);
+          }
+          await shell.fs.writeText(SETTINGS, JSON.stringify(kept), { hidden: true });
+        })().catch(() => {
           // Not kept this time; the window still works.
         });
       }, 400);
@@ -140,6 +157,8 @@ export const cadApp: AppDef = {
     /** This window's recovery copy (set once it has kept one, or when it opened one). */
     let recoveryPath: string | null = null;
     let recovered = false;
+    /** What was left out when the drawing opened (it then opens as a copy). */
+    let leftOutOnOpen = '';
     if (arg) {
       try {
         const entry = await shell.fs.stat(arg);
@@ -175,7 +194,16 @@ export const cadApp: AppDef = {
         path = arg;
         label = baseName(arg);
         loadedId = entry.id;
-        if (read.skipped) shell.toast(`${read.skipped} item${read.skipped === 1 ? '' : 's'} of a kind this version does not know ${read.skipped === 1 ? 'was' : 'were'} left out.`);
+        if (read.skipped || read.damaged) {
+          // Saving over it would lose what was left out: it opens as a copy, and Save asks where.
+          path = null;
+          loadedId = '';
+          folderHint = parentPath(arg);
+          leftOutOnOpen = [
+            read.skipped ? `${read.skipped} item${read.skipped === 1 ? ' is' : 's are'} of a kind this version of TOMLIN CAD does not know` : '',
+            read.damaged ? `${read.damaged} item${read.damaged === 1 ? ' is' : 's are'} damaged (${read.why})` : '',
+          ].filter(Boolean).join('; ');
+        }
         }
       } catch (error) {
         const why = error instanceof CadProblem ? error.message : 'This drawing could not be read.';
@@ -186,7 +214,9 @@ export const cadApp: AppDef = {
     }
     let nextId = drawing.ents.reduce((m, e) => Math.max(m, e.id), 0) + 1;
     // A recovered drawing has changes that are not saved yet.
-    let version = recovered ? 1 : 0;
+    let version = recovered || leftOutOnOpen ? 1 : 0;
+    /** Version numbers only go up: a state reached after an Undo never takes the number of the saved one. */
+    let stamp = version;
     let savedVersion = 0;
     let autosavedVersion = recovered ? 1 : -1;
     let undoStack: Snapshot[] = [];
@@ -229,23 +259,31 @@ export const cadApp: AppDef = {
     const f = (v: number) => fmt(v, drawing.units);
 
     // ---- Changes and undo ------------------------------------------------------------------------------------------
-    const snap = (): Snapshot => ({ ents: drawing.ents, layers: drawing.layers.map(l => ({ ...l })), current: drawing.current, photo: drawing.photo, version });
+    const snap = (): Snapshot => ({ ents: drawing.ents, layers: drawing.layers.map(l => ({ ...l })), current: drawing.current, photo: drawing.photo, units: drawing.units, style: drawing.style, version });
+    /** What Undo leaves as it is: layers shown and locked, the layer drawn on, how the photo shows. */
+    const lookOf = (layers: Layer[], current: string, photo: Photo | null) => JSON.stringify([layers.map(l => [l.name, l.on, l.locked]), current, photo ? [photo.on, photo.opacity] : null]);
     function commit(apply: () => void): void {
       undoStack.push(snap());
       if (undoStack.length > 300) undoStack.shift();
       redoStack = [];
       apply();
-      version++;
+      version = ++stamp;
       afterChange();
     }
     function restore(s: Snapshot): void {
-      // Which layers are showing is not taken back by Undo (it is a way of looking, not a change to the shapes).
-      const showing = new Map(drawing.layers.map(l => [l.name, l.on]));
+      // Which layers are showing or locked, the layer drawn on, and how the photo shows are not taken back by Undo
+      // (they are ways of looking and working, not changes to the shapes).
+      const now = new Map(drawing.layers.map(l => [l.name, l]));
+      const photoNow = drawing.photo;
       drawing.ents = s.ents;
-      drawing.layers = s.layers.map(l => ({ ...l, on: showing.get(l.name) ?? l.on }));
-      drawing.current = s.current;
-      drawing.photo = s.photo;
-      version = s.version;
+      drawing.layers = s.layers.map(l => ({ ...l, on: now.get(l.name)?.on ?? l.on, locked: now.get(l.name)?.locked ?? l.locked }));
+      drawing.current = drawing.layers.some(l => l.name === drawing.current) ? drawing.current : s.current;
+      drawing.photo = s.photo && photoNow ? { ...s.photo, on: photoNow.on, opacity: photoNow.opacity } : s.photo;
+      drawing.units = s.units;
+      drawing.style = s.style;
+      gridSpacing = drawing.units === 'mm' ? 10 : 0.5;
+      // Back to the saved shapes with a different look kept is still a change from the file.
+      version = lookOf(drawing.layers, drawing.current, drawing.photo) === lookOf(s.layers, s.current, s.photo) ? s.version : ++stamp;
       for (const id of [...selected]) if (!drawing.ents.some(e => e.id === id)) selected.delete(id);
       afterChange();
     }
@@ -263,7 +301,7 @@ export const cadApp: AppDef = {
     }
     /** Something that is kept in the file but not undone changed (a layer shown or hidden, the current layer). */
     function touched(): void {
-      version++;
+      version = ++stamp;
       afterChange();
     }
     function afterChange(): void {
@@ -277,12 +315,20 @@ export const cadApp: AppDef = {
       app.setTitle(`${label} - TOMLIN CAD`);
     }
 
-    function addShapes(shapes: Shape[], layerName = drawing.current): void {
-      if (!shapes.length) return;
+    const TOO_BIG = 'That would put a size beyond any number into the drawing (it could not be saved and opened again), so nothing was changed. Check the numbers typed: a scale or a distance may be far too big.';
+    /** The ids given to the shapes added (empty when nothing was added). */
+    function addShapes(shapes: Shape[], layerName = drawing.current): number[] {
+      if (!shapes.length) return [];
+      if (!shapes.every(allFinite)) {
+        problem(TOO_BIG);
+        return [];
+      }
+      const first = nextId;
       commit(() => {
         if (!layerOf(layerName)) drawing.layers = [...drawing.layers, { name: layerName, colour: layerName === CONSTRUCTION ? '#e040e0' : '#ffffff', on: true, locked: false, lineType: layerName === CONSTRUCTION ? 'dashed' : 'continuous' }];
         drawing.ents = [...drawing.ents, ...shapes.map(s => ({ ...s, id: nextId++, layer: layerName }) as Ent)];
       });
+      return shapes.map((_, i) => first + i);
     }
 
     // ---- Messages: the command history and the status bar ------------------------------------------------------
@@ -309,6 +355,7 @@ export const cadApp: AppDef = {
       add: (shapes, layer) => addShapes(shapes, layer),
       change(changed, added, removed = []) {
         if (!changed.length && !added.length && !removed.length) return;
+        if (!changed.every(c => allFinite(c.shape)) || !added.every(a => allFinite(a.shape))) return problem(TOO_BIG);
         commit(() => {
           if (removed.length) {
             const gone = new Set(removed);
@@ -324,7 +371,6 @@ export const cadApp: AppDef = {
           drawing.ents = [...drawing.ents, ...made];
         });
       },
-      undoLast: undo,
       say: text => say(text),
       problem,
       fmt: f,
@@ -720,6 +766,7 @@ export const cadApp: AppDef = {
         } },
         { label: l.on ? 'Hide' : 'Show', action: () => {
           l.on = !l.on;
+          if (!l.on) for (const e of drawing.ents) if (e.layer === l.name) selected.delete(e.id);
           touched();
         } },
         { label: l.locked ? 'Unlock' : 'Lock', action: () => lockLayer(l) },
@@ -856,7 +903,13 @@ export const cadApp: AppDef = {
       settings.dxfConstruction = xlines.checked;
       settings.dxfHidden = hidden.checked;
       keepSettings();
-      const out = writeDxf(drawing, { textAsLines: asLines.checked, construction: xlines.checked, hidden: hidden.checked });
+      let out: ReturnType<typeof writeDxf>;
+      try {
+        out = writeDxf(drawing, { textAsLines: asLines.checked, construction: xlines.checked, hidden: hidden.checked });
+      } catch (error) {
+        if (error instanceof CadProblem) return problem(error.message);
+        throw error;
+      }
       if (!out.count) return problem('There is nothing to write: draw something first (or tick hidden layers or construction lines if that is all there is).');
       const folder = path ? parentPath(path) : folderHint ?? '/Documents';
       let taken: string[] = [];
@@ -1087,7 +1140,6 @@ export const cadApp: AppDef = {
     }
     /** File > Print: the paper, the scale and a title, with a preview of each page; then print, or save a PDF. */
     async function printDialog(): Promise<void> {
-      endTool(true);
       const st: PrintSetup = { ...settings.print, title: printTitle ?? stemOf(label) };
       const paperSel = h('select', { class: 'field', 'aria-label': 'Paper' }, ...(Object.keys(CAD_PAPERS) as CadPaper[]).map(k => h('option', { value: k }, CAD_PAPERS[k].label)));
       paperSel.value = st.paper;
@@ -1111,7 +1163,8 @@ export const cadApp: AppDef = {
       };
       const colour = tick('Each layer in its own colour (off: everything in black)', st.colour);
       const titleBlock = tick('Title block along the bottom (with a 50 mm bar to check the scale)', st.titleBlock);
-      const photoTick = tick('The photo under the drawing', st.photo);
+      const photoTick = tick(drawing.photo?.on === false ? 'The photo under the drawing (hidden now: show it first, View > Photo to trace > Show the photo)' : 'The photo under the drawing', st.photo && drawing.photo?.on !== false);
+      photoTick.box.disabled = drawing.photo?.on === false;
       const xlineTick = tick('Construction lines', st.construction);
       const titleIn = h('input', { type: 'text', class: 'field', value: st.title, 'aria-label': 'Title', autocomplete: 'off', maxlength: '120' });
       const drawnIn = h('input', { type: 'text', class: 'field', value: st.drawnBy, 'aria-label': 'Drawn by', autocomplete: 'off', maxlength: '80' });
@@ -1246,8 +1299,16 @@ export const cadApp: AppDef = {
       try {
         await shell.fs.ensureFolder(RECOVERY, { hidden: true });
         recoveryPath ??= `${RECOVERY}/${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}.tcad`;
-        liveRecovery.add(recoveryPath);
-        await shell.fs.writeText(recoveryPath, writeTcad(drawing, { recovery: { label, path } }), { hidden: true });
+        const p = recoveryPath;
+        liveRecovery.add(p);
+        await shell.fs.writeText(p, writeTcad(drawing, { recovery: { label, path } }), { hidden: true });
+        // Saved (or closed) while the copy was being written: the copy is not needed after all.
+        if (recoveryPath !== p || version === savedVersion) {
+          liveRecovery.delete(p);
+          if (recoveryPath === p) recoveryPath = null;
+          await shell.fs.remove([p]).catch(() => {});
+          return;
+        }
         autosavedVersion = v;
       } catch {
         // Not kept this time: it is tried again in two minutes.
@@ -1374,6 +1435,7 @@ export const cadApp: AppDef = {
       const k = units === 'inch' ? 1 / 25.4 : 25.4;
       commit(() => {
         if (convert.checked) drawing.ents = drawing.ents.map(e => ({ ...scaleShape(e, P(0, 0), k), id: e.id, layer: e.layer }) as Ent);
+        if (convert.checked && drawing.photo) drawing.photo = { ...drawing.photo, at: mul(drawing.photo.at, k), u: mul(drawing.photo.u, k) };
         drawing.style = convert.checked ? { ...drawing.style, textH: drawing.style.textH * k, dimH: drawing.style.dimH * k, arrow: drawing.style.arrow * k } : defaultStyle(units === 'inch');
         drawing.units = units;
       });
@@ -1394,7 +1456,7 @@ export const cadApp: AppDef = {
         'DXF: File > Open reads DXF of any release saved as text (from CAM programs, AutoCAD and others); File > Output > CAD > DXF writes AutoCAD R12 DXF for the CAM program. What a DXF holds that TOMLIN CAD does not draw (hatches, pictures, 3D) is listed when it opens.',
         'Photo to trace (View > Photo to trace, or the photo button): open a phone photo under the drawing, scale it by clicking two marks a known distance apart (a tape measure in the photo) and typing that distance, line up an edge that should run straight, move it, and draw over it. It stays in the .tcad, can be hidden or made fainter, and never goes into a DXF. Take the photo square on: TOMLIN CAD does not straighten a photo taken at a slant.',
         'Print to scale (File > Print to scale, Ctrl+P): A4 to A1, Letter and Tabloid; Fit, 1:1, 1:2, 1:5, 1:10 and more, or any 1:n; too big for one sheet, it prints across several to tape together. A title block carries the title, scale, date, page and a 50 mm bar to check with a ruler. Print at actual size (100%). The same pages save as a PDF.',
-        'Saves its own drawings (.tcad), with File > Recent drawings, and keeps a recovery copy of unsaved changes every two minutes (offered back the next time TOMLIN CAD opens, if a flat battery or a closed page stopped it). Not here yet: a CAM program’s own drawing files (open their DXF instead) and outline (hollow) letters. Never here: CAM (toolpaths, G-code), 3D.',
+        'Saves its own drawings (.tcad), with File > Recent drawings, and keeps a recovery copy of unsaved changes every two minutes (if a flat battery or a closed page stopped it, the next TOMLIN CAD window offers it back; File > Drawings not saved lists them). Not here yet: a CAM program’s own drawing files (open their DXF instead) and outline (hollow) letters. Never here: CAM (toolpaths, G-code), 3D.',
       ].join('\n\n'));
     }
     function showKeys(): void {
@@ -1716,13 +1778,15 @@ export const cadApp: AppDef = {
       for (const [key, b] of toolButtons) b.setAttribute('aria-pressed', String(key === 'pan' ? panMode : key === 'arrows' ? settings.arrows : key === toolId));
     }
     const panBtn = btn('pan', 'Pan: drag to move the view (the middle button does this too)', () => {
-      endTool(true);
+      // A tool part-way through stays: Pan moves the view, then the tool carries on.
       panMode = !panMode;
       syncToolButtons();
       refreshPrompt();
     }, 'pan');
     const selectBtn = btn('select', 'Select: click items, or drag a box (to the right: wholly inside; to the left: touching)', () => {
-      endTool(true);
+      // A polyline or curve part-way through is finished as it is (as Done would), not thrown away.
+      if (tool) enterKey();
+      if (tool) endTool();
       panMode = false;
       syncToolButtons();
       refreshPrompt();
@@ -2184,6 +2248,9 @@ export const cadApp: AppDef = {
     on(app.root, 'keyup', (e: KeyboardEvent) => {
       if (e.key === ' ') spaceDown = false;
     }, signal);
+    on(window, 'blur', () => {
+      spaceDown = false;
+    }, signal);
     on(app.root, 'keydown', (e: KeyboardEvent) => {
       const ctrl = e.ctrlKey || e.metaKey;
       const k = e.key.toLowerCase();
@@ -2261,7 +2328,7 @@ export const cadApp: AppDef = {
         e.preventDefault();
         return deleteSelected();
       }
-      if (e.key === 'Tab' && snaps.length > 1 && e.target === canvas) {
+      if (e.key === 'Tab' && snaps.length > 1 && (e.target === canvas || (isEntry && pointerIn))) {
         e.preventDefault();
         snapAt = (snapAt + 1) % snaps.length;
         refreshXY();
@@ -2301,6 +2368,10 @@ export const cadApp: AppDef = {
       return ok;
     });
     if (recovered) say(`Recovered ${label}: a copy kept before it was saved. Save it to keep it (Save asks where).`);
+    else if (leftOutOnOpen) {
+      say(`Opened ${label} as a copy: ${leftOutOnOpen}; those were left out. Save asks where, so the file keeps them.`);
+      void shell.dialogs.alert(`Opened ${label} as a copy`, `Some items could not be opened: ${leftOutOnOpen}. They were left out. Saving this copy over the file would lose them, so Save asks for a name (the file itself is not changed).`);
+    }
     else if (dxfReport) {
       say(`Opened ${label} (a DXF; Save makes a TOMLIN CAD drawing beside it).`);
       for (const line of dxfReport.lines) say(line);
@@ -2308,6 +2379,6 @@ export const cadApp: AppDef = {
     } else say(path ? `Opened ${label}.` : 'A new drawing, in millimetres. Choose a tool, or type one such as line.');
     canvas.focus({ preventScroll: true });
     paint();
-    if (!arg) void offerRecovery(false);
+    if (!recovered) void offerRecovery(false);
   },
 };

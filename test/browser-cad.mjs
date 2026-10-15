@@ -729,6 +729,38 @@ await step('session 9: a crooked photo lined up, scaled from a known length and 
   ok(!(await page.locator('.dialog', { hasText: 'Drawings not saved' }).waitFor({ timeout: 2000 }).then(() => true, () => false)), 'nothing offered once it was closed on purpose');
 });
 
+await step('audit fixes: Undo after a save, then a new line, shows unsaved; Undo after Units brings millimetres back; Pan keeps a polyline being drawn', async () => {
+  await closeAll();
+  await openCad();
+  const dirty = async () => (await page.locator('.task-label', { hasText: 'TOMLIN CAD' }).last().innerText()).trim().endsWith('*');
+  await cmd('line', '0,0', '100,0', '');
+  await page.keyboard.press('Control+Shift+S');
+  await D().locator('input[aria-label="File name"]').fill('undo-check.tcad');
+  await D().getByRole('button', { name: 'Save' }).click();
+  await page.locator('.toast', { hasText: 'undo-check.tcad' }).first().waitFor();
+  ok(!(await dirty()), 'saved: no star');
+  await canvas().focus();
+  await page.keyboard.press('Control+z');
+  ok(await dirty(), 'undone after the save: a star');
+  await cmd('line', '0,0', '0,100', '');
+  ok(await dirty(), 'a different line drawn: still a star (it was clean here before the fix)');
+  // Units, sizes changed, then Undo: the drawing is in millimetres again, and so are its numbers.
+  await W().locator('.cad-cell-btn', { hasText: /^mm$/ }).click();
+  await D().getByLabel('Inches').check();
+  await D().getByRole('button', { name: 'OK' }).click();
+  eq(await W().locator('.cad-cell-btn', { hasText: /^(mm|inch)$/ }).innerText(), 'inch', 'now inches');
+  await canvas().focus();
+  await page.keyboard.press('Control+z');
+  eq(await W().locator('.cad-cell-btn', { hasText: /^(mm|inch)$/ }).innerText(), 'mm', 'Undo: millimetres again');
+  // A polyline part-way through survives a press of Pan.
+  await cmd('polyline', '200,0', '300,0', '300,100');
+  await W().getByRole('button', { name: /^Pan:/ }).click();
+  await W().getByRole('button', { name: /^Pan:/ }).click();
+  ok((await W().locator('.cad-prompt').innerText()).startsWith('Polyline'), 'the polyline is still being drawn: ' + (await W().locator('.cad-prompt').innerText()));
+  await cmd('');
+  eq(await count('Geometry'), 2, 'the line and the polyline');
+});
+
 await step('View: grid, white background, large icons, help', async () => {
   await canvas().focus();
   await page.keyboard.press('F7');

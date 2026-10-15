@@ -105,7 +105,8 @@ const isPt = (v: unknown): v is Pt => !!v && typeof v === 'object' && finite((v 
 export function readPhoto(v: unknown): Photo | null {
   if (!v || typeof v !== 'object') return null;
   const o = v as Record<string, unknown>;
-  if (typeof o.jpeg !== 'string' || !/^[A-Za-z0-9+/]+=*$/.test(o.jpeg.slice(0, 64)) || o.jpeg.length > 40_000_000) return null;
+  // All of it is checked: one wrong character would stop the picture loading (and the drawing area with it).
+  if (typeof o.jpeg !== 'string' || o.jpeg.length > 40_000_000 || o.jpeg.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(o.jpeg)) return null;
   if (!finite(o.px) || !finite(o.py) || o.px < 1 || o.py < 1 || o.px > 20000 || o.py > 20000) return null;
   if (!isPt(o.at) || !isPt(o.u) || Math.hypot(o.u.x, o.u.y) < 1e-12) return null;
   const opacity = finite(o.opacity) ? Math.min(1, Math.max(0.1, o.opacity)) : 0.5;
