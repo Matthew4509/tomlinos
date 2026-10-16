@@ -20,13 +20,14 @@ import {
   COLOUR_NAMES, CONSTRUCTION, DIMENSIONS, TEXT, isNote, CadProblem, LAYER_COLOURS, LINE_TYPES, TYPE_NAMES, colourName, describe, type LineType, fmt, newDrawing, readTcad, writeTcad, type Drawing, type Ent, type Layer, type Shape, type Units,
 } from './cad/model.ts';
 import { SNAP_NAMES, SNAP_ORDER, findSnaps, type Snap, type SnapMode } from './cad/snap.ts';
-import { COMMAND_WORDS, TOOLS, type PolarAnswer, type TextAnswer, type TextAsk, type Tool, type ToolCtx, type ToolId } from './cad/tools.ts';
+import { PARTS_FOLDER, PART_EXT, layerFor, partList, partNameProblem, placePart, readPart, unitFactor, writePart, type Part } from './cad/parts.ts';
+import { COMMAND_WORDS, TOOLS, partPlaceTool, type PolarAnswer, type TextAnswer, type TextAsk, type Tool, type ToolCtx, type ToolId } from './cad/tools.ts';
 import { explode, join } from './cad/modify.ts';
 import { allFinite, decodeText, readDxf, writeDxf } from './cad/dxf.ts';
 import type { Align } from './cad/font.ts';
 import { defaultStyle, dimParts, textShapeStrokes, type DimShape } from './cad/notes.ts';
 import { MAX_SCALE, MIN_SCALE, fitView, render, toWorld, type View } from './cad/view.ts';
-import { OPACITIES, PHOTO_SIDE, photoBox, photoScale, pixelMatrix, placePhoto, type Photo } from './cad/photo.ts';
+import { OPACITIES, PHOTO_SIDE, photoBox, photoScale, pixelMatrix, placePhoto, planStraighten, warpPixels, type Photo } from './cad/photo.ts';
 import { CAD_PAPERS, CAD_SCALES, DEFAULT_SETUP, PT, drawCadPage, planPrint, scaleText, type CadPaper, type PageExtras, type PrintPlan, type PrintSetup } from './cad/print.ts';
 import { svg } from '../core/dom.ts';
 import type { Entry } from '../fs/fs.ts';
@@ -235,6 +236,8 @@ export const cadApp: AppDef = {
     let panMode = false;
     let cursor = P(0, 0);
     let pointerIn = false;
+    /** The last press anywhere in the window was a finger (not a mouse or pen). */
+    let lastTouch = false;
     let snaps: Snap[] = [];
     let snapAt = 0;
     let hover: number | null = null;
@@ -403,6 +406,22 @@ export const cadApp: AppDef = {
         const v = viewBox();
         if (b.x0 < v.x0 || b.y0 < v.y0 || b.x1 > v.x1 || b.y1 > v.y1) zoomFit();
       },
+      straightenPhoto(corners, w, hgt) {
+        void straightenPhoto(corners, w, hgt);
+      },
+      placePart(part, at, angle) {
+        const shapes = placePart(part, drawing.units, at, angle);
+        const names = drawing.layers.map(l => l.name);
+        const first = nextId;
+        ctx.change([], shapes.map((shape, i) => ({ shape, layer: layerFor(part.items[i].layer, names, drawing.current) })));
+        if (nextId === first) return;
+        ctx.select(Array.from({ length: nextId - first }, (_, i) => first + i));
+        const k = unitFactor(part.units, drawing.units);
+        say(`${part.name}: ${shapes.length} item${shapes.length === 1 ? '' : 's'} placed and chosen (Move or Rotate takes them together)${k === 1 ? '' : `, made in ${part.units === 'mm' ? 'millimetres' : 'inches'} and sized to this drawing’s ${unitWord()}`}. Next: another place, or Done.`);
+      },
+      savePart(base) {
+        void savePart(base);
+      },
     };
 
     // ---- Tools -----------------------------------------------------------------------------------------------------
@@ -473,6 +492,7 @@ export const cadApp: AppDef = {
       const lw = t.toLowerCase();
       if (!tool) {
         if (!t) return enterKey();
+        if (lw === 'part' || lw === 'insert') return void insertPart();
         const id = COMMAND_WORDS[lw];
         if (id) startTool(id);
         else problem(`“${t}” is not a command. Choose a tool from the menus or toolbars, or type one such as line, circle, rect, move.`);
@@ -522,7 +542,7 @@ export const cadApp: AppDef = {
     // ---- Selection -------------------------------------------------------------------------------------------------
     function hitAt(screen: Pt, filter?: (e: Ent) => boolean): Ent | null {
       const q = toWorld(view, canvasW(), canvasH(), screen);
-      const reach = 6 / view.scale;
+      const reach = (lastTouch ? 14 : 6) / view.scale;
       let best: Ent | null = null;
       let bestD = Infinity;
       for (const e of live()) {
@@ -685,7 +705,7 @@ export const cadApp: AppDef = {
         box ? `Extents: from ${f(box.x0)}, ${f(box.y0)} to ${f(box.x1)}, ${f(box.y1)} (${f(box.x1 - box.x0)} x ${f(box.y1 - box.y0)} ${unitWord()})` : 'Extents: nothing drawn yet (construction lines have no ends)',
         `Chosen now: ${selected.size}`,
         drawing.photo
-          ? `Photo: ${drawing.photo.name}, ${drawing.photo.px} x ${drawing.photo.py} pixels; bottom-left corner at ${f(drawing.photo.at.x)}, ${f(drawing.photo.at.y)}; ${Number(photoScale(drawing.photo).toPrecision(6))} ${unitWord()} a pixel; turned ${f((Math.atan2(drawing.photo.u.y, drawing.photo.u.x) * 180) / Math.PI)}°; ${drawing.photo.on ? `showing at ${Math.round(drawing.photo.opacity * 100)}%` : 'hidden'}`
+          ? `Photo: ${drawing.photo.name}, ${drawing.photo.px} x ${drawing.photo.py} pixels; bottom-left corner at ${f(drawing.photo.at.x)}, ${f(drawing.photo.at.y)}; ${Number(photoScale(drawing.photo).toPrecision(6))} ${unitWord()} a pixel; turned ${f((Math.atan2(drawing.photo.u.y, drawing.photo.u.x) * 180) / Math.PI)}°; ${drawing.photo.clip ? 'straightened; ' : ''}${drawing.photo.on ? `showing at ${Math.round(drawing.photo.opacity * 100)}%` : 'hidden'}`
           : 'Photo: none',
       ];
       void shell.dialogs.alert('Information', lines.join('\n'));
@@ -1024,6 +1044,159 @@ export const cadApp: AppDef = {
         drawing.photo = null;
       });
       say('Photo removed (Undo brings it back).');
+    }
+    // ---- The parts library ---------------------------------------------------------------------------------------
+    /** The person's own parts (each a .tcad in the parts folder), and how many there could not be read. */
+    async function ownParts(): Promise<{ parts: Part[]; unread: string[] }> {
+      const parts: Part[] = [];
+      const unread: string[] = [];
+      if (!(await shell.fs.exists(PARTS_FOLDER))) return { parts, unread };
+      for (const e of await shell.fs.list(PARTS_FOLDER, true)) {
+        if (e.kind !== 'file' || !e.name.toLowerCase().endsWith(PART_EXT)) continue;
+        try {
+          parts.push(readPart(e.name.slice(0, -PART_EXT.length), await shell.fs.readText(`${PARTS_FOLDER}/${e.name}`)));
+        } catch {
+          unread.push(e.name);
+        }
+      }
+      return { parts, unread };
+    }
+    /** A part drawn small, on the drawing area's colours. */
+    function drawPartPreview(cv: HTMLCanvasElement, part: Part): void {
+      const w = 280;
+      const hgt = 180;
+      const dpr = window.devicePixelRatio || 1;
+      cv.width = Math.round(w * dpr);
+      cv.height = Math.round(hgt * dpr);
+      css(cv, { width: w, height: hgt });
+      const g = cv.getContext('2d');
+      if (!g) return;
+      g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const shapes = placePart(part, part.units, P(0, 0), 0);
+      const ents = shapes.map((s, i) => ({ ...s, id: i + 1, layer: part.items[i].layer }) as Ent);
+      const layers = new Map(drawing.layers.map(l => [l.name, { ...l, on: true }]));
+      for (const e of ents) if (!layers.has(e.layer)) layers.set(e.layer, { name: e.layer, colour: '#ffffff', on: true, locked: false, lineType: 'continuous' });
+      const b = boxOfShapes(shapes);
+      const v = fitView(b && { x0: Math.min(b.x0, 0), y0: Math.min(b.y0, 0), x1: Math.max(b.x1, 0), y1: Math.max(b.y1, 0) }, w, hgt);
+      // The base point is marked as the snap mark would show it.
+      render(g, w, hgt, v, {
+        ents, layers, selected: new Set(), hover: null, preview: [], snap: { p: P(0, 0), kind: 'end' }, box: null, grid: 0, gridOn: false,
+        white: settings.white, units: part.units, arrows: false, photo: null,
+      });
+    }
+    async function insertPart(): Promise<void> {
+      let own: { parts: Part[]; unread: string[] };
+      try {
+        own = await ownParts();
+      } catch (error) {
+        return void (await shell.report('Could not read the parts folder', error));
+      }
+      const parts = partList(own.parts);
+      const list = h('select', { class: 'field cad-part-list', size: '9', 'aria-label': 'Parts' },
+        ...parts.map((p, i) => h('option', { value: String(i) }, p.starter ? `${p.name}  (comes with TOMLIN CAD)` : p.name)));
+      list.value = '0';
+      const pv = h('canvas', { class: 'cad-part-preview', 'aria-hidden': 'true' });
+      const about = h('p', { class: 'dialog-detail cad-part-about' });
+      const show = () => {
+        const p = parts[Number(list.value)];
+        if (!p) return;
+        drawPartPreview(pv, p);
+        const b = boxOfShapes(p.items.map(i => i.shape));
+        const size = b ? `${fmt(b.x1 - b.x0, p.units)} x ${fmt(b.y1 - b.y0, p.units)} ${p.units === 'mm' ? 'mm' : 'in'}` : '';
+        about.textContent = `${p.note ? p.note + ' ' : ''}${p.items.length} item${p.items.length === 1 ? '' : 's'}, ${size}. The yellow mark is its base point.`;
+      };
+      on(list, 'change', show, signal);
+      show();
+      const where = h('p', { class: 'dialog-detail' },
+        `Your own parts are drawings in ${PARTS_FOLDER}: make one with Geometry > Parts > Save the chosen items as a part; open one with File > Open to change it; delete one in My Files.${own.unread.length ? ` Not readable, left out: ${own.unread.join(', ')}.` : ''}`);
+      const chosen = await askForm<number>('Insert a part', [list, h('div', { class: 'cad-part-show' }, pv, about), where], () => {
+        const i = Number(list.value);
+        return parts[i] ? i : 'Choose a part from the list.';
+      });
+      if (chosen === null) return;
+      if (tool) say(`${tool.title}: stopped.`);
+      panMode = false;
+      tool = partPlaceTool(ctx, parts[chosen]);
+      toolId = null;
+      say(`${tool.title}.`);
+      syncToolButtons();
+      refreshPrompt();
+      updatePointer();
+      keyboardBack();
+    }
+    function saveChosenAsPart(): void {
+      if (!selected.size) return problem('Choose the items for the part first (click them, or drag a box round them), then Geometry > Parts > Save the chosen items as a part.');
+      startTool('part-save');
+    }
+    async function savePart(base: Pt): Promise<void> {
+      const items = drawing.ents.filter(e => selected.has(e.id));
+      if (!items.length) return problem('Choose the items for the part first (click them, or drag a box round them).');
+      const name = h('input', { type: 'text', class: 'field', 'aria-label': 'Name of the part', autocomplete: 'off', value: '' });
+      // The form's answer is an object: a bare string from it would be read as a problem to show.
+      const answer = await askForm<{ name: string }>('Save as a part', [
+        h('label', { class: 'cad-row' }, h('span', {}, 'Name of the part'), name),
+        h('p', { class: 'dialog-detail' }, `${items.length} item${items.length === 1 ? '' : 's'}, kept in ${PARTS_FOLDER} as a drawing of ${unitWord()}. Geometry > Parts > Insert a part places it again.`),
+      ], () => partNameProblem(name.value) ?? { name: name.value.trim() });
+      if (answer === null) return;
+      const named = answer.name;
+      const target = `${PARTS_FOLDER}/${named}${PART_EXT}`;
+      try {
+        await shell.fs.ensureFolder(PARTS_FOLDER);
+        const there = await shell.fs.exists(target);
+        if (there && !(await shell.dialogs.confirm({ title: 'Replace the part?', text: `There is a part called “${named}” already. Replace it with these items?`, ok: 'Replace', danger: true, cancel: 'Cancel' }))) return;
+        await shell.fs.writeText(target, writePart(drawing, items, base));
+        say(`Part “${named}” saved: ${items.length} item${items.length === 1 ? '' : 's'}, placed by the point ${f(base.x)}, ${f(base.y)}.`);
+        shell.toast(`Saved the part “${named}”.`);
+      } catch (error) {
+        await shell.report('Could not save the part', error);
+      }
+    }
+
+    let straightening = false;
+    /** Redraws the photo's pixels so the clicked corners make a true w x h rectangle (see photo.ts). */
+    async function straightenPhoto(corners: Pt[], w: number, hgt: number): Promise<void> {
+      const ph = drawing.photo;
+      if (!ph) return problem(NO_PHOTO);
+      if (straightening) return problem('The photo is being straightened already: wait for it to finish.');
+      const plan = planStraighten(ph, corners, w, hgt);
+      if (typeof plan === 'string') return problem(plan);
+      straightening = true;
+      say('Straightening the photo...');
+      try {
+        let bitmap: ImageBitmap;
+        try {
+          bitmap = await createImageBitmap(new Blob([fromBase64(ph.jpeg) as Uint8Array<ArrayBuffer>], { type: 'image/jpeg' }));
+        } catch {
+          throw new CadProblem('The photo in this drawing cannot be read: its picture is damaged. View > Photo to trace > Open a photo puts another in its place.');
+        }
+        const from = h('canvas', { width: String(ph.px), height: String(ph.py) });
+        const fg = from.getContext('2d', { willReadFrequently: true });
+        const to = h('canvas', { width: String(plan.px), height: String(plan.py) });
+        const tg = to.getContext('2d');
+        if (!fg || !tg) throw new CadProblem('The computer would not make room to straighten the photo (it may be short of memory).');
+        fg.drawImage(bitmap, 0, 0, ph.px, ph.py);
+        bitmap.close();
+        const src = fg.getImageData(0, 0, ph.px, ph.py).data;
+        tg.putImageData(new ImageData(warpPixels(src, ph.px, ph.py, plan.back, plan.px, plan.py) as Uint8ClampedArray<ArrayBuffer>, plan.px, plan.py), 0, 0);
+        const blob = await new Promise<Blob | null>(done => to.toBlob(done, 'image/jpeg', 0.85));
+        if (!blob) throw new CadProblem('The straightened photo could not be made into a JPEG (the computer may be short of memory).');
+        const jpeg = toBase64(new Uint8Array(await blob.arrayBuffer()));
+        if (drawing.photo !== ph) return problem('The photo was changed while it was being straightened, so it was left as it is. Straighten it again.');
+        const { clip, at, u, px, py } = plan;
+        const next: Photo = { jpeg, px, py, at, u, opacity: ph.opacity, on: true, name: ph.name, ...(clip ? { clip } : {}) };
+        commit(() => {
+          drawing.photo = next;
+        });
+        say(`Photo straightened: those four corners are now a ${f(w)} x ${f(hgt)} rectangle, square to the drawing. Only what lies flat on that surface is true to size. Undo puts the photo back as it was.`);
+        const b = photoBox(next);
+        const v = viewBox();
+        if (b.x0 < v.x0 || b.y0 < v.y0 || b.x1 > v.x1 || b.y1 > v.y1) zoomFit();
+      } catch (error) {
+        if (error instanceof CadProblem) problem(error.message);
+        else await shell.report('Could not straighten the photo', error);
+      } finally {
+        straightening = false;
+      }
     }
     function photoTool(id: ToolId): void {
       if (!drawing.photo) return problem(NO_PHOTO);
@@ -1454,7 +1627,8 @@ export const cadApp: AppDef = {
         'Text (Geometry > Text): words in TOMLIN CAD’s own single-line letters, any height and angle, lined up left, middle or right, several lines, or round an arc or circle. CAD > Explode turns text into lines a cutter can follow.',
         'Dimensions (Utils > Dimensions): linear (across or up), horizontal, vertical, aligned, radius, diameter, angle and leader notes, on the Dimensions layer. They measure their own points: move or scale one and its number follows (they are not tied to the shapes they measure). Double-click text or a dimension to change it.',
         'DXF: File > Open reads DXF of any release saved as text (from CAM programs, AutoCAD and others); File > Output > CAD > DXF writes AutoCAD R12 DXF for the CAM program. What a DXF holds that TOMLIN CAD does not draw (hatches, pictures, 3D) is listed when it opens.',
-        'Photo to trace (View > Photo to trace, or the photo button): open a phone photo under the drawing, scale it by clicking two marks a known distance apart (a tape measure in the photo) and typing that distance, line up an edge that should run straight, move it, and draw over it. It stays in the .tcad, can be hidden or made fainter, and never goes into a DXF. Take the photo square on: TOMLIN CAD does not straighten a photo taken at a slant.',
+        'Photo to trace (View > Photo to trace, or the photo button): open a phone photo under the drawing, scale it by clicking two marks a known distance apart (a tape measure in the photo) and typing that distance, line up an edge that should run straight, move it, and draw over it. It stays in the .tcad, can be hidden or made fainter, and never goes into a DXF. A photo taken at a slant: Straighten a slanted photo, then click the four corners of something rectangular lying flat in it (a benchtop, a door, a sheet of A4 at 297 x 210 mm) in order round its edge and type its real width and height; it is redrawn square and to scale. Only what lies flat on that surface comes out true: anything standing up from it (a splashback, a tap) leans.',
+        'Parts (Geometry > Parts): choose items and save them as a named part with a base point (a hinge-hole pattern, a sink cut-out); insert a part at a point and a turn, as many times as needed. A few common ones come with TOMLIN CAD (a 35 mm hinge cup, a 32 mm shelf-pin row, handle holes): their sizes are the usual ones, and the hardware maker’s drilling sheet decides. Placed parts are plain items, so the DXF needs nothing new. Your parts are drawings in /Documents/CAD parts.',
         'Print to scale (File > Print to scale, Ctrl+P): A4 to A1, Letter and Tabloid; Fit, 1:1, 1:2, 1:5, 1:10 and more, or any 1:n; too big for one sheet, it prints across several to tape together. A title block carries the title, scale, date, page and a 50 mm bar to check with a ruler. Print at actual size (100%). The same pages save as a PDF.',
         'Saves its own drawings (.tcad), with File > Recent drawings, and keeps a recovery copy of unsaved changes every two minutes (if a flat battery or a closed page stopped it, the next TOMLIN CAD window offers it back; File > Drawings not saved lists them). Not here yet: a CAM program’s own drawing files (open their DXF instead) and outline (hollow) letters. Never here: CAM (toolpaths, G-code), 3D.',
       ].join('\n\n'));
@@ -1466,6 +1640,7 @@ export const cadApp: AppDef = {
         'F3 snaps on and off   F7 grid   F8 ortho (straight across or up)   F9 snap to the grid   Tab: the next snap under the pointer.',
         'Ctrl+Z undo   Ctrl+Y redo   Ctrl+A choose all   Delete: delete the chosen items   Ctrl+S save   Ctrl+Shift+S save as   Ctrl+O open   Ctrl+P print to scale.',
         'Mouse wheel: zoom at the pointer.   Middle button drag, or the Pan tool: move the view.   Double-click an item: choose its chain.',
+        'Touch screen or tablet: tap to place a point (the snap shows where your finger lands; slide to another snap before lifting, as it catches from twice as far as the mouse). Two fingers move the view; pinch to zoom. Hold a finger still for half a second for the right-click (Enter while a tool runs, else the menu). A pen works as a mouse. View > Large icons makes the buttons easier to tap.',
         'Alt and the underlined letter, or F10: the menus.   Start typing anywhere in the drawing to use the command line.',
       ].join('\n\n'));
     }
@@ -1620,7 +1795,9 @@ export const cadApp: AppDef = {
       const want = tool?.want() ?? {};
       if (tool && want.point && pointerIn && !snapsOff && !panning) {
         const modes = new Set(settings.snaps);
-        snaps = findSnaps(shown(), { at: cursor, reach: 14 / view.scale, modes, from: tool.base(), grid: 0, magnet: 40 / view.scale, onItem: 8 / view.scale });
+        // A fingertip covers far more than a mouse's tip: it catches from twice as far.
+        const k = lastTouch ? 2 : 1;
+        snaps = findSnaps(shown(), { at: cursor, reach: (14 * k) / view.scale, modes, from: tool.base(), grid: 0, magnet: (40 * Math.min(k, 1.5)) / view.scale, onItem: (8 * k) / view.scale });
         snapAt = 0;
       } else snaps = [];
       if (pointerIn && !panning && (!tool || want.pick || want.select)) {
@@ -1636,6 +1813,54 @@ export const cadApp: AppDef = {
     let panning: { x: number; y: number; view: View } | null = null;
     let down: { screen: Pt; world: Pt; shift: boolean } | null = null;
     let spaceDown = false;
+    on(app.root, 'pointerdown', (e: PointerEvent) => {
+      lastTouch = e.pointerType === 'touch';
+    }, signal, { capture: true });
+    // Touch: one finger works as the mouse's left button (the snap shows where it lands, and lifting it gives the
+    // point); two fingers move the view and pinch to zoom; a finger held still is a right-click. A pen works as a mouse.
+    const fingers = new Map<number, Pt>();
+    let pinch: { mid: Pt; gap: number; view: View; world: Pt; moved: boolean } | null = null;
+    let held: { timer: number; at: Pt } | null = null;
+    /** When a finger last touched (the browser's own right-click from a held finger is then left to ours). */
+    let touchedAt = -Infinity;
+    const HOLD_MS = 550;
+    const fingerPair = () => [...fingers.values()].slice(0, 2);
+    function letGo(): void {
+      if (held) clearTimeout(held.timer);
+      held = null;
+    }
+    function startPinch(): void {
+      letGo();
+      down = null;
+      box = null;
+      panning = null;
+      canvas.classList.remove('panning');
+      const [a, b] = fingerPair();
+      const midPt = P((a.x + b.x) / 2, (a.y + b.y) / 2);
+      pinch = { mid: midPt, gap: Math.max(1, dist(a, b)), view, world: toWorld(view, canvasW(), canvasH(), midPt), moved: false };
+      snaps = [];
+      hover = null;
+      paint();
+    }
+    function movePinch(): void {
+      if (!pinch) return;
+      const [a, b] = fingerPair();
+      const midPt = P((a.x + b.x) / 2, (a.y + b.y) / 2);
+      const scale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, (pinch.view.scale * Math.max(1, dist(a, b))) / pinch.gap));
+      // The drawing point first between the fingers stays between them.
+      view = { cx: pinch.world.x - (midPt.x - canvasW() / 2) / scale, cy: pinch.world.y + (midPt.y - canvasH() / 2) / scale, scale };
+      if (dist(midPt, pinch.mid) > 2 || Math.abs(scale / pinch.view.scale - 1) > 0.01) pinch.moved = true;
+      cursor = toWorld(view, canvasW(), canvasH(), midPt);
+      refreshXY();
+      paint();
+    }
+    function endPinch(): void {
+      if (pinch?.moved) {
+        viewBefore.push(pinch.view);
+        if (viewBefore.length > 50) viewBefore.shift();
+      }
+      pinch = null;
+    }
     const screenOf = (e: MouseEvent) => {
       const r = canvas.getBoundingClientRect();
       return P(e.clientX - r.left, e.clientY - r.top);
@@ -1652,6 +1877,30 @@ export const cadApp: AppDef = {
     on(canvas, 'pointerdown', (e: PointerEvent) => {
       canvas.focus({ preventScroll: true });
       const s = screenOf(e);
+      if (e.pointerType === 'touch') {
+        touchedAt = performance.now();
+        fingers.set(e.pointerId, s);
+        if (fingers.size === 2) return startPinch();
+        if (fingers.size > 2 || pinch) return;
+        // No hover with a finger: the snap is worked out where it lands, and shown while it slides.
+        pointerIn = true;
+        lastScreen = s;
+        cursor = toWorld(view, canvasW(), canvasH(), s);
+        letGo();
+        held = {
+          at: s,
+          timer: window.setTimeout(() => {
+            held = null;
+            down = null;
+            box = null;
+            panning = null;
+            canvas.classList.remove('panning');
+            const r = canvas.getBoundingClientRect();
+            rightClick(r.left + s.x, r.top + s.y);
+          }, HOLD_MS),
+        };
+        updatePointer();
+      }
       if (e.button === 1 || (e.button === 0 && (panMode || spaceDown))) {
         e.preventDefault();
         panning = { x: s.x, y: s.y, view };
@@ -1664,8 +1913,15 @@ export const cadApp: AppDef = {
       down = { screen: s, world: toWorld(view, canvasW(), canvasH(), s), shift: e.shiftKey || e.ctrlKey };
     }, signal);
     on(canvas, 'pointermove', (e: PointerEvent) => {
-      pointerIn = true;
       const s = screenOf(e);
+      if (e.pointerType === 'touch') {
+        if (!fingers.has(e.pointerId)) return;
+        fingers.set(e.pointerId, s);
+        if (pinch) return movePinch();
+        // A finger that slides is aiming, not holding.
+        if (held && dist(held.at, s) > 10) letGo();
+      }
+      pointerIn = true;
       lastScreen = s;
       cursor = toWorld(view, canvasW(), canvasH(), s);
       if (panning) {
@@ -1675,13 +1931,25 @@ export const cadApp: AppDef = {
         paint();
         return;
       }
-      if (down && (!tool || tool.want().select) && dist(down.screen, s) > 4) {
+      // A finger wobbles more than a mouse before it counts as a drag.
+      if (down && (!tool || tool.want().select) && dist(down.screen, s) > (e.pointerType === 'touch' ? 10 : 4)) {
         box = { a: down.world, b: cursor, crossing: s.x < down.screen.x };
       }
       updatePointer();
     }, signal);
     on(canvas, 'pointerup', (e: PointerEvent) => {
       const s = screenOf(e);
+      if (e.pointerType === 'touch') {
+        touchedAt = performance.now();
+        fingers.delete(e.pointerId);
+        letGo();
+        if (pinch) {
+          // The rest of a pinch is no click: the next finger down starts afresh.
+          if (fingers.size < 2) endPinch();
+          return;
+        }
+        if (fingers.size) return;
+      }
       if (panning) {
         if (dist(P(panning.x, panning.y), s) > 2) viewBefore.push(panning.view);
         panning = null;
@@ -1716,6 +1984,19 @@ export const cadApp: AppDef = {
         refreshPrompt();
       }
     }, signal);
+    on(canvas, 'pointercancel', (e: PointerEvent) => {
+      // The system took the finger or pen back (a swipe from the screen's edge): nothing it began is finished.
+      fingers.delete(e.pointerId);
+      letGo();
+      if (pinch && fingers.size < 2) endPinch();
+      down = null;
+      box = null;
+      if (panning) {
+        panning = null;
+        canvas.classList.remove('panning');
+      }
+      paint();
+    }, signal);
     on(canvas, 'dblclick', (e: MouseEvent) => {
       if (tool) return;
       const hit = hitAt(screenOf(e));
@@ -1734,6 +2015,13 @@ export const cadApp: AppDef = {
     }, signal);
     on(canvas, 'contextmenu', (e: MouseEvent) => {
       e.preventDefault();
+      // A held finger is answered by our own timer (the same everywhere); the browser's would be a second one.
+      const kind = (e as PointerEvent).pointerType;
+      if (kind === 'touch' || (!kind && (fingers.size || performance.now() - touchedAt < 1500))) return;
+      rightClick(e.clientX, e.clientY);
+    }, signal);
+    /** A right-click (or a finger held still): Enter while a tool runs, else the drawing's menu. */
+    function rightClick(clientX: number, clientY: number): void {
       if (tool) enterKey();
       else {
         shell.menus.show([
@@ -1744,9 +2032,9 @@ export const cadApp: AppDef = {
           { separator: true },
           { label: 'Delete the chosen items', disabled: !selected.size, action: deleteSelected },
           { label: 'Clear the choice', disabled: !selected.size, action: () => ctx.select([]) },
-        ], e.clientX, e.clientY, { returnFocus: canvas });
+        ], clientX, clientY, { returnFocus: canvas });
       }
-    }, signal);
+    }
     on(canvas, 'wheel', (e: WheelEvent) => {
       e.preventDefault();
       const s = screenOf(e);
@@ -1964,7 +2252,9 @@ export const cadApp: AppDef = {
     /** After typing: the keyboard stays in the boxes while the tool asks for something typed, else goes to the drawing. */
     function keyboardBack(): void {
       const w = tool?.want();
-      if (w && (w.point || w.number || w.size)) firstField().focus({ preventScroll: true });
+      // With a finger, points are tapped: the boxes take the keyboard only when a number must be typed, or the
+      // on-screen keyboard would cover half the drawing at every step.
+      if (w && (lastTouch ? (w.number || w.size) && !w.point : w.point || w.number || w.size)) firstField().focus({ preventScroll: true });
       else canvas.focus({ preventScroll: true });
     }
     on(doneBtn, 'mousedown', (e: MouseEvent) => e.preventDefault(), signal);
@@ -2077,6 +2367,7 @@ export const cadApp: AppDef = {
       { separator: true },
       { label: 'Scale by a length you know', disabled: !drawing.photo, action: () => photoTool('photo-scale') },
       { label: 'Line up an edge (straight across or up)', disabled: !drawing.photo, action: () => photoTool('photo-turn') },
+      { label: 'Straighten a slanted photo (four corners)', disabled: !drawing.photo, action: () => photoTool('photo-square') },
       { label: 'Move', disabled: !drawing.photo, action: () => photoTool('photo-move') },
       { separator: true },
       { label: 'Show the photo', checked: !!drawing.photo?.on, disabled: !drawing.photo, action: () => setPhotoLook({ on: !drawing.photo?.on }, drawing.photo?.on ? 'The photo is hidden (it stays in the drawing).' : 'The photo is showing.') },
@@ -2156,6 +2447,11 @@ export const cadApp: AppDef = {
       { separator: true },
       sub_('Construction lines', [item('xline-h'), item('xline-v'), item('xline-angle'), item('xline-2p'), item('xline-offset')]),
       sub_('Tangent lines', [item('tan-point'), item('tan-two')]),
+      { separator: true },
+      sub_('Parts', [
+        { label: 'Insert a part...', action: () => void insertPart() },
+        { label: 'Save the chosen items as a part...', action: saveChosenAsPart },
+      ]),
     ];
     const utilsMenu = (): MenuItem[] => [
       item('measure'), item('measure-angle'), item('area'), item('list'),

@@ -335,6 +335,9 @@ function fakeCtx(): ToolCtx & { items: Ent[]; said: string[]; problems: string[]
       photo = ph;
       said.push(t);
     },
+    straightenPhoto: () => {},
+    placePart: () => {},
+    savePart: () => {},
   };
   return ctx;
 }

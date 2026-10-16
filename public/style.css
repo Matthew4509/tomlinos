@@ -2092,6 +2092,11 @@ textarea.field { resize: vertical; font: inherit; }
 .cad-layer-name:hover { border-color: #0a246a; }
 .cad-layer-name.current { font-weight: 700; background: #dde4f4; }
 .cad-count { color: #555; font-size: 12px; }
+.cad-part-list { display: block; width: 100%; min-width: 300px; box-sizing: border-box; font: 12px Tahoma, "Segoe UI", sans-serif; }
+.cad-part-show { display: flex; gap: 10px; align-items: flex-start; margin-top: 8px; }
+.cad-part-preview { flex: none; border: 1px solid #808080; }
+.cad-part-about { flex: 1; min-width: 0; margin: 0; }
+@media (max-width: 560px) { .cad-part-show { flex-direction: column; } }
 .cad-canvas-wrap { flex: 1; min-width: 0; position: relative; margin: 2px; border: 1px solid; border-color: #808080 #fff #fff #808080; overflow: hidden; background: #1e2088; }
 .cad-canvas { display: block; cursor: crosshair; outline: none; touch-action: none; }
 .cad-canvas.pan-mode { cursor: grab; }

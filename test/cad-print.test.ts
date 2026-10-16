@@ -236,6 +236,9 @@ test('photo tools through their steps', async () => {
       ph = p;
       said.push(t);
     },
+    straightenPhoto() {},
+    placePart() {},
+    savePart() {},
   };
   const none = TOOLS['photo-scale'].make(ctx);
   none.point!(P(0, 0));

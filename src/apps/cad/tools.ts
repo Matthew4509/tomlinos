@@ -9,7 +9,8 @@ import type { Align } from './font.ts';
 import { angleArms, dimLabel, type DimShape, type NoteStyle } from './notes.ts';
 import { boxOfShapes, chainFrom, mirrorShape, moveShape, pieceNear, rotateShape, scaleShape } from './edit.ts';
 import { CONSTRUCTION, ellipse, isNote, pieceLength, piecesOf, polygon, rectangle, slot, type Ent, type Shape, type Units } from './model.ts';
-import { movePhoto, scaleFromTwo, straightenTurn, turnPhoto, type Photo } from './photo.ts';
+import { placePart, type Part } from './parts.ts';
+import { movePhoto, planStraighten, scaleFromTwo, straightenTurn, turnPhoto, type Photo } from './photo.ts';
 import { areaOf, breakAt, breakBetween, chamfer, closeShape, cornerBetween, extend, fillet, offset, polyCorners, reverse, setStart, trim } from './modify.ts';
 
 export interface Want {
@@ -81,6 +82,12 @@ export interface ToolCtx {
   photo(): Photo | null;
   /** Changes the photo's place, size or turn (one step of undo) and says what was done. */
   setPhoto(ph: Photo, said: string): void;
+  /** Redraws the photo so the four corners (in order round a rectangle) make a w x h rectangle: one step of undo. */
+  straightenPhoto(corners: Pt[], w: number, h: number): void;
+  /** Places a part from the library: its base point at `at`, turned (radians); the new items become the choice. */
+  placePart(part: Part, at: Pt, angle: number): void;
+  /** Saves the chosen items as a part, with this base point (asks its name). */
+  savePart(base: Pt): void;
 }
 
 export interface Tool {
@@ -1618,6 +1625,40 @@ function photoTurnTool(ctx: ToolCtx): Tool {
   });
 }
 
+function photoSquareTool(ctx: ToolCtx): Tool {
+  const corners = (g: Given[]) => g.map(ptOf).filter((p): p is Pt => !!p);
+  return stepTool(ctx, {
+    title: 'Photo: straighten a slanted photo',
+    steps: [
+      { prompt: 'Click the 1st corner of something rectangular lying flat in the photo (a benchtop, a door, a sheet of A4)', want: { point: true } },
+      { prompt: 'Click the 2nd corner, going round its edge', want: { point: true } },
+      { prompt: 'Click the 3rd corner', want: { point: true } },
+      { prompt: 'Click the 4th corner', want: { point: true } },
+      { prompt: `Its real width (1st to 2nd corner) and height (2nd to 3rd corner), in ${ctx.units() === 'mm' ? 'mm' : 'inches'}`, want: { size: true } },
+    ],
+    // The outline so far, closing back to the first corner.
+    preview: (g, c) => {
+      const pts = corners(g);
+      const ring = g.length < 4 ? [...pts, c] : pts;
+      return ring.length < 2 ? [] : ring.map((p, i) => line(p, ring[(i + 1) % ring.length])).filter(s => s.type === 'line' && dist(s.a, s.b) > 0);
+    },
+    make(g) {
+      const ph = ctx.photo();
+      if (!ph) return fail(ctx, NO_PHOTO);
+      const size = g[4] as { w: number; h: number };
+      if (!(size.w > 0) || !(size.h > 0)) return fail(ctx, 'The width and the height must be numbers above 0.');
+      const plan = planStraighten(ph, corners(g), size.w, size.h);
+      if (typeof plan === 'string') {
+        // The corners are what is wrong: start again from the first.
+        g.splice(0);
+        return fail(ctx, `${plan} Start again from the 1st corner.`);
+      }
+      ctx.straightenPhoto(corners(g), size.w, size.h);
+      return true;
+    },
+  });
+}
+
 function photoMoveTool(ctx: ToolCtx): Tool {
   return stepTool(ctx, {
     title: 'Photo: move',
@@ -1632,6 +1673,44 @@ function photoMoveTool(ctx: ToolCtx): Tool {
       const a = ptOf(g[0])!;
       const b = ptOf(g[1])!;
       ctx.setPhoto(movePhoto(ph, sub(b, a)), `Photo moved ${ctx.fmt(b.x - a.x)} across and ${ctx.fmt(b.y - a.y)} up.`);
+      return true;
+    },
+  });
+}
+
+// ---- The parts library -----------------------------------------------------------------------------------------
+
+/** Places a part (chosen in the window's list) at a point and a turn; again and again until Done. */
+export function partPlaceTool(ctx: ToolCtx, part: Part): Tool {
+  const turnOf = (g: Given, at: Pt) => (g.kind === 'number' ? deg(g.v) : g.kind === 'point' && dist(g.p, at) > 1e-12 ? angleOf(sub(g.p, at)) : 0);
+  return stepTool(ctx, {
+    title: `Part: ${part.name}`,
+    steps: [
+      { prompt: 'Where it goes (its base point)', want: { point: true } },
+      { prompt: 'Its turn: degrees anticlockwise, or click the way it faces (Enter: no turn)', want: { point: true, number: true }, dflt: () => 0 },
+    ],
+    previewFrom: 0,
+    preview: (g, c) => {
+      if (!g.length) return placePart(part, ctx.units(), c, 0);
+      const at = ptOf(g[0])!;
+      return [...placePart(part, ctx.units(), at, dist(c, at) > 1e-12 ? angleOf(sub(c, at)) : 0), line(at, c)];
+    },
+    make(g) {
+      const at = ptOf(g[0])!;
+      ctx.placePart(part, at, turnOf(g[1], at));
+      return true;
+    },
+    again: true,
+  });
+}
+
+function partSaveTool(ctx: ToolCtx): Tool {
+  return stepTool(ctx, {
+    title: 'Save the chosen items as a part',
+    steps: [{ prompt: 'Click its base point: the point it will be placed by (a hole’s middle, a corner)', want: { point: true } }],
+    make(g) {
+      if (!ctx.selection().length) return fail(ctx, 'Choose the items for the part first (click them, or drag a box round them).');
+      ctx.savePart(ptOf(g[0])!);
       return true;
     },
   });
@@ -1705,6 +1784,8 @@ export const TOOLS = {
   'photo-scale': { name: 'Photo: scale by a length you know', make: photoScaleTool },
   'photo-turn': { name: 'Photo: line up an edge', make: photoTurnTool },
   'photo-move': { name: 'Photo: move', make: photoMoveTool },
+  'photo-square': { name: 'Photo: straighten a slanted photo', make: photoSquareTool },
+  'part-save': { name: 'Save the chosen items as a part', make: partSaveTool },
 } satisfies Record<string, { name: string; make: (ctx: ToolCtx) => Tool }>;
 
 export type ToolId = keyof typeof TOOLS;

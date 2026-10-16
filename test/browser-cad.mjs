@@ -3,8 +3,9 @@
 // redo, saving and opening again; snaps found with the pointer (middle, intersection, centre); the shapes (circle by
 // diameter, ellipse, polygon, slot, arcs, curves); construction lines and tangent lines; choosing by window, crossing
 // box and chain; move, mirror, the arrays; Utils > Measure; text and dimensions (session 7); a DXF written and opened
-// again (session 8); a photo traced over, printing to scale, recent drawings and a recovery copy (session 9); and no
-// errors in the console.
+// again (session 8); a photo traced over, printing to scale, recent drawings and a recovery copy (session 9); a
+// slanted photo straightened; pen and touch (taps, a held finger, two-finger pan and pinch); and no errors in the
+// console.
 // Needs the dev server on a FRESH, EMPTY data folder (the first step sets up the owner), and `npm run build` done.
 //   node test/browser-cad.mjs [http://127.0.0.1:3043] [screenshot folder]
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -556,6 +557,76 @@ async function upload(file, folder) {
   await w.getByRole('button', { name: 'Close', exact: true }).first().click();
 }
 
+const photoMenu = async item => {
+  await W().getByRole('button', { name: 'Photo to trace' }).click();
+  await page.locator('.menu').getByText(item, { exact: true }).click();
+};
+/** The photo's size, corner, size of a pixel and turn, as Utils > Information gives them. */
+async function info() {
+  await W().getByRole('button', { name: 'Information about the drawing' }).click();
+  const t = await D().innerText();
+  await D().getByRole('button').first().click();
+  const m = /(\d+) x (\d+) pixels; bottom-left corner at (-?[\d.]+), (-?[\d.]+); ([\d.e-]+) mm a pixel; turned (-?[\d.]+)°/.exec(t);
+  ok(m, 'the photo in Information: ' + t);
+  return { px: Number(m[1]), py: Number(m[2]), at: [Number(m[3]), Number(m[4])], s: Number(m[5]), turn: Number(m[6]), text: t };
+}
+/** Where a pixel of the photo (PY pixels high) is on the drawing. */
+function photoWorld(ph, [i, j], PY) {
+  const a = (ph.turn * Math.PI) / 180;
+  const lx = i * ph.s;
+  const ly = (PY - j) * ph.s;
+  return [ph.at[0] + lx * Math.cos(a) - ly * Math.sin(a), ph.at[1] + lx * Math.sin(a) + ly * Math.cos(a)];
+}
+/** Starts a photo tool and clicks photo pixels with the snaps off (the points are on the photo, not on anything drawn). */
+async function clickPhoto(ph, item, pixels, PY) {
+  await W().getByRole('button', { name: 'Zoom fit: the whole drawing' }).click();
+  // Worked out first: finding the screen's scale uses the Line tool.
+  const at = await mapper();
+  await photoMenu(item);
+  await canvas().focus();
+  await page.keyboard.press('F3');
+  for (const px of pixels) {
+    const [x, y] = photoWorld(ph, px, PY);
+    const q = at(x, y);
+    await page.mouse.click(q.x, q.y);
+  }
+  await page.keyboard.press('F3');
+}
+/** The middle of the drawing area's pixels of one colour ('green' or 'red') within r screen pixels of a point. */
+async function blobNear(q, r, kind) {
+  return page.evaluate(({ q, r, kind }) => {
+    const cv = [...document.querySelectorAll('.cad-canvas')].pop();
+    const box = cv.getBoundingClientRect();
+    const k = cv.width / box.width;
+    const x0 = Math.max(0, Math.floor((q.x - box.left - r) * k));
+    const y0 = Math.max(0, Math.floor((q.y - box.top - r) * k));
+    const w = Math.min(cv.width - x0, Math.ceil(2 * r * k));
+    const h = Math.min(cv.height - y0, Math.ceil(2 * r * k));
+    const d = cv.getContext('2d').getImageData(x0, y0, w, h).data;
+    let sx = 0;
+    let sy = 0;
+    let n = 0;
+    for (let j = 0; j < h; j++) {
+      for (let i = 0; i < w; i++) {
+        const o = (j * w + i) * 4;
+        const [R, G, B] = [d[o], d[o + 1], d[o + 2]];
+        if (kind === 'green' ? G > 110 && R < 60 && B < 110 : R > 110 && G < 50) {
+          sx += i;
+          sy += j;
+          n++;
+        }
+      }
+    }
+    return n ? { x: box.left + (x0 + sx / n + 0.5) / k, y: box.top + (y0 + sy / n + 0.5) / k, n } : null;
+  }, { q, r, kind });
+}
+/** A screen point back to the drawing, for a map made by mapper(). */
+function unmap(q, map) {
+  const o = map(0, 0);
+  const e = map(1000, 1000);
+  return [((q.x - o.x) / (e.x - o.x)) * 1000, ((q.y - o.y) / (e.y - o.y)) * 1000];
+}
+
 await step('session 9: a crooked photo lined up, scaled from a known length and moved to 0,0, then traced; kept in the .tcad; printed to scale (pages, preview, PDF); recent drawings; a recovery copy offered after the page closed', async () => {
   await closeAll();
   // A "photo" of a benchtop 1600 x 800 mm, 800 pixels wide, taken 3 degrees crooked: its bottom corners are red dots.
@@ -596,44 +667,11 @@ await step('session 9: a crooked photo lined up, scaled from a known length and 
     rmSync(dir, { recursive: true, force: true });
   }
   await openCad();
-  const photoMenu = async item => {
-    await W().getByRole('button', { name: 'Photo to trace' }).click();
-    await page.locator('.menu').getByText(item, { exact: true }).click();
-  };
   await photoMenu('Open a photo...');
   await D().locator('.pick-row', { hasText: 'bench.jpg' }).first().dblclick();
   await W().locator('.cad-said', { hasText: 'is under the drawing' }).waitFor();
-  /** The photo's corner, size of a pixel and turn, as Utils > Information gives them. */
-  const info = async () => {
-    await W().getByRole('button', { name: 'Information about the drawing' }).click();
-    const t = await D().innerText();
-    await D().getByRole('button').first().click();
-    const m = /bottom-left corner at (-?[\d.]+), (-?[\d.]+); ([\d.e-]+) mm a pixel; turned (-?[\d.]+)°/.exec(t);
-    ok(m, 'the photo in Information: ' + t);
-    return { at: [Number(m[1]), Number(m[2])], s: Number(m[3]), turn: Number(m[4]) };
-  };
-  /** Where a pixel of the photo is on the drawing. */
-  const worldOf = (ph, [i, j]) => {
-    const a = (ph.turn * Math.PI) / 180;
-    const lx = i * ph.s;
-    const ly = (PY - j) * ph.s;
-    return [ph.at[0] + lx * Math.cos(a) - ly * Math.sin(a), ph.at[1] + lx * Math.sin(a) + ly * Math.cos(a)];
-  };
-  /** Starts a photo tool and clicks photo pixels with the snaps off (the points are on the photo, not on anything drawn). */
-  const clickPixels = async (ph, item, pixels) => {
-    await W().getByRole('button', { name: 'Zoom fit: the whole drawing' }).click();
-    // Worked out first: finding the screen's scale uses the Line tool.
-    const at = await mapper();
-    await photoMenu(item);
-    await canvas().focus();
-    await page.keyboard.press('F3');
-    for (const px of pixels) {
-      const [x, y] = worldOf(ph, px);
-      const q = at(x, y);
-      await page.mouse.click(q.x, q.y);
-    }
-    await page.keyboard.press('F3');
-  };
+  const worldOf = (ph, px) => photoWorld(ph, px, PY);
+  const clickPixels = (ph, item, pixels) => clickPhoto(ph, item, pixels, PY);
   let ph = await info();
   eq(ph.turn, 0, 'laid straight');
   // Line up the crooked bottom edge: the photo turns 3 degrees back.
@@ -727,6 +765,205 @@ await step('session 9: a crooked photo lined up, scaled from a known length and 
   await closeAll();
   await openCad();
   ok(!(await page.locator('.dialog', { hasText: 'Drawings not saved' }).waitFor({ timeout: 2000 }).then(() => true, () => false)), 'nothing offered once it was closed on purpose');
+});
+
+await step('straighten a slanted photo: four corners of a 1600 x 800 benchtop shot at a slant, its true middle lands in the middle', async () => {
+  await closeAll();
+  // A benchtop seen from its near side: the far edge looks shorter. Red dots on its corners; a green one on its true
+  // middle (where the diagonals cross, which in a slanted photo is NOT the average of the four corners).
+  const PX = 1200;
+  const PY = 800;
+  const [BL, BR, TR, TL] = [[150, 720], [1050, 720], [880, 260], [320, 260]];
+  const t = ((BR[0] - BL[0]) * (TL[1] - BR[1]) - (BR[1] - BL[1]) * (TL[0] - BR[0])) / ((TR[0] - BL[0]) * (TL[1] - BR[1]) - (TR[1] - BL[1]) * (TL[0] - BR[0]));
+  const MID = [BL[0] + t * (TR[0] - BL[0]), BL[1] + t * (TR[1] - BL[1])];
+  const jpeg = await page.evaluate(({ PX, PY, Q, MID }) => {
+    const c = document.createElement('canvas');
+    c.width = PX;
+    c.height = PY;
+    const g = c.getContext('2d');
+    g.fillStyle = '#d8c8a8';
+    g.fillRect(0, 0, PX, PY);
+    g.fillStyle = '#7a5a30';
+    g.beginPath();
+    Q.forEach((q, i) => (i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1])));
+    g.closePath();
+    g.fill();
+    const dot = (q, colour) => {
+      g.fillStyle = colour;
+      g.beginPath();
+      g.arc(q[0], q[1], 7, 0, 7);
+      g.fill();
+    };
+    for (const q of Q) dot(q, '#ff0000');
+    dot(MID, '#00ff00');
+    return c.toDataURL('image/jpeg', 0.95).split(',')[1];
+  }, { PX, PY, Q: [BL, BR, TR, TL], MID });
+  const dir = mkdtempSync(join(tmpdir(), 'cad-walk-'));
+  try {
+    writeFileSync(join(dir, 'slanted.jpg'), Buffer.from(jpeg, 'base64'));
+    await upload(join(dir, 'slanted.jpg'), '/Pictures');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  await openCad();
+  await photoMenu('Open a photo...');
+  await D().locator('.pick-row', { hasText: 'slanted.jpg' }).first().dblclick();
+  await W().locator('.cad-said', { hasText: 'is under the drawing' }).waitFor();
+  const ph = await info();
+  const first = photoWorld(ph, BL, PY);
+  await clickPhoto(ph, 'Straighten a slanted photo (four corners)', [BL, BR, TR, TL], PY);
+  ok((await W().locator('.cad-xyin').innerText()).includes('Width'), 'it asks for the width and height');
+  await cmd('1600,800');
+  await W().locator('.cad-said', { hasText: 'Photo straightened' }).waitFor({ timeout: 20000 });
+  ok((await said(2)).includes('1600 x 800 rectangle'), 'said: ' + (await said(2)));
+  const after = await info();
+  ok(after.text.includes('straightened') && after.turn === 0, 'straightened and square: ' + after.text);
+  ok(after.px <= 3000 && after.py <= 3000, `at most 3000 pixels across: ${after.px} x ${after.py}`);
+  // Where the corners and the middle are now, found on screen by their colours.
+  await W().getByRole('button', { name: 'Zoom fit: the whole drawing' }).click();
+  const at = await mapper();
+  const expect = [[800, 400, 'green', 'the true middle'], [0, 0, 'red', '1st corner'], [1600, 0, 'red', '2nd corner'], [1600, 800, 'red', '3rd corner'], [0, 800, 'red', '4th corner']];
+  for (const [dx, dy, kind, what] of expect) {
+    const want = [first[0] + dx, first[1] + dy];
+    const found = await blobNear(at(want[0], want[1]), 25, kind);
+    ok(found, `${what}: a ${kind} dot near ${want}`);
+    if (!found) continue;
+    const got = unmap(found, at);
+    ok(Math.hypot(got[0] - want[0], got[1] - want[1]) < 20, `${what} at ${got.map(v => v.toFixed(1))}, expected ${want.map(v => v.toFixed(1))}`);
+  }
+  await shot('cad-photo-straightened');
+  // Undo puts the slanted photo back.
+  await canvas().focus();
+  await page.keyboard.press('Control+z');
+  const undone = await info();
+  ok(undone.px === PX && !undone.text.includes('straightened'), 'Undo: the photo as it was: ' + undone.text);
+});
+
+await step('pen and touch: a tap snaps from further than a mouse, a held finger finishes the tool or opens the menu, two fingers pan and pinch', async () => {
+  await closeAll();
+  await openCad();
+  await W().getByRole('button', { name: 'Rectangle: two corners' }).click();
+  await cmd('0,0', '1600,800');
+  await page.keyboard.press('Escape');
+  await W().getByRole('button', { name: 'Zoom fit: the whole drawing' }).click();
+  const cdp = await context.newCDPSession(page);
+  await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+  const touch = (type, pts) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: pts.map((p, i) => ({ x: p.x, y: p.y, id: i, radiusX: 4, radiusY: 4 })) });
+  const tap = async p => {
+    await touch('touchStart', [p]);
+    await touch('touchEnd', []);
+    await page.waitForTimeout(80);
+  };
+  const hold = async p => {
+    await touch('touchStart', [p]);
+    await page.waitForTimeout(800);
+    await touch('touchEnd', []);
+    await page.waitForTimeout(150);
+  };
+  /** Two fingers from a and b, each moved by its own amount, in 6 even moves. */
+  const two = async (a, b, da, db) => {
+    await touch('touchStart', [a, b]);
+    for (let k = 1; k <= 6; k++) {
+      await touch('touchMove', [{ x: a.x + (da.x * k) / 6, y: a.y + (da.y * k) / 6 }, { x: b.x + (db.x * k) / 6, y: b.y + (db.y * k) / 6 }]);
+    }
+    await touch('touchEnd', []);
+    await page.waitForTimeout(150);
+  };
+  try {
+    let at = await mapper();
+    // The Line button tapped: the keyboard stays out of the X box (on a tablet it would cover the drawing).
+    const lineBtn = await W().getByRole('button', { name: /^Line\b/ }).first().boundingBox();
+    await tap({ x: lineBtn.x + lineBtn.width / 2, y: lineBtn.y + lineBtn.height / 2 });
+    ok((await W().locator('.cad-prompt').innerText()).startsWith('Line'), 'the Line tool by a tap: ' + (await W().locator('.cad-prompt').innerText()));
+    eq(await page.evaluate(() => document.activeElement?.tagName), 'CANVAS', 'the drawing keeps the keyboard, not the X box');
+    // 14 px across and 14 px up from each corner (20 px away): beyond a mouse's 14 px, caught by a finger.
+    const c0 = at(0, 0);
+    const c1 = at(1600, 800);
+    await tap({ x: c0.x + 14, y: c0.y - 14 });
+    await tap({ x: c1.x - 14, y: c1.y + 14 });
+    await hold({ x: c1.x - 200, y: c1.y + 120 });
+    ok(!(await W().locator('.cad-done').isVisible()), 'a held finger finished the Line tool');
+    eq(await count('Geometry'), 2, 'the rectangle and the line');
+    // The line's two ends are exactly on the corners.
+    await cmd('list');
+    const m = at(800, 400);
+    await page.mouse.click(m.x, m.y);
+    await D().waitFor();
+    const listed = await D().innerText();
+    ok(listed.includes('From 0, 0 to 1600, 800'), 'from corner to corner: ' + listed);
+    await D().getByRole('button').first().click();
+    await page.keyboard.press('Escape');
+    // Pinch: the fingers twice as far apart, the drawing twice as big about the point between them.
+    const box = await canvas().boundingBox();
+    const mid = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    const under = unmap(mid, at);
+    const before = at(1600, 0).x - at(0, 0).x;
+    await two({ x: mid.x - 60, y: mid.y }, { x: mid.x + 60, y: mid.y }, { x: -60, y: 0 }, { x: 60, y: 0 });
+    at = await mapper();
+    const ratio = (at(1600, 0).x - at(0, 0).x) / before;
+    ok(Math.abs(ratio - 2) < 0.06, 'pinched out to twice as big: ' + ratio.toFixed(3));
+    const still = at(under[0], under[1]);
+    ok(Math.hypot(still.x - mid.x, still.y - mid.y) < 4, `the point between the fingers stayed: ${still.x.toFixed(1)},${still.y.toFixed(1)} vs ${mid.x},${mid.y}`);
+    // Two fingers moved together: the drawing moves with them.
+    const p0 = at(0, 0);
+    await two({ x: mid.x - 40, y: mid.y }, { x: mid.x + 40, y: mid.y }, { x: 120, y: 60 }, { x: 120, y: 60 });
+    at = await mapper();
+    const p1 = at(0, 0);
+    ok(Math.abs(p1.x - p0.x - 120) < 4 && Math.abs(p1.y - p0.y - 60) < 4, `moved 120 across and 60 down: ${(p1.x - p0.x).toFixed(1)}, ${(p1.y - p0.y).toFixed(1)}`);
+    // A finger held with no tool: the drawing's menu.
+    await hold(mid);
+    ok(await page.locator('.menu').getByText('Zoom fit', { exact: true }).isVisible(), 'the menu from a held finger');
+    await page.keyboard.press('Escape');
+  } finally {
+    await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: false }).catch(() => {});
+    await cdp.detach().catch(() => {});
+  }
+});
+
+await step('parts library: a starter hinge cup placed, saved as my own part with a base point, then placed again turned', async () => {
+  await closeAll();
+  await openCad();
+  const partsMenu = async item => {
+    await W().getByRole('menuitem', { name: 'Geometry' }).click();
+    await page.locator('.menu').getByText('Parts', { exact: true }).click();
+    await page.locator('.menu').getByText(item, { exact: true }).click();
+  };
+  await partsMenu('Insert a part...');
+  ok(await D().locator('.cad-part-preview').waitFor({ timeout: 5000 }).then(() => true, () => false), 'a preview of the part');
+  ok((await D().locator('select[aria-label="Parts"]').inputValue()) === '0' && (await D().innerText()).includes('Hinge cup 35 mm'), 'the starter hinge cup is listed first');
+  await D().getByRole('button', { name: 'OK' }).click();
+  ok((await W().locator('.cad-prompt').innerText()).includes('Where it goes'), 'asks where: ' + (await W().locator('.cad-prompt').innerText()));
+  await cmd('100,50');
+  await canvas().focus();
+  await page.keyboard.press('Enter');
+  ok((await said(2)).includes('3 items placed and chosen'), 'placed: ' + (await said(2)));
+  await cmd('');
+  eq(await count('Geometry'), 3, 'a cup and two screw holes');
+  // Saved as my own part, placed by the cup's middle.
+  await partsMenu('Save the chosen items as a part...');
+  await cmd('100,50');
+  await D().locator('input[aria-label="Name of the part"]').fill('My hinge');
+  await D().getByRole('button', { name: 'OK' }).click();
+  const saved = await W().locator('.cad-said', { hasText: 'Part “My hinge” saved' }).waitFor({ timeout: 10000 }).then(() => true, () => false);
+  ok(saved, `saved as a part: ${await said(4)} | box: ${(await page.locator('.dialog').count()) ? await D().innerText() : 'none'}`);
+  // Placed again, a quarter turn: my part is first in the list.
+  await partsMenu('Insert a part...');
+  const first = await D().locator('select[aria-label="Parts"] option').first().innerText();
+  eq(first, 'My hinge', 'my own part first');
+  await D().getByRole('button', { name: 'OK' }).click();
+  await cmd('300,50', '90', '');
+  eq(await count('Geometry'), 6, 'two hinges now');
+  // A screw hole of the turned one: (22.5, 9.5) from its base turned a quarter is (-9.5, 22.5) -> 290.5, 72.5.
+  await W().getByRole('button', { name: 'Zoom fit: the whole drawing' }).click();
+  const at = await mapper();
+  await cmd('list');
+  const q = at(290.5, 72.5 + 4);
+  await page.mouse.click(q.x, q.y);
+  await D().waitFor();
+  const listed = await D().innerText();
+  ok(listed.includes('Centre 290.5, 72.5') && listed.includes('diameter 8'), 'the turned screw hole: ' + listed);
+  await D().getByRole('button').first().click();
+  await page.keyboard.press('Escape');
 });
 
 await step('audit fixes: Undo after a save, then a new line, shows unsaved; Undo after Units brings millimetres back; Pan keeps a polyline being drawn', async () => {

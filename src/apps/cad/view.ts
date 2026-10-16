@@ -95,6 +95,14 @@ export function render(c: CanvasRenderingContext2D, w: number, h: number, v: Vie
     c.globalAlpha = s.photo.ph.opacity;
     c.imageSmoothingQuality = 'high';
     c.transform(...pixelMatrix(s.photo.ph, photoOnPage(s.photo.ph, scr)));
+    // A straightened photo shows only the part the photo filled (the rest of its picture is blank).
+    const clip = s.photo.ph.clip;
+    if (clip) {
+      c.beginPath();
+      clip.forEach((p, i) => (i ? c.lineTo(p.x, p.y) : c.moveTo(p.x, p.y)));
+      c.closePath();
+      c.clip();
+    }
     c.drawImage(s.photo.img, 0, 0);
     c.restore();
   }
