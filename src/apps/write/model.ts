@@ -20,9 +20,10 @@ export interface NodeJSON {
   marks?: MarkJSON[];
 }
 
-/** Paragraph styles: Normal, Title and three headings, saved in Word as the styles of those names. */
-export type StyleId = 'normal' | 'title' | 'h1' | 'h2' | 'h3';
-export const STYLE_IDS: StyleId[] = ['normal', 'title', 'h1', 'h2', 'h3'];
+/** Paragraph styles: Normal, Title and six headings, saved in Word as the styles of those names. */
+export type StyleId = 'normal' | 'title' | 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6';
+export const STYLE_IDS: StyleId[] = ['normal', 'title', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'];
+export const HEADING_IDS: StyleId[] = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'];
 
 export interface StyleLook {
   label: string;
@@ -33,6 +34,7 @@ export interface StyleLook {
   /** Points. */
   size: number;
   bold?: boolean;
+  italic?: boolean;
   colour?: string;
   /** Space before and after, in points; line spacing as a multiple of single. */
   before: number;
@@ -47,7 +49,52 @@ export const STYLES: Record<StyleId, StyleLook> = {
   h1: { label: 'Heading 1', wordId: 'Heading1', wordName: 'heading 1', face: 'Calibri Light', size: 16, colour: '#2f5496', before: 12, after: 0, line: 1.08 },
   h2: { label: 'Heading 2', wordId: 'Heading2', wordName: 'heading 2', face: 'Calibri Light', size: 13, colour: '#2f5496', before: 2, after: 0, line: 1.08 },
   h3: { label: 'Heading 3', wordId: 'Heading3', wordName: 'heading 3', face: 'Calibri Light', size: 12, colour: '#1f3763', before: 2, after: 0, line: 1.08 },
+  h4: { label: 'Heading 4', wordId: 'Heading4', wordName: 'heading 4', face: 'Calibri Light', size: 11, italic: true, colour: '#2f5496', before: 2, after: 0, line: 1.08 },
+  h5: { label: 'Heading 5', wordId: 'Heading5', wordName: 'heading 5', face: 'Calibri Light', size: 11, colour: '#2f5496', before: 2, after: 0, line: 1.08 },
+  h6: { label: 'Heading 6', wordId: 'Heading6', wordName: 'heading 6', face: 'Calibri Light', size: 11, colour: '#1f3763', before: 2, after: 0, line: 1.08 },
 };
+
+/** How a numbered list counts: 1 2 3, a b c, A B C, i ii iii or I II III. */
+export type NumberKind = 'decimal' | 'lowerLetter' | 'upperLetter' | 'lowerRoman' | 'upperRoman';
+export const NUMBER_KINDS: NumberKind[] = ['decimal', 'lowerLetter', 'upperLetter', 'lowerRoman', 'upperRoman'];
+/** What goes round the number: "1." (dot), "1)" (paren), "(1)" (both), "1" (plain). */
+export type NumberShape = 'dot' | 'paren' | 'both' | 'plain';
+export const NUMBER_SHAPES: NumberShape[] = ['dot', 'paren', 'both', 'plain'];
+
+const ROMAN: Array<[number, string]> = [[1000, 'm'], [900, 'cm'], [500, 'd'], [400, 'cd'], [100, 'c'], [90, 'xc'], [50, 'l'], [40, 'xl'], [10, 'x'], [9, 'ix'], [5, 'v'], [4, 'iv'], [1, 'i']];
+
+/** A list number in its kind ("c", "IV"). */
+export function numberIn(kind: NumberKind, n: number): string {
+  if (kind === 'lowerRoman' || kind === 'upperRoman') {
+    let out = '';
+    let k = Math.max(1, Math.min(3999, n));
+    for (const [v, s] of ROMAN) while (k >= v) {
+      out += s;
+      k -= v;
+    }
+    return kind === 'upperRoman' ? out.toUpperCase() : out;
+  }
+  if (kind === 'lowerLetter' || kind === 'upperLetter') {
+    let s = '';
+    for (let k = Math.max(1, n); k > 0; k = Math.floor((k - 1) / 26)) s = String.fromCharCode(97 + ((k - 1) % 26)) + s;
+    return kind === 'upperLetter' ? s.toUpperCase() : s;
+  }
+  return String(n);
+}
+
+/** A number with what goes round it ("(c)", "IV."). */
+export function shapeNumber(text: string, shape: NumberShape): string {
+  return shape === 'paren' ? `${text})` : shape === 'both' ? `(${text})` : shape === 'plain' ? text : `${text}.`;
+}
+
+/** A link's address when it is one Write keeps and opens (a web page or an email), else null. */
+export function linkHref(url: string): string | null {
+  const u = url.trim();
+  return u.length <= 2000 && /^(https?:\/\/[^\s"<>]+|mailto:[^\s"<>]+)$/i.test(u) ? u : null;
+}
+
+/** The kind a list at this depth counts in when it says nothing: 1. then a. then i., over again. */
+export const depthKind = (depth: number): NumberKind => (['decimal', 'lowerLetter', 'lowerRoman'] as NumberKind[])[depth % 3];
 
 /** Line spacing choices offered on the Home tab (multiples of single). */
 export const LINE_CHOICES = [1, 1.08, 1.15, 1.5, 2, 2.5, 3];

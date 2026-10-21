@@ -209,9 +209,11 @@ export async function readOdt(bytes: Uint8Array): Promise<OdtRead> {
     const s = name ? styles.get(name) : undefined;
     const label = (s?.display ?? name ?? '').toLowerCase().replace(/_20_/g, ' ');
     if (label === 'title') return 'title';
-    if (outline !== null) return outline <= 1 ? 'h1' : outline === 2 ? 'h2' : 'h3';
-    const m = /^heading\s*([1-9])$/.exec(label);
-    if (m) return m[1] === '1' ? 'h1' : m[1] === '2' ? 'h2' : 'h3';
+    // Heading 1 to 6 as they are; 7 to 10 show as Heading 6.
+    const level = (n: number): StyleId => `h${Math.max(1, Math.min(6, n))}` as StyleId;
+    if (outline !== null) return level(outline);
+    const m = /^heading\s*(\d+)$/.exec(label);
+    if (m) return level(Number(m[1]));
     return 'normal';
   };
 

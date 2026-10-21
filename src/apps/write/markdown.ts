@@ -3,7 +3,7 @@
 // cannot hold (colours, sizes, typefaces, alignment, pictures, page breaks) is left out on saving, and the window asks
 // first. Our own small reader and writer: common Markdown as people write it, not every corner of the standard.
 // No browser needed.
-import type { MarkJSON, NodeJSON } from './model.ts';
+import { linkHref, type MarkJSON, type NodeJSON } from './model.ts';
 
 const CODE_FACE = 'Consolas';
 
@@ -58,7 +58,9 @@ export function inlineMd(text: string, base: MarkJSON[] = []): NodeJSON[] {
         const end = close > 0 ? s.indexOf(')', close + 2) : -1;
         if (close > 0 && end > 0) {
           flush();
-          walk(s.slice(i + 1, close), marks);
+          // A web or email address stays a link; anything else (a file next to it, a place in the page) is its words.
+          const href = linkHref(s.slice(close + 2, end).trim().replace(/^<|>$/g, '').split(/\s+"/)[0]);
+          walk(s.slice(i + 1, close), href && !has(marks, 'link') ? [...marks, { type: 'link', attrs: { href } }] : marks);
           i = end + 1;
           continue;
         }
@@ -142,7 +144,7 @@ export function readMarkdown(source: string): NodeJSON {
       // The heading's words, without the #s some people also put at its end.
       let words = line.slice(level).trim();
       while (words.endsWith('#')) words = words.slice(0, -1);
-      blocks.push(para(words.trim(), { style: level === 1 ? 'h1' : level === 2 ? 'h2' : 'h3' }));
+      blocks.push(para(words.trim(), { style: `h${level}` }));
       i++;
       continue;
     }
@@ -246,6 +248,8 @@ function inlineToMd(nodes: NodeJSON[] | undefined): string {
         if (types.has('strike')) t = `~~${t}~~`;
         if (types.has('em')) t = `*${t}*`;
         if (types.has('strong')) t = `**${t}**`;
+        const href = n.marks?.find(m => m.type === 'link')?.attrs?.href;
+        if (typeof href === 'string' && linkHref(href)) t = `[${t}](${href.replace(/[()\s]/g, c => encodeURIComponent(c))})`;
       }
       out += lead + t + trail;
     }
@@ -266,6 +270,7 @@ export function markdownLoses(doc: NodeJSON): string[] {
       if (m.type === 'font' && !/consolas|courier|mono/i.test(String(m.attrs?.face))) lost.add('typefaces');
     }
     if (n.type === 'table_cell' && (Number(n.attrs?.colspan) > 1 || Number(n.attrs?.rowspan) > 1)) lost.add('joined table cells');
+    if (n.type === 'ordered_list' && (n.attrs?.kind || n.attrs?.shape || n.attrs?.outline)) lost.add('list numbering such as A., (a) or 1.1 (Markdown numbers 1. 2. 3.)');
     for (const c of n.content ?? []) walk(c);
   };
   walk(doc);
@@ -282,7 +287,7 @@ export function writeMarkdown(doc: NodeJSON): string {
         const text = inlineToMd(b.content);
         if (style === 'title' || style === 'h1') out.push(`${indent}# ${text}`, '');
         else if (style === 'h2') out.push(`${indent}## ${text}`, '');
-        else if (style === 'h3') out.push(`${indent}### ${text}`, '');
+        else if (/^h[3-6]$/.test(String(style))) out.push(`${indent}${'#'.repeat(Number(String(style).slice(1)))} ${text}`, '');
         else out.push(text ? text.split('\n').map(l => indent + l).join('\n') : '', '');
       } else if (b.type === 'bullet_list' || b.type === 'ordered_list') {
         let n = Number(b.attrs?.order ?? 1) || 1;

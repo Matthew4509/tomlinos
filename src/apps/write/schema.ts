@@ -6,7 +6,7 @@
 // read from the style attribute's text, never applied to anything first: before pasted HTML is parsed, each style
 // attribute is renamed data-wp-style (pastedHtml), so the page's security policy never sees an inline style to refuse.
 import { cleanFace, cssFamily } from '../sheet/fonts.ts';
-import { STYLE_IDS, type StyleId } from './model.ts';
+import { linkHref, NUMBER_KINDS, NUMBER_SHAPES, STYLE_IDS, type StyleId } from './model.ts';
 import { imageByUrl, imageUrl } from './images.ts';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -151,7 +151,7 @@ export function paraAttrs(css: Record<string, string>): Record<string, unknown> 
   return out;
 }
 
-const STYLE_CLASS: Record<string, StyleId> = { msotitle: 'title', msoheading1: 'h1', msoheading2: 'h2', msoheading3: 'h3' };
+const STYLE_CLASS: Record<string, StyleId> = { msotitle: 'title', msoheading1: 'h1', msoheading2: 'h2', msoheading3: 'h3', msoheading4: 'h4', msoheading5: 'h5', msoheading6: 'h6' };
 
 /** The CSS a paragraph's own settings make (the style's own look comes from its class). */
 function paraCss(attrs: Record<string, any>): string {
@@ -202,14 +202,17 @@ function cellToDom(tag: 'td' | 'th', node: any): any {
 
 /** The editor's schema, built from the ProseMirror bundle (loaded when a Write window opens). */
 export function buildSchema(pm: PM): any {
-  const pAttrs = { style: { default: 'normal' }, align: { default: null }, before: { default: null }, after: { default: null }, line: { default: null }, indent: { default: null }, first: { default: null } };
+  // `word`: the Word style a paragraph had in the file it came from (its look is in the other settings); kept when it
+  // is saved back, until another style is chosen.
+  const pAttrs = { style: { default: 'normal' }, align: { default: null }, before: { default: null }, after: { default: null }, line: { default: null }, indent: { default: null }, first: { default: null }, word: { default: null } };
   const pRule = (tag: string, style: StyleId | null) => ({
     tag,
     getAttrs: (el: HTMLElement) => {
       const cls = [...el.classList].map(c => c.toLowerCase());
       const own = cls.find(c => c.startsWith('wp-') && STYLE_IDS.includes(c.slice(3) as StyleId));
       const word = cls.map(c => STYLE_CLASS[c]).find(Boolean);
-      return { style: own ? own.slice(3) : (word ?? style ?? 'normal'), ...paraAttrs(readCss(styleOf(el))) };
+      const kept = el.getAttribute('data-word');
+      return { style: own ? own.slice(3) : (word ?? style ?? 'normal'), ...paraAttrs(readCss(styleOf(el))), word: kept && /^[\w .\-]{1,80}$/.test(kept) ? kept : null };
     },
   });
   return new pm.Schema({
@@ -219,10 +222,13 @@ export function buildSchema(pm: PM): any {
         content: 'inline*',
         group: 'block',
         attrs: pAttrs,
-        parseDOM: [pRule('p', null), pRule('h1', 'h1'), pRule('h2', 'h2'), pRule('h3', 'h3'), pRule('h4', 'h3'), pRule('h5', 'h3'), pRule('h6', 'h3')],
+        parseDOM: [pRule('p', null), pRule('h1', 'h1'), pRule('h2', 'h2'), pRule('h3', 'h3'), pRule('h4', 'h4'), pRule('h5', 'h5'), pRule('h6', 'h6')],
         toDOM: (node: any) => {
           const css = paraCss(node.attrs);
-          return ['p', css ? { class: `wp-${node.attrs.style}`, style: css } : { class: `wp-${node.attrs.style}` }, 0];
+          const attrs: Record<string, string> = { class: `wp-${node.attrs.style}` };
+          if (css) attrs.style = css;
+          if (node.attrs.word) attrs['data-word'] = node.attrs.word;
+          return ['p', attrs, 0];
         },
       },
       bullet_list: {
@@ -234,9 +240,27 @@ export function buildSchema(pm: PM): any {
       ordered_list: {
         content: 'list_item+',
         group: 'block',
-        attrs: { order: { default: 1 } },
-        parseDOM: [{ tag: 'ol', getAttrs: (el: HTMLElement) => ({ order: Math.max(1, Math.min(10000, Number(el.getAttribute('start')) || 1)) }) }],
-        toDOM: (node: any) => (node.attrs.order === 1 ? ['ol', 0] : ['ol', { start: String(node.attrs.order) }, 0]),
+        // kind / shape: how it counts and what goes round the number (null: 1. a. i. by depth); outline: "1.1." with the
+        // numbers of the lists it sits in.
+        attrs: { order: { default: 1 }, kind: { default: null }, shape: { default: null }, outline: { default: false } },
+        parseDOM: [{ tag: 'ol', getAttrs: (el: HTMLElement) => {
+          const kind = el.getAttribute('data-kind');
+          const shape = el.getAttribute('data-shape');
+          return {
+            order: Math.max(1, Math.min(10000, Number(el.getAttribute('start')) || 1)),
+            kind: NUMBER_KINDS.includes(kind as never) ? kind : null,
+            shape: NUMBER_SHAPES.includes(shape as never) ? shape : null,
+            outline: el.hasAttribute('data-outline'),
+          };
+        } }],
+        toDOM: (node: any) => {
+          const attrs: Record<string, string> = {};
+          if (node.attrs.order !== 1) attrs.start = String(node.attrs.order);
+          if (node.attrs.kind) attrs['data-kind'] = node.attrs.kind;
+          if (node.attrs.shape) attrs['data-shape'] = node.attrs.shape;
+          if (node.attrs.outline) attrs['data-outline'] = '';
+          return ['ol', attrs, 0];
+        },
       },
       list_item: {
         content: 'paragraph block*',
@@ -359,6 +383,16 @@ export function buildSchema(pm: PM): any {
       },
     },
     marks: {
+      // A link to a web page or an email address: the outermost mark, so it wraps the words' own look.
+      link: {
+        attrs: { href: {} },
+        inclusive: false,
+        parseDOM: [{ tag: 'a[href]', getAttrs: (el: HTMLElement) => {
+          const href = linkHref(el.getAttribute('href') ?? '');
+          return href ? { href } : false;
+        } }],
+        toDOM: (mark: any) => ['a', { href: mark.attrs.href, class: 'wp-link', title: `${mark.attrs.href} (Ctrl+click to open)`, rel: 'noopener noreferrer' }, 0],
+      },
       // Typeface, size and colour wrap the others, as a run in Word has them.
       font: {
         attrs: { face: {} },

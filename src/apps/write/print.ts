@@ -10,7 +10,7 @@ import { cssFamily, fontKind, type FontKind } from '../sheet/fonts.ts';
 import { PdfDocument, type PdfPage } from '../sheet/pdf.ts';
 import { pageAt, pageTop, type Geometry } from './layout.ts';
 import { frameOf, geometryOf, type Frame } from './measure.ts';
-import { fillLine, paperPt, pxToPt, type PageBox, type PageSetup } from './model.ts';
+import { depthKind, fillLine, NUMBER_KINDS, NUMBER_SHAPES, numberIn, paperPt, pxToPt, shapeNumber, type NumberKind, type NumberShape, type PageBox, type PageSetup } from './model.ts';
 import { picture } from './images.ts';
 
 /** A word, a box or a picture on one page, in points from the page's top-left corner. */
@@ -36,26 +36,8 @@ function hexOf(css: string): string | null {
 /** The first typeface in a CSS font-family list. */
 const firstFace = (family: string): string => family.split(',')[0].trim().replace(/^["']|["']$/g, '');
 
-const ROMAN: Array<[number, string]> = [[1000, 'm'], [900, 'cm'], [500, 'd'], [400, 'cd'], [100, 'c'], [90, 'xc'], [50, 'l'], [40, 'xl'], [10, 'x'], [9, 'ix'], [5, 'v'], [4, 'iv'], [1, 'i']];
-function roman(n: number): string {
-  let out = '';
-  for (const [v, s] of ROMAN) while (n >= v) {
-    out += s;
-    n -= v;
-  }
-  return out;
-}
-const letters = (n: number): string => {
-  let s = '';
-  while (n > 0) {
-    n--;
-    s = String.fromCharCode(97 + (n % 26)) + s;
-    n = Math.floor(n / 26);
-  }
-  return s;
-};
-
-/** The number or bullet shown before a list item (as the editor's CSS draws it: 1. a. i. and • ◦ ▪ by depth). */
+/** The number or bullet shown before a list item (as the editor's CSS draws it: 1. a. i. and • ◦ ▪ by depth, or the
+ *  list's own format kept from a Word file: A. (a) I) and 1.1.). */
 export function markerText(li: HTMLElement, editor: HTMLElement): string {
   const list = li.parentElement;
   if (!list) return '';
@@ -63,9 +45,16 @@ export function markerText(li: HTMLElement, editor: HTMLElement): string {
   let same = 0;
   for (let e = list.parentElement; e && e !== editor; e = e.parentElement) if (e.nodeName === list.nodeName) same++;
   if (list.nodeName === 'UL') return ['•', '◦', '▪'][same % 3];
-  const start = Number((list as HTMLOListElement).getAttribute('start')) || 1;
-  const n = start + [...list.children].indexOf(li);
-  return same % 3 === 0 ? `${n}.` : same % 3 === 1 ? `${letters(n)}.` : `${roman(n)}.`;
+  const numberOf = (item: Element): number => (Number(item.parentElement?.getAttribute('start')) || 1) + [...(item.parentElement?.children ?? [])].indexOf(item);
+  if (list.hasAttribute('data-outline')) {
+    // Each numbered list it sits in gives its own number: 2.1.3.
+    const parts: number[] = [numberOf(li)];
+    for (let e = list.parentElement; e && e !== editor; e = e.parentElement) if (e.nodeName === 'LI' && e.parentElement?.nodeName === 'OL') parts.unshift(numberOf(e));
+    return `${parts.join('.')}.`;
+  }
+  const kind = (list.getAttribute('data-kind') ?? depthKind(same)) as NumberKind;
+  const shape = (list.getAttribute('data-shape') ?? 'dot') as NumberShape;
+  return shapeNumber(numberIn(NUMBER_KINDS.includes(kind) ? kind : depthKind(same), numberOf(li)), NUMBER_SHAPES.includes(shape) ? shape : 'dot');
 }
 
 /** Reads the pages off the screen: the editor's element, the paper strip it sits on, and the page setup. */

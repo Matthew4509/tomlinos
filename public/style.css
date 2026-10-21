@@ -1954,6 +1954,9 @@ textarea.field { resize: vertical; font: inherit; }
 .wp-sample-h1 { font-family: "Calibri Light", Carlito, "Segoe UI", Arial, sans-serif; font-size: 15px; color: #2f5496; }
 .wp-sample-h2 { font-family: "Calibri Light", Carlito, "Segoe UI", Arial, sans-serif; font-size: 14px; color: #2f5496; }
 .wp-sample-h3 { font-family: "Calibri Light", Carlito, "Segoe UI", Arial, sans-serif; font-size: 13px; color: #1f3763; }
+.wp-sample-h4, .wp-sample-h5, .wp-sample-h6 { font-family: "Calibri Light", Carlito, "Segoe UI", Arial, sans-serif; font-size: 12px; color: #2f5496; }
+.wp-sample-h4 { font-style: italic; }
+.wp-sample-h6 { color: #1f3763; }
 .wp-tip { font-size: 12px; color: #555; max-width: 170px; white-space: normal; line-height: 1.3; }
 .wp-help { padding: 4px 10px; font-size: 13px; line-height: 1.4; max-width: 980px; white-space: normal; color: #222; }
 .wp-help p { margin: 3px 0; }
@@ -1979,6 +1982,12 @@ textarea.field { resize: vertical; font: inherit; }
 .wp-doc p.wp-h1 { font-size: 16pt; color: #2f5496; margin-top: 12pt; }
 .wp-doc p.wp-h2 { font-size: 13pt; color: #2f5496; margin-top: 2pt; }
 .wp-doc p.wp-h3 { font-size: 12pt; color: #1f3763; margin-top: 2pt; }
+.wp-doc p.wp-h4, .wp-doc p.wp-h5, .wp-doc p.wp-h6 { font-family: "Calibri Light", Carlito, "Segoe UI", Arial, sans-serif; font-size: 11pt; margin-top: 2pt; margin-bottom: 0; }
+.wp-doc p.wp-h4 { font-style: italic; color: #2f5496; }
+.wp-doc p.wp-h5 { color: #2f5496; }
+.wp-doc p.wp-h6 { color: #1f3763; }
+/* A link: blue and underlined, as in Word; Ctrl+click opens it. */
+.wp-doc a.wp-link { color: #0563c1; text-decoration: underline; cursor: text; }
 .wp-doc ul, .wp-doc ol { margin: 0 0 8pt; padding-left: 0.5in; }
 .wp-doc li { position: relative; }
 .wp-doc li > p { margin-bottom: 0; }
@@ -1997,6 +2006,28 @@ textarea.field { resize: vertical; font: inherit; }
 .wp-doc ol ol li::marker { content: counter(list-item, lower-alpha) ". "; }
 .wp-doc ol ol ol li::marker { content: counter(list-item, lower-roman) ". "; }
 .wp-doc ol ol ol ol li::marker { content: counter(list-item, decimal) ". "; }
+/* A numbered list with its own format (kept from a Word file): how it counts, and what goes round the number. */
+.wp-doc ol[data-kind="decimal"][data-shape="dot"] > li::marker { content: counter(list-item, decimal) ". "; }
+.wp-doc ol[data-kind="decimal"][data-shape="paren"] > li::marker { content: counter(list-item, decimal) ") "; }
+.wp-doc ol[data-kind="decimal"][data-shape="both"] > li::marker { content: "(" counter(list-item, decimal) ") "; }
+.wp-doc ol[data-kind="decimal"][data-shape="plain"] > li::marker { content: counter(list-item, decimal) " "; }
+.wp-doc ol[data-kind="lowerLetter"][data-shape="dot"] > li::marker { content: counter(list-item, lower-alpha) ". "; }
+.wp-doc ol[data-kind="lowerLetter"][data-shape="paren"] > li::marker { content: counter(list-item, lower-alpha) ") "; }
+.wp-doc ol[data-kind="lowerLetter"][data-shape="both"] > li::marker { content: "(" counter(list-item, lower-alpha) ") "; }
+.wp-doc ol[data-kind="lowerLetter"][data-shape="plain"] > li::marker { content: counter(list-item, lower-alpha) " "; }
+.wp-doc ol[data-kind="upperLetter"][data-shape="dot"] > li::marker { content: counter(list-item, upper-alpha) ". "; }
+.wp-doc ol[data-kind="upperLetter"][data-shape="paren"] > li::marker { content: counter(list-item, upper-alpha) ") "; }
+.wp-doc ol[data-kind="upperLetter"][data-shape="both"] > li::marker { content: "(" counter(list-item, upper-alpha) ") "; }
+.wp-doc ol[data-kind="upperLetter"][data-shape="plain"] > li::marker { content: counter(list-item, upper-alpha) " "; }
+.wp-doc ol[data-kind="lowerRoman"][data-shape="dot"] > li::marker { content: counter(list-item, lower-roman) ". "; }
+.wp-doc ol[data-kind="lowerRoman"][data-shape="paren"] > li::marker { content: counter(list-item, lower-roman) ") "; }
+.wp-doc ol[data-kind="lowerRoman"][data-shape="both"] > li::marker { content: "(" counter(list-item, lower-roman) ") "; }
+.wp-doc ol[data-kind="lowerRoman"][data-shape="plain"] > li::marker { content: counter(list-item, lower-roman) " "; }
+.wp-doc ol[data-kind="upperRoman"][data-shape="dot"] > li::marker { content: counter(list-item, upper-roman) ". "; }
+.wp-doc ol[data-kind="upperRoman"][data-shape="paren"] > li::marker { content: counter(list-item, upper-roman) ") "; }
+.wp-doc ol[data-kind="upperRoman"][data-shape="both"] > li::marker { content: "(" counter(list-item, upper-roman) ") "; }
+.wp-doc ol[data-kind="upperRoman"][data-shape="plain"] > li::marker { content: counter(list-item, upper-roman) " "; }
+.wp-doc ol[data-outline] > li::marker { content: counters(list-item, ".") ". "; }
 .wp-doc mark { color: inherit; }
 .wp-doc .wp-break { position: relative; height: 14px; margin: 2px 0; border-top: 1px dotted #8a97ab; cursor: default; }
 .wp-doc .wp-break::after { content: "Page break"; position: absolute; left: 50%; top: 1px; transform: translateX(-50%); padding: 0 6px; font: 10px "Segoe UI", Arial, sans-serif; color: #6b7a90; background: #fff; }

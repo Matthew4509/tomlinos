@@ -27,9 +27,10 @@ import { headerFooterDialog, marginsDialog, paragraphDialog, pictureSizeDialog, 
 import { addPicture, picture } from './write/images.ts';
 import { drawFurniture, frameOf, GAP, measure, pageOfCursor, sameSpacers, spacerDecorations } from './write/measure.ts';
 import {
-  countWords, defaultPage, docFromText, EMPTY_DOC, LINE_CHOICES, MARGIN_PRESETS, pageBox, PAPERS, plainText, STYLE_IDS, STYLES,
-  type NodeJSON, type PageSetup, type Paper, type StyleId,
+  countWords, defaultPage, docFromText, EMPTY_DOC, LINE_CHOICES, linkHref, MARGIN_PRESETS, pageBox, PAPERS, plainText, STYLE_IDS, STYLES,
+  type NodeJSON, type NumberKind, type NumberShape, type PageSetup, type Paper, type StyleId,
 } from './write/model.ts';
+import { openInNewTab } from './link.ts';
 import { pdfOf, printPreview, snapshot } from './write/print.ts';
 import { buildSchema, pastedHtml, type PM } from './write/schema.ts';
 
@@ -307,6 +308,13 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
     'Mod-Alt-1': (s: any, d: any) => styleCmd('h1')(s, d),
     'Mod-Alt-2': (s: any, d: any) => styleCmd('h2')(s, d),
     'Mod-Alt-3': (s: any, d: any) => styleCmd('h3')(s, d),
+    'Mod-Alt-4': (s: any, d: any) => styleCmd('h4')(s, d),
+    'Mod-Alt-5': (s: any, d: any) => styleCmd('h5')(s, d),
+    'Mod-Alt-6': (s: any, d: any) => styleCmd('h6')(s, d),
+    'Mod-k': () => {
+      void editLink();
+      return true;
+    },
     'Mod-Shift-n': (s: any, d: any) => styleCmd('normal')(s, d),
     'Mod-Shift-l': listCmd(nodes.bullet_list),
     'Mod-Enter': (s: any, d: any) => insertPageBreak(s, d),
@@ -525,6 +533,15 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
       field: (node: any) => new FieldView(node),
       toc: (node: any) => new TocView(node),
     },
+    // Ctrl+click on a link opens it in a new browser tab (a plain click puts the cursor there, as in Word).
+    handleClick: (v: any, pos: number, event: MouseEvent) => {
+      if (!(event.ctrlKey || event.metaKey)) return false;
+      const href = v.state.doc.nodeAt(pos)?.marks.find((m: any) => m.type.name === 'link')?.attrs.href;
+      const safe = typeof href === 'string' ? linkHref(href) : null;
+      if (!safe) return false;
+      openInNewTab(new URL(safe));
+      return true;
+    },
     // Pasted HTML is read from a copy that never runs or loads anything; style blocks and comments are dropped first.
     transformPastedHTML: pastedHtml,
     handlePaste: (_v: any, event: ClipboardEvent) => {
@@ -706,10 +723,81 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
     }
     return true;
   };
-  const styleCmd = (style: StyleId) => paraCmd({ style });
+  const styleCmd = (style: StyleId) => paraCmd({ style, word: null });
   const exec = (cmd: (s: any, d?: any) => boolean) => {
     cmd(view.state, view.dispatch);
     view.focus();
+  };
+
+  /** What was typed as an address: a web address, "www." (made https), or an email address (made mailto:). */
+  const addressOf = (typed: string): string | null => {
+    const t = typed.trim();
+    if (/^[^\s@/:]+@[^\s@]+\.[^\s@]+$/.test(t)) return linkHref(`mailto:${t}`);
+    if (/^www\./i.test(t)) return linkHref(`https://${t}`);
+    return linkHref(t);
+  };
+  /** The link around `pos` in its paragraph (the cursor inside it or just after it): its range and address. */
+  const linkAround = (st: any, pos: number): { from: number; to: number; href: string } | null => {
+    const $p = st.doc.resolve(pos);
+    const parent = $p.parent;
+    const start = $p.start();
+    const kids: Array<{ from: number; to: number; href: string | null }> = [];
+    parent.forEach((child: any, off: number) => {
+      const href = child.marks.find((m: any) => m.type.name === 'link')?.attrs.href ?? null;
+      kids.push({ from: start + off, to: start + off + child.nodeSize, href });
+    });
+    let i = kids.findIndex(k => k.href && pos >= k.from && pos < k.to);
+    if (i < 0) i = kids.findIndex(k => k.href && pos === k.to);
+    if (i < 0) return null;
+    const href = kids[i].href!;
+    let a = i, b = i;
+    while (a > 0 && kids[a - 1].href === href) a--;
+    while (b < kids.length - 1 && kids[b + 1].href === href) b++;
+    return { from: kids[a].from, to: kids[b].to, href };
+  };
+  /** Ctrl+K: a link on the chosen words (or the link the cursor is in, to change); an empty address takes it away. */
+  async function editLink(): Promise<void> {
+    const st = view.state;
+    const linkType = st.schema.marks.link;
+    let { from, to } = st.selection;
+    const around = linkAround(st, from);
+    if (from === to && around) ({ from, to } = around);
+    let current: string | null = around?.href ?? null;
+    if (!current && from < to) st.doc.nodesBetween(from, to, (n: any) => {
+      current ??= n.marks?.find((m: any) => m.type === linkType)?.attrs.href ?? null;
+    });
+    const typed = await shell.dialogs.prompt({
+      title: current ? 'Change the link' : 'Link',
+      label: 'A web address (starting https:// or www.) or an email address. Leave it empty to take the link away.',
+      value: current ?? '',
+      ok: current ? 'Change' : 'Link',
+      check: v => (!v.trim() || addressOf(v) ? null : 'Type a web address starting https:// or www., or an email address.'),
+    });
+    if (typed === null) return view.focus();
+    const href = typed.trim() ? addressOf(typed) : null;
+    let tr = view.state.tr;
+    if (!href) {
+      if (from < to) tr = tr.removeMark(from, to, linkType);
+    } else if (from === to) {
+      // Nothing chosen: the address itself goes in, as its link.
+      const words = typed.trim();
+      tr = tr.insert(from, view.state.schema.text(words, [linkType.create({ href })])).removeStoredMark(linkType);
+    } else tr = tr.removeMark(from, to, linkType).addMark(from, to, linkType.create({ href }));
+    view.dispatch(tr.scrollIntoView());
+    view.focus();
+  }
+  /** A numbered list's format: how it counts and what goes round the number (null: 1. a. i. by depth). Not in a
+   *  numbered list yet: the paragraphs become one first. */
+  const listFormatCmd = (kind: NumberKind | null, shape: NumberShape | null, outline = false) => (st: any, dispatch?: any): boolean => {
+    const $f = st.selection.$from;
+    for (let d = $f.depth; d > 0; d--) {
+      const n = $f.node(d);
+      if (n.type === nodes.ordered_list) {
+        if (dispatch) dispatch(st.tr.setNodeMarkup($f.before(d), undefined, { ...n.attrs, kind, shape, outline }));
+        return true;
+      }
+    }
+    return pm.wrapInList(nodes.ordered_list, { order: 1, kind, shape, outline })(st, dispatch);
   };
 
   /** Lists: the same kind again takes the paragraphs out of the list; the other kind changes it. */
@@ -1556,6 +1644,16 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
 
   const bulletBtn = btn(listIcon('bullet'), 'Bullets (Ctrl+Shift+L, or type * and a space)', () => exec(toggleList(nodes.bullet_list)));
   const numberBtn = btn(listIcon('number'), 'Numbering (or type 1. and a space)', () => exec(toggleList(nodes.ordered_list)));
+  const numberFormatBtn = menuBtn('▾', 'Numbering format: 1) (a) A. I. 1.1 ...', () => {
+    const choices: Array<[string, NumberKind | null, NumberShape | null, boolean]> = [
+      ['As the level goes: 1. then a. then i.', null, null, false],
+      ['1. 2. 3.', 'decimal', 'dot', false], ['1) 2) 3)', 'decimal', 'paren', false],
+      ['a. b. c.', 'lowerLetter', 'dot', false], ['(a) (b) (c)', 'lowerLetter', 'both', false], ['A. B. C.', 'upperLetter', 'dot', false],
+      ['i. ii. iii.', 'lowerRoman', 'dot', false], ['I. II. III.', 'upperRoman', 'dot', false],
+      ['1.1. 1.2. (inside a numbered list)', null, null, true],
+    ];
+    return choices.map(([label, kind, shape, outline]) => ({ label, action: () => exec(listFormatCmd(kind, shape, outline)) }));
+  }, 'rb');
   const outdentBtn = btn(listIcon('outdent'), 'Decrease indent (Shift+Tab in a list)', () => indentBy(-1));
   const indentBtn = btn(listIcon('indent'), 'Increase indent (Tab in a list)', () => indentBy(1));
   const alignBtns = (['left', 'center', 'right', 'justify'] as const).map(a => btn(alignIcon(a), { left: 'Align left (Ctrl+L)', center: 'Centre (Ctrl+E)', right: 'Align right (Ctrl+R)', justify: 'Justify (Ctrl+J)' }[a], () => exec(paraCmd({ align: a === 'left' ? null : a }))));
@@ -1657,13 +1755,14 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
       return [
         group('Undo', undoBtn, redoBtn, cutBtn, copyBtn),
         sized(300, group('Font', faceBox, sizeBox, growBtn, shrinkBtn, h('span', { class: 'rb-break' }), boldBtn, italicBtn, underBtn, strikeBtn, supBtn, subBtn, colourBtn, highlightBtn, clearBtn)),
-        sized(240, group('Paragraph', bulletBtn, numberBtn, outdentBtn, indentBtn, h('span', { class: 'rb-break' }), ...alignBtns, lineBtn)),
+        sized(260, group('Paragraph', bulletBtn, numberBtn, numberFormatBtn, outdentBtn, indentBtn, h('span', { class: 'rb-break' }), ...alignBtns, lineBtn)),
         group('Styles', ...styleBtns),
         group('Editing', btn('⌕ Find', 'Find (Ctrl+F)', () => openFind(false), 'text-rb'), btn('Replace', 'Replace (Ctrl+H)', () => openFind(true), 'text-rb')),
       ];
     }
     if (t === 'insert') {
       return [group('Pages', pageBreakBtn, btn('☰ Contents page', 'A contents page: the headings and their pages, kept up to date', insertToc, 'text-rb')), group('Tables', tableBtn),
+        group('Links', btn('🔗 Link', 'A link to a web page or an email address (Ctrl+K); Ctrl+click a link to open it', () => void editLink(), 'text-rb')),
         group('Footnotes', btn('¹ Footnote', 'A footnote at the foot of the page (Ctrl+Alt+F); click its number to change it', () => void insertFootnote(), 'text-rb')), sized(200, group('Pictures', picDeskBtn, picPcBtn)),
         group('Tip', h('span', { class: 'wp-tip' }, 'Paste or drop a picture straight into the page.'))];
     }
@@ -1703,9 +1802,9 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
     }
     return [h('div', { class: 'wp-help' },
       h('p', {}, h('strong', {}, 'Opens and saves: '), 'Word documents (.docx), Markdown (.md) and plain text (.txt). Opens WordPad files (.rtf) and LibreOffice files (.odt) and saves them as Word documents. A Word file from elsewhere keeps what Write cannot show (text boxes, shapes, charts, comments, equations: grey labels in the text) and gets it back unchanged when saved.'),
-      h('p', {}, h('strong', {}, 'Writes: '), 'fonts, sizes, colours, highlight; alignment, spacing, indents; Normal, Title and Heading 1–3; bullets and numbering; tables with joined and shaded cells; pictures in the line; page breaks; footnotes; a contents page; margins, paper and orientation; a header and footer with page numbers; find and replace; spelling (the browser’s own checker); letters from Contacts or a spreadsheet (Mailings); templates (File > New from a template); print and PDF.'),
+      h('p', {}, h('strong', {}, 'Writes: '), 'fonts, sizes, colours, highlight; alignment, spacing, indents; Normal, Title and Heading 1–6; a Word file’s own paragraph styles kept by name; links to web pages and email addresses (Ctrl+K; Ctrl+click opens one); bullets and numbering, including 1) (a) A. I. and 1.1 (the ▾ beside Numbering); tables with joined and shaded cells; pictures in the line; page breaks; footnotes; a contents page; margins, paper and orientation; a header and footer with page numbers; find and replace; spelling (the browser’s own checker); letters from Contacts or a spreadsheet (Mailings); templates (File > New from a template); print and PDF.'),
       h('p', {}, h('strong', {}, 'Not here: '), 'columns, comments and tracked changes of its own, text boxes and shapes of its own, text wrapping round pictures, a different first-page header, equations, grammar checking, and the old .doc files.'),
-      h('p', {}, h('strong', {}, 'Keys: '), 'Ctrl+B, I, U; Ctrl+E centre, Ctrl+L left, Ctrl+R right, Ctrl+J justify; Ctrl+1, 2, 5 line spacing; Ctrl+Alt+1, 2, 3 headings; Ctrl+Shift+N Normal; Ctrl+Enter page break; Shift+Enter new line; Ctrl+Alt+F footnote; Ctrl+F find, Ctrl+H replace; Tab and Shift+Tab move a list item in and out; Ctrl+S save; Ctrl+P print.'))];
+      h('p', {}, h('strong', {}, 'Keys: '), 'Ctrl+B, I, U; Ctrl+E centre, Ctrl+L left, Ctrl+R right, Ctrl+J justify; Ctrl+1, 2, 5 line spacing; Ctrl+Alt+1 to 6 headings; Ctrl+K link; Ctrl+Shift+N Normal; Ctrl+Enter page break; Shift+Enter new line; Ctrl+Alt+F footnote; Ctrl+F find, Ctrl+H replace; Tab and Shift+Tab move a list item in and out; Ctrl+S save; Ctrl+P print.'))];
   };
   let tab: Tab = 'home';
   const ribbon = h('div', { class: 'ribbon', role: 'tabpanel', 'data-menus-stay': '' }, ...groupsOf('home'));

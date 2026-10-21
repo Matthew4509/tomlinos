@@ -12,7 +12,7 @@ import { child, children, escapeAttr, escapeXml, parseXml, XML_HEAD, XmlProblem,
 import { zipDeflate, type ZipEntry } from '../../core/zip.ts';
 import { addPicture, EXTENSION, picture, type Picture } from './images.ts';
 import {
-  cleanPage, defaultPage, PAPERS, PX_PER_IN, STYLES, type HeaderLine, type MarkJSON, type NodeJSON, type PageSetup, type Paper, type StyleId,
+  cleanPage, defaultPage, depthKind, linkHref, NUMBER_KINDS, PAPERS, PX_PER_IN, STYLES, type HeaderLine, type NumberKind, type NumberShape, type MarkJSON, type NodeJSON, type PageSetup, type Paper, type StyleId,
 } from './model.ts';
 
 export class DocxProblem extends Error {}
@@ -50,8 +50,41 @@ const xmlSafe = (s: string): string => s.replace(/[\u0000-\u0008\u000B\u000C\u00
 const BULLETS = ['•', 'o', '▪'];
 const ORDER_FORMATS = ['decimal', 'lowerLetter', 'lowerRoman'];
 
+/** A numbered list level's own format (kept from a Word file, or chosen): how it counts, what goes round the number,
+ *  or "1.1." with the numbers of the levels above. */
+export interface LevelFormat {
+  kind: NumberKind;
+  shape: NumberShape;
+  outline: boolean;
+}
+
+/** One numbered list: its numbering id, where it starts, its level, and any level with a format of its own. */
+interface OrderedNum {
+  numId: number;
+  start: number;
+  level: number;
+  formats: Map<number, LevelFormat>;
+}
+
+/** Word's lvlText for a level in a format ("%2)", "(%2)", "%1.%2."). */
+function levelText(f: LevelFormat, i: number): string {
+  if (f.outline) return `${Array.from({ length: i + 1 }, (_, k) => `%${k + 1}`).join('.')}.`;
+  const me = `%${i + 1}`;
+  return f.shape === 'paren' ? `${me})` : f.shape === 'both' ? `(${me})` : f.shape === 'plain' ? me : `${me}.`;
+}
+
+/** The format a Word level counts in, or null when Write has no such format (a word in the text, "none", 001...). */
+function readLevelFormat(fmt: string, text: string, i: number): LevelFormat | null {
+  const outline = Array.from({ length: i + 1 }, (_, k) => `%${k + 1}`).join('.');
+  if (i > 0 && fmt === 'decimal' && (text === `${outline}.` || text === outline)) return { kind: 'decimal', shape: 'dot', outline: true };
+  if (!NUMBER_KINDS.includes(fmt as NumberKind)) return null;
+  const me = `%${i + 1}`;
+  const shape: NumberShape | null = text === `${me}.` ? 'dot' : text === `${me})` ? 'paren' : text === `(${me})` ? 'both' : text === me ? 'plain' : null;
+  return shape ? { kind: fmt as NumberKind, shape, outline: false } : null;
+}
+
 /** Our two list definitions (bullets, numbers) and one numbering per list, with ids from `abs` and `bulletNum` up. */
-function numberingParts(ordered: Array<{ numId: number; start: number }>, abs: number, bulletNum: number): { abstracts: string; nums: string } {
+function numberingParts(ordered: OrderedNum[], abs: number, bulletNum: number): { abstracts: string; nums: string } {
   const lvl = (i: number, bullet: boolean) => {
     const left = 720 * (i + 1);
     const text = bullet ? BULLETS[i % 3] : `%${i + 1}.`;
@@ -65,20 +98,26 @@ function numberingParts(ordered: Array<{ numId: number; start: number }>, abs: n
   let out = `<w:num w:numId="${bulletNum}"><w:abstractNumId w:val="${abs}"/></w:num>`;
   for (const o of ordered) {
     out += `<w:num w:numId="${o.numId}"><w:abstractNumId w:val="${abs + 1}"/>`;
-    // Each numbered list starts again from its own first number (9 levels, so a list inside it restarts too).
-    for (let i = 0; i < 9; i++) out += `<w:lvlOverride w:ilvl="${i}"><w:startOverride w:val="${i === 0 ? o.start : 1}"/></w:lvlOverride>`;
+    // Each numbered list starts again from its own first number at its own level (9 levels, so a list inside it
+    // restarts too); a level with a format of its own is defined here in full.
+    for (let i = 0; i < 9; i++) {
+      const start = i === o.level ? o.start : 1;
+      const f = o.formats.get(i);
+      const lvl = f ? `<w:lvl w:ilvl="${i}"><w:start w:val="${start}"/><w:numFmt w:val="${f.kind}"/><w:lvlText w:val="${escapeAttr(levelText(f, i))}"/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="${720 * (i + 1)}" w:hanging="360"/></w:pPr></w:lvl>` : '';
+      out += `<w:lvlOverride w:ilvl="${i}"><w:startOverride w:val="${start}"/>${lvl}</w:lvlOverride>`;
+    }
     out += '</w:num>';
   }
   return { abstracts, nums: out };
 }
 
-function numberingXml(ordered: Array<{ numId: number; start: number }>): string {
+function numberingXml(ordered: OrderedNum[]): string {
   const parts = numberingParts(ordered, 0, 1);
   return `${XML_HEAD}<w:numbering xmlns:w="${NS.w}">${parts.abstracts}${parts.nums}</w:numbering>`;
 }
 
 /** The ids of the styles Write writes (and replaces in a file it opened, so the text looks as Write showed it). */
-const OUR_STYLE_IDS = ['Normal', 'Title', 'Heading1', 'Heading2', 'Heading3', 'ListParagraph', 'Header', 'Footer', 'TableNormal', 'TableGrid', 'FootnoteText', 'FootnoteReference', 'TOCHeading', 'TOC1', 'TOC2', 'TOC3'];
+const OUR_STYLE_IDS = ['Normal', 'Title', 'Heading1', 'Heading2', 'Heading3', 'Heading4', 'Heading5', 'Heading6', 'Hyperlink', 'ListParagraph', 'Header', 'Footer', 'TableNormal', 'TableGrid', 'FootnoteText', 'FootnoteReference', 'TOCHeading', 'TOC1', 'TOC2', 'TOC3'];
 
 function stylesXml(): string {
   return `${XML_HEAD}<w:styles xmlns:w="${NS.w}">` + docDefaults() + ourStyles() + '</w:styles>';
@@ -94,12 +133,13 @@ function docDefaults(): string {
 function ourStyles(): string {
   const para = (id: StyleId, outline: number | null) => {
     const s = STYLES[id];
-    const rpr = `<w:rPr><w:rFonts w:ascii="${s.face}" w:hAnsi="${s.face}" w:cs="${s.face}"/>${s.bold ? '<w:b/>' : ''}${s.colour ? `<w:color w:val="${s.colour.slice(1).toUpperCase()}"/>` : ''}<w:sz w:val="${s.size * 2}"/><w:szCs w:val="${s.size * 2}"/></w:rPr>`;
+    const rpr = `<w:rPr><w:rFonts w:ascii="${s.face}" w:hAnsi="${s.face}" w:cs="${s.face}"/>${s.bold ? '<w:b/>' : ''}${s.italic ? '<w:i/>' : ''}${s.colour ? `<w:color w:val="${s.colour.slice(1).toUpperCase()}"/>` : ''}<w:sz w:val="${s.size * 2}"/><w:szCs w:val="${s.size * 2}"/></w:rPr>`;
     const ppr = `<w:pPr>${outline !== null ? '<w:keepNext/><w:keepLines/>' : ''}<w:spacing w:before="${twips(s.before)}" w:after="${twips(s.after)}" w:line="${Math.round(s.line * 240)}" w:lineRule="auto"/>${outline !== null ? `<w:outlineLvl w:val="${outline}"/>` : ''}${id === 'title' ? '<w:contextualSpacing/>' : ''}</w:pPr>`;
     return `<w:style w:type="paragraph"${id === 'normal' ? ' w:default="1"' : ''} w:styleId="${s.wordId}"><w:name w:val="${s.wordName}"/>${id === 'normal' ? '' : '<w:basedOn w:val="Normal"/><w:next w:val="Normal"/>'}<w:qFormat/>${ppr}${rpr}</w:style>`;
   };
   return ''
-    + para('normal', null) + para('title', null) + para('h1', 0) + para('h2', 1) + para('h3', 2)
+    + para('normal', null) + para('title', null) + para('h1', 0) + para('h2', 1) + para('h3', 2) + para('h4', 3) + para('h5', 4) + para('h6', 5)
+    + '<w:style w:type="character" w:styleId="Hyperlink"><w:name w:val="Hyperlink"/><w:uiPriority w:val="99"/><w:unhideWhenUsed/><w:rPr><w:color w:val="0563C1"/><w:u w:val="single"/></w:rPr></w:style>'
     + '<w:style w:type="paragraph" w:styleId="ListParagraph"><w:name w:val="List Paragraph"/><w:basedOn w:val="Normal"/><w:uiPriority w:val="34"/><w:qFormat/><w:pPr><w:ind w:left="720"/><w:contextualSpacing/></w:pPr></w:style>'
     + '<w:style w:type="paragraph" w:styleId="Header"><w:name w:val="header"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr></w:style>'
     + '<w:style w:type="paragraph" w:styleId="Footer"><w:name w:val="footer"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr></w:style>'
@@ -166,8 +206,12 @@ interface WriteCtx {
   page: PageSetup;
   /** Picture id to its relationship id and file name, each picture kept once. */
   media: Map<string, { rid: string; name: string; pic: Picture }>;
-  ordered: Array<{ numId: number; start: number }>;
+  ordered: OrderedNum[];
   nextNum: number;
+  /** A link's address to its relationship id, each address kept once. */
+  links: Map<string, string>;
+  /** The paragraph style ids the file being saved over has (a paragraph's own Word style is written only then). */
+  styleIds: Set<string>;
   /** The numbering every bulleted list uses. */
   bulletNum: number;
   /** How new pictures are named inside the file (a prefix of its own when the file already has pictures). */
@@ -185,10 +229,11 @@ interface WriteCtx {
   bodyPx: number;
 }
 
-function runProps(marks: MarkJSON[] | undefined): string {
-  if (!marks?.length) return '';
-  const has = (t: string) => marks.find(m => m.type === t);
-  let out = '';
+/** A run's properties; `charStyle` (a link's Hyperlink style) goes first, as Word's file format wants. */
+function runProps(marks: MarkJSON[] | undefined, charStyle?: string): string {
+  if (!marks?.length && !charStyle) return '';
+  const has = (t: string) => marks?.find(m => m.type === t);
+  let out = charStyle ? `<w:rStyle w:val="${charStyle}"/>` : '';
   const font = has('font')?.attrs?.face as string | undefined;
   if (font) out += `<w:rFonts w:ascii="${escapeAttr(font)}" w:hAnsi="${escapeAttr(font)}" w:cs="${escapeAttr(font)}"/>`;
   if (has('strong')) out += '<w:b/><w:bCs/>';
@@ -238,11 +283,33 @@ function pictureRun(node: NodeJSON, ctx: WriteCtx): string {
     + `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>`;
 }
 
+/** The relationship id for a link's address (one per address). */
+function linkRel(href: string, ctx: WriteCtx): string {
+  let rid = ctx.links.get(href);
+  if (!rid) {
+    rid = `rIdTwLink${ctx.links.size + 1}`;
+    ctx.links.set(href, rid);
+  }
+  return rid;
+}
+
 function inlineXml(nodes: NodeJSON[] | undefined, ctx: WriteCtx): string {
   let out = '';
+  // Runs of the same link go inside one w:hyperlink.
+  let open: string | null = null;
+  const linkOf = (n: NodeJSON): string | null => {
+    const href = n.marks?.find(m => m.type === 'link')?.attrs?.href;
+    return typeof href === 'string' ? linkHref(href) : null;
+  };
   for (const n of nodes ?? []) {
+    const href = linkOf(n);
+    if (href !== open) {
+      if (open) out += '</w:hyperlink>';
+      if (href) out += `<w:hyperlink r:id="${linkRel(href, ctx)}" w:history="1">`;
+      open = href;
+    }
     if (n.type === 'text') {
-      const rpr = runProps(n.marks);
+      const rpr = runProps(n.marks, href ? 'Hyperlink' : undefined);
       // A tab is a w:tab of its own; a line break inside text never happens (Shift+Enter makes a hard_break node).
       const parts = xmlSafe(n.text ?? '').split('\t');
       out += `<w:r>${rpr}${parts.map((p, i) => (i ? '<w:tab/>' : '') + (p ? `<w:t xml:space="preserve">${escapeXml(p)}</w:t>` : '')).join('')}</w:r>`;
@@ -267,6 +334,7 @@ function inlineXml(nodes: NodeJSON[] | undefined, ctx: WriteCtx): string {
       out += pictureRun(n, ctx);
     }
   }
+  if (open) out += '</w:hyperlink>';
   return out;
 }
 
@@ -276,7 +344,10 @@ function paragraphXml(p: NodeJSON, ctx: WriteCtx, list?: { numId: number; level:
   const style = (STYLES[a.style as StyleId] ? a.style : 'normal') as StyleId;
   let ppr = '';
   const listStyle = list && style === 'normal';
-  if (style !== 'normal') ppr += `<w:pStyle w:val="${STYLES[style].wordId}"/>`;
+  // The paragraph's own style in the file it came from (Quote, Heading 7, a company style), while that file has it.
+  const own = typeof a.word === 'string' && ctx.styleIds.has(a.word) ? a.word : null;
+  if (own) ppr += `<w:pStyle w:val="${escapeAttr(own)}"/>`;
+  else if (style !== 'normal') ppr += `<w:pStyle w:val="${STYLES[style].wordId}"/>`;
   else if (listStyle) ppr += '<w:pStyle w:val="ListParagraph"/>';
   if (list && list.numId) ppr += `<w:numPr><w:ilvl w:val="${list.level}"/><w:numId w:val="${list.numId}"/></w:numPr>`;
   const sp: string[] = [];
@@ -293,11 +364,34 @@ function paragraphXml(p: NodeJSON, ctx: WriteCtx, list?: { numId: number; level:
   return `<w:p>${ppr ? `<w:pPr>${ppr}</w:pPr>` : ''}${inlineXml(p.content, ctx)}</w:p>`;
 }
 
-function listXml(list: NodeJSON, ctx: WriteCtx, level: number): string {
+/** A numbered list's own format, or null when it counts as Write does by depth. */
+function listFormat(list: NodeJSON): LevelFormat | null {
+  const a = list.attrs ?? {};
+  if (a.outline) return { kind: 'decimal', shape: 'dot', outline: true };
+  if (!a.kind && !a.shape) return null;
+  return { kind: NUMBER_KINDS.includes(a.kind as NumberKind) ? a.kind as NumberKind : 'decimal', shape: (['dot', 'paren', 'both', 'plain'] as NumberShape[]).includes(a.shape as NumberShape) ? a.shape as NumberShape : 'dot', outline: false };
+}
+
+/**
+ * A list's paragraphs. `level` is its Word level (every list it sits in counts); `olDepth` how many numbered lists it
+ * sits in, which is what the page shows it by (1. a. i.), so a numbered list inside bullets is written as shown.
+ */
+function listXml(list: NodeJSON, ctx: WriteCtx, level: number, parent?: OrderedNum, olDepth = 0): string {
   let numId = ctx.bulletNum;
+  let me: OrderedNum | undefined;
   if (list.type === 'ordered_list') {
-    numId = ctx.nextNum++;
-    ctx.ordered.push({ numId, start: Math.max(1, Number(list.attrs?.order) || 1) });
+    let f = listFormat(list);
+    if (!f && depthKind(olDepth) !== ORDER_FORMATS[level % 3]) f = { kind: depthKind(olDepth), shape: 'dot', outline: false };
+    if (f?.outline && parent) {
+      // "1.1." counts on from the list it sits in, as a level of the same Word list.
+      numId = parent.numId;
+      parent.formats.set(level, f);
+      me = parent;
+    } else {
+      numId = ctx.nextNum++;
+      me = { numId, start: Math.max(1, Number(list.attrs?.order) || 1), level, formats: f ? new Map([[level, f]]) : new Map() };
+      ctx.ordered.push(me);
+    }
   }
   let out = '';
   for (const item of list.content ?? []) {
@@ -306,7 +400,7 @@ function listXml(list: NodeJSON, ctx: WriteCtx, level: number): string {
       if (block.type === 'paragraph') {
         out += paragraphXml(block, ctx, { numId: first ? numId : 0, level });
         first = false;
-      } else if (block.type === 'bullet_list' || block.type === 'ordered_list') out += listXml(block, ctx, Math.min(8, level + 1));
+      } else if (block.type === 'bullet_list' || block.type === 'ordered_list') out += listXml(block, ctx, Math.min(8, level + 1), me, olDepth + (list.type === 'ordered_list' ? 1 : 0));
       else out += blocksXml([block], ctx);
     }
   }
@@ -446,7 +540,9 @@ export async function writeDocx(doc: NodeJSON, page: PageSetup, title = '', sour
   const most = (re: RegExp) => Math.max(0, ...[...(keptNumbering ?? '').matchAll(re)].map(m => Number(m[1])));
   const abs = source ? most(/w:abstractNumId="(\d+)"/g) + 1 : 0;
   const bulletNum = source ? most(/w:numId="(\d+)"/g) + 1 : 1;
-  const ctx: WriteCtx = { page, media: new Map(), ordered: [], nextNum: bulletNum + 1, bulletNum, drawingId: 0, bodyPx, mediaPrefix: source ? 'Tw' : '', notes: [], nextNote: 1, keptNotes: source?.notes ?? new Map(), headingPages: extras.headingPages ?? [], allBlocks: doc.content ?? [] };
+  const styleText = source?.styles ? partText(source, source.styles) : null;
+  const styleIds = new Set([...(styleText ?? '').matchAll(/w:styleId="([^"]{1,80})"/g)].map(m => m[1]));
+  const ctx: WriteCtx = { page, media: new Map(), ordered: [], links: new Map(), styleIds, nextNum: bulletNum + 1, bulletNum, drawingId: 0, bodyPx, mediaPrefix: source ? 'Tw' : '', notes: [], nextNote: 1, keptNotes: source?.notes ?? new Map(), headingPages: extras.headingPages ?? [], allBlocks: doc.content ?? [] };
   if (source?.notes.size) ctx.nextNote = Math.max(...source.notes.keys()) + 1;
   const body = blocksXml(doc.content ?? [], ctx);
   const hasHeader = lineHas(page.header);
@@ -470,6 +566,7 @@ export async function writeDocx(doc: NodeJSON, page: PageSetup, title = '', sour
     + `<Relationship Id="rIdSettings" Type="${REL}/settings" Target="settings.xml"/>`;
   if (hasHeader) rels += `<Relationship Id="rIdHeader1" Type="${REL}/header" Target="header1.xml"/>`;
   if (hasFooter) rels += `<Relationship Id="rIdFooter1" Type="${REL}/footer" Target="footer1.xml"/>`;
+  for (const [href, rid] of ctx.links) rels += `<Relationship Id="${rid}" Type="${REL}/hyperlink" Target="${escapeAttr(href)}" TargetMode="External"/>`;
   const hasNotes = ctx.notes.length > 0;
   if (hasNotes) rels += `<Relationship Id="rIdFootnotes" Type="${REL}/footnotes" Target="footnotes.xml"/>`;
   for (const media of ctx.media.values()) rels += `<Relationship Id="${media.rid}" Type="${REL}/image" Target="media/${media.name}"/>`;
@@ -638,6 +735,8 @@ function writeKept(source: DocxSource, ctx: WriteCtx, body: string, pageXml: str
     }
   }
 
+  // Links in the text: a relationship each, to the outside address.
+  for (const [href, rid] of ctx.links) newRels.push(`<Relationship Id="${rid}" Type="${REL}/hyperlink" Target="${escapeAttr(href)}" TargetMode="External"/>`);
   // Pictures in the text, as files of their own.
   for (const media of ctx.media.values()) {
     out.set(`${dir}media/${media.name}`, media.pic.bytes);
@@ -733,8 +832,17 @@ interface StyleDef {
 interface Level {
   bullet: boolean;
   start: number;
-  /** False when Word numbers this level some other way than Write writes it (1.1, (a), A., none...). */
+  /** False when Word numbers this level in a way Write has no format for ("Step 1", 001, none...). */
   same: boolean;
+  /** How a numbered level counts (null for a bullet, or a way Write cannot show). */
+  format: LevelFormat | null;
+}
+
+/** A Word list level: bullet or number, where it starts, and its format. */
+function levelOf(lvl: XmlEl, i: number): Level {
+  const fmt = at(child(lvl, 'numFmt'), 'val') ?? 'decimal';
+  const format = fmt === 'bullet' ? null : readLevelFormat(fmt, at(child(lvl, 'lvlText'), 'val') ?? `%${i + 1}.`, i);
+  return { bullet: fmt === 'bullet' || fmt === 'none', start: num(at(child(lvl, 'start'), 'val')) ?? 1, same: fmt === 'bullet' || !!format, format };
 }
 
 class Reader {
@@ -742,7 +850,9 @@ class Reader {
   defaults: { run: RunLook; para: ParaLook } = { run: {}, para: {} };
   theme = { major: 'Calibri Light', minor: 'Calibri' };
   abstracts = new Map<string, Map<number, Level>>();
-  nums = new Map<string, { abstract: string; starts: Map<number, number> }>();
+  /** Each Word list: its definition, the levels it starts elsewhere, and levels it defines over again (a level's own
+   *  w:lvl inside w:lvlOverride, as Write writes a list's own format). */
+  nums = new Map<string, { abstract: string; starts: Map<number, number>; levels: Map<number, Level> }>();
   rels = new Map<string, string>();
   media = new Map<string, Uint8Array>();
   dropped = new Set<string>();
@@ -874,9 +984,7 @@ class Reader {
       const levels = new Map<number, Level>();
       for (const lvl of children(an, 'lvl')) {
         const i = num(at(lvl, 'ilvl')) ?? 0;
-        const fmt = at(child(lvl, 'numFmt'), 'val') ?? 'decimal';
-        const same = fmt === 'bullet' || (fmt === ORDER_FORMATS[i % 3] && (at(child(lvl, 'lvlText'), 'val') ?? `%${i + 1}.`) === `%${i + 1}.`);
-        levels.set(i, { bullet: fmt === 'bullet' || fmt === 'none', start: num(at(child(lvl, 'start'), 'val')) ?? 1, same });
+        levels.set(i, levelOf(lvl, i));
       }
       this.abstracts.set(id, levels);
     }
@@ -885,19 +993,23 @@ class Reader {
       const abstract = at(child(n, 'abstractNumId'), 'val');
       if (id === undefined || abstract === undefined) continue;
       const starts = new Map<number, number>();
+      const levels = new Map<number, Level>();
       for (const o of children(n, 'lvlOverride')) {
+        const i = num(at(o, 'ilvl')) ?? 0;
         const s = num(at(child(o, 'startOverride'), 'val'));
-        if (s !== null) starts.set(num(at(o, 'ilvl')) ?? 0, s);
+        if (s !== null) starts.set(i, s);
+        const own = child(o, 'lvl');
+        if (own) levels.set(i, levelOf(own, i));
       }
-      this.nums.set(id, { abstract, starts });
+      this.nums.set(id, { abstract, starts, levels });
     }
   }
 
   level(numId: string, ilvl: number): Level | null {
     const n = this.nums.get(numId);
     if (!n) return null;
-    const lv = this.abstracts.get(n.abstract)?.get(ilvl) ?? { bullet: false, start: 1, same: true };
-    return { bullet: lv.bullet, start: n.starts.get(ilvl) ?? lv.start, same: lv.same };
+    const lv = n.levels.get(ilvl) ?? this.abstracts.get(n.abstract)?.get(ilvl) ?? { bullet: false, start: 1, same: true, format: null };
+    return { bullet: lv.bullet, start: n.starts.get(ilvl) ?? lv.start, same: lv.same, format: lv.format };
   }
 
   /** Our style for a Word paragraph style: Title, Heading 1, 2, 3 (4 to 9 show as 3), anything else Normal. */
@@ -906,18 +1018,20 @@ class Reader {
     const name = s?.name ?? (id ?? '').toLowerCase();
     if (name === 'title' || id === 'Title') return 'title';
     const m = /^heading\s*([1-9])$/.exec(name) ?? /^heading([1-9])$/i.exec(id ?? '');
-    if (m) return m[1] === '1' ? 'h1' : m[1] === '2' ? 'h2' : 'h3';
+    if (m) return m[1] === '1' ? 'h1' : m[1] === '2' ? 'h2' : m[1] === '3' ? 'h3' : m[1] === '4' ? 'h4' : m[1] === '5' ? 'h5' : 'h6';
     return 'normal';
   }
 
-  /** The document's own paragraph styles met in its text (Write saves them as Normal), by their names in Word. */
-  ownStyles = new Set<string>();
+  /** The file's own style for a paragraph (Quote, Heading 7, a company style), kept so saving puts it back; null for
+   *  Normal and the styles Write writes itself. */
+  ownStyle(styleId: string): string | null {
+    const name = this.styles.get(styleId)?.name ?? '';
+    if (!this.styles.has(styleId) || styleId === this.defaultParaStyle || OUR_STYLE_IDS.includes(styleId) || /^(normal|list paragraph)$/.test(name)) return null;
+    return /^[\w .\-]{1,80}$/.test(styleId) ? styleId : null;
+  }
 
-  /** Notes what a body paragraph has that Write does not keep: its style's name, and its direct look. */
-  notePara(ppr: XmlEl | undefined, styleId: string): void {
-    const name = this.styles.get(styleId)?.name ?? styleId.toLowerCase();
-    if (/^heading\s*[4-9]$/.test(name) || /^heading[4-9]$/i.test(styleId)) this.dropped.add('Heading 4 to Heading 9 (they show and are saved as Heading 3)');
-    else if (this.ourStyle(styleId) === 'normal' && styleId !== this.defaultParaStyle && !/^(normal|list paragraph)$/.test(name) && this.styles.has(styleId)) this.ownStyles.add(name);
+  /** Notes what a body paragraph's own look has that Write does not keep. */
+  notePara(ppr: XmlEl | undefined): void {
     if (!ppr) return;
     if (children(child(ppr, 'tabs'), 'tab').some(t => at(t, 'val') !== 'clear')) this.dropped.add('tab stops set in paragraphs (tabs go to the standard stops)');
     if ((num(at(child(ppr, 'ind'), 'right') ?? at(child(ppr, 'ind'), 'end')) ?? 0) > 0) this.dropped.add('right indents (text runs to the right margin)');
@@ -937,7 +1051,7 @@ class Reader {
 
 const near = (a: number | undefined, b: number) => a === undefined || Math.abs(a - b) < 0.05;
 
-const LINKS = 'links (the words stay; where they lead is not kept)';
+const LINKS = 'links to places inside the document, or of a kind Write does not open (the words stay; where they lead is not kept)';
 
 /** The editor's marks for a run that looks like `look` in a paragraph of `style`: only what differs from the style. */
 function marksFor(look: RunLook, style: StyleId): MarkJSON[] {
@@ -952,7 +1066,7 @@ function marksFor(look: RunLook, style: StyleId): MarkJSON[] {
   if (colour !== (s.colour ?? '#000000')) marks.push({ type: 'color', attrs: { value: colour } });
   if (look.highlight) marks.push({ type: 'highlight', attrs: { value: look.highlight } });
   if (look.bold && !s.bold) marks.push({ type: 'strong' });
-  if (look.italic) marks.push({ type: 'em' });
+  if (look.italic && !s.italic) marks.push({ type: 'em' });
   if (look.underline) marks.push({ type: 'underline' });
   if (look.strike) marks.push({ type: 'strike' });
   if (look.vert) marks.push({ type: 'vert', attrs: { pos: look.vert } });
@@ -1149,9 +1263,21 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
     const style = rd.ourStyle(styleId);
     const parts: Array<NodeJSON[] | 'break'> = [[]];
     const cur = () => parts[parts.length - 1] as NodeJSON[];
+    // The link the words being read are in: a w:hyperlink around them, or a HYPERLINK field's result.
+    let fieldHref: string | null = null;
+    const linkNow = (): string | null => {
+      for (let k = stack.length - 1; k >= 0; k--) if (stack[k].href !== undefined) return stack[k].href ?? null;
+      return fieldHref;
+    };
     const pushText = (text: string, look: RunLook) => {
       if (!text) return;
-      const marks = marksFor(look, style);
+      let marks = marksFor(look, style);
+      const href = linkNow();
+      if (href) {
+        // Word's blue underline for a link is the link's own look here, not formatting of the words.
+        marks = marks.filter(m => m.type !== 'underline' && !(m.type === 'color' && String(m.attrs?.value).toLowerCase() === '#0563c1'));
+        marks = [{ type: 'link', attrs: { href } }, ...marks];
+      }
       // Word splits text into many runs that look the same (spell checks, edits): they join into one.
       const last = cur()[cur().length - 1];
       if (last?.type === 'text' && JSON.stringify(last.marks ?? []) === JSON.stringify(marks)) last.text += text;
@@ -1160,7 +1286,7 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
     // A field (a page number, a date, a contents list) shows as the text Word last put in it: its code is in
     // w:instrText, never in w:t, so only the shown result is read. A mail merge field becomes a field.
     let mergeSkip = false;
-    const stack: Array<{ el: XmlEl; i: number }> = [{ el: p, i: 0 }];
+    const stack: Array<{ el: XmlEl; i: number; href?: string | null }> = [{ el: p, i: 0 }];
     while (stack.length) {
       const top = stack[stack.length - 1];
       if (top.i >= top.el.kids.length) {
@@ -1176,7 +1302,11 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
           rd.noteRun(child(el, 'rPr'));
           for (const k of el.kids) {
             if (k.name === 'instrText') {
-              if (/^\s*HYPERLINK\b/i.test(k.text)) rd.dropped.add(LINKS);
+              const hl = /^\s*HYPERLINK\s+"([^"]+)"/i.exec(k.text);
+              if (hl && !/\\l\b/.test(k.text)) {
+                fieldHref = linkHref(hl[1]);
+                if (!fieldHref) rd.dropped.add(LINKS);
+              } else if (/^\s*HYPERLINK\b/i.test(k.text)) rd.dropped.add(LINKS);
               // A mail merge field written as a complex field: its shown result is skipped.
               const m = /MERGEFIELD\s+"?([^"\s\\]+)/i.exec(k.text);
               if (m) {
@@ -1184,7 +1314,10 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
                 cur().push(marks.length ? { type: 'field', attrs: { name: m[1].slice(0, 40) }, marks } : { type: 'field', attrs: { name: m[1].slice(0, 40) } });
                 mergeSkip = true;
               }
-            } else if (k.name === 'fldChar' && at(k, 'fldCharType') === 'end') mergeSkip = false;
+            } else if (k.name === 'fldChar' && at(k, 'fldCharType') === 'end') {
+              mergeSkip = false;
+              fieldHref = null;
+            }
             else if (mergeSkip) continue;
             else if (k.name === 't') pushText(k.text, look);
             else if (k.name === 'tab' || k.name === 'ptab') pushText('\t', look);
@@ -1245,7 +1378,14 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
         }
         case 'hyperlink': case 'smartTag': case 'customXml': case 'ins': case 'moveTo': case 'sdtContent': case 'dir': case 'bdo':
           if (el.name === 'ins' || el.name === 'moveTo') rd.dropped.add('tracked changes (shown with the changes accepted)');
-          if (el.name === 'hyperlink') rd.dropped.add(LINKS);
+          if (el.name === 'hyperlink') {
+            const rid = el.attrs['r:id'] ?? el.attrs.id;
+            const rel = rid ? relTargets.get(rid) : undefined;
+            const href = rel?.external ? linkHref(rel.target) : null;
+            if (!href) rd.dropped.add(LINKS);
+            stack.push({ el, i: 0, href });
+            break;
+          }
           stack.push({ el, i: 0 });
           break;
         case 'sdt':
@@ -1316,8 +1456,9 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
         const numId = direct.numId ?? (style === 'normal' ? styleDef?.para.numId : undefined);
         const ilvl = Math.max(0, Math.min(8, direct.ilvl ?? styleDef?.para.ilvl ?? 0));
         const lvl = numId && numId !== '0' ? rd.level(numId, ilvl) : null;
-        rd.notePara(ppr, styleId);
-        if (lvl && !lvl.same) rd.dropped.add('list numbering in other styles (such as 1.1, (a), A. or none): it shows and is saved as 1., a., i.');
+        rd.notePara(ppr);
+        const word = rd.ownStyle(styleId);
+        if (lvl && !lvl.same) rd.dropped.add('list numbering Write has no format for (such as "Step 1", 001 or none): it shows and is saved as 1., a., i.');
         const runBase = { ...rd.defaults.run, ...(styleDef?.run ?? {}) };
         const parts = await paragraphs(el, styleId, runBase);
         if (look.pageBreakBefore && out.length) {
@@ -1325,6 +1466,7 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
           out.push({ type: 'page_break' });
         }
         const attrs = paraAttrs(look, style, !!lvl);
+        if (word) attrs.word = word;
         const hasContent = (x: NodeJSON[] | 'break') => x !== 'break' && x.length > 0;
         const allEmpty = !parts.some(hasContent);
         for (const [i, part] of parts.entries()) {
@@ -1343,7 +1485,7 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
             open = open.filter(o => o.level <= ilvl);
           } else if (host && i === 0) {
             const items = host.list.content!;
-            items[items.length - 1].content!.push({ ...para, attrs: paraAttrs(look, style, true) });
+            items[items.length - 1].content!.push({ ...para, attrs: word ? { ...paraAttrs(look, style, true), word } : paraAttrs(look, style, true) });
             open = open.slice(0, open.indexOf(host) + 1);
           } else {
             closeLists();
@@ -1439,10 +1581,7 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
   const blocks = await readBlocks(body, 0);
   const doc: NodeJSON = { type: 'doc', content: blocks.length ? blocks : [{ type: 'paragraph' }] };
   if (findAll(body, 'commentRangeStart').length) rd.dropped.add('where comments start and end (each comment stays, at its point)');
-  if (rd.ownStyles.size) {
-    const names = [...rd.ownStyles].slice(0, 3).map(n => `“${n.replace(/\b\w/g, c => c.toUpperCase())}”`).join(', ');
-    rd.dropped.add(`the document’s own paragraph styles (${names}${rd.ownStyles.size > 3 ? ' and more' : ''}): their look stays, but they are saved as Normal`);
-  }
+
   // Every part of the file, kept for saving over it.
   const parts = new Map<string, Uint8Array>();
   for (const e of entries) {
@@ -1487,7 +1626,10 @@ function placeInList(out: NodeJSON[], open: Array<{ list: NodeJSON; level: numbe
     return;
   }
   if (top && top.level === ilvl) open.pop();
-  const list: NodeJSON = ordered ? { type: 'ordered_list', attrs: { order: n }, content: [item] } : { type: 'bullet_list', content: [item] };
+  const depth = open.filter(o => o.ordered && o.level < ilvl).length;
+  const f = lvl.format;
+  const own = f && (f.outline || f.kind !== depthKind(depth) || f.shape !== 'dot') ? (f.outline ? { outline: true } : { kind: f.kind, shape: f.shape }) : {};
+  const list: NodeJSON = ordered ? { type: 'ordered_list', attrs: { order: n, ...own }, content: [item] } : { type: 'bullet_list', content: [item] };
   const parent = open[open.length - 1];
   if (parent && parent.level < ilvl) {
     const items = parent.list.content!;

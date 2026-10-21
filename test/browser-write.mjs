@@ -525,7 +525,7 @@ await step('Markdown, WordPad and a Word file with a text box open formatted; th
   ok((await doc().innerText()).includes('and more'), 'the typing was saved with it');
 });
 
-await step('a Word file with a link and a Heading 5 says so when it opens, and Save asks before saving over it', async () => {
+await step('a Word file with a link and a Heading 5 keeps both through a save; Ctrl+K makes a link; the ▾ beside Numbering gives (a)', async () => {
   const W_R = `${W_NS} xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"`;
   writeFileSync(join(dir, 'linked.docx'), await zipDeflate([
     { name: '[Content_Types].xml', data: enc.encode('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'), modified: 0 },
@@ -536,18 +536,39 @@ await step('a Word file with a link and a Heading 5 says so when it opens, and S
   await upload([join(dir, 'linked.docx')]);
   await newDoc();
   await reopen('linked.docx');
-  await D().getByText('links (the words stay; where they lead is not kept)').waitFor();
-  await D().getByText('Heading 4 to Heading 9 (they show and are saved as Heading 3)').waitFor();
-  await D().getByRole('button', { name: 'OK' }).click();
-  ok((await doc().innerText()).includes('our site'), 'the link’s words are there');
+  await doc().locator('a.wp-link', { hasText: 'our site' }).waitFor();
+  eq(await doc().locator('a.wp-link').getAttribute('href'), 'https://example.com/', 'the link keeps its address');
+  await doc().locator('p.wp-h5', { hasText: 'Deep heading' }).waitFor();
+  eq(await page.locator('.dialog').count(), 0, 'nothing left out, so nothing to report');
   await doc().focus();
   await page.keyboard.press('Control+End');
   await page.keyboard.type('.');
   await page.keyboard.press('Control+S');
-  await D().getByText('Save over “linked.docx”?').waitFor();
-  ok((await D().innerText()).includes('where they lead is not kept'), 'the question names the link');
-  await D().getByRole('button', { name: 'Cancel' }).click();
-  await shot('write-save-over-link');
+  await toast('Saved “linked.docx”');
+  await closeAllWrite();
+  await newDoc();
+  await reopen('linked.docx');
+  await doc().locator('a.wp-link[href="https://example.com/"]', { hasText: 'our site' }).waitFor();
+  await doc().locator('p.wp-h5', { hasText: 'Deep heading' }).waitFor();
+  // Ctrl+K on chosen words: an email address becomes a mailto link.
+  await doc().focus();
+  await page.keyboard.press('Control+End');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('Ask Ann');
+  await page.keyboard.press('Shift+Home');
+  await page.keyboard.press('Control+k');
+  await D().locator('input').fill('ann@example.com');
+  await D().getByRole('button', { name: 'Link' }).click();
+  await doc().locator('a.wp-link[href="mailto:ann@example.com"]', { hasText: 'Ask Ann' }).waitFor();
+  // The numbering format: (a) (b) (c).
+  await page.keyboard.press('End');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('1. first');
+  await W().locator('button[title^="Numbering format"]').click();
+  await page.locator('.menu').getByText('(a) (b) (c)', { exact: true }).click();
+  const marker = await doc().locator('ol li').first().evaluate(li => getComputedStyle(li, '::marker').content);
+  ok(/lower-alpha/.test(marker) && marker.includes('('), 'the list counts (a): ' + marker);
+  await shot('write-link-numbering');
   await closeAllWrite();
 });
 

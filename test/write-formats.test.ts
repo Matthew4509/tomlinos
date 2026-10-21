@@ -207,7 +207,7 @@ test('Markdown both ways: headings, bold, italic, code, lists in lists, numbered
   assert.equal(b[2].content![1].content![1].type, 'bullet_list');
   assert.equal(b[3].type, 'table');
   const out = writeMarkdown(doc);
-  assert.ok(out.startsWith('# Plan\n\nSome **bold**, *italic*, ~~old~~ and `code` with a link and snake\\_case. Same paragraph.'), out);
+  assert.ok(out.startsWith('# Plan\n\nSome **bold**, *italic*, ~~old~~ and `code` with a [link](https://example.invalid) and snake\\_case. Same paragraph.'), out);
   assert.ok(out.includes('3. Third\n4. Fourth\n   - inside'), out);
   assert.ok(out.includes('| Name | Qty |\n| --- | --- |\n| Apples | 4 |'), out);
   // Read back, it is the same document.

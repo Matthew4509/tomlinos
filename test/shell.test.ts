@@ -264,6 +264,7 @@ const OUTSIDE: Array<[string, RegExp, string]> = [
   ['http://schemas.microsoft.com/office/word', /apps[\\/]write[\\/]docx\.ts$/, 'the name Word gives its compatibility setting inside a file (not a request)'],
   ['http://schemas.microsoft.com/office/spreadsheetml/', /apps[\\/]sheet[\\/]xlsx\.ts$/, 'the name Excel 365 gives its "dynamic array" mark inside a file (not a request)'],
   ['http://ns.adobe.com/xap/1.0/', /apps[\\/]photoedit[\\/]fileinfo\.ts$/, 'the mark a JPEG\'s XMP details start with, looked for inside the file (not a request)'],
+  ['https://${t}', /apps[\\/]write\.ts$/, 'a "www." address typed for a link (Ctrl+K) becomes https (then checked by linkHref)'],
   ['https://codemirror.net/', /apps[\\/]about\.ts$/, 'a link on the Credits page, opened only when clicked'],
   ['https://prosemirror.net/', /apps[\\/]about\.ts$/, 'a link on the Credits page, opened only when clicked'],
   ['https://github.com/mlc-ai/web-llm', /apps[\\/]about\.ts$/, 'a link on the Credits page, opened only when clicked'],
