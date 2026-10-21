@@ -15,7 +15,7 @@ import { createGrid } from './sheet/grid.ts';
 import { codeProblem, formatCode, isDateCode } from './sheet/numfmt.ts';
 import { addressOf, colName, SyntaxProblem } from './sheet/refs.ts';
 import { CellError, formatNumber, type CellStyle, type Line } from './sheet/values.ts';
-import { keyOf, MAX_FILE_BYTES, Workbook, type FindOptions, type Found, type Range } from './sheet/workbook.ts';
+import { cutInWords, decodeText, keyOf, MAX_FILE_BYTES, Workbook, type FindOptions, type Found, type Range } from './sheet/workbook.ts';
 import { openXlsx, saveXlsx, type XlsxReport } from './sheet/xlsx.ts';
 import { CHART_LABEL, CHART_TYPES } from './sheet/chart.ts';
 import { chartIcon, mountCharts } from './sheet/charts-ui.ts';
@@ -142,6 +142,8 @@ export const sheetApp: AppDef = {
     let kind: 'sheet' | 'xlsx' = 'sheet';
     /** What opening an Excel file left out; saving over that file asks first while this is set. */
     let lost: XlsxReport | null = null;
+    /** What did not fit when a CSV or text file was opened, in words ('' when it all fitted). */
+    let cut = '';
 
     if (arg) {
       try {
@@ -152,9 +154,10 @@ export const sheetApp: AppDef = {
         const name = baseName(arg);
         const ext = splitExtension(name)[1].toLowerCase();
         const excel = ext === '.xlsx' || ext === '.xlsm' || ext === '.xls';
-        const text = excel ? '' : new TextDecoder('utf-8').decode(bytes);
+        const text = excel ? '' : decodeText(bytes);
         if (ext === '.csv' || ext === '.tsv' || ext === '.txt') {
           wb.importText(0, 0, 0, text);
+          cut = cutInWords(wb.lastCut);
           label = name;
         } else if (excel) {
           const report = await openXlsx(wb, bytes);
@@ -192,6 +195,7 @@ export const sheetApp: AppDef = {
 
     const grid = createGrid(shell, wb, app.signal);
     if (lost) void showReport(label, lost);
+    if (cut) void shell.dialogs.alert(`Not all of “${label}” fitted`, cut, 'The file itself has not been changed. Saving here makes a new file, so the full one stays as it is.').then(() => grid.focus());
 
     /** What opening an Excel file left out or could not work out, in a list the person can read before going on. */
     async function showReport(name: string, report: XlsxReport): Promise<void> {
@@ -1615,9 +1619,11 @@ export const sheetApp: AppDef = {
         }
         try {
           const a = grid.active();
-          const n = wb.importText(wb.active, a.col, a.row, await file.text());
-          shell.toast(`Imported ${n.toLocaleString()} cells from “${file.name}”.`);
+          const n = wb.importText(wb.active, a.col, a.row, decodeText(new Uint8Array(await file.arrayBuffer())));
+          const left = cutInWords(wb.lastCut);
           onChange();
+          if (left) await shell.dialogs.alert(`Not all of “${file.name}” fitted`, `${n.toLocaleString()} cells were imported. ${left}`, `${a.col || a.row ? 'Starting the import at cell A1 fits more. ' : ''}A bigger file can be split into smaller parts, each imported on its own sheet.`);
+          else shell.toast(`Imported ${n.toLocaleString()} cells from “${file.name}”.`);
         } catch (error) {
           await report(error);
         }

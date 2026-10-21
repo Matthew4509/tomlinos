@@ -12,7 +12,7 @@ import { describeValidation, listItems, passes, validationAt, type Validation } 
 import { formulaHelper } from './autocomplete.ts';
 import { cssFamily, sizePx, STANDARD_PX } from './fonts.ts';
 import { FUNCTION_NAMES } from './formula.ts';
-import { colOfKey, keyOf, parseDelimited, rowOfKey, type Range, type Workbook } from './workbook.ts';
+import { colOfKey, cutInWords, keyOf, parseDelimited, rowOfKey, type Range, type Workbook } from './workbook.ts';
 
 const HEAD_W = 46;
 const HEAD_H = 24;
@@ -1973,6 +1973,8 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
         const table = parseDelimited(body, '\t');
         const cols = table.reduce((most, r) => Math.max(most, r.length), 1);
         grid.wb.importText(grid.wb.active, target.col, target.row, body, '\t');
+        const left = cutInWords(grid.wb.lastCut);
+        if (left) void shell.dialogs.alert('Not all of the paste fitted', left, target.col || target.row ? 'Pasting at cell A1 fits more.' : undefined);
         select({ c0: target.col, r0: target.row, c1: Math.min(MAX_COLS - 1, target.col + cols - 1), r1: Math.min(MAX_ROWS - 1, target.row + Math.max(1, table.length) - 1) }, target);
       }
       afterEdit();

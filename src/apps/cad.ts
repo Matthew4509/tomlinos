@@ -154,7 +154,9 @@ export const cadApp: AppDef = {
     let label = 'Drawing';
     let loadedId = '';
     let folderHint: string | null = null;
-    let dxfReport: { lines: string[]; leftOut: number } | null = null;
+    let dxfReport: { lines: string[]; leftOut: number; changed: number } | null = null;
+    /** The DXF this drawing was opened from, if what it holds was not all kept (so outputting over it asks first). */
+    let lossyDxf: string | null = null;
     /** This window's recovery copy (set once it has kept one, or when it opened one). */
     let recoveryPath: string | null = null;
     let recovered = false;
@@ -171,7 +173,8 @@ export const cadApp: AppDef = {
           drawing = read.drawing;
           label = baseName(arg);
           folderHint = parentPath(arg);
-          dxfReport = { lines: read.report, leftOut: read.leftOut };
+          dxfReport = { lines: read.report, leftOut: read.leftOut, changed: read.changed };
+          if (read.leftOut || read.changed) lossyDxf = arg;
         } else if (parentPath(arg) === RECOVERY) {
           // A drawing kept before it was saved: it opens unsaved, and Save asks where (it never writes over the file it
           // came from without asking).
@@ -951,6 +954,13 @@ export const cadApp: AppDef = {
           if (existing && !(await shell.dialogs.confirm({ title: 'Replace it?', text: `“${baseName(target)}” already exists. Replace it with this one?`, ok: 'Replace', danger: true, cancel: 'Cancel' }))) return;
           replacing = !!existing;
         }
+        if (lossyDxf && target.toLowerCase() === lossyDxf.toLowerCase() && !(await shell.dialogs.confirm({
+          title: 'Write over the DXF this came from?',
+          text: `“${baseName(target)}” is the DXF this drawing was opened from. What TOMLIN CAD did not keep when it opened (listed then: heights, thicknesses, colours or line types of items’ own, or items left out) would be gone from it for good.`,
+          ok: 'Write over it',
+          danger: true,
+          cancel: 'Cancel',
+        }))) return;
         const entry = await shell.fs.writeFile(target, out.bytes, replacing ? {} : { mustBeNew: true });
         for (const n of out.notes) say(n);
         shell.toast(`Saved “${entry.name}”.`);
@@ -2671,7 +2681,7 @@ export const cadApp: AppDef = {
     else if (dxfReport) {
       say(`Opened ${label} (a DXF; Save makes a TOMLIN CAD drawing beside it).`);
       for (const line of dxfReport.lines) say(line);
-      if (dxfReport.leftOut) void shell.dialogs.alert(`Opened ${label}`, dxfReport.lines.join('\n\n'));
+      if (dxfReport.leftOut || dxfReport.changed) void shell.dialogs.alert(`Opened ${label}`, dxfReport.lines.join('\n\n'));
     } else say(path ? `Opened ${label}.` : 'A new drawing, in millimetres. Choose a tool, or type one such as line.');
     canvas.focus({ preventScroll: true });
     paint();

@@ -733,6 +733,8 @@ interface StyleDef {
 interface Level {
   bullet: boolean;
   start: number;
+  /** False when Word numbers this level some other way than Write writes it (1.1, (a), A., none...). */
+  same: boolean;
 }
 
 class Reader {
@@ -873,7 +875,8 @@ class Reader {
       for (const lvl of children(an, 'lvl')) {
         const i = num(at(lvl, 'ilvl')) ?? 0;
         const fmt = at(child(lvl, 'numFmt'), 'val') ?? 'decimal';
-        levels.set(i, { bullet: fmt === 'bullet' || fmt === 'none', start: num(at(child(lvl, 'start'), 'val')) ?? 1 });
+        const same = fmt === 'bullet' || (fmt === ORDER_FORMATS[i % 3] && (at(child(lvl, 'lvlText'), 'val') ?? `%${i + 1}.`) === `%${i + 1}.`);
+        levels.set(i, { bullet: fmt === 'bullet' || fmt === 'none', start: num(at(child(lvl, 'start'), 'val')) ?? 1, same });
       }
       this.abstracts.set(id, levels);
     }
@@ -893,8 +896,8 @@ class Reader {
   level(numId: string, ilvl: number): Level | null {
     const n = this.nums.get(numId);
     if (!n) return null;
-    const lv = this.abstracts.get(n.abstract)?.get(ilvl) ?? { bullet: false, start: 1 };
-    return { bullet: lv.bullet, start: n.starts.get(ilvl) ?? lv.start };
+    const lv = this.abstracts.get(n.abstract)?.get(ilvl) ?? { bullet: false, start: 1, same: true };
+    return { bullet: lv.bullet, start: n.starts.get(ilvl) ?? lv.start, same: lv.same };
   }
 
   /** Our style for a Word paragraph style: Title, Heading 1, 2, 3 (4 to 9 show as 3), anything else Normal. */
@@ -906,9 +909,35 @@ class Reader {
     if (m) return m[1] === '1' ? 'h1' : m[1] === '2' ? 'h2' : 'h3';
     return 'normal';
   }
+
+  /** The document's own paragraph styles met in its text (Write saves them as Normal), by their names in Word. */
+  ownStyles = new Set<string>();
+
+  /** Notes what a body paragraph has that Write does not keep: its style's name, and its direct look. */
+  notePara(ppr: XmlEl | undefined, styleId: string): void {
+    const name = this.styles.get(styleId)?.name ?? styleId.toLowerCase();
+    if (/^heading\s*[4-9]$/.test(name) || /^heading[4-9]$/i.test(styleId)) this.dropped.add('Heading 4 to Heading 9 (they show and are saved as Heading 3)');
+    else if (this.ourStyle(styleId) === 'normal' && styleId !== this.defaultParaStyle && !/^(normal|list paragraph)$/.test(name) && this.styles.has(styleId)) this.ownStyles.add(name);
+    if (!ppr) return;
+    if (children(child(ppr, 'tabs'), 'tab').some(t => at(t, 'val') !== 'clear')) this.dropped.add('tab stops set in paragraphs (tabs go to the standard stops)');
+    if ((num(at(child(ppr, 'ind'), 'right') ?? at(child(ppr, 'ind'), 'end')) ?? 0) > 0) this.dropped.add('right indents (text runs to the right margin)');
+    if (child(ppr, 'pBdr')) this.dropped.add('lines and boxes round paragraphs');
+    const fill = at(child(ppr, 'shd'), 'fill');
+    if (fill && /^[0-9a-f]{6}$/i.test(fill) && fill.toLowerCase() !== 'ffffff') this.dropped.add('shading behind whole paragraphs');
+  }
+
+  /** Notes what a run's own look has that Write does not keep. */
+  noteRun(rpr: XmlEl | undefined): void {
+    if (!rpr) return;
+    if (toggle(child(rpr, 'vanish'))) this.dropped.add('hidden text (it shows here, and is saved as ordinary text)');
+    if (toggle(child(rpr, 'caps')) || toggle(child(rpr, 'smallCaps'))) this.dropped.add('ALL CAPS and Small Caps set as formatting (the letters show as typed)');
+    if ((num(at(child(rpr, 'spacing'), 'val')) ?? 0) !== 0) this.dropped.add('letter spacing (wider or closer letters)');
+  }
 }
 
 const near = (a: number | undefined, b: number) => a === undefined || Math.abs(a - b) < 0.05;
+
+const LINKS = 'links (the words stay; where they lead is not kept)';
 
 /** The editor's marks for a run that looks like `look` in a paragraph of `style`: only what differs from the style. */
 function marksFor(look: RunLook, style: StyleId): MarkJSON[] {
@@ -1144,8 +1173,10 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
           const rStyle = at(child(child(el, 'rPr'), 'rStyle'), 'val');
           const base = rStyle ? { ...styleRun, ...(rd.resolved(rStyle)?.run ?? {}) } : styleRun;
           const look = rd.runLook(child(el, 'rPr'), base);
+          rd.noteRun(child(el, 'rPr'));
           for (const k of el.kids) {
             if (k.name === 'instrText') {
+              if (/^\s*HYPERLINK\b/i.test(k.text)) rd.dropped.add(LINKS);
               // A mail merge field written as a complex field: its shown result is skipped.
               const m = /MERGEFIELD\s+"?([^"\s\\]+)/i.exec(k.text);
               if (m) {
@@ -1214,6 +1245,7 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
         }
         case 'hyperlink': case 'smartTag': case 'customXml': case 'ins': case 'moveTo': case 'sdtContent': case 'dir': case 'bdo':
           if (el.name === 'ins' || el.name === 'moveTo') rd.dropped.add('tracked changes (shown with the changes accepted)');
+          if (el.name === 'hyperlink') rd.dropped.add(LINKS);
           stack.push({ el, i: 0 });
           break;
         case 'sdt':
@@ -1284,6 +1316,8 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
         const numId = direct.numId ?? (style === 'normal' ? styleDef?.para.numId : undefined);
         const ilvl = Math.max(0, Math.min(8, direct.ilvl ?? styleDef?.para.ilvl ?? 0));
         const lvl = numId && numId !== '0' ? rd.level(numId, ilvl) : null;
+        rd.notePara(ppr, styleId);
+        if (lvl && !lvl.same) rd.dropped.add('list numbering in other styles (such as 1.1, (a), A. or none): it shows and is saved as 1., a., i.');
         const runBase = { ...rd.defaults.run, ...(styleDef?.run ?? {}) };
         const parts = await paragraphs(el, styleId, runBase);
         if (look.pageBreakBefore && out.length) {
@@ -1353,6 +1387,10 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
     const tblPr = child(tbl, 'tblPr');
     const styleId = at(child(tblPr, 'tblStyle'), 'val');
     const direct = child(tblPr, 'tblBorders');
+    const tableStyle = rd.resolved(styleId)?.name;
+    if (styleId && tableStyle && !/^(table grid|normal table|table normal)$/.test(tableStyle)) rd.dropped.add('table styles (such as banded rows or a coloured top row): tables keep their borders and cell colours only');
+    if (findAll(tbl, 'trHeight').length) rd.dropped.add('set row heights in tables (rows fit their text)');
+    if (findAll(tbl, 'vAlign').some(v => at(v, 'val') === 'center' || at(v, 'val') === 'bottom')) rd.dropped.add('text set to the middle or bottom of table cells (it sits at the top)');
     let borders = rd.resolved(styleId)?.tableBorders ?? false;
     if (direct) borders = direct.kids.some(b => !['nil', 'none'].includes(at(b, 'val') ?? 'nil'));
     const grid = children(child(tbl, 'tblGrid'), 'gridCol').map(g => (num(at(g, 'w')) ?? 0) / 15);
@@ -1401,6 +1439,10 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
   const blocks = await readBlocks(body, 0);
   const doc: NodeJSON = { type: 'doc', content: blocks.length ? blocks : [{ type: 'paragraph' }] };
   if (findAll(body, 'commentRangeStart').length) rd.dropped.add('where comments start and end (each comment stays, at its point)');
+  if (rd.ownStyles.size) {
+    const names = [...rd.ownStyles].slice(0, 3).map(n => `“${n.replace(/\b\w/g, c => c.toUpperCase())}”`).join(', ');
+    rd.dropped.add(`the document’s own paragraph styles (${names}${rd.ownStyles.size > 3 ? ' and more' : ''}): their look stays, but they are saved as Normal`);
+  }
   // Every part of the file, kept for saving over it.
   const parts = new Map<string, Uint8Array>();
   for (const e of entries) {

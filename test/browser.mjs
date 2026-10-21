@@ -1029,6 +1029,28 @@ await step('Spreadsheet: a CSV file opens as a new workbook; a damaged .sheet fi
   await page.locator('.win', { has: page.locator('.sheet') }).getByRole('button', { name: 'Close' }).click();
 });
 
+await step('Spreadsheet: a CSV longer than a sheet says how many rows did not fit; Excel’s Windows CSV keeps its £', async () => {
+  // 5,003 rows, saved the way Excel's "CSV (Comma delimited)" does on Windows: one byte for £ (Windows-1252).
+  const rows = ['Item,Price £'];
+  for (let i = 1; i < 5003; i++) rows.push(`Part ${i},${i}`);
+  const csv = join(appDir, 'long.csv');
+  writeFileSync(csv, Buffer.from(rows.join('\r\n'), 'latin1'));
+  const w = explorerWin();
+  const chooser = page.waitForEvent('filechooser');
+  await w.getByRole('button', { name: 'Upload' }).click();
+  (await chooser).setFiles([csv]);
+  await w.locator('.item', { hasText: 'long' }).first().waitFor({ timeout: 10000 });
+  await w.locator('.item', { hasText: 'long' }).first().dblclick();
+  const dlg = page.locator('.dialog', { hasText: 'Not all of “long.csv” fitted' });
+  await dlg.waitFor({ timeout: 15000 });
+  ok((await dlg.innerText()).includes('3 rows did not fit and were left out'), 'the cut is counted: ' + (await dlg.innerText()));
+  await dlg.getByRole('button', { name: 'OK' }).click();
+  eq(await cell('B1'), 'Price £', 'the £ reads right');
+  await page.locator('.win', { has: page.locator('.sheet') }).getByRole('button', { name: 'Close' }).click();
+  const close = page.locator('.dialog');
+  if (await close.count()) await close.getByRole('button', { name: 'Close without saving' }).click();
+});
+
 await step('Spreadsheet: a pasted block keeps its lines in one cell, Alt+Enter adds one, the cell wraps, and TEXTSPLIT / TEXTAFTER / XLOOKUP pull the lines apart', async () => {
   await closeAll();
   await page.locator('.start-btn').click();

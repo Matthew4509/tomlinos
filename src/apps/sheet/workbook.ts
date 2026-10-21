@@ -6,7 +6,8 @@
 import { localeDateOrder, readDateTime, shortDateCode, type DateOrder } from './dates.ts';
 import { evaluateCell, givesList, leadingFunction, parseFormula, text as valueToText, type Context, type Grid, type Node } from './formula.ts';
 import { codeProblem, formatCode, isDateCode, type Formatted } from './numfmt.ts';
-import { MAX_COLS, MAX_ROWS, mapRefs, parseCellRef, renameSheetInFormula, shiftFormula, SyntaxProblem, tokenize, type Ref } from './refs.ts';
+import { plural } from '../../core/format.ts';
+import { colName, MAX_COLS, MAX_ROWS, mapRefs, parseCellRef, renameSheetInFormula, shiftFormula, SyntaxProblem, tokenize, type Ref } from './refs.ts';
 import { CellError, clean, E, formatNumber, formatValue, type CellStyle, type Value } from './values.ts';
 import { cleanChart, mapChartRefs, MAX_CHARTS, type Chart } from './chart.ts';
 import { cleanRule, MAX_RANGES, MAX_RULES, subtractAll, type CfEntry } from './condfmt.ts';
@@ -320,6 +321,8 @@ export class Workbook {
   private ast = new Map<string, Node | CellError>();
   private undoStack: UndoEntry[] = [];
   private redoStack: UndoEntry[] = [];
+  /** Rows and columns the last importText could not fit on the sheet. */
+  lastCut = { rows: 0, cols: 0 };
   private boundsCache: Array<{ v: number; cols: number; rows: number }> = [];
   private depth = 0;
 
@@ -2859,9 +2862,12 @@ export class Workbook {
   /**
    * Puts CSV/TSV text into the sheet starting at (col, row). Returns how many cells were set. A paste passes '\t': split
    * at tabs only, as Excel does, so a comma in pasted text stays in its cell. Left out, the delimiter is guessed (a CSV file).
+   * What did not fit on the sheet is in `lastCut` afterwards (cutInWords says it).
    */
   importText(s: number, col: number, row: number, textIn: string, delimiter?: '\t'): number {
-    const table = parseDelimited(textIn, delimiter);
+    const split = splitDelimited(textIn, delimiter);
+    const table = split.rows;
+    this.lastCut = { rows: Math.max(0, row + split.rowCount - MAX_ROWS), cols: Math.max(0, col + split.widest - MAX_COLS) };
     const changes: Change[] = [];
     let created = 0;
     let count = 0;
@@ -3075,13 +3081,28 @@ function cleanStyle(raw: unknown): CellStyle {
 
 /**
  * Splits CSV or tab-separated text into rows of fields (quotes, doubled quotes, and line breaks inside quotes work).
- * The delimiter is guessed from the first line unless one is given.
+ * The delimiter is guessed from the first line unless one is given. Only a sheet's worth is kept; see splitDelimited.
  */
 export function parseDelimited(input: string, given?: '\t'): string[][] {
+  return splitDelimited(input, given).rows;
+}
+
+/**
+ * parseDelimited, also saying how big the text really was: `rowCount` rows and `widest` fields in its longest row,
+ * counted past the edge of a sheet, where `rows` stops.
+ */
+export function splitDelimited(input: string, given?: '\t'): { rows: string[][]; rowCount: number; widest: number } {
   const firstLine = input.split(/\r?\n/, 1)[0] ?? '';
   const count = (ch: string) => firstLine.split(ch).length - 1;
   const delimiter = given ?? (count('\t') > 0 && count('\t') >= count(',') ? '\t' : count(';') > count(',') ? ';' : ',');
   const rows: string[][] = [];
+  let rowCount = 0;
+  let widest = 0;
+  const end = (line: string[]) => {
+    rowCount++;
+    widest = Math.max(widest, line.length);
+    if (rows.length < MAX_ROWS) rows.push(line.slice(0, MAX_COLS));
+  };
   let row: string[] = [];
   let field = '';
   let quoted = false;
@@ -3101,15 +3122,35 @@ export function parseDelimited(input: string, given?: '\t'): string[][] {
     } else if (c === '\n' || c === '\r') {
       if (c === '\r' && input[i + 1] === '\n') i++;
       row.push(field);
-      rows.push(row);
+      end(row);
       row = [];
       field = '';
     } else field += c;
-    if (rows.length > MAX_ROWS) break;
   }
   if (field !== '' || row.length) {
     row.push(field);
-    rows.push(row);
+    end(row);
   }
-  return rows.slice(0, MAX_ROWS).map(r => r.slice(0, MAX_COLS));
+  return { rows, rowCount, widest };
+}
+
+/** Rows and columns an import or paste could not fit, in words, or '' when it all fitted. */
+export function cutInWords(cut: { rows: number; cols: number }): string {
+  const parts = [cut.rows ? plural(cut.rows, 'row') : '', cut.cols ? plural(cut.cols, 'column') : ''].filter(Boolean);
+  if (!parts.length) return '';
+  return `${parts.join(' and ')} did not fit and ${cut.rows + cut.cols === 1 ? 'was' : 'were'} left out: a sheet here holds ${MAX_ROWS.toLocaleString()} rows and ${MAX_COLS} columns (to column ${colName(MAX_COLS - 1)}).`;
+}
+
+/**
+ * Reads a text file's bytes as text. A byte-order mark says UTF-8 or UTF-16; otherwise UTF-8 if the bytes are valid
+ * UTF-8, else Windows-1252 (Excel's "CSV (Comma delimited)" on Windows), so £ and é come through either way.
+ */
+export function decodeText(bytes: Uint8Array): string {
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) return new TextDecoder('utf-16le').decode(bytes);
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) return new TextDecoder('utf-16be').decode(bytes);
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return new TextDecoder('windows-1252').decode(bytes);
+  }
 }

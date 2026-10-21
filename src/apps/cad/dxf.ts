@@ -559,6 +559,8 @@ export interface DxfRead {
   /** Lines for the report shown after opening. */
   report: string[];
   leftOut: number;
+  /** Items whose height, thickness, own colour or own line type the drawing does not keep (all said in `report`). */
+  changed: number;
 }
 
 interface Placed {
@@ -716,6 +718,10 @@ export function readDxf(bytes: Uint8Array): DxfRead {
   let curves = 0;
   let exploded = 0;
   let ownColours = 0;
+  // Kept nowhere in a TOMLIN CAD drawing, so said: a height off 0, a thickness, a line type of the item's own.
+  let raised = 0;
+  let thick = 0;
+  let ownLineTypes = 0;
   const tol = arcTolerance(units);
   const expanded = new Map<string, Placed[]>();
   const counted = (map: Map<string, number>, key: string) => map.set(key, (map.get(key) ?? 0) + 1);
@@ -738,7 +744,13 @@ export function readDxf(bytes: Uint8Array): DxfRead {
       if (total > MAX_ITEMS) throw new CadProblem(`it holds more than ${MAX_ITEMS.toLocaleString('en-GB')} items`);
       const layer = get(r, 8) ?? '0';
       const own = num(r, 62, 256);
-      if (own !== 256 && own !== 0 && r.type !== 'SEQEND' && r.type !== 'VERTEX') ownColours++;
+      if (r.type !== 'SEQEND' && r.type !== 'VERTEX') {
+        if ((own !== 256 && own !== 0) || get(r, 420) !== undefined) ownColours++;
+        if ([30, 31, 38].some(code => Math.abs(num(r, code)) > 1e-9)) raised++;
+        if (Math.abs(num(r, 39)) > 1e-9) thick++;
+        const lt = get(r, 6);
+        if (lt && !/^(BYLAYER|BYBLOCK)$/i.test(lt.trim())) ownLineTypes++;
+      }
       const put = (shape: Shape) => {
         out.push({ shape, layer });
         total++;
@@ -1045,10 +1057,13 @@ export function readDxf(bytes: Uint8Array): DxfRead {
   if (curves) report.push(`${curves} curve${curves === 1 ? '' : 's'} (splines) drawn as polylines of arcs, each within ${tol} ${units === 'mm' ? 'mm' : 'in'} of the true shape.`);
   for (const note of notes) report.push(note);
   if (ownColours) report.push(`${ownColours} item${ownColours === 1 ? ' has' : 's have'} a colour of its own in the file: TOMLIN CAD draws every item in its layer's colour.`);
+  if (ownLineTypes) report.push(`${ownLineTypes} item${ownLineTypes === 1 ? ' has' : 's have'} a line type of its own in the file (dashed, centre...): TOMLIN CAD draws every item in its layer's line type.`);
+  if (raised) report.push(`${raised} item${raised === 1 ? ' sits' : 's sit'} at a height (Z) other than 0: drawn flat, and a DXF output from here puts ${raised === 1 ? 'it' : 'them'} at 0. If the CAM program reads depth from Z, set it again there.`);
+  if (thick) report.push(`${thick} item${thick === 1 ? ' has' : 's have'} a thickness (raised walls in 3D): drawn flat, and not kept.`);
   const left = [...leftOut].reduce((t, [, c]) => t + c, 0);
   if (left) report.push(`Left out (TOMLIN CAD does not draw these): ${[...leftOut].map(([kName, c]) => `${c} ${kName}${c === 1 ? '' : 's'}`).join(', ')}.`);
   if (!d.ents.length) report.push('Nothing in the file could be drawn.');
-  return { drawing: d, report, leftOut: left };
+  return { drawing: d, report, leftOut: left, changed: ownColours + ownLineTypes + raised + thick };
 }
 
 /** Every number in a shape is a real number (not Infinity or NaN). */

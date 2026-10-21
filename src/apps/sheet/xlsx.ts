@@ -341,7 +341,8 @@ export function toExcelFormula(f: string): string {
 
 interface ReadStyles {
   /** Per cell format (xf) number: this spreadsheet's style, and whether it shows dates. */
-  xf: Array<{ style: CellStyle; date: boolean }>;
+  /** `turned`: text set at an angle; `shrink`: shrink to fit. Neither is kept here. */
+  xf: Array<{ style: CellStyle; date: boolean; turned?: boolean; shrink?: boolean }>;
   unreadCodes: number;
 }
 
@@ -420,7 +421,9 @@ function readStyles(xml: XmlEl | null, theme: string[], order: DateOrder, symbol
     const fmt = styleForCode(code, symbol);
     if (fmt) Object.assign(style, fmt);
     else out.unreadCodes++;
-    out.xf.push({ style, date: style.fmt === 'custom' && !!style.code && isDateCode(style.code) });
+    const turn = Number(al?.attrs.textRotation ?? 0);
+    const shrink = al?.attrs.shrinkToFit === '1' || al?.attrs.shrinkToFit === 'true';
+    out.xf.push({ style, date: style.fmt === 'custom' && !!style.code && isDateCode(style.code), ...(Number.isFinite(turn) && turn !== 0 ? { turned: true } : {}), ...(shrink ? { shrink: true } : {}) });
   }
   return out;
 }
@@ -567,6 +570,8 @@ export async function openXlsx(wb: Workbook, bytes: Uint8Array): Promise<XlsxRep
   let shapes = 0;
   let sparklines = 0;
   let dataTables = 0;
+  // Read nowhere yet, so said in the report (each counts the cells, rows, columns or sheets that had it).
+  const unkept = { turned: 0, shrink: 0, grouped: 0, tabColour: 0, lineFormats: 0 };
   const counts = { links: 0, protect: 0 };
   const names = new Set<string>();
   const sheetEls = children(child(book, 'sheets'), 'sheet');
@@ -600,6 +605,8 @@ export async function openXlsx(wb: Workbook, bytes: Uint8Array): Promise<XlsxRep
       if (!Number.isFinite(lo) || !Number.isFinite(hi)) continue;
       const w = Number(c.attrs.width);
       const hidden = c.attrs.hidden === '1' || c.attrs.hidden === 'true';
+      if (Number(c.attrs.outlineLevel ?? 0) > 0) unkept.grouped++;
+      if (Number(c.attrs.style ?? 0) > 0) unkept.lineFormats++;
       for (let i = lo - 1; i <= hi - 1; i++) {
         if (hidden) hiddenCols.push(i);
         // Excel keeps a width in characters of its standard font; this is its own sum for the pixels on screen.
@@ -608,6 +615,7 @@ export async function openXlsx(wb: Workbook, bytes: Uint8Array): Promise<XlsxRep
         }
       }
     }
+    if (child(child(ws, 'sheetPr'), 'tabColor')) unkept.tabColour++;
     const pane = child(child(child(ws, 'sheetViews'), 'sheetView'), 'pane');
     const freeze = pane && (pane.attrs.state === 'frozen' || pane.attrs.state === 'frozenSplit')
       ? [Math.max(0, Math.min(MAX_ROWS - 1, Math.floor(Number(pane.attrs.ySplit ?? 0)) || 0)), Math.max(0, Math.min(MAX_COLS - 1, Math.floor(Number(pane.attrs.xSplit ?? 0)) || 0))]
@@ -626,6 +634,8 @@ export async function openXlsx(wb: Workbook, bytes: Uint8Array): Promise<XlsxRep
           if (Number.isFinite(px)) rowH[rowNo] = Math.max(12, Math.min(400, px));
         }
         if (rowEl.attrs.hidden === '1' || rowEl.attrs.hidden === 'true') hiddenRows.push(rowNo);
+        if (Number(rowEl.attrs.outlineLevel ?? 0) > 0) unkept.grouped++;
+        if ((rowEl.attrs.customFormat === '1' || rowEl.attrs.customFormat === 'true') && Number(rowEl.attrs.s ?? 0) > 0) unkept.lineFormats++;
       }
       let colNo = -1;
       for (const c of children(rowEl, 'c')) {
@@ -641,6 +651,8 @@ export async function openXlsx(wb: Workbook, bytes: Uint8Array): Promise<XlsxRep
           continue;
         }
         const info = styles.xf[xf];
+        if (info?.turned) unkept.turned++;
+        if (info?.shrink) unkept.shrink++;
         let v: number | string | boolean | null = null;
         let error: string | null = null;
         if (t === 's') v = sst[Number(vText)] ?? null;
@@ -937,6 +949,12 @@ export async function openXlsx(wb: Workbook, bytes: Uint8Array): Promise<XlsxRep
   say(parts.pageOther, 'some print settings (another paper size, manual page breaks, or a different header on the first or even pages)');
   say(counts.links, 'links on cells (the text is kept)');
   say(counts.protect, 'sheet protection');
+  // A <col> can stand for many columns, so these two are said without a number.
+  say(unkept.grouped, 'grouped rows or columns (the + and - buttons that fold them away): all shown open');
+  say(unkept.tabColour, `the colour of ${plural(unkept.tabColour, 'sheet tab')}`);
+  say(unkept.turned, `${plural(unkept.turned, 'cell')} with text set at an angle (shown level)`);
+  say(unkept.shrink, `${plural(unkept.shrink, 'cell')} set to shrink text to fit (shown at full size)`);
+  say(unkept.lineFormats, 'formatting set on whole rows or columns (cells with their own formatting keep it; empty cells there show plain)');
   say(skipped, `${plural(skipped, 'sheet')} that ${skipped === 1 ? 'is' : 'are'} not a sheet of cells (a chart sheet), or past the ${MAX_SHEETS}-sheet limit`);
   say(hiddenSheets, `${plural(hiddenSheets, 'hidden sheet')}: shown here`);
   say(styles.unreadCodes, `${plural(styles.unreadCodes, 'number format')} this spreadsheet cannot read (shown as General)`);

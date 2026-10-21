@@ -525,6 +525,32 @@ await step('Markdown, WordPad and a Word file with a text box open formatted; th
   ok((await doc().innerText()).includes('and more'), 'the typing was saved with it');
 });
 
+await step('a Word file with a link and a Heading 5 says so when it opens, and Save asks before saving over it', async () => {
+  const W_R = `${W_NS} xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"`;
+  writeFileSync(join(dir, 'linked.docx'), await zipDeflate([
+    { name: '[Content_Types].xml', data: enc.encode('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'), modified: 0 },
+    { name: '_rels/.rels', data: enc.encode('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'), modified: 0 },
+    { name: 'word/_rels/document.xml.rels', data: enc.encode('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com/" TargetMode="External"/></Relationships>'), modified: 0 },
+    { name: 'word/document.xml', data: enc.encode(`<?xml version="1.0"?><w:document ${W_R}><w:body><w:p><w:pPr><w:pStyle w:val="Heading5"/></w:pPr><w:r><w:t>Deep heading</w:t></w:r></w:p><w:p><w:r><w:t xml:space="preserve">See </w:t></w:r><w:hyperlink r:id="rId9"><w:r><w:t>our site</w:t></w:r></w:hyperlink></w:p><w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr></w:body></w:document>`), modified: 0 },
+  ]));
+  await upload([join(dir, 'linked.docx')]);
+  await newDoc();
+  await reopen('linked.docx');
+  await D().getByText('links (the words stay; where they lead is not kept)').waitFor();
+  await D().getByText('Heading 4 to Heading 9 (they show and are saved as Heading 3)').waitFor();
+  await D().getByRole('button', { name: 'OK' }).click();
+  ok((await doc().innerText()).includes('our site'), 'the link’s words are there');
+  await doc().focus();
+  await page.keyboard.press('Control+End');
+  await page.keyboard.type('.');
+  await page.keyboard.press('Control+S');
+  await D().getByText('Save over “linked.docx”?').waitFor();
+  ok((await D().innerText()).includes('where they lead is not kept'), 'the question names the link');
+  await D().getByRole('button', { name: 'Cancel' }).click();
+  await shot('write-save-over-link');
+  await closeAllWrite();
+});
+
 await step('find and replace: every "cat" becomes "fox", formatting and all', async () => {
   await newDoc();
   await page.keyboard.type('cat cat dog ');

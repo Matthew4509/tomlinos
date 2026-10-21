@@ -998,6 +998,44 @@ await step('audit fixes: Undo after a save, then a new line, shows unsaved; Undo
   eq(await count('Geometry'), 2, 'the line and the polyline');
 });
 
+await step('a DXF with items at a height and a dashed line of its own says so; outputting over that DXF asks first', async () => {
+  await closeAll();
+  const dir = mkdtempSync(join(tmpdir(), 'cad-walk-'));
+  try {
+    const lines = ['0', 'SECTION', '2', 'HEADER', '9', '$INSUNITS', '70', '4', '0', 'ENDSEC', '0', 'SECTION', '2', 'ENTITIES',
+      '0', 'LINE', '8', 'CUT', '10', '0', '20', '0', '30', '-18', '11', '600', '21', '0', '31', '-18',
+      '0', 'LINE', '8', 'CUT', '6', 'DASHED', '10', '0', '20', '100', '30', '0', '11', '600', '21', '100', '31', '0',
+      '0', 'ENDSEC', '0', 'EOF'];
+    writeFileSync(join(dir, 'heights.dxf'), lines.join('\r\n') + '\r\n');
+    await upload(join(dir, 'heights.dxf'), '/Documents');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  await openCad();
+  await W().getByRole('menuitem', { name: 'File' }).click();
+  await page.locator('.menu').getByText('Open...', { exact: true }).click();
+  await D().locator('.pick-row', { hasText: 'heights.dxf' }).first().dblclick();
+  await D().getByText(/1 item sits at a height \(Z\) other than 0/).waitFor();
+  ok((await D().innerText()).includes('1 item has a line type of its own'), 'the dashed line is said: ' + (await D().innerText()));
+  await shot('cad-dxf-heights');
+  await D().getByRole('button', { name: 'OK' }).click();
+  eq(await count('CUT'), 2, 'both lines are drawn');
+  await W().getByRole('menuitem', { name: 'File' }).click();
+  await page.locator('.menu').getByText('Output', { exact: true }).click();
+  await page.locator('.menu').getByText('CAD', { exact: true }).click();
+  await page.locator('.menu').getByText('DXF...', { exact: true }).click();
+  await D().getByRole('button', { name: 'Choose where...' }).click();
+  await D().locator('input[aria-label="File name"]').fill('heights.dxf');
+  await D().getByRole('button', { name: 'Save' }).click();
+  await D().getByRole('button', { name: 'Replace' }).click();
+  await D().getByText('Write over the DXF this came from?').waitFor();
+  await D().getByRole('button', { name: 'Cancel' }).click();
+  ok(!(await page.locator('.toast', { hasText: 'Saved “heights.dxf”' }).count()), 'nothing was written');
+  // The next step works in a new drawing.
+  await closeAll();
+  await openCad();
+});
+
 await step('View: grid, white background, large icons, help', async () => {
   await canvas().focus();
   await page.keyboard.press('F7');
