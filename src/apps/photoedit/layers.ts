@@ -47,11 +47,14 @@ export function blendFromOra(op: string | undefined): BlendMode | null {
 export const LAYER_BUDGET = 150_000_000;
 export const MAX_LAYERS = 100;
 
-/** Why one more layer of this size cannot be added (null = it can). `count` = layers there now. */
-export function noRoomForLayer(w: number, h: number, count: number): string | null {
-  if (count >= MAX_LAYERS) return `This picture has ${count} layers, the most Photo Editor holds. Merge or delete a layer to add another.`;
+/** Why one more layer (or mask) of this size cannot be added (null = it can). `count` = layers and masks there now,
+ *  `masks` = how many of them are masks (each holds as much as a layer). */
+export function noRoomForLayer(w: number, h: number, count: number, masks = 0): string | null {
+  const has = `${count - masks} layer${count - masks === 1 ? '' : 's'}${masks ? ` and ${masks} mask${masks === 1 ? '' : 's'}` : ''}`;
+  const way = masks ? 'Merge or delete a layer, or apply or delete a mask, to add another.' : 'Merge or delete a layer to add another.';
+  if (count >= MAX_LAYERS) return `This picture has ${has}, the most Photo Editor holds. ${way}`;
   if ((count + 1) * w * h > LAYER_BUDGET) {
-    return `This picture has ${count} layer${count === 1 ? '' : 's'} at ${w.toLocaleString()} × ${h.toLocaleString()}, which is as much as this browser can hold safely. Merge or delete a layer to add another.`;
+    return `This picture has ${has} at ${w.toLocaleString()} × ${h.toLocaleString()}, which is as much as this browser can hold safely. ${way}`;
   }
   return null;
 }

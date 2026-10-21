@@ -23,6 +23,9 @@ export interface Layer {
   locked: boolean;
   /** Set while the layer is an editable text layer. */
   text: TextSpec | null;
+  /** A layer mask: a grey picture the size of the layer, white where the layer shows and black where it is hidden
+   *  (grey in between). It is a layer of its own kind, so every drawing tool can paint on it. */
+  mask: Layer | null;
 }
 
 export type LayerMeta = Pick<Layer, 'name' | 'visible' | 'opacity' | 'mode' | 'locked' | 'text'>;
@@ -46,7 +49,31 @@ export function makeCanvas(w: number, hgt: number): [HTMLCanvasElement, CanvasRe
 
 export function makeLayer(w: number, hgt: number, name: string, meta: Partial<LayerMeta> = {}): Layer {
   const [canvas, ctx] = makeCanvas(w, hgt);
-  return { id: nextId++, name, canvas, ctx, visible: true, opacity: 1, mode: 'normal', locked: false, text: null, ...meta };
+  return { id: nextId++, name, canvas, ctx, visible: true, opacity: 1, mode: 'normal', locked: false, text: null, mask: null, ...meta };
+}
+
+/** A new mask: all white (the whole layer shows), all black (all hidden), or from a selection (shows inside it). */
+export function makeMask(w: number, hgt: number, from: 'white' | 'black' | Mask): Layer {
+  const mask = makeLayer(w, hgt, 'Mask');
+  if (typeof from === 'string') {
+    mask.ctx.fillStyle = from === 'white' ? '#ffffff' : '#000000';
+    mask.ctx.fillRect(0, 0, w, hgt);
+  } else {
+    const img = mask.ctx.createImageData(w, hgt);
+    for (let i = 0; i < from.length; i++) {
+      const o = i * 4;
+      img.data[o] = img.data[o + 1] = img.data[o + 2] = from[i];
+      img.data[o + 3] = 255;
+    }
+    mask.ctx.putImageData(img, 0, 0);
+  }
+  return mask;
+}
+
+/** How much a mask's pixels show their layer (0 to 255), written into the alpha of `d` in place: the grey's
+ *  brightness, times its own alpha (a part rubbed out of a mask hides the layer, as black does). */
+export function maskToAlpha(d: Uint8ClampedArray): void {
+  for (let i = 0; i < d.length; i += 4) d[i + 3] = ((d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) * d[i + 3] + 32640) / 65280 | 0;
 }
 
 export function surfaceOf(ctx: CanvasRenderingContext2D): Surface {
@@ -92,7 +119,15 @@ export class Doc {
   height: number;
   /** Bottom first. */
   layers: Layer[] = [];
-  active!: Layer;
+  private current!: Layer;
+  /** The layer worked on. Choosing another stops painting on a mask. */
+  get active(): Layer {
+    return this.current;
+  }
+  set active(layer: Layer) {
+    if (layer !== this.current) this.maskEdit = false;
+    this.current = layer;
+  }
   selection: Mask | null = null;
   readonly history = new History(HISTORY_BYTES);
   readonly display: HTMLCanvasElement;
@@ -103,6 +138,10 @@ export class Doc {
   private selCanvas: HTMLCanvasElement | null = null;
   private scratch: [HTMLCanvasElement, CanvasRenderingContext2D] = makeCanvas(1, 1);
   private scratch2: [HTMLCanvasElement, CanvasRenderingContext2D] = makeCanvas(1, 1);
+  private scratch3: [HTMLCanvasElement, CanvasRenderingContext2D] = makeCanvas(1, 1);
+  private scratch4: [HTMLCanvasElement, CanvasRenderingContext2D] = makeCanvas(1, 1);
+  /** True while the tools paint into the active layer's mask instead of its pixels. */
+  maskEdit = false;
   /** The selection's outline (for the marching ants) and its box, worked out once per change. */
   edges: number[] = [];
   selBounds: Rect | null = null;
@@ -124,6 +163,7 @@ export class Doc {
     this.display.height = hgt;
     this.layers = layers;
     this.active = layers[layers.length - 1];
+    this.maskEdit = false;
     this.pending = null;
     this.setSelectionQuiet(null);
     this.history.clear();
@@ -137,6 +177,52 @@ export class Doc {
 
   indexOf(layer: Layer): number {
     return this.layers.indexOf(layer);
+  }
+
+  /** What the drawing tools change: the active layer, or its mask while that is being edited. */
+  get paint(): Layer {
+    return this.onMask ? this.active.mask! : this.active;
+  }
+
+  /** True while the tools really paint on a mask (the active layer has one, and it was chosen). */
+  get onMask(): boolean {
+    return this.maskEdit && !!this.active.mask;
+  }
+
+  /** Every canvas the picture holds: each layer, and after it its mask. */
+  withMasks(): Layer[] {
+    return this.layers.flatMap(l => (l.mask ? [l, l.mask] : [l]));
+  }
+
+  /** A mask's part `r` as a canvas whose alpha is how much the layer shows there (a stroke being drawn on it too). */
+  private maskAlpha(mask: Layer, r: Rect, into: [HTMLCanvasElement, CanvasRenderingContext2D]): HTMLCanvasElement {
+    let img: ImageData;
+    if (this.pending && this.pending.layer === mask && this.pending.bounds) {
+      const [, tx] = this.sized(into, r.w, r.h);
+      tx.globalCompositeOperation = 'copy';
+      tx.drawImage(mask.canvas, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h);
+      tx.globalCompositeOperation = 'source-over';
+      this.applyPending(tx, r, 0, 0);
+      img = tx.getImageData(0, 0, r.w, r.h);
+    } else img = mask.ctx.getImageData(r.x, r.y, r.w, r.h);
+    maskToAlpha(img.data);
+    const [c, x] = this.sized(into, r.w, r.h);
+    x.putImageData(img, 0, 0);
+    return c;
+  }
+
+  /** A layer's pixels with its mask applied (the layer's own canvas when it has none). */
+  maskedCanvas(layer: Layer): HTMLCanvasElement {
+    if (!layer.mask) return layer.canvas;
+    const [c, x] = makeCanvas(this.width, this.height);
+    x.drawImage(layer.canvas, 0, 0);
+    const img = layer.mask.ctx.getImageData(0, 0, this.width, this.height);
+    maskToAlpha(img.data);
+    const [a, ax] = makeCanvas(this.width, this.height);
+    ax.putImageData(img, 0, 0);
+    x.globalCompositeOperation = 'destination-in';
+    x.drawImage(a, 0, 0);
+    return c;
   }
 
   // ---- Showing ----
@@ -159,6 +245,15 @@ export class Doc {
         tx.drawImage(layer.canvas, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h);
         this.applyPending(tx, r, 0, 0);
         src = tc;
+        sx = sy = 0;
+      }
+      if (layer.mask) {
+        const alpha = this.maskAlpha(layer.mask, r, this.scratch4);
+        const [mc, mx] = this.sized(this.scratch3, r.w, r.h);
+        mx.drawImage(src, sx, sy, r.w, r.h, 0, 0, r.w, r.h);
+        mx.globalCompositeOperation = 'destination-in';
+        mx.drawImage(alpha, 0, 0, r.w, r.h, 0, 0, r.w, r.h);
+        src = mc;
         sx = sy = 0;
       }
       d.globalAlpha = layer.opacity;
@@ -222,7 +317,7 @@ export class Doc {
     const ctx = canvas.getContext('2d')!;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    this.pending = { layer: this.active, canvas, alpha, op, bounds: null };
+    this.pending = { layer: this.paint, canvas, alpha, op, bounds: null };
     return this.pending;
   }
 
@@ -287,7 +382,7 @@ export class Doc {
    * Changes the active layer's pixels inside `rect` (default: the selection's box, or the whole layer) with a plain
    * function, kept inside the selection, as one undo step. False when nothing changed.
    */
-  changePixels(label: string, fn: (p: Pixels) => void, rect?: Rect | null, layer = this.active): boolean {
+  changePixels(label: string, fn: (p: Pixels) => void, rect?: Rect | null, layer = this.paint): boolean {
     const r = clipRect(rect ?? this.selBounds ?? this.full, this.width, this.height);
     if (!r) return false;
     const before = layer.ctx.getImageData(r.x, r.y, r.w, r.h);
@@ -320,6 +415,21 @@ export class Doc {
     this.push({ label, bytes: 64 + JSON.stringify(change).length * 2, undo: () => apply(before), redo: () => apply(change) });
   }
 
+  /** A layer's mask added, changed for another, or taken away (null), as an undo step (with `extra` steps done first,
+   *  undone after). With no mask, the tools paint on the layer again. */
+  setMask(label: string, layer: Layer, mask: Layer | null, extra: Step[] = []): void {
+    const before = layer.mask;
+    const apply = (m: Layer | null) => {
+      layer.mask = m;
+      if (!m && this.active === layer) this.maskEdit = false;
+      this.render();
+      this.onChange('layers');
+    };
+    apply(mask);
+    const step: Step = { label, bytes: ((before ? 1 : 0) + (mask ? 1 : 0)) * this.width * this.height * 4 + 64, undo: () => apply(before), redo: () => apply(mask) };
+    this.push(extra.length ? group(label, [...extra, step]) : step);
+  }
+
   /** A new order or set of layers (add, delete, move, merge) as an undo step. Removed layers stay in memory with the
    *  step, so undo brings them back as they were. */
   setLayers(label: string, layers: Layer[], active: Layer, extra: Step[] = []): void {
@@ -335,14 +445,16 @@ export class Doc {
     const kept = new Set(before.layers);
     const added = layers.filter(l => !kept.has(l));
     const removed = before.layers.filter(l => !layers.includes(l));
-    const bytes = [...added, ...removed].length * this.width * this.height * 4 + 64;
+    // A masked layer holds two canvases.
+    const bytes = [...added, ...removed].reduce((n, l) => n + (l.mask ? 2 : 1), 0) * this.width * this.height * 4 + 64;
     const step: Step = { label, bytes, undo: () => apply(before), redo: () => apply(after) };
     this.push(extra.length ? group(label, [...extra, step]) : step);
   }
 
   /** Every layer gets a new canvas (resize, rotate, crop, canvas size): the old canvases are kept for undo. */
   replaceCanvases(label: string, w: number, hgt: number, canvases: Map<Layer, HTMLCanvasElement>, selection: Mask | null, texts?: Map<Layer, TextSpec | null>): void {
-    const before = { w: this.width, h: this.height, sel: this.selection, canvases: new Map(this.layers.map(l => [l, l.canvas])), texts: new Map(this.layers.map(l => [l, l.text])) };
+    // Masks are in `canvases` too (whole-picture changes change them the same way as their layers).
+    const before = { w: this.width, h: this.height, sel: this.selection, canvases: new Map(this.withMasks().map(l => [l, l.canvas])), texts: new Map(this.layers.map(l => [l, l.text])) };
     const after = { w, h: hgt, sel: selection, canvases, texts: texts ?? new Map(this.layers.map(l => [l, l.text])) };
     const apply = (s: typeof after) => {
       this.width = s.w;
@@ -402,16 +514,17 @@ export class Doc {
       if (!layer.visible) continue;
       x.globalAlpha = layer.opacity;
       x.globalCompositeOperation = blendInfo(layer.mode).canvas;
-      x.drawImage(layer.canvas, 0, 0);
+      x.drawImage(this.maskedCanvas(layer), 0, 0);
     }
     return c;
   }
 
-  /** The active layer's pixels inside the selection (or the whole layer), cut to the selection's box. */
-  selectedPixels(layer = this.active): { canvas: HTMLCanvasElement; x: number; y: number } | null {
+  /** A layer's pixels inside the selection (or the whole layer), cut to the selection's box. `asSeen`: with its mask
+   *  applied (a copy shows what was seen, not what the mask hides). */
+  selectedPixels(layer = this.paint, asSeen = false): { canvas: HTMLCanvasElement; x: number; y: number } | null {
     const r = this.selBounds ?? this.full;
     const [c, x] = makeCanvas(r.w, r.h);
-    x.drawImage(layer.canvas, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h);
+    x.drawImage(asSeen ? this.maskedCanvas(layer) : layer.canvas, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h);
     const sel = this.selectionCanvas();
     if (sel) {
       x.globalCompositeOperation = 'destination-in';

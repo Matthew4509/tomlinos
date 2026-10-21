@@ -2,6 +2,9 @@
 // .ora files in a real Chrome, checking the pixels on screen. Needs the dev server on a FRESH, EMPTY data folder (the
 // first step sets up the owner), and `npm run build` done.
 //   node test/browser-photoedit.mjs [http://127.0.0.1:3052] [screenshot folder]
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { chromium } from 'playwright-core';
 
 const BASE = process.argv[2] ?? 'http://127.0.0.1:3052';
@@ -559,6 +562,124 @@ await step('New picture over 50 million pixels is refused with the reason; one U
   await page.keyboard.press('Escape');
 });
 
+await step('layer masks: black on the mask hides the layer, the eraser shows it again; kept through .ora; Apply makes it pixels and Undo brings the mask back', async () => {
+  await W().getByRole('button', { name: 'New...' }).click();
+  await page.locator('.dialog', { hasText: 'Not saved' }).getByRole('button', { name: 'Lose the changes' }).click().catch(() => {});
+  await page.locator('.dialog input[aria-label="Width"]').fill('400');
+  await page.locator('.dialog input[aria-label="Height"]').fill('300');
+  await page.locator('.dialog').getByRole('button', { name: 'Create' }).click();
+  await W().getByRole('button', { name: 'New layer' }).click();
+  await W().locator('input[aria-label="Colour"]').fill('#d62828');
+  await menu('Edit', 'Fill with the colour');
+  const RED = [214, 40, 40, 255], WHITE = [255, 255, 255, 255];
+  ok(near(await pixel(300, 150), RED), 'the new layer is red');
+  await menu('Layer', 'Add mask (white: all shows)');
+  ok((await W().locator('.pe-layer.on').innerText()).includes('mask'), 'the layer says it has a mask');
+  eq(await W().locator('.pe-mask-btn[aria-pressed="true"]').count(), 1, 'the mask is the one painted on');
+  ok(near(await pixel(300, 150), RED), 'a white mask shows it all');
+  // Black on the right of the mask hides the layer there: the white Background shows.
+  await W().locator('input[aria-label="Colour"]').fill('#000000');
+  await tool('Brush');
+  await W().locator('input[aria-label="Size"]').fill('80');
+  // Overlapping strokes, so the soft brush edges leave no gap.
+  for (const x of [270, 300, 330, 360]) await dragPic([x, 40], [x, 260]);
+  ok(near(await pixel(300, 150), WHITE), 'hidden where the mask is black: ' + (await pixel(300, 150)));
+  ok(near(await pixel(100, 150), RED), 'shown where it is white');
+  // The eraser on a mask paints white: the layer shows again there.
+  await tool('Eraser (to see-through)');
+  await W().locator('input[aria-label="Size"]').fill('20');
+  await dragPic([300, 100], [300, 200]);
+  ok(near(await pixel(300, 150), RED), 'the eraser shows it again: ' + (await pixel(300, 150)));
+  ok(near(await pixel(340, 150), WHITE), 'beside the eraser it stays hidden');
+  // Painting the layer itself (its own small picture clicked) leaves the mask as it is.
+  await W().locator('.pe-layer.on .pe-thumb').first().click();
+  eq(await W().locator('.pe-mask-btn[aria-pressed="false"]').count(), 1, 'now painting on the layer');
+  await shot('11-mask');
+  // Kept through .ora: the mask comes back to be edited.
+  await page.keyboard.press('Control+s');
+  await page.locator('.dialog input[aria-label="File name"]').fill('masked.ora');
+  await page.locator('.dialog').getByRole('button', { name: 'Save' }).click();
+  await page.locator('.toast', { hasText: 'Saved “masked.ora”' }).waitFor();
+  await W().getByRole('button', { name: 'Close' }).click();
+  await page.keyboard.press('Control+Alt+e');
+  const x = page.locator('.win.active');
+  await x.locator('.item', { hasText: 'Pictures' }).first().dblclick();
+  await x.locator('.item', { hasText: 'masked' }).first().dblclick();
+  await W().locator('.pe-status', { hasText: 'masked.ora' }).waitFor({ timeout: 10000 });
+  await page.locator('.win', { has: page.locator('.fv-explorer') }).getByRole('button', { name: 'Close' }).click().catch(() => {});
+  ok((await W().locator('.pe-layer', { hasText: 'Layer 2' }).innerText()).includes('mask'), 'the mask is back');
+  ok(near(await pixel(300, 150), RED) && near(await pixel(340, 150), WHITE), 'and looks the same');
+  // Apply: the hiding becomes the layer's own see-through pixels; Undo brings the mask back.
+  await W().locator('.pe-layer', { hasText: 'Layer 2' }).click();
+  await menu('Layer', 'Apply the mask');
+  ok(!(await W().locator('.pe-layer', { hasText: 'Layer 2' }).innerText()).includes('mask'), 'applied: no mask');
+  ok(near(await pixel(340, 150), WHITE) && near(await pixel(100, 150), RED), 'looks the same after Apply');
+  await page.keyboard.press('Control+z');
+  ok((await W().locator('.pe-layer', { hasText: 'Layer 2' }).innerText()).includes('mask'), 'Undo brings the mask back');
+  ok(near(await pixel(340, 150), WHITE), 'still hidden there');
+  await menu('Layer', 'Delete the mask');
+  ok(near(await pixel(340, 150), RED), 'deleting the mask shows the whole layer again');
+});
+
+await step('a photo with camera details: with no changes Save writes nothing; after a change Save asks before saving over it', async () => {
+  // Every Photo Editor window closed first, so the photo opens in a window of its own.
+  for (let i = 0; i < 4 && (await W().count()); i++) {
+    await W().last().getByRole('button', { name: 'Close', exact: true }).first().click();
+    const lose = page.locator('.dialog').getByRole('button', { name: 'Close without saving' });
+    if (await lose.waitFor({ timeout: 1500 }).then(() => true, () => false)) await lose.click();
+  }
+  // A real JPEG made in the page, with an EXIF part put in after its start, as a camera writes one.
+  const b64 = await page.evaluate(() => {
+    const c = document.createElement('canvas');
+    c.width = 120;
+    c.height = 80;
+    const x = c.getContext('2d');
+    x.fillStyle = '#3366cc';
+    x.fillRect(0, 0, 120, 80);
+    return c.toDataURL('image/jpeg', 0.9).split(',')[1];
+  });
+  const jpg = Buffer.from(b64, 'base64');
+  const exif = Buffer.from([0xff, 0xe1, 0x00, 0x16, ...Buffer.from('Exif\0\0', 'latin1'), 0x4d, 0x4d, 0, 0x2a, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0]);
+  const dir = mkdtempSync(join(tmpdir(), 'pe-walk-'));
+  try {
+    writeFileSync(join(dir, 'camera.jpg'), Buffer.concat([jpg.subarray(0, 2), exif, jpg.subarray(2)]));
+    await page.keyboard.press('Control+Alt+e');
+    const x = page.locator('.win.active');
+    await x.locator('.item', { hasText: 'Pictures' }).first().dblclick();
+    const chooser = page.waitForEvent('filechooser');
+    await x.getByRole('button', { name: 'Upload' }).click();
+    (await chooser).setFiles([join(dir, 'camera.jpg')]);
+    await x.locator('.item', { hasText: 'camera' }).first().waitFor({ timeout: 15000 });
+    await x.getByRole('button', { name: 'Close', exact: true }).first().click();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  // Opened from Photo Editor (a double-click on a JPEG opens the Pictures viewer).
+  await page.locator('.start-btn').click();
+  await page.locator('.start-filter').fill('photo editor');
+  await page.locator('.start-menu [data-label="photo editor"]').first().click();
+  await W().getByRole('button', { name: 'Open...' }).click();
+  await page.locator('.dialog .pick-row', { hasText: 'camera.jpg' }).first().dblclick();
+  await W().locator('.pe-status', { hasText: 'camera.jpg' }).waitFor({ timeout: 10000 });
+  await W().locator('.pe-stage').focus();
+  await page.keyboard.press('Control+s');
+  await page.locator('.toast', { hasText: 'No changes to save.' }).first().waitFor();
+  await tool('Brush');
+  await dragPic([10, 10], [60, 40]);
+  await page.keyboard.press('Control+s');
+  const ask = page.locator('.dialog', { hasText: 'Save over “camera.jpg”?' });
+  await ask.waitFor();
+  ok((await ask.innerText()).includes('the details stored with the photo'), 'the camera details are named: ' + (await ask.innerText()));
+  await ask.getByRole('button', { name: 'Cancel' }).click();
+  await W().getByRole('button', { name: 'Close', exact: true }).first().click();
+  await page.locator('.dialog').getByRole('button', { name: 'Close without saving' }).click();
+  // The next steps work in a new Photo Editor window.
+  await page.locator('.start-btn').click();
+  await page.locator('.start-filter').fill('photo editor');
+  await page.locator('.start-menu [data-label="photo editor"]').first().click();
+  await W().locator('.pe-doc').waitFor();
+});
+
 await step('phone width: the editor fits 390 pixels with no sideways scroll of the page', async () => {
   await page.setViewportSize({ width: 390, height: 800 });
   await page.waitForTimeout(500);
@@ -617,7 +738,8 @@ await step('unsaved work is kept as a recovery copy with its layers; after the p
     document.dispatchEvent(new Event('visibilitychange'));
     delete document.visibilityState;
   });
-  await page.waitForTimeout(2500);
+  // Long enough after the 12 big layers of the step before (the copy is a PNG per layer).
+  await page.waitForTimeout(8000);
   // The page stops without saving, as a crash or a closed tab would.
   page.once('dialog', d => d.accept());
   await page.goto(BASE, { waitUntil: 'load' });

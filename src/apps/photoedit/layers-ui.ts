@@ -1,12 +1,15 @@
 // Photo Editor's Layers panel: the layers top first, each with an eye to show or hide it, a small picture and its
 // name; the active layer's blend mode, see-through amount and lock; and buttons to add, copy, raise, lower, merge and
-// delete. Drag a layer to move it (or use the arrows). Double-click a name to rename it.
+// delete. Drag a layer to move it (or use the arrows). Double-click a name to rename it. A layer with a mask shows
+// the mask's small picture beside its own: click either to paint on that one (the one painted on is outlined).
 import { h, on } from '../../core/dom.ts';
 import type { Doc, Layer } from './doc.ts';
 import { BLEND_MODES, type BlendMode } from './layers.ts';
 
 export interface LayerCommands {
   activate(layer: Layer): void;
+  /** Works on this layer, painting on its mask (true) or its pixels (false). */
+  editMask(layer: Layer, on: boolean): void;
   add(): void;
   duplicate(): void;
   remove(): void;
@@ -48,6 +51,7 @@ export function layersPanel(doc: Doc, cmd: LayerCommands, signal: AbortSignal) {
     list,
     h('div', { class: 'pe-layer-btns' }, addBtn, dupBtn, upBtn, downBtn, mergeBtn, delBtn));
 
+  /** Each layer's small picture, and each mask's (a mask is a layer of its own kind). */
   const thumbs = new Map<Layer, HTMLCanvasElement>();
   let opacityFrom = -1;
 
@@ -71,11 +75,26 @@ export function layersPanel(doc: Doc, cmd: LayerCommands, signal: AbortSignal) {
       const index = doc.indexOf(layer);
       const active = layer === doc.active;
       const eye = h('button', { type: 'button', class: 'pe-eye', 'aria-pressed': String(layer.visible), title: layer.visible ? 'Hide this layer' : 'Show this layer', 'aria-label': `${layer.visible ? 'Hide' : 'Show'} “${layer.name}”` }, layer.visible ? '●' : '○');
-      const thumb = h('canvas', { class: 'pe-thumb', width: 48, height: 36, 'aria-hidden': 'true' });
+      const onMask = active && doc.maskEdit && !!layer.mask;
+      const thumb = h('canvas', { class: `pe-thumb${layer.mask && active && !onMask ? ' painting' : ''}`, width: 48, height: 36, 'aria-hidden': 'true' });
       thumbs.set(layer, thumb);
+      let maskThumb: HTMLButtonElement | null = null;
+      if (layer.mask) {
+        const mc = h('canvas', { class: `pe-thumb${onMask ? ' painting' : ''}`, width: 48, height: 36, 'aria-hidden': 'true' });
+        thumbs.set(layer.mask, mc);
+        maskThumb = h('button', { type: 'button', class: 'pe-mask-btn', 'aria-pressed': String(onMask), title: onMask ? 'Painting on the mask: click the layer’s picture to paint on the layer' : 'Click to paint on the mask (black hides, white shows)', 'aria-label': `Paint on the mask of “${layer.name}”` }, mc);
+        on(maskThumb, 'click', e => {
+          e.stopPropagation();
+          cmd.editMask(layer, true);
+        }, signal);
+        on(thumb, 'click', e => {
+          e.stopPropagation();
+          cmd.editMask(layer, false);
+        }, signal);
+      }
       const name = h('span', { class: 'pe-layer-name' }, layer.name);
-      const badges = h('span', { class: 'pe-badges' }, layer.text ? 'T' : null, layer.locked ? ' 🔒' : null, layer.mode !== 'normal' ? ` ${BLEND_MODES.find(b => b.id === layer.mode)?.label ?? ''}` : null, layer.opacity < 1 ? ` ${Math.round(layer.opacity * 100)}%` : null);
-      const row = h('div', { class: `pe-layer${active ? ' on' : ''}${layer.visible ? '' : ' hidden-layer'}`, role: 'option', 'aria-selected': String(active), tabindex: active ? '0' : '-1', draggable: 'true', title: 'Click to work on this layer; double-click the name (or F2) to rename; drag to move' }, eye, thumb, h('span', { class: 'pe-layer-text' }, name, badges));
+      const badges = h('span', { class: 'pe-badges' }, layer.text ? 'T' : null, layer.mask ? ' mask' : null, layer.locked ? ' 🔒' : null, layer.mode !== 'normal' ? ` ${BLEND_MODES.find(b => b.id === layer.mode)?.label ?? ''}` : null, layer.opacity < 1 ? ` ${Math.round(layer.opacity * 100)}%` : null);
+      const row = h('div', { class: `pe-layer${active ? ' on' : ''}${layer.visible ? '' : ' hidden-layer'}`, role: 'option', 'aria-selected': String(active), tabindex: active ? '0' : '-1', draggable: 'true', title: 'Click to work on this layer; double-click the name (or F2) to rename; drag to move' }, eye, thumb, maskThumb, h('span', { class: 'pe-layer-text' }, name, badges));
       on(eye, 'click', e => {
         e.stopPropagation();
         cmd.setVisible(layer, !layer.visible);
@@ -131,7 +150,7 @@ export function layersPanel(doc: Doc, cmd: LayerCommands, signal: AbortSignal) {
     });
     list.replaceChildren(...rows);
     if (hadFocus) (list.querySelector('.pe-layer.on') as HTMLElement | null)?.focus({ preventScroll: true });
-    for (const layer of doc.layers) drawThumb(layer);
+    for (const layer of doc.withMasks()) drawThumb(layer);
     const a = doc.active;
     mode.value = a.mode;
     opacity.value = String(Math.round(a.opacity * 100));
@@ -163,7 +182,7 @@ export function layersPanel(doc: Doc, cmd: LayerCommands, signal: AbortSignal) {
   function refreshThumbs() {
     clearTimeout(thumbTimer);
     thumbTimer = window.setTimeout(() => {
-      for (const layer of doc.layers) drawThumb(layer);
+      for (const layer of doc.withMasks()) drawThumb(layer);
     }, 250);
   }
   signal.addEventListener('abort', () => clearTimeout(thumbTimer));

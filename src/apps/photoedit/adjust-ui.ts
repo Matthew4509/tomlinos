@@ -67,7 +67,7 @@ function drawHistogram(c: HTMLCanvasElement, hist: Histogram, ch: Channel, marks
 /** Opens one colour window. Resolves when it closes (applied or not). */
 /** `beforeApply` runs just before the change is made (a text layer becomes pixels only then, not on Cancel). */
 export async function adjust(shell: Shell, doc: Doc, kind: AdjustKind, beforeApply: () => void = () => undefined): Promise<boolean> {
-  const layer = doc.active;
+  const layer = doc.paint;
   const r = clipRect(doc.selBounds ?? doc.full, doc.width, doc.height);
   if (!r) return false;
   const original = layer.ctx.getImageData(r.x, r.y, r.w, r.h);

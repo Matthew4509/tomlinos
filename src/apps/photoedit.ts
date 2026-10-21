@@ -17,8 +17,9 @@ import { MAX_PICTURE_PIXELS, pictureTooBig } from '../core/imagesize.ts';
 import { APPS } from './catalog.ts';
 import { saveOver } from '../shell/savefile.ts';
 import { createRecovery } from '../shell/recovery.ts';
+import { factsOf, lostBySaving } from './photoedit/fileinfo.ts';
 import { BLUR, convolve3, floodFill, greyscale, hexToRgba, invert, keepShape, mixPixel, rgbToHex, sepia, SHARPEN } from './photoedit/pixels.ts';
-import { Doc, makeCanvas, makeLayer, paintText, surfaceOf, textBounds, type Layer } from './photoedit/doc.ts';
+import { Doc, makeCanvas, makeLayer, makeMask, maskToAlpha, paintText, surfaceOf, textBounds, type Layer } from './photoedit/doc.ts';
 import { clipRect, group, PixelPatch, TILE, unionRect, type Rect } from './photoedit/history.ts';
 import { combine, cropMask, ellipseMask, feather, flipMaskIn, invertMask, polygonMask, rectMask, wandMask, type Combine, type Mask, type Point } from './photoedit/selection.ts';
 import { blurSharpenDab, cloneDab, DabPath, dabRect, dodgeBurnDab, healDab, makeCarry, makeStroke, smudgeDab, type Carry, type Dab, type StrokeState } from './photoedit/retouch.ts';
@@ -76,6 +77,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
   let dirty = false;
   /** Counts changes, so a change made while a save is on its way stays marked unsaved. */
   let edits = 0;
+  const maskCount = () => doc.layers.filter(l => l.mask).length;
   /** A recovered picture's old name and folder, offered when it is saved (it has no file of its own yet). */
   let recoveredName: string | null = null;
   let recoveredFolder: string | null = null;
@@ -93,6 +95,10 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
   let tool: Tool = 'brush';
   /** Paths for which the person agreed that a flat file (PNG, JPEG, WebP) drops the layers. */
   const flatAgreed = new Set<string>();
+  /** Paths for which the person agreed that a JPEG turns see-through parts white. */
+  const whiteAgreed = new Set<string>();
+  /** The file opened, if it moves (more frames than the first) or holds what saving over it would take out. */
+  let opened: { path: string; animated: boolean; losses: string[] } | null = null;
 
   // ---- The picture: layers drawn together into one canvas, and one on top for outlines and handles ----
   const display = h('canvas', { class: 'pe-doc', width: 800, height: 600 });
@@ -190,6 +196,11 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       panel.refresh();
       refresh();
     },
+    editMask: (layer, on) => {
+      settle();
+      doc.active = layer;
+      setMaskEdit(on);
+    },
     add: () => addLayer(),
     duplicate: () => duplicateLayer(),
     remove: () => deleteLayer(),
@@ -269,7 +280,8 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     if (!unsaved) recovery.drop();
     app.setTitle(`${name}${unsaved ? ' *' : ''} - Photo Editor`);
     app.setDirty(unsaved);
-    const layers = doc.layers.length > 1 ? `  ·  ${doc.layers.length} layers, on “${doc.active.name}”` : '';
+    const on = doc.onMask ? `on the mask of “${doc.active.name}”` : `on “${doc.active.name}”`;
+    const layers = doc.layers.length > 1 ? `  ·  ${doc.layers.length} layers, ${on}` : doc.onMask ? `  ·  ${on}` : '';
     status.textContent = `${name}  ·  ${doc.width} × ${doc.height} pixels${layers}  ·  ${Math.round(zoom * 100)}%${unsaved ? '  ·  not saved' : ''}`;
   }
   function note(text: string) {
@@ -380,6 +392,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     dirty = false;
     recoveredName = null;
     recoveredFolder = null;
+    opened = null;
     flatAgreed.clear();
     panel.refresh();
     fit();
@@ -390,7 +403,8 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     const blob = new Blob([bytes as BlobPart], { type });
     if (type !== 'image/svg+xml') {
       try {
-        return await createImageBitmap(blob);
+        // A phone photo turned by its EXIF note opens upright.
+        return await createImageBitmap(blob, { imageOrientation: 'from-image' });
       } catch {
         // Fall through to an <img>, which knows a few more kinds.
       }
@@ -412,19 +426,45 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
 
   async function openOraFile(bytes: Uint8Array): Promise<boolean> {
     const ora = await openOra(bytes);
+    const notes = [...ora.notes];
     const { width: w, height: hgt } = ora.stack;
     const layers: Layer[] = [];
     // The file lists the top layer first; the editor keeps the bottom first.
     for (const l of [...ora.stack.layers].reverse()) {
       const layer = makeLayer(w, hgt, l.name, { visible: l.visible, opacity: l.opacity, mode: l.mode, locked: l.locked, text: l.text ?? null });
-      const img = await decode(await ora.layerPng(l), 'layer.png');
-      layer.ctx.drawImage(img, Math.round(l.x), Math.round(l.y));
-      closeImage(img);
+      // A layer saved here with a mask: its pixels before masking, and the mask, so the mask can be edited again.
+      let masked = false;
+      if (l.mask) {
+        let full: Awaited<ReturnType<typeof decode>> | null = null;
+        try {
+          full = await decode(await ora.partPng(l.mask.unmasked, l), 'layer.png');
+          const grey = await decode(await ora.partPng(l.mask.mask, l), 'mask.png');
+          layer.ctx.drawImage(full, Math.round(l.x), Math.round(l.y));
+          layer.mask = makeLayer(w, hgt, 'Mask');
+          layer.mask.ctx.drawImage(grey, Math.round(l.x), Math.round(l.y));
+          closeImage(grey);
+          masked = true;
+        } catch {
+          layer.ctx.clearRect(0, 0, w, hgt);
+          layer.mask = null;
+          // Its words would draw again over what the mask hid: kept as the pixels seen.
+          layer.text = null;
+          notes.push(`The mask of “${l.name}” could not be read: the layer is kept as it looked, without a mask.`);
+        } finally {
+          if (full) closeImage(full);
+        }
+      }
+      if (!masked) {
+        const img = await decode(await ora.layerPng(l), 'layer.png');
+        layer.ctx.drawImage(img, Math.round(l.x), Math.round(l.y));
+        if (l.x < 0 || l.y < 0 || l.x + img.width > w || l.y + img.height > hgt) notes.push(`Part of “${l.name}” reaches past the edge of the picture: that part was cut off.`);
+        closeImage(img);
+      }
       layers.push(layer);
     }
     xf = null;
     doc.reset(w, hgt, layers);
-    if (ora.notes.length) await shell.dialogs.alert('Opened, with changes', `Photo Editor opened this layered picture, but:\n\n• ${ora.notes.join('\n• ')}`);
+    if (notes.length) await shell.dialogs.alert('Opened, with changes', `Photo Editor opened this layered picture, but:\n\n• ${notes.join('\n• ')}`);
     return true;
   }
 
@@ -438,6 +478,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       }
       status.textContent = 'Opening...';
       const bytes = await shell.fs.readFile(p);
+      const facts = factsOf(bytes);
       if (extensionOf(entry.name) === 'ora') {
         await openOraFile(bytes);
       } else {
@@ -469,6 +510,9 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       recoveredName = null;
       recoveredFolder = null;
       flatAgreed.clear();
+      const losses = lostBySaving(facts);
+      opened = facts.animated || losses.length ? { path: p, animated: facts.animated, losses } : null;
+      if (facts.animated) shell.toast(`“${entry.name}” moves: Photo Editor shows its first frame only. Saving makes a new file, so the moving picture stays as it is.`);
       panel.refresh();
       fit();
       return true;
@@ -497,15 +541,22 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       const layers: OraLayer[] = top.map((l, i) => ({
         name: l.name, src: `data/layer${top.length - 1 - i}.png`, x: 0, y: 0, opacity: l.opacity, visible: l.visible, locked: l.locked, mode: l.mode,
         ...(l.text ? { text: l.text } : {}),
+        ...(l.mask ? { mask: { mask: `data/layer${top.length - 1 - i}-mask.png`, unmasked: `data/layer${top.length - 1 - i}-unmasked.png` } } : {}),
       }));
+      // A masked layer's own PNG has the mask applied (as other programs show it); its parts go in as well.
       const pngs: Uint8Array[] = [];
-      for (const l of top) pngs.push(await toPng(l.canvas));
+      const extra: Array<{ name: string; data: Uint8Array }> = [];
+      for (const [i, l] of top.entries()) {
+        pngs.push(await toPng(doc.maskedCanvas(l)));
+        const m = layers[i].mask;
+        if (l.mask && m) extra.push({ name: m.unmasked, data: await toPng(l.canvas) }, { name: m.mask, data: await toPng(l.mask.canvas) });
+      }
       const flat = doc.flatten();
       const [tw, th] = thumbSize(doc.width, doc.height);
       const [tc, tx] = makeCanvas(tw, th);
       tx.imageSmoothingQuality = 'high';
       tx.drawImage(flat, 0, 0, tw, th);
-      return buildOra({ stack: { width: doc.width, height: doc.height, layers }, layerPngs: pngs, merged: await toPng(flat), thumbnail: await toPng(tc) });
+      return buildOra({ stack: { width: doc.width, height: doc.height, layers }, layerPngs: pngs, merged: await toPng(flat), thumbnail: await toPng(tc), extra });
     }
     let source = doc.flatten();
     if (type === 'image/jpeg') {
@@ -521,23 +572,48 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
 
   /** A flat file drops the layers: asked once per file name. False = do not save. */
   async function flatOk(dest: string): Promise<boolean | 'ora'> {
-    if (extensionOf(dest) === 'ora' || flatAgreed.has(dest)) return true;
-    const extra = doc.layers.length > 1 || doc.layers.some(l => l.text || l.mode !== 'normal' || !l.visible);
-    if (!extra) return true;
-    const answer = await shell.dialogs.ask<'flat' | 'ora' | 'no'>({
-      title: 'Layers are not kept in this file',
-      text: `A .${extensionOf(dest)} file holds one flat picture. “${baseName(dest)}” will have this picture as you see it, with its ${doc.layers.length} layer${doc.layers.length === 1 ? '' : 's'} joined, and text no longer editable. To keep the layers, save a copy as .ora (OpenRaster; GIMP and Krita open it too).`,
-      buttons: [{ label: 'Save flat', value: 'flat', primary: true }, { label: 'Save as .ora instead...', value: 'ora' }, { label: 'Cancel', value: 'no' }],
-      cancel: 'no',
-    });
-    if (answer === 'flat') flatAgreed.add(dest);
-    return answer === 'flat' ? true : answer === 'ora' ? 'ora' : false;
+    if (extensionOf(dest) === 'ora') return true;
+    const extra = doc.layers.length > 1 || doc.layers.some(l => l.text || l.mask || l.mode !== 'normal' || !l.visible);
+    if (extra && !flatAgreed.has(dest)) {
+      const hidden = doc.layers.filter(l => !l.visible).length;
+      const masks = doc.layers.filter(l => l.mask).length;
+      const also = [
+        hidden ? `${hidden} hidden layer${hidden === 1 ? '' : 's'} left out` : '',
+        masks ? `${masks === 1 ? 'the mask' : `${masks} masks`} applied (what ${masks === 1 ? 'it hides is' : 'they hide is'} gone from the file)` : '',
+      ].filter(Boolean);
+      const answer = await shell.dialogs.ask<'flat' | 'ora' | 'no'>({
+        title: 'Layers are not kept in this file',
+        text: `A .${extensionOf(dest)} file holds one flat picture. “${baseName(dest)}” will have this picture as you see it, with its ${doc.layers.length} layer${doc.layers.length === 1 ? '' : 's'} joined${also.length ? `, ${also.join(', ')}` : ''}, and text no longer editable. To keep the layers, save a copy as .ora (OpenRaster; GIMP and Krita open it too).`,
+        buttons: [{ label: 'Save flat', value: 'flat', primary: true }, { label: 'Save as .ora instead...', value: 'ora' }, { label: 'Cancel', value: 'no' }],
+        cancel: 'no',
+      });
+      if (answer !== 'flat') return answer === 'ora' ? 'ora' : false;
+      flatAgreed.add(dest);
+    }
+    const ext = extensionOf(dest);
+    if ((ext === 'jpg' || ext === 'jpeg') && !whiteAgreed.has(dest) && seeThrough(doc.flatten())) {
+      const ok = await shell.dialogs.confirm({
+        title: 'See-through parts become white',
+        text: `A JPEG has no see-through parts: in “${baseName(dest)}” they become white. Save as .png or .ora to keep them.`,
+        ok: 'Save with white',
+        cancel: 'Cancel',
+      });
+      if (!ok) return false;
+      whiteAgreed.add(dest);
+    }
+    return true;
+  }
+  /** True when any pixel is not fully solid. */
+  function seeThrough(c: HTMLCanvasElement): boolean {
+    const d = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
+    for (let i = 3; i < d.length; i += 4) if (d[i] < 255) return true;
+    return false;
   }
 
   async function saveAs(preferOra = false): Promise<boolean> {
     settle();
     const [stem, ext] = splitExtension(path ? baseName(path) : recoveredName ?? 'Untitled.png');
-    const layered = doc.layers.length > 1 || doc.layers.some(l => l.text);
+    const layered = doc.layers.length > 1 || doc.layers.some(l => l.text || l.mask);
     const keep = preferOra || (layered && !path) ? '.ora' : SAVE_TYPES[ext.slice(1).toLowerCase()] ? ext : '.png';
     const target = await pickSave(shell, { title: 'Save picture as (.png, .jpg, .webp, or .ora to keep the layers)', folder: path ? parentPath(path) : recoveredFolder ?? '/Pictures', name: stem + keep, accept: OPEN_EXTS });
     if (!target) return false;
@@ -569,6 +645,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       if (!entry) return false;
       path = dest;
       loadedId = entry.id;
+      if (opened?.path === dest) opened = null;
       if (edits === before) dirty = false;
       refresh();
       shell.toast(`Saved “${entry.name}” (${formatSize(entry.size)}).`);
@@ -586,6 +663,25 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     if (!path || !SAVE_TYPES[extensionOf(path)]) {
       if (path) await shell.dialogs.alert('Save as a new file', `Photo Editor saves PNG, JPEG, WebP and OpenRaster (.ora). “${baseName(path)}” stays as it is; choose a name for the edited copy next.`);
       return saveAs();
+    }
+    // Unchanged: nothing is written (a JPEG or WebP saved again loses a little detail each time).
+    if (!dirty && !xf) {
+      shell.toast('No changes to save.');
+      return true;
+    }
+    if (opened?.path === path && opened.animated) {
+      await shell.dialogs.alert('Save as a new file', `“${baseName(path)}” moves (it has more frames than the first). Photo Editor keeps the first frame only, so the file stays as it is; choose a name for the edited copy next.`);
+      return saveAs();
+    }
+    if (opened?.path === path && opened.losses.length) {
+      const answer = await shell.dialogs.ask<'copy' | 'over' | null>({
+        title: `Save over “${baseName(path)}”?`,
+        text: `The file holds what Photo Editor does not keep: ${opened.losses.join('; ')}. Saving over it takes ${opened.losses.length === 1 ? 'that' : 'them'} out of it for good.`,
+        buttons: [{ label: 'Save a copy', value: 'copy', primary: true }, { label: 'Save over it', value: 'over', danger: true }, { label: 'Cancel', value: null }],
+        cancel: null,
+      });
+      if (answer === null) return false;
+      if (answer === 'copy') return saveAs();
     }
     const flat = await flatOk(path);
     if (flat === 'ora') return saveAs(true);
@@ -627,7 +723,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     if (!xf && !lasso && !cropBox) preview = (t === 'clone' || t === 'heal') && cloneSrc ? cloneMarker : null;
     note(t === 'clone' || t === 'heal' ? (cloneSrc ? 'Paint to copy. Alt+click to choose a new place to copy from.' : 'First Alt+click (or Ctrl+click) where to copy from.')
       : SELECTS.includes(t) ? (t === 'lasso' ? 'Drag freely, or click corner by corner and double-click to close. ' : '') + 'Shift adds, Alt takes away.'
-        : t === 'move' ? (doc.active.text ? 'Drag to move the text. Layer > Text to pixels lets you stretch or turn it.' : 'Drag inside to move, the squares to stretch (Shift keeps the shape), outside to turn. Enter applies.')
+        : t === 'move' ? (doc.active.text ? 'Drag to move the text. Layer > Text to pixels lets you stretch or turn it.' : 'Drag inside to move, the squares to stretch (Shift keeps the shape), outside to turn. Enter applies; whatever then lies past the edge is cut off (Undo brings it back).')
           : t === 'text' ? 'Click to write; click on a text layer\'s words to change them.' : '');
     drawOverlay();
   }
@@ -638,13 +734,16 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
   };
 
   /** May the active layer be changed? A locked layer says no; a text layer becomes pixels first (said once). */
-  function editable(layer = doc.active, keepText = false): boolean {
+  /** False (and says why) when `layer` is locked. A text layer becomes pixels unless `keepText`, or unless the tools
+   *  are painting on its mask (`onMask`). */
+  function editable(layer = doc.active, keepText = false, onMask = doc.onMask): boolean {
     if (layer.locked) {
       note(`“${layer.name}” is locked. Untick Locked in the Layers panel to change it.`);
       shell.toast(`“${layer.name}” is locked.`);
       return false;
     }
-    if (layer.text && !keepText) {
+    // Painting on a text layer's mask leaves its words editable.
+    if (layer.text && !keepText && !onMask) {
       doc.setMeta('Text to pixels', layer, { text: null });
       shell.toast(`“${layer.name}” is now pixels: its words can no longer be edited (Undo brings that back).`);
     }
@@ -716,7 +815,8 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     const pend = doc.pending;
     if (!stroke || !pend) return;
     const d = stroke.diameter * pressure;
-    const t = brushTip(stroke.diameter, hardness.value / 100, tool === 'eraser' ? '#000000' : colour.value);
+    // On a mask the eraser paints white, showing the layer again (as in GIMP); on a layer it rubs out to see-through.
+    const t = brushTip(stroke.diameter, hardness.value / 100, tool === 'eraser' ? (doc.onMask ? '#ffffff' : '#000000') : colour.value);
     let dirty: Rect | null = null;
     for (const q of stroke.path.to(p.x, p.y)) {
       const r = { x: q.x - d / 2, y: q.y - d / 2, w: d, h: d };
@@ -922,7 +1022,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
   function cropTo(b: Rect, label: string) {
     const canvases = new Map<Layer, HTMLCanvasElement>();
     const texts = new Map<Layer, TextSpec | null>();
-    for (const l of doc.layers) {
+    for (const l of doc.withMasks()) {
       const [c, x] = makeCanvas(b.w, b.h);
       x.drawImage(l.canvas, -b.x, -b.y);
       canvases.set(l, c);
@@ -952,8 +1052,9 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
   }
 
   function startTransform(): boolean {
-    const layer = doc.active;
-    if (!editable(layer)) return false;
+    // While the mask is being edited, the move tool moves the mask (the layer stays put), as in GIMP.
+    if (!editable(doc.active, doc.onMask)) return false;
+    const layer = doc.paint;
     const r = doc.selBounds ?? alphaBounds(layer.canvas);
     if (!r) {
       note('This layer is empty here: nothing to move.');
@@ -1128,7 +1229,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       return b && p.x >= b.x - 4 && p.x <= b.x + b.w + 4 && p.y >= b.y - 4 && p.y <= b.y + b.h + 4;
     });
     if (hit) return editText(hit);
-    const why = noRoomForLayer(doc.width, doc.height, doc.layers.length);
+    const why = noRoomForLayer(doc.width, doc.height, doc.withMasks().length, maskCount());
     if (why) return void (await shell.dialogs.alert('No room for another layer', why));
     const spec = await askText(null, p);
     if (!spec) return;
@@ -1182,7 +1283,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     }
     if (t === 'wand') {
       settle();
-      const layer = doc.active.ctx.getImageData(0, 0, doc.width, doc.height);
+      const layer = doc.paint.ctx.getImageData(0, 0, doc.width, doc.height);
       finishSelection(wandMask({ data: layer.data, width: doc.width, height: doc.height }, p.x, p.y, tolerance.value, joined.checked), howOf(e), 'Magic wand');
       return;
     }
@@ -1206,7 +1307,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       return;
     }
     if (t === 'move') {
-      if (doc.active.text && !doc.active.locked) {
+      if (doc.active.text && !doc.active.locked && !doc.onMask) {
         textDrag = { layer: doc.active, spec: { ...doc.active.text }, at: p };
         over.setPointerCapture(e.pointerId);
         return;
@@ -1233,7 +1334,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       if (!editable()) return void (drag = null);
       touched = [];
       tileSet.clear();
-      doc.beginPending(strokeCanvas, opacity.value / 100, t === 'eraser' ? 'destination-out' : 'source-over');
+      doc.beginPending(strokeCanvas, opacity.value / 100, t === 'eraser' && !doc.onMask ? 'destination-out' : 'source-over');
       stroke = { path: new DabPath(Math.max(0.5, (size.value * spacing.value) / 100)), diameter: size.value };
       strokeTo(p, pressureOf(e));
       return;
@@ -1253,14 +1354,14 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       }
       if (!editable()) return void (drag = null);
       if ((t === 'clone' || t === 'heal') && cloneSrc && !cloneOffset) cloneOffset = { x: cloneSrc.x - p.x, y: cloneSrc.y - p.y };
-      const work = doc.active.ctx.getImageData(0, 0, doc.width, doc.height);
+      const work = doc.paint.ctx.getImageData(0, 0, doc.width, doc.height);
       const pix = { data: work.data, width: work.width, height: work.height };
       // Clone, heal and dodge / burn remember the layer as the stroke began, so overlapping dabs never go past the
       // strength; clone and heal copy from that same starting picture.
       const memory = t === 'clone' || t === 'heal' || t === 'dodge' ? makeStroke(pix) : undefined;
       const names: Partial<Record<Tool, string>> = { clone: 'Clone', heal: 'Heal', smudge: 'Smudge', dodge: dodgeMode.value === 'dodge' ? 'Dodge' : 'Burn', blur: blurMode.value === 'blur' ? 'Blur brush' : 'Sharpen brush' };
       retouch = {
-        kind: t, label: names[t] ?? 'Retouch', layer: doc.active, work, patch: new PixelPatch(surfaceOf(doc.active.ctx)),
+        kind: t, label: names[t] ?? 'Retouch', layer: doc.paint, work, patch: new PixelPatch(surfaceOf(doc.paint.ctx)),
         path: new DabPath(Math.max(0.5, (size.value * spacing.value) / 100)),
         source: memory && (t === 'clone' || t === 'heal') ? { data: memory.base, width: work.width, height: work.height } : null,
         stroke: memory, carry: t === 'smudge' ? makeCarry(pix, p.x, p.y, size.value / 2) : null, radius: size.value / 2,
@@ -1448,7 +1549,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     const hadText = doc.layers.filter(l => l.text).length;
     const canvases = new Map<Layer, HTMLCanvasElement>();
     const texts = new Map<Layer, TextSpec | null>();
-    for (const l of doc.layers) {
+    for (const l of doc.withMasks()) {
       const [c, x] = makeCanvas(w, hgt);
       x.imageSmoothingQuality = 'high';
       draw(x, l.canvas);
@@ -1517,7 +1618,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     w.addEventListener('input', () => sync('w'), { signal: ab.signal });
     hh.addEventListener('input', () => sync('h'), { signal: ab.signal });
     sync('w');
-    const room = () => Number(w.value) * Number(hh.value) <= MAX_PIXELS && !noRoomForLayer(Number(w.value), Number(hh.value), doc.layers.length - 1);
+    const room = () => Number(w.value) * Number(hh.value) <= MAX_PIXELS && !noRoomForLayer(Number(w.value), Number(hh.value), doc.withMasks().length - 1, maskCount());
     const ok = await shell.dialogs.ask({
       title: 'Resize picture',
       body: h('div', { class: 'pe-form' }, h('label', {}, 'Width ', w), h('label', {}, 'Height ', hh), h('label', {}, lock, ' Keep the shape'), pct,
@@ -1567,7 +1668,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
         h('p', { class: 'hint' }, 'Adds see-through space round the picture, or cuts its edges, without stretching it.')),
       buttons: [{ label: 'Change', value: true, primary: true }, { label: 'Cancel', value: false }],
       cancel: false,
-      primaryEnabled: () => [w, hh].every(i => Number(i.value) >= 1 && Number(i.value) <= 20000) && Number(w.value) * Number(hh.value) <= MAX_PIXELS && !noRoomForLayer(Number(w.value), Number(hh.value), doc.layers.length - 1),
+      primaryEnabled: () => [w, hh].every(i => Number(i.value) >= 1 && Number(i.value) <= 20000) && Number(w.value) * Number(hh.value) <= MAX_PIXELS && !noRoomForLayer(Number(w.value), Number(hh.value), doc.withMasks().length - 1, maskCount()),
     });
     if (!ok) return;
     const nw = Math.round(Number(w.value)), nh = Math.round(Number(hh.value));
@@ -1578,7 +1679,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
   function resizeCanvas(label: string, nw: number, nh: number, ox: number, oy: number) {
     const canvases = new Map<Layer, HTMLCanvasElement>();
     const texts = new Map<Layer, TextSpec | null>();
-    for (const l of doc.layers) {
+    for (const l of doc.withMasks()) {
       const [c, x] = makeCanvas(nw, nh);
       x.drawImage(l.canvas, ox, oy);
       canvases.set(l, c);
@@ -1591,7 +1692,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
   // ---- Layers ----
   function addLayer(name?: string): Layer | null {
     settle();
-    const why = noRoomForLayer(doc.width, doc.height, doc.layers.length);
+    const why = noRoomForLayer(doc.width, doc.height, doc.withMasks().length, maskCount());
     if (why) {
       void shell.dialogs.alert('No room for another layer', why);
       return null;
@@ -1603,11 +1704,19 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
   }
   function duplicateLayer() {
     settle();
-    const why = noRoomForLayer(doc.width, doc.height, doc.layers.length);
+    const why = noRoomForLayer(doc.width, doc.height, doc.withMasks().length, maskCount());
     if (why) return void shell.dialogs.alert('No room for another layer', why);
     const a = doc.active;
+    if (a.mask) {
+      const twice = noRoomForLayer(doc.width, doc.height, doc.withMasks().length + 1, maskCount() + 1);
+      if (twice) return void shell.dialogs.alert('No room for another layer', twice);
+    }
     const layer = makeLayer(doc.width, doc.height, copyName(doc.layers.map(l => l.name), a.name), { visible: a.visible, opacity: a.opacity, mode: a.mode, text: a.text ? { ...a.text } : null });
     layer.ctx.drawImage(a.canvas, 0, 0);
+    if (a.mask) {
+      layer.mask = makeLayer(doc.width, doc.height, 'Mask');
+      layer.mask.ctx.drawImage(a.mask.canvas, 0, 0);
+    }
     const at = doc.indexOf(a) + 1;
     doc.setLayers('Duplicate layer', [...doc.layers.slice(0, at), layer, ...doc.layers.slice(at)], layer);
   }
@@ -1636,13 +1745,14 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     // Each layer goes in at its own see-through amount, so the picture looks the same after; the merged layer is then
     // fully solid and Normal (as in GIMP). A lower layer with its own blend mode cannot keep that look for the upper
     // layer's pixels too, so it is said.
+    // Each goes in as it shows, with its mask applied; the merged layer has no mask.
     const merged = makeLayer(doc.width, doc.height, below.name);
     const c = merged.ctx;
     c.globalAlpha = below.opacity;
-    c.drawImage(below.canvas, 0, 0);
+    c.drawImage(doc.maskedCanvas(below), 0, 0);
     c.globalAlpha = top.opacity;
     c.globalCompositeOperation = blendInfo(top.mode).canvas;
-    c.drawImage(top.canvas, 0, 0);
+    c.drawImage(doc.maskedCanvas(top), 0, 0);
     c.globalAlpha = 1;
     c.globalCompositeOperation = 'source-over';
     doc.setLayers('Merge down', [...doc.layers.slice(0, i - 1), merged, ...doc.layers.slice(i + 1)], merged);
@@ -1650,19 +1760,77 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
   }
   function flattenAll() {
     settle();
-    if (doc.layers.length === 1 && !doc.layers[0].text && doc.layers[0].visible && doc.layers[0].opacity === 1) return;
+    if (doc.layers.length === 1 && !doc.layers[0].text && !doc.layers[0].mask && doc.layers[0].visible && doc.layers[0].opacity === 1) return;
     const flat = makeLayer(doc.width, doc.height, 'Background');
     flat.ctx.drawImage(doc.flatten(), 0, 0);
     doc.setLayers('Flatten picture', [flat], flat);
   }
+  // ---- Layer masks ----
+  /** Paints on the active layer's mask (true) or on its pixels (false). */
+  function setMaskEdit(on: boolean) {
+    doc.maskEdit = on && !!doc.active.mask;
+    panel.refresh();
+    refresh();
+    note(doc.onMask
+      ? `Painting on the mask of “${doc.active.name}”: black hides the layer, white shows it, grey shows it partly.`
+      : `Painting on “${doc.active.name}” itself.`);
+  }
+  function addMask(from: 'white' | 'black' | 'selection') {
+    settle();
+    const l = doc.active;
+    if (l.mask) return void shell.toast(`“${l.name}” has a mask already.`);
+    if (!editable(l, true)) return;
+    if (from === 'selection' && !doc.selection) return void shell.toast('Select a part first: the mask shows the layer inside it.');
+    const why = noRoomForLayer(doc.width, doc.height, doc.withMasks().length, maskCount());
+    if (why) return void shell.dialogs.alert('No room for a mask', why);
+    doc.setMask('Add layer mask', l, makeMask(doc.width, doc.height, from === 'selection' ? doc.selection! : from));
+    setMaskEdit(true);
+  }
+  function invertLayerMask() {
+    settle();
+    const m = doc.active.mask;
+    if (!m || !editable(doc.active, true)) return;
+    // The value seen (a rubbed-out part counts as black) turned round, solid grey.
+    doc.changePixels('Invert mask', p => {
+      const d = p.data;
+      maskToAlpha(d);
+      for (let i = 0; i < d.length; i += 4) {
+        d[i] = d[i + 1] = d[i + 2] = 255 - d[i + 3];
+        d[i + 3] = 255;
+      }
+    }, undefined, m);
+  }
+  /** The mask's hiding becomes the layer's own see-through pixels, and the mask goes. */
+  function applyMask() {
+    settle();
+    const l = doc.active;
+    // A text layer's words become pixels first (with the mask applied they can no longer be drawn again).
+    if (!l.mask || !editable(l, false, false)) return;
+    const out = doc.maskedCanvas(l);
+    const patch = new PixelPatch(surfaceOf(l.ctx));
+    patch.touch(doc.full);
+    l.ctx.clearRect(0, 0, doc.width, doc.height);
+    l.ctx.drawImage(out, 0, 0);
+    doc.setMask('Apply layer mask', l, null, [doc.pixelStep('Apply layer mask', l, patch)]);
+    setMaskEdit(false);
+  }
+  function deleteMask() {
+    settle();
+    const l = doc.active;
+    if (!l.mask || !editable(l, true)) return;
+    doc.setMask('Delete layer mask', l, null);
+    setMaskEdit(false);
+  }
+
   async function renameLayer(layer: Layer) {
     const name = await shell.dialogs.prompt({ title: 'Rename layer', label: 'Layer name', value: layer.name, ok: 'Rename', check: v => (v.trim() ? (v.length > 200 ? 'Keep it under 200 letters.' : null) : 'Type a name first.') });
     if (name && name.trim() !== layer.name) doc.setMeta('Rename layer', layer, { name: name.trim() });
   }
   function flipLayer(horizontal: boolean) {
     settle();
-    if (!editable()) return;
-    const l = doc.active;
+    if (!editable(doc.active, doc.onMask)) return;
+    // The mask while it is being edited, else the layer.
+    const l = doc.paint;
     const label = horizontal ? 'Flip layer' : 'Flip layer upside down';
     const sel = doc.selectionCanvas();
     const r = doc.selBounds;
@@ -1699,7 +1867,8 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
   // ---- Edit: clipboard, delete, fill ----
   function copy(cut: boolean) {
     settle();
-    const got = doc.selectedPixels();
+    // What is seen: the mask itself while painting on it, else the layer with its mask applied.
+    const got = doc.selectedPixels(doc.paint, true);
     if (!got) return;
     const clip = { ...got, png: -1 };
     internalClip = clip;
@@ -1755,7 +1924,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     const mark = doc.history.pushes;
     if (w > doc.width || hgt > doc.height) {
       const nw = Math.max(w, doc.width), nh = Math.max(hgt, doc.height);
-      const grow = nw * nh <= MAX_PIXELS && nw <= MAX_SIDE && nh <= MAX_SIDE && !noRoomForLayer(nw, nh, doc.layers.length) && await shell.dialogs.ask({
+      const grow = nw * nh <= MAX_PIXELS && nw <= MAX_SIDE && nh <= MAX_SIDE && !noRoomForLayer(nw, nh, doc.withMasks().length, maskCount()) && await shell.dialogs.ask({
         title: 'The pasted picture is bigger',
         text: `It is ${w} × ${hgt} pixels; this picture is ${doc.width} × ${doc.height}. Make this picture ${nw} × ${nh} so all of it fits?`,
         buttons: [{ label: 'Make it bigger', value: true, primary: true }, { label: 'Keep the size', value: false }],
@@ -1763,7 +1932,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       });
       if (grow) resizeCanvas('Make room to paste', nw, nh, 0, 0);
     }
-    const why = noRoomForLayer(doc.width, doc.height, doc.layers.length);
+    const why = noRoomForLayer(doc.width, doc.height, doc.withMasks().length, maskCount());
     if (why) {
       doc.history.squash(mark, 'Paste');
       return void shell.dialogs.alert('No room for another layer', why);
@@ -1915,6 +2084,14 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     { label: 'Change the text...', disabled: !doc.active.text, action: () => void editText(doc.active) },
     { label: 'Text to pixels', disabled: !doc.active.text, action: () => doc.setMeta('Text to pixels', doc.active, { text: null }) },
     { separator: true },
+    { label: 'Add mask (white: all shows)', disabled: !!doc.active.mask, action: () => addMask('white') },
+    { label: 'Add mask (black: all hidden)', disabled: !!doc.active.mask, action: () => addMask('black') },
+    { label: 'Add mask from the selection', disabled: !!doc.active.mask || !doc.selection, action: () => addMask('selection') },
+    { label: 'Paint on the mask', checked: doc.onMask, disabled: !doc.active.mask, action: () => setMaskEdit(!doc.onMask) },
+    { label: 'Invert the mask', disabled: !doc.active.mask, action: invertLayerMask },
+    { label: 'Apply the mask', disabled: !doc.active.mask, action: applyMask },
+    { label: 'Delete the mask', disabled: !doc.active.mask, action: deleteMask },
+    { separator: true },
     { label: 'Flip layer left to right', action: () => flipLayer(true) },
     { label: 'Flip layer upside down', action: () => flipLayer(false) },
   ]), app.signal);
@@ -1952,14 +2129,15 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
 
   async function showHelp() {
     await shell.dialogs.alert('Photo Editor', [
+      'Layer masks (Layer menu): add one white, black or from the selection, then paint on it: black hides the layer, white shows it, grey shows it partly; the eraser shows it again. Click the mask’s small picture in the Layers panel (or Layer > Paint on the mask) to paint on it; click the layer’s to paint on the layer. Invert, apply or delete a mask. Saved in .ora: other programs see the layer as it looks here, and Photo Editor gets the mask back.',
       'Layers: add, copy, delete, rename, drag to reorder, hide, see-through amount, 16 blend modes, lock, merge down, flatten. Text layers stay editable until merged, turned into pixels, painted on or changed with a colour window or filter, or turned, flipped or resized with the whole picture (each says so, and Undo brings the words back).',
       'Selections: rectangle, ellipse, lasso, magic wand; add (Shift), take away (Alt); invert; soft edges. Painting, fills, filters and colour changes stay inside the selection.',
       'Painting: brush and eraser (size, hardness, opacity, spacing, pen pressure), line, arrow, rectangle, ellipse, fill, gradient. Retouching: clone, heal, smudge, dodge / burn, blur / sharpen.',
       'Colour: brightness and contrast, levels, curves, hue and saturation, colour balance, threshold, posterise, desaturate, invert. Filters: greyscale, sepia, blur, sharpen.',
       'Move, stretch and turn a layer or a selection; crop, resize, canvas size, rotate, flip.',
-      'Files: opens PNG, JPEG, GIF (first frame), WebP, AVIF, BMP, SVG, ICO and OpenRaster (.ora). Saves PNG, JPEG and WebP as one flat picture, and .ora with the layers (GIMP and Krita open it).',
-      'Left out: opening GIMP .xcf or Photoshop .psd files with their layers (flatten them elsewhere first, or save as .ora in GIMP); layer masks; layer groups (an .ora with groups opens as one list); paths and Bézier curves; perspective and warp; camera RAW, CMYK, 16-bit colour and colour profiles; most of GIMP\'s filters; scripts, plug-ins and batch work; animation.',
-      `Limits: pictures up to ${MAX_PIXELS / 1e6} million pixels and ${MAX_SIDE.toLocaleString()} on a side; all layers together up to about 150 million pixels (for example 12 layers of 12 megapixels), and 100 layers at most. Undo keeps the most recent steps up to about 256 MB.`,
+      'Files: opens PNG, JPEG, GIF (first frame), WebP, AVIF, BMP, SVG, ICO and OpenRaster (.ora). Saves PNG, JPEG and WebP as one flat picture, and .ora with the layers (GIMP and Krita open it). JPEG and WebP lose a little detail each time they are saved (PNG and .ora do not), so Save does nothing when there are no changes. Saving over a photo asks first when the file holds what is not kept (camera details, print size, colour profile, 16-bit or CMYK colour); a moving GIF, PNG or WebP keeps its first frame only and is always saved as a new file.',
+      'Left out: opening GIMP .xcf or Photoshop .psd files with their layers (flatten them elsewhere first, or save as .ora in GIMP); masks in an .ora from GIMP or Krita (the layer opens as it looks); layer groups (an .ora with groups opens as one list); paths and Bézier curves; perspective and warp; camera RAW, CMYK, 16-bit colour and colour profiles; most of GIMP\'s filters; scripts, plug-ins and batch work; animation.',
+      `Limits: pictures up to ${MAX_PIXELS / 1e6} million pixels and ${MAX_SIDE.toLocaleString()} on a side; all layers together up to about 150 million pixels (for example 12 layers of 12 megapixels; a mask counts as a layer), and 100 layers at most. Undo keeps the most recent steps up to about 256 MB.`,
     ].join('\n\n'));
   }
   async function showKeys() {

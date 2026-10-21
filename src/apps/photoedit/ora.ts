@@ -1,6 +1,9 @@
 // OpenRaster (.ora): the layered picture file GIMP, Krita and MyPaint open. It is a zip holding "mimetype" first and
 // unpacked (the words "image/openraster"), "stack.xml" (the layers, top first), one PNG per layer in data/, the
 // whole picture as "mergedimage.png" and a small "Thumbnails/thumbnail.png" (256 pixels at most).
+// OpenRaster has no layer masks. A masked layer's own PNG is written with the mask applied, so GIMP and Krita show it
+// as it looks here; two more PNGs (the layer before masking, and the mask) are named in attributes only this editor
+// reads, so the mask comes back to be edited again.
 // A file from outside is untrusted: entries, sizes and pixels are capped BEFORE anything is decoded.
 import { zipStore } from '../../core/zip.ts';
 import { child, escapeAttr, parseXml, XmlProblem, type XmlEl } from '../../core/xml.ts';
@@ -43,6 +46,8 @@ export interface OraLayer {
   locked: boolean;
   mode: BlendMode;
   text?: TextSpec;
+  /** Paths of this editor's mask parts: the mask itself (grey), and the layer before masking. */
+  mask?: { mask: string; unmasked: string };
 }
 
 export interface OraStack {
@@ -63,6 +68,7 @@ export function writeStack(s: OraStack): string {
     ];
     if (l.locked) attrs.push(['edit-locked', 'true']);
     if (l.text) attrs.push(['tomlinos:text', JSON.stringify(l.text)]);
+    if (l.mask) attrs.push(['tomlinos:mask', l.mask.mask], ['tomlinos:unmasked', l.mask.unmasked]);
     return `  <layer ${attrs.map(([k, v]) => `${k}="${escapeAttr(v)}"`).join(' ')}/>`;
   });
   return `<?xml version="1.0" encoding="UTF-8"?>\n<image version="0.0.5" w="${s.width}" h="${s.height}" xmlns:tomlinos="${NS}">\n <stack>\n${layers.join('\n')}\n </stack>\n</image>\n`;
@@ -134,6 +140,8 @@ export function readStack(xml: string): StackRead {
         };
         const text = readText(el.attrs['tomlinos:text']);
         if (text) layer.text = text;
+        const mask = el.attrs['tomlinos:mask'], unmasked = el.attrs['tomlinos:unmasked'];
+        if (mask && unmasked) layer.mask = { mask: mask.slice(0, 500), unmasked: unmasked.slice(0, 500) };
         layers.push(layer);
       } else if (el.name === 'text' || el.name === 'filter') {
         notes.add('A text or filter element in the stack was left out (only picture layers are read).');
@@ -154,6 +162,8 @@ export interface OraParts {
   layerPngs: Uint8Array[];
   merged: Uint8Array;
   thumbnail: Uint8Array;
+  /** More parts (a masked layer's mask and unmasked pixels), each under the path its layer names. */
+  extra?: Array<{ name: string; data: Uint8Array }>;
 }
 
 /** The .ora file. mimetype goes first and unpacked (readers check it at a fixed place); PNGs are already packed, so
@@ -165,6 +175,7 @@ export function buildOra(p: OraParts): Uint8Array<ArrayBuffer> {
     { name: 'mimetype', data: enc.encode(ORA_TYPE), modified: now },
     { name: 'stack.xml', data: enc.encode(writeStack(p.stack)), modified: now },
     ...p.stack.layers.map((l, i) => ({ name: l.src, data: p.layerPngs[i], modified: now })),
+    ...(p.extra ?? []).map(e => ({ name: e.name, data: e.data, modified: now })),
     { name: 'mergedimage.png', data: p.merged, modified: now },
     { name: 'Thumbnails/thumbnail.png', data: p.thumbnail, modified: now },
   ]);
@@ -181,6 +192,8 @@ export interface OraOpened {
   notes: string[];
   /** The PNG bytes of a layer, checked for size first. */
   layerPng(layer: OraLayer): Promise<Uint8Array>;
+  /** Another PNG the stack names for this layer (its mask parts), checked the same way. */
+  partPng(path: string, layer: OraLayer): Promise<Uint8Array>;
 }
 
 /** Opens the zip and reads stack.xml; every layer's PNG is checked (packed size, declared pixels) before decoding. */
@@ -212,20 +225,19 @@ export async function openOra(bytes: Uint8Array): Promise<OraOpened> {
   if (stack.width * stack.height > MAX_PICTURE_PIXELS || stack.width > MAX_SIDE || stack.height > MAX_SIDE) {
     throw new OraProblem(`It says it is ${stack.width.toLocaleString()} × ${stack.height.toLocaleString()} pixels, more than Photo Editor opens (${MAX_PICTURE_PIXELS / 1e6} million pixels, ${MAX_SIDE.toLocaleString()} on a side).`);
   }
-  if (stack.layers.length * stack.width * stack.height > LAYER_BUDGET) {
+  // A mask holds as much as a layer.
+  const held = stack.layers.length + stack.layers.filter(l => l.mask).length;
+  if (held * stack.width * stack.height > LAYER_BUDGET) {
     throw new OraProblem(`It has ${stack.layers.length} layers at ${stack.width.toLocaleString()} × ${stack.height.toLocaleString()}, more than this browser can hold safely.`);
   }
-  return {
-    stack,
-    notes,
-    layerPng: async l => {
-      const png = await read(l.src, MAX_LAYER_FILE);
-      const size = imageSize(png);
-      if (!size) throw new OraProblem(`The layer “${l.name}” is not a PNG picture.`);
-      if (size.width * size.height > MAX_PICTURE_PIXELS || size.width > stack.width * 4 + 16384 || size.height > stack.height * 4 + 16384) {
-        throw new OraProblem(`The layer “${l.name}” says it is ${size.width.toLocaleString()} × ${size.height.toLocaleString()} pixels, far more than the picture; it was not opened.`);
-      }
-      return png;
-    },
+  const png = async (path: string, l: OraLayer): Promise<Uint8Array> => {
+    const bytes = await read(path, MAX_LAYER_FILE);
+    const size = imageSize(bytes);
+    if (!size) throw new OraProblem(`The layer “${l.name}” is not a PNG picture.`);
+    if (size.width * size.height > MAX_PICTURE_PIXELS || size.width > stack.width * 4 + 16384 || size.height > stack.height * 4 + 16384) {
+      throw new OraProblem(`The layer “${l.name}” says it is ${size.width.toLocaleString()} × ${size.height.toLocaleString()} pixels, far more than the picture; it was not opened.`);
+    }
+    return bytes;
   };
+  return { stack, notes, layerPng: l => png(l.src, l), partPng: png };
 }
