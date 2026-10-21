@@ -643,6 +643,38 @@ await step('a template, and spelling on and off', async () => {
   eq(await W().locator('.wp-doc').getAttribute('spellcheck'), 'true', 'on again');
 });
 
+await step('unsaved work is kept as a recovery copy; after the page stops, the next Write window offers it back', async () => {
+  await newDoc();
+  await page.keyboard.type('Kept through a crash');
+  // The page goes to the background (a lid closing): a copy is kept at once.
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { get: () => 'hidden', configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+    delete document.visibilityState;
+  });
+  await page.waitForTimeout(1500);
+  // The page stops without saving, as a crash or a closed tab would.
+  page.once('dialog', d => d.accept());
+  await page.goto(BASE, { waitUntil: 'load' });
+  await page.locator('#desktop .item').first().waitFor();
+  await openApp('tomlin write');
+  const offer = page.locator('.dialog', { hasText: 'Documents not saved' });
+  await offer.waitFor({ timeout: 10000 });
+  ok((await offer.innerText()).includes('Document: kept'), 'the copy is listed: ' + (await offer.innerText()));
+  await offer.getByRole('button', { name: 'Open it' }).click();
+  await page.locator('.toast', { hasText: 'Recovered “Document”' }).first().waitFor();
+  await doc().waitFor();
+  ok((await doc().innerText()).includes('Kept through a crash'), 'the work is back');
+  eq(await page.locator('.win .write').count(), 1, 'the empty window made way for the recovered one');
+  await shot('write-recovered');
+  await closeAllWrite();
+  await openApp('tomlin write');
+  await doc().waitFor();
+  await page.waitForTimeout(1500);
+  eq(await page.locator('.dialog', { hasText: 'Documents not saved' }).count(), 0, 'closed on purpose: nothing offered again');
+  await closeAllWrite();
+});
+
 await step('no errors in the console', async () => {
   if (missing.length) console.log('       (404, expected for files not made yet: ' + [...new Set(missing)].join(', ') + ')');
   eq(problems.filter(p => !/status of 404/.test(p)), [], 'console');

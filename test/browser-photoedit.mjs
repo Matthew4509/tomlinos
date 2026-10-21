@@ -589,6 +589,56 @@ await step('a big picture: the 13th layer at 4000 × 3000 is refused with the re
   await shot('08-big');
 });
 
+await step('unsaved work is kept as a recovery copy with its layers; after the page stops, the next Photo Editor offers it back', async () => {
+  const closePe = async () => {
+    for (let i = 0; i < 4 && (await W().count()); i++) {
+      await W().last().getByRole('button', { name: 'Close', exact: true }).first().click();
+      const lose = page.locator('.dialog').getByRole('button', { name: 'Close without saving' });
+      if (await lose.waitFor({ timeout: 1500 }).then(() => true, () => false)) await lose.click();
+      await page.waitForTimeout(200);
+    }
+  };
+  const openPe = async () => {
+    await page.locator('.start-btn').click();
+    await page.locator('.start-filter').fill('photo editor');
+    await page.locator('.start-menu [data-label="photo editor"]').first().click();
+    await W().last().locator('.pe-doc').waitFor();
+  };
+  await closePe();
+  await openPe();
+  await W().getByRole('button', { name: 'New layer' }).click();
+  await tool('Brush');
+  await W().locator('input[aria-label="Size"]').fill('20');
+  await dragPic([50, 150], [350, 150]);
+  ok(near(await pixel(200, 150), [214, 40, 40, 255]), 'painted');
+  // The page goes to the background (a lid closing): a copy is kept at once.
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { get: () => 'hidden', configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+    delete document.visibilityState;
+  });
+  await page.waitForTimeout(2500);
+  // The page stops without saving, as a crash or a closed tab would.
+  page.once('dialog', d => d.accept());
+  await page.goto(BASE, { waitUntil: 'load' });
+  await page.locator('#desktop .item').first().waitFor();
+  await openPe();
+  const offer = page.locator('.dialog', { hasText: 'Pictures not saved' });
+  await offer.waitFor({ timeout: 10000 });
+  ok((await offer.innerText()).includes('Untitled.png: kept'), 'the copy is listed: ' + (await offer.innerText()));
+  await offer.getByRole('button', { name: 'Open it' }).click();
+  await page.locator('.toast', { hasText: 'Recovered “Untitled.png”' }).first().waitFor();
+  eq(await W().count(), 1, 'the empty window made way for the recovered one');
+  eq(await layerNames(), ['Layer 2', 'Background'], 'the layers are back');
+  ok(near(await pixel(200, 150), [214, 40, 40, 255]), 'and the paint: ' + (await pixel(200, 150)));
+  ok((await W().locator('.pe-status').innerText()).includes('not saved'), 'marked not saved');
+  await shot('recovered');
+  await closePe();
+  await openPe();
+  await page.waitForTimeout(1500);
+  eq(await page.locator('.dialog', { hasText: 'Pictures not saved' }).count(), 0, 'closed on purpose: nothing offered again');
+});
+
 await step('no errors in the page', async () => {
   eq(problems.filter(p => !/status of 404/.test(p)), [], 'problems');
 });

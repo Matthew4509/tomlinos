@@ -16,6 +16,7 @@ import { mediaTypeOf } from './media.ts';
 import { MAX_PICTURE_PIXELS, pictureTooBig } from '../core/imagesize.ts';
 import { APPS } from './catalog.ts';
 import { saveOver } from '../shell/savefile.ts';
+import { createRecovery } from '../shell/recovery.ts';
 import { BLUR, convolve3, floodFill, greyscale, hexToRgba, invert, keepShape, mixPixel, rgbToHex, sepia, SHARPEN } from './photoedit/pixels.ts';
 import { Doc, makeCanvas, makeLayer, paintText, surfaceOf, textBounds, type Layer } from './photoedit/doc.ts';
 import { clipRect, group, PixelPatch, TILE, unionRect, type Rect } from './photoedit/history.ts';
@@ -75,6 +76,19 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
   let dirty = false;
   /** Counts changes, so a change made while a save is on its way stays marked unsaved. */
   let edits = 0;
+  /** A recovered picture's old name and folder, offered when it is saved (it has no file of its own yet). */
+  let recoveredName: string | null = null;
+  let recoveredFolder: string | null = null;
+  // A copy of unsaved work every two minutes, offered back if the page stops before it is saved. The copy is
+  // OpenRaster (.ora), so the layers come back too.
+  const recovery = createRecovery(shell, app.signal, {
+    appId: 'photoedit', folder: '/System/photoedit-recovery', ext: '.ora',
+    appName: 'Photo Editor', one: 'picture', many: 'pictures',
+    unsaved: () => dirty,
+    token: () => edits,
+    snapshot: () => encode('ora'),
+    note: () => ({ label: path ? baseName(path) : recoveredName ?? 'Untitled.png', path }),
+  });
   let zoom = 1;
   let tool: Tool = 'brush';
   /** Paths for which the person agreed that a flat file (PNG, JPEG, WebP) drops the layers. */
@@ -249,9 +263,10 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     redoBtn.disabled = doc.history.redoList.length === 0;
     undoBtn.title = doc.history.undoList.length ? `Undo ${doc.history.undoList[doc.history.undoList.length - 1].label} (Ctrl+Z)` : 'Undo (Ctrl+Z)';
     redoBtn.title = doc.history.redoList.length ? `Redo ${doc.history.redoList[doc.history.redoList.length - 1].label} (Ctrl+Y)` : 'Redo (Ctrl+Y)';
-    const name = path ? baseName(path) : 'Untitled.png';
+    const name = path ? baseName(path) : recoveredName ?? 'Untitled.png';
     // A move not yet applied is a change too (closing the window asks first).
     const unsaved = dirty || !!xf;
+    if (!unsaved) recovery.drop();
     app.setTitle(`${name}${unsaved ? ' *' : ''} - Photo Editor`);
     app.setDirty(unsaved);
     const layers = doc.layers.length > 1 ? `  ·  ${doc.layers.length} layers, on “${doc.active.name}”` : '';
@@ -363,6 +378,8 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     path = null;
     loadedId = '';
     dirty = false;
+    recoveredName = null;
+    recoveredFolder = null;
     flatAgreed.clear();
     panel.refresh();
     fit();
@@ -449,6 +466,8 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       path = p;
       loadedId = entry.id;
       dirty = false;
+      recoveredName = null;
+      recoveredFolder = null;
       flatAgreed.clear();
       panel.refresh();
       fit();
@@ -517,10 +536,10 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
 
   async function saveAs(preferOra = false): Promise<boolean> {
     settle();
-    const [stem, ext] = splitExtension(path ? baseName(path) : 'Untitled.png');
+    const [stem, ext] = splitExtension(path ? baseName(path) : recoveredName ?? 'Untitled.png');
     const layered = doc.layers.length > 1 || doc.layers.some(l => l.text);
     const keep = preferOra || (layered && !path) ? '.ora' : SAVE_TYPES[ext.slice(1).toLowerCase()] ? ext : '.png';
-    const target = await pickSave(shell, { title: 'Save picture as (.png, .jpg, .webp, or .ora to keep the layers)', folder: path ? parentPath(path) : '/Pictures', name: stem + keep, accept: OPEN_EXTS });
+    const target = await pickSave(shell, { title: 'Save picture as (.png, .jpg, .webp, or .ora to keep the layers)', folder: path ? parentPath(path) : recoveredFolder ?? '/Pictures', name: stem + keep, accept: OPEN_EXTS });
     if (!target) return false;
     let dest = target.path;
     let replace = target.replace;
@@ -2065,6 +2084,26 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
   blank(800, 600, true);
   // A narrow window starts with the Layers panel hidden (the toolbar button brings it back).
   if (app.root.clientWidth && app.root.clientWidth < 700) showPanel(false);
-  if (arg) await openPath(arg);
+  if (arg && recovery.owns(arg)) {
+    try {
+      await openOraFile(await shell.fs.readFile(arg));
+      const was = await recovery.adopt(arg);
+      recoveredName = was.label;
+      recoveredFolder = was.path ? parentPath(was.path) : null;
+      // It starts unsaved: Save asks where.
+      dirty = true;
+      edits++;
+      panel.refresh();
+      fit();
+      refresh();
+      shell.toast(`Recovered “${was.label}”: a copy kept before it was saved. Save it to keep it (Save asks where).`);
+    } catch {
+      await shell.dialogs.alert('Could not open that', 'This recovery copy could not be read: it may have been cut short while it was being kept. Nothing else was changed.');
+      refresh();
+    }
+  } else {
+    if (arg) await openPath(arg);
+    void recovery.offer(false, { untouched: () => !path && !dirty && !recoveredName, close: () => app.close() });
+  }
   stage.focus();
 }

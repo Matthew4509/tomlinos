@@ -1051,6 +1051,46 @@ await step('Spreadsheet: a CSV longer than a sheet says how many rows did not fi
   if (await close.count()) await close.getByRole('button', { name: 'Close without saving' }).click();
 });
 
+await step('Spreadsheet: unsaved work is kept as a recovery copy; after the page stops, the next spreadsheet offers it back', async () => {
+  await closeAll();
+  const openSheet = async () => {
+    await page.locator('.start-btn').click();
+    await page.locator('.start-filter').fill('spreadsheet');
+    await page.locator('.start-item', { hasText: 'Spreadsheet' }).click();
+    await page.locator('.sheet .grid-scroll').last().waitFor();
+  };
+  await openSheet();
+  await goTo('A1');
+  await typeRow(['Kept through a crash']);
+  // The page goes to the background (a lid closing): a copy is kept at once.
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { get: () => 'hidden', configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+    delete document.visibilityState;
+  });
+  await settle(1500);
+  // The page stops without saving, as a crash or a closed tab would; the next visit opens a spreadsheet.
+  page.once('dialog', d => d.accept());
+  await open();
+  await page.locator('#desktop .item').first().waitFor();
+  await closeAll();
+  await openSheet();
+  const offer = page.locator('.dialog', { hasText: 'Spreadsheets not saved' });
+  await offer.waitFor({ timeout: 10000 });
+  ok((await offer.innerText()).includes('Untitled: kept'), 'the copy is listed: ' + (await offer.innerText()));
+  await offer.getByRole('button', { name: 'Open it' }).click();
+  await page.locator('.toast', { hasText: 'Recovered “Untitled”' }).first().waitFor();
+  eq(await page.locator('.win .sheet').count(), 1, 'the empty spreadsheet made way for the recovered one');
+  eq(await cell('A1'), 'Kept through a crash', 'the work is back');
+  ok((await page.locator('.task-label', { hasText: 'Untitled' }).last().innerText()).trim().endsWith('*'), 'and marked not saved');
+  await sheetWin().getByRole('button', { name: 'Close' }).click();
+  await page.locator('.dialog').getByRole('button', { name: 'Close without saving' }).click();
+  await openSheet();
+  await settle(1500);
+  eq(await page.locator('.dialog', { hasText: 'Spreadsheets not saved' }).count(), 0, 'closed on purpose: nothing offered again');
+  await closeAll();
+});
+
 await step('Spreadsheet: a pasted block keeps its lines in one cell, Alt+Enter adds one, the cell wraps, and TEXTSPLIT / TEXTAFTER / XLOOKUP pull the lines apart', async () => {
   await closeAll();
   await page.locator('.start-btn').click();

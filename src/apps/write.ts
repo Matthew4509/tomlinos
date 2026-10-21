@@ -12,6 +12,7 @@ import { baseName, joinPath, parentPath, splitExtension, uniqueName } from '../f
 import type { MenuItem } from '../shell/menu.ts';
 import { pickFile, pickSave } from '../shell/filepicker.ts';
 import { saveOver } from '../shell/savefile.ts';
+import { createRecovery } from '../shell/recovery.ts';
 import type { AppDef, AppHandle } from '../shell/types.ts';
 import { APPS } from './catalog.ts';
 import { FONT_FACES, FONT_SIZES } from './sheet/fonts.ts';
@@ -146,6 +147,19 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
   /** The editor, once made (its own parts are drawn while it is being made). */
   let viewRef: any = null;
   let startDoc: NodeJSON = EMPTY_DOC;
+  /** Goes up each time the document or its page setup changes, so an unchanged recovery copy is not kept again. */
+  let changes = 0;
+  let lastDoc: unknown = null;
+  let lastPage = '';
+  const recoveryToken = (): number => {
+    const p = JSON.stringify(page);
+    if (viewRef.state.doc !== lastDoc || p !== lastPage) {
+      lastDoc = viewRef.state.doc;
+      lastPage = p;
+      changes++;
+    }
+    return changes;
+  };
 
   // Write's own settings: spell checking on or off.
   const SETTINGS = '/System/write.json';
@@ -155,6 +169,35 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
     if (saved.spell === false) spell = false;
   } catch {
     // Nothing kept yet: spelling is checked.
+  }
+
+  // A copy of unsaved work every two minutes, offered back if the page stops before it is saved. The copy is a Word
+  // document as Write writes one, so its pictures, footnotes and page setup come back with it.
+  const recovery = createRecovery(shell, app.signal, {
+    appId: 'write', folder: '/System/write-recovery', ext: '.docx',
+    appName: 'TOMLIN Write', one: 'document', many: 'documents',
+    unsaved: () => !!viewRef && isDirty(),
+    token: () => recoveryToken(),
+    snapshot: () => writeDocx(viewRef.state.doc.toJSON(), page, label),
+    note: () => ({ label, path }),
+  });
+  let recovered = false;
+  if (arg && recovery.owns(arg)) {
+    try {
+      const read = await readDocx(await shell.fs.readFile(arg));
+      startDoc = read.doc;
+      page = read.page;
+      const was = await recovery.adopt(arg);
+      label = was.label;
+      kind = /\.txt$/i.test(label) ? 'txt' : /\.(md|markdown)$/i.test(label) ? 'md' : 'docx';
+      folderHint = was.path ? parentPath(was.path) : null;
+      recovered = true;
+    } catch {
+      app.root.append(h('div', { class: 'app-message', role: 'alert' }, h('p', {}, 'This recovery copy could not be read: it may have been cut short while it was being kept.'), h('p', { class: 'dialog-detail' }, 'Nothing else was changed.')));
+      app.setTitle('Recovery copy');
+      return;
+    }
+    arg = undefined;
   }
 
   // File > New from a template opens a window with "template:letter" (and the like).
@@ -458,7 +501,8 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
       finder.plugin,
     ],
   });
-  let savedDoc = state.doc;
+  // A recovered copy starts unsaved: Save asks where.
+  let savedDoc = recovered ? schema.nodeFromJSON(EMPTY_DOC) : state.doc;
   let savedPage = JSON.stringify(page);
 
   const mount = h('div', { class: 'wp-doc-host' });
@@ -960,8 +1004,10 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
   };
   const isDirty = () => !view.state.doc.eq(savedDoc) || JSON.stringify(page) !== savedPage;
   function refresh(): void {
-    app.setDirty(isDirty());
+    const dirty = isDirty();
+    app.setDirty(dirty);
     app.setTitle(label);
+    if (!dirty) recovery.drop();
   }
 
   /** A document with tables, pictures or formatting saved as .txt keeps only its words: asked once each time. */
@@ -1819,6 +1865,9 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
     if (layoutFrame) cancelAnimationFrame(layoutFrame);
     view.destroy();
   });
+
+  if (recovered) shell.toast(`Recovered “${label}”: a copy kept before it was saved. Save it to keep it (Save asks where).`);
+  else void recovery.offer(false, { untouched: () => !path && !isDirty() && !view.state.doc.textContent, close: () => app.close() });
 
   if (lost.length || keptParts.length) {
     const parts: Node[] = [];

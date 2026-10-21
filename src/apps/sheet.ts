@@ -63,6 +63,7 @@ const CELL_STYLES: Array<{ label: string; look: CellStyle }> = [
   { label: '20% Accent 6 (pale green)', look: { fill: '#e2efda' } },
 ];
 import { saveOver } from '../shell/savefile.ts';
+import { createRecovery } from '../shell/recovery.ts';
 
 const PALETTE: Array<[string, string]> = [
   ['White', '#ffffff'], ['Light grey', '#d9d9d9'], ['Grey', '#7f7f7f'], ['Black', '#000000'],
@@ -144,7 +145,30 @@ export const sheetApp: AppDef = {
     let lost: XlsxReport | null = null;
     /** What did not fit when a CSV or text file was opened, in words ('' when it all fitted). */
     let cut = '';
+    // A copy of unsaved work every two minutes, offered back if the page stops before it is saved.
+    const recovery = createRecovery(shell, app.signal, {
+      appId: 'sheet', folder: '/System/sheet-recovery', ext: '.sheet',
+      appName: 'The spreadsheet', one: 'spreadsheet', many: 'spreadsheets',
+      unsaved: () => wb.version !== savedVersion,
+      token: () => wb.version,
+      snapshot: () => wb.serialize(),
+      note: () => ({ label, path }),
+    });
+    let recovered = false;
 
+    if (arg && recovery.owns(arg)) {
+      try {
+        wb.load(JSON.parse(await shell.fs.readText(arg)));
+        const was = await recovery.adopt(arg);
+        label = was.label;
+        recovered = true;
+      } catch {
+        app.root.append(h('div', { class: 'app-message', role: 'alert' }, h('p', {}, 'This recovery copy could not be read: it may have been cut short while it was being kept.'), h('p', { class: 'dialog-detail' }, 'Nothing else was changed.')));
+        app.setTitle('Recovery copy');
+        return;
+      }
+      arg = undefined;
+    }
     if (arg) {
       try {
         const entry = await shell.fs.stat(arg);
@@ -191,9 +215,12 @@ export const sheetApp: AppDef = {
         return;
       }
     }
-    savedVersion = wb.version;
+    // A recovered copy starts unsaved: Save asks where.
+    savedVersion = recovered ? -1 : wb.version;
 
     const grid = createGrid(shell, wb, app.signal);
+    if (recovered) shell.toast(`Recovered “${label}”: a copy kept before it was saved. Save it to keep it (Save asks where).`);
+    else void recovery.offer(false, { untouched: () => !path && wb.version === savedVersion, close: () => app.close() });
     if (lost) void showReport(label, lost);
     if (cut) void shell.dialogs.alert(`Not all of “${label}” fitted`, cut, 'The file itself has not been changed. Saving here makes a new file, so the full one stays as it is.').then(() => grid.focus());
 
@@ -220,6 +247,7 @@ export const sheetApp: AppDef = {
       const dirty = wb.version !== savedVersion;
       app.setDirty(dirty);
       app.setTitle(label);
+      if (!dirty) recovery.drop();
     };
 
     // ---- Small helpers ---------------------------------------------------------------------------------------------
