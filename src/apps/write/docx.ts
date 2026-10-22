@@ -1,4 +1,4 @@
-// Word documents (.docx) for TOMLIN Write: a writer that turns the editor's document into the parts Word, LibreOffice
+// Word documents (.docx) for Write: a writer that turns the editor's document into the parts Word, LibreOffice
 // and Google Docs read, and a reader that turns a .docx (ours or anyone's) back into the editor's document. A .docx is a
 // zip of XML parts; zip.ts packs it and archive/read.ts unpacks it, xml.ts reads and writes the XML. Our own code; no
 // browser needed except to keep the pictures (images.ts).
@@ -227,6 +227,24 @@ interface WriteCtx {
   allBlocks: NodeJSON[];
   /** Width of the writing area, in pixels (a picture or table is never made wider). */
   bodyPx: number;
+  /** A new file (not saved over the one it came from): kept parts that point at other parts of that file cannot go in. */
+  fresh: boolean;
+  /** The labels of kept parts left out of a new file (each written as its label in brackets instead). */
+  leftOut: string[];
+}
+
+/** True when a kept part points at another part of the file it came from (a picture, a chart, a link), which a new file
+ *  does not have: Word calls a file with such a part damaged. */
+const pointsOutside = (xml: string): boolean => /\br:(?:id|embed|link|pict|dm|lo|qs|cs)="/.test(xml);
+
+/** A kept part as it goes into the file: as it was, or in a new file its label in brackets when it points outside. */
+function keptXml(n: NodeJSON, ctx: WriteCtx, block: boolean): string {
+  const xml = String(n.attrs?.xml ?? '');
+  if (!ctx.fresh || !pointsOutside(xml)) return xml;
+  const label = String(n.attrs?.label ?? '') || 'Part from the original file';
+  ctx.leftOut.push(label);
+  const run = `<w:r><w:t xml:space="preserve">${escapeXml(xmlSafe(`[${label}]`))}</w:t></w:r>`;
+  return block ? `<w:p>${run}</w:p>` : run;
 }
 
 /** A run's properties; `charStyle` (a link's Hyperlink style) goes first, as Word's file format wants. */
@@ -329,7 +347,7 @@ function inlineXml(nodes: NodeJSON[] | undefined, ctx: WriteCtx): string {
       const name = fieldName(String(n.attrs?.name ?? ''));
       if (name) out += `<w:fldSimple w:instr=" MERGEFIELD ${name} "><w:r>${runProps(n.marks)}<w:t>${escapeXml(`«${name}»`)}</w:t></w:r></w:fldSimple>`;
     } else if (n.type === 'opaque_inline') {
-      out += String(n.attrs?.xml ?? '');
+      out += keptXml(n, ctx, false);
     } else if (n.type === 'image') {
       out += pictureRun(n, ctx);
     }
@@ -498,7 +516,7 @@ function blocksXml(blocks: NodeJSON[], ctx: WriteCtx): string {
     else if (b.type === 'bullet_list' || b.type === 'ordered_list') out += listXml(b, ctx, 0);
     else if (b.type === 'table') out += tableXml(b, ctx);
     else if (b.type === 'page_break') out += '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
-    else if (b.type === 'opaque_block') out += String(b.attrs?.xml ?? '');
+    else if (b.type === 'opaque_block') out += keptXml(b, ctx, true);
     else if (b.type === 'toc') out += tocXml(b, ctx);
   }
   return out;
@@ -528,8 +546,12 @@ function headerXml(kind: 'hdr' | 'ftr', line: HeaderLine, bodyTwips: number): st
 
 const lineHas = (l: HeaderLine) => !!(l.l.trim() || l.c.trim() || l.r.trim());
 
-/** The document as the bytes of a .docx file. */
-export async function writeDocx(doc: NodeJSON, page: PageSetup, title = '', source?: DocxSource, extras: { headingPages?: number[] } = {}): Promise<Uint8Array<ArrayBuffer>> {
+/**
+ * The document as the bytes of a .docx file. Without `source` (a new file), kept parts that point at other parts of the
+ * file they came from (text boxes, charts, linked pictures) are written as their label in brackets; their labels are put
+ * in `extras.leftOut` when it is given, so the person can be told.
+ */
+export async function writeDocx(doc: NodeJSON, page: PageSetup, title = '', source?: DocxSource, extras: { headingPages?: number[]; leftOut?: string[] } = {}): Promise<Uint8Array<ArrayBuffer>> {
   const pt = PAPERS[page.paper];
   const wPt = page.orient === 'landscape' ? pt.h : pt.w;
   const hPt = page.orient === 'landscape' ? pt.w : pt.h;
@@ -542,7 +564,7 @@ export async function writeDocx(doc: NodeJSON, page: PageSetup, title = '', sour
   const bulletNum = source ? most(/w:numId="(\d+)"/g) + 1 : 1;
   const styleText = source?.styles ? partText(source, source.styles) : null;
   const styleIds = new Set([...(styleText ?? '').matchAll(/w:styleId="([^"]{1,80})"/g)].map(m => m[1]));
-  const ctx: WriteCtx = { page, media: new Map(), ordered: [], links: new Map(), styleIds, nextNum: bulletNum + 1, bulletNum, drawingId: 0, bodyPx, mediaPrefix: source ? 'Tw' : '', notes: [], nextNote: 1, keptNotes: source?.notes ?? new Map(), headingPages: extras.headingPages ?? [], allBlocks: doc.content ?? [] };
+  const ctx: WriteCtx = { page, media: new Map(), ordered: [], links: new Map(), styleIds, nextNum: bulletNum + 1, bulletNum, drawingId: 0, bodyPx, mediaPrefix: source ? 'Tw' : '', notes: [], nextNote: 1, keptNotes: source?.notes ?? new Map(), headingPages: extras.headingPages ?? [], allBlocks: doc.content ?? [], fresh: !source, leftOut: extras.leftOut ?? [] };
   if (source?.notes.size) ctx.nextNote = Math.max(...source.notes.keys()) + 1;
   const body = blocksXml(doc.content ?? [], ctx);
   const hasHeader = lineHas(page.header);
@@ -589,7 +611,7 @@ export async function writeDocx(doc: NodeJSON, page: PageSetup, title = '', sour
     + `<Relationship Id="rId3" Type="${REL}/extended-properties" Target="docProps/app.xml"/></Relationships>`;
   const core = `${XML_HEAD}<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">`
     + `${title ? `<dc:title>${escapeXml(xmlSafe(title.slice(0, 200)))}</dc:title>` : ''}<dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified></cp:coreProperties>`;
-  const app = `${XML_HEAD}<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>TOMLIN Write</Application></Properties>`;
+  const app = `${XML_HEAD}<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>Write</Application></Properties>`;
   const settings = `${XML_HEAD}<w:settings xmlns:w="${NS.w}"><w:defaultTabStop w:val="720"/>${hasNotes ? '<w:footnotePr><w:footnote w:id="-1"/><w:footnote w:id="0"/></w:footnotePr>' : ''}<w:characterSpacingControl w:val="doNotCompress"/><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat></w:settings>`;
 
   const enc = new TextEncoder();
@@ -850,6 +872,8 @@ class Reader {
   defaults: { run: RunLook; para: ParaLook } = { run: {}, para: {} };
   theme = { major: 'Calibri Light', minor: 'Calibri' };
   abstracts = new Map<string, Map<number, Level>>();
+  /** Lists that use a Word list style (numStyleLink) whose levels could not be found, by their id: the style's name. */
+  unlinked = new Map<string, string>();
   /** Each Word list: its definition, the levels it starts elsewhere, and levels it defines over again (a level's own
    *  w:lvl inside w:lvlOverride, as Write writes a list's own format). */
   nums = new Map<string, { abstract: string; starts: Map<number, number>; levels: Map<number, Level> }>();
@@ -978,6 +1002,10 @@ class Reader {
 
   readNumbering(root: XmlEl | null): void {
     if (!root) return;
+    // A list that uses a Word list style (numStyleLink) has no levels of its own: they are in the list whose styleLink
+    // names the same style. Followed once the whole part is read.
+    const byStyleLink = new Map<string, Map<number, Level>>();
+    const linked: Array<{ id: string; style: string }> = [];
     for (const an of children(root, 'abstractNum')) {
       const id = at(an, 'abstractNumId');
       if (id === undefined) continue;
@@ -987,6 +1015,10 @@ class Reader {
         levels.set(i, levelOf(lvl, i));
       }
       this.abstracts.set(id, levels);
+      const styleLink = at(child(an, 'styleLink'), 'val');
+      if (styleLink !== undefined && levels.size) byStyleLink.set(styleLink, levels);
+      const numStyleLink = at(child(an, 'numStyleLink'), 'val');
+      if (numStyleLink !== undefined && !levels.size) linked.push({ id, style: numStyleLink });
     }
     for (const n of children(root, 'num')) {
       const id = at(n, 'numId');
@@ -1003,11 +1035,22 @@ class Reader {
       }
       this.nums.set(id, { abstract, starts, levels });
     }
+    for (const { id, style } of linked) {
+      // The list style's own numbering (its numPr) names the list that holds the levels, when no styleLink matches.
+      const styleNum = this.styles.get(style)?.para.numId;
+      const viaStyle = styleNum ? this.nums.get(styleNum)?.abstract : undefined;
+      const levels = byStyleLink.get(style) ?? (viaStyle !== undefined && viaStyle !== id ? this.abstracts.get(viaStyle) : undefined);
+      if (levels?.size) this.abstracts.set(id, levels);
+      else this.unlinked.set(id, style);
+    }
   }
 
   level(numId: string, ilvl: number): Level | null {
     const n = this.nums.get(numId);
     if (!n) return null;
+    // Said only when a paragraph uses such a list: a template often defines lists it never uses.
+    const missing = this.unlinked.get(n.abstract);
+    if (missing !== undefined) this.dropped.add(`lists that use a list style Write could not find in the file (“${missing}”): they show and are saved as 1., a., i.`);
     const lv = n.levels.get(ilvl) ?? this.abstracts.get(n.abstract)?.get(ilvl) ?? { bullet: false, start: 1, same: true, format: null };
     return { bullet: lv.bullet, start: n.starts.get(ilvl) ?? lv.start, same: lv.same, format: lv.format };
   }
@@ -1456,6 +1499,9 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
         const numId = direct.numId ?? (style === 'normal' ? styleDef?.para.numId : undefined);
         const ilvl = Math.max(0, Math.min(8, direct.ilvl ?? styleDef?.para.ilvl ?? 0));
         const lvl = numId && numId !== '0' ? rd.level(numId, ilvl) : null;
+        // Saving over puts Write's own heading styles in, so that numbering is not kept either: said, not kept.
+        const outline = style !== 'normal' && direct.numId === undefined ? styleDef?.para.numId : undefined;
+        if (outline && outline !== '0' && rd.level(outline, ilvl)) rd.dropped.add('numbered headings (1, 1.1 ...): shown and saved without their numbers');
         rd.notePara(ppr);
         const word = rd.ownStyle(styleId);
         if (lvl && !lvl.same) rd.dropped.add('list numbering Write has no format for (such as "Step 1", 001 or none): it shows and is saved as 1., a., i.');

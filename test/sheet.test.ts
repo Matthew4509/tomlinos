@@ -175,6 +175,26 @@ test('CSV: quotes, commas, line breaks, semicolons; export defuses text that wou
   assert.ok(wb.exportText(0, { c0: 0, r0: 4, c1: 0, r1: 4 }, ',').startsWith("'="), 'a text cell beginning with = is defused');
 });
 
+test('CSV export: only text that would run as a formula is defused; a phone number or a lone dash is left as it is', () => {
+  const wb = new Workbook();
+  const texts = ['+64 21 555 0100', '-', '+SUM(A1)', '-1+2', '@cmd', '- item'];
+  texts.forEach((t, row) => wb.setInput(0, 0, row, `'${t}`));
+  const out = wb.exportText(0, { c0: 0, r0: 0, c1: 0, r1: texts.length - 1 }, ',').split('\r\n');
+  assert.deepEqual(out, ['+64 21 555 0100', '-', "'+SUM(A1)", "'-1+2", "'@cmd", "'- item"]);
+});
+
+test('CSV split at semicolons: a decimal comma reads as a number, and 1,500 is one and a half', () => {
+  const wb = new Workbook();
+  wb.importText(0, 0, 0, 'item;price;weight\nbolt;1,5;1,500\nnut;1.234,5;12,5%');
+  assert.equal(wb.value(0, 1, 1), 1.5);
+  assert.equal(wb.value(0, 2, 1), 1.5);
+  assert.equal(wb.value(0, 1, 2), 1234.5);
+  assert.equal(wb.value(0, 2, 2), 0.125);
+  const comma = new Workbook();
+  comma.importText(0, 0, 0, 'a\tb\n"1,500"\t2', '\t');
+  assert.equal(comma.value(0, 0, 1), 1500, 'outside a semicolon CSV, 1,500 keeps its thousands comma');
+});
+
 test('save and load round-trip; a hostile or damaged file is refused with a reason', () => {
   const wb = book({ A1: '5', A2: '=A1*2', A3: 'text' });
   wb.setStyle(0, { c0: 0, r0: 0, c1: 0, r1: 0 }, s => ({ ...s, b: true, fill: '#ffff00' }));

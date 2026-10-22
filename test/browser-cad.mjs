@@ -1,4 +1,4 @@
-// Drives TOMLIN CAD in a real Chrome: the window's parts (menus, two toolbars, the tool columns, the Layers panel, the
+// Drives KerfLine in a real Chrome: the window's parts (menus, two toolbars, the tool columns, the Layers panel, the
 // drawing area, the command line, the status bar), a closed 600 x 400 outline typed on the command line, undo and
 // redo, saving and opening again; snaps found with the pointer (middle, intersection, centre); the shapes (circle by
 // diameter, ellipse, polygon, slot, arcs, curves); construction lines and tangent lines; choosing by window, crossing
@@ -73,8 +73,8 @@ const xy = async () => {
 const chosen = async () => W().locator('.cad-msg').innerText();
 async function openCad() {
   if (!(await page.locator('.start-filter').isVisible())) await page.locator('.start-btn').click();
-  await page.locator('.start-filter').fill('tomlin cad');
-  await page.locator('.start-menu [data-label="tomlin cad"]').first().click();
+  await page.locator('.start-filter').fill('kerfline');
+  await page.locator('.start-menu [data-label="kerfline"]').first().click();
   await canvas().waitFor();
   await W().getByRole('button', { name: 'Maximise' }).click();
   await page.waitForTimeout(300);
@@ -123,11 +123,11 @@ await step('set up a fresh desktop', async () => {
   await page.locator('#desktop .item').first().waitFor({ timeout: 20000 });
 });
 
-await step('TOMLIN CAD is in Start > Office and opens in the classic CAD layout', async () => {
+await step('KerfLine is in Start > Office and opens in the classic CAD layout', async () => {
   await page.locator('.start-btn').click();
   await page.locator('.start-menu button', { hasText: 'Office' }).first().click();
   const labels = await page.locator('.start-item').evaluateAll(els => els.map(e => e.getAttribute('data-label')));
-  ok(labels.includes('tomlin cad'), 'listed in Office: ' + labels.join(', '));
+  ok(labels.includes('kerfline'), 'listed in Office: ' + labels.join(', '));
   await page.keyboard.press('Escape');
   await openCad();
   eq(await W().locator('.menubar-item').allInnerTexts(), ['File', 'Edit', 'View', 'Geometry', 'CAD', 'Utils', 'Help'], 'menus in order');
@@ -753,8 +753,8 @@ await step('session 9: a crooked photo lined up, scaled from a known length and 
   if (await page.locator('.gate-go').isVisible().catch(() => false)) await page.locator('.gate-go').click();
   await page.locator('#desktop .item').first().waitFor({ timeout: 20000 });
   if (!(await page.locator('.start-filter').isVisible())) await page.locator('.start-btn').click();
-  await page.locator('.start-filter').fill('tomlin cad');
-  await page.locator('.start-menu [data-label="tomlin cad"]').first().click();
+  await page.locator('.start-filter').fill('kerfline');
+  await page.locator('.start-menu [data-label="kerfline"]').first().click();
   await page.locator('.dialog', { hasText: 'Drawings not saved' }).waitFor({ timeout: 15000 });
   ok((await D().innerText()).includes('bench.tcad: kept'), 'the copy is named: ' + (await D().innerText()));
   await D().getByRole('button', { name: 'Open it' }).click();
@@ -969,7 +969,7 @@ await step('parts library: a starter hinge cup placed, saved as my own part with
 await step('audit fixes: Undo after a save, then a new line, shows unsaved; Undo after Units brings millimetres back; Pan keeps a polyline being drawn', async () => {
   await closeAll();
   await openCad();
-  const dirty = async () => (await page.locator('.task-label', { hasText: 'TOMLIN CAD' }).last().innerText()).trim().endsWith('*');
+  const dirty = async () => (await page.locator('.task-label', { hasText: 'KerfLine' }).last().innerText()).trim().endsWith('*');
   await cmd('line', '0,0', '100,0', '');
   await page.keyboard.press('Control+Shift+S');
   await D().locator('input[aria-label="File name"]').fill('undo-check.tcad');
@@ -1045,8 +1045,8 @@ await step('View: grid, white background, large icons, help', async () => {
   ok(await W().locator('.cad.cad-large').count(), 'large icons');
   eq(await W().locator('.cad-btn').first().evaluate(b => b.getBoundingClientRect().width), 32, '32 px buttons');
   await W().getByRole('menuitem', { name: 'Help' }).click();
-  await page.locator('.menu').getByText('What TOMLIN CAD does', { exact: true }).click();
-  ok((await D().innerText()).includes('Never here: CAM'), 'help says what is not here');
+  await page.locator('.menu').getByText('What KerfLine does', { exact: true }).click();
+  ok((await D().innerText()).includes('Never here: CAM (toolpaths, G-code), 3D'), 'help says what is not here');
   await D().getByRole('button').first().click();
 });
 

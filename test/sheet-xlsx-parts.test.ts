@@ -190,3 +190,41 @@ test('parts as Excel writes them are read in; what cannot be kept is reported', 
   const said = report.dropped.join(' | ');
   for (const words of ['radar chart', '2 conditional formatting rules', 'manual page breaks', 'only its first block']) assert.ok(said.includes(words), `${words}: ${said}`);
 });
+
+/** A one-sheet workbook whose rules, filter and print area are set on whole columns, as Excel writes them. */
+function wholeColumns(): Uint8Array {
+  const parts: Record<string, string> = {
+    '[Content_Types].xml': '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>',
+    '_rels/.rels': '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',
+    'xl/workbook.xml': `<?xml version="1.0"?><workbook ${MAIN}><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets>
+<definedNames><definedName name="_xlnm.Print_Area" localSheetId="0">Data!$A$1:$D$1048576</definedName></definedNames></workbook>`,
+    'xl/_rels/workbook.xml.rels': `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`,
+    'xl/styles.xml': `<?xml version="1.0"?><styleSheet ${MAIN}><fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts><cellXfs count="1"><xf/></cellXfs>
+<dxfs count="1"><dxf><font><b/></font></dxf></dxfs></styleSheet>`,
+    'xl/worksheets/sheet1.xml': `<?xml version="1.0"?><worksheet ${MAIN}>
+<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Name</t></is></c><c r="B1" t="inlineStr"><is><t>Score</t></is></c><c r="C1" t="inlineStr"><is><t>Status</t></is></c></row><row r="2"><c r="B2"><v>5</v></c></row></sheetData>
+<autoFilter ref="A1:C1048576"/>
+<conditionalFormatting sqref="B2:B1048576"><cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan"><formula>3</formula></cfRule></conditionalFormatting>
+<conditionalFormatting sqref="A6000:A6010"><cfRule type="cellIs" dxfId="0" priority="2" operator="lessThan"><formula>0</formula></cfRule></conditionalFormatting>
+<dataValidations count="2"><dataValidation type="list" allowBlank="1" sqref="C2:C1048576"><formula1>"Paid,Due"</formula1></dataValidation>
+<dataValidation type="whole" operator="greaterThan" sqref="XFD1:XFD9"><formula1>0</formula1></dataValidation></dataValidations>
+</worksheet>`,
+  };
+  return zipStore(Object.entries(parts).map(([name, text]) => ({ name, data: new TextEncoder().encode(text), modified: Date.UTC(2026, 9, 13) })));
+}
+
+test('rules, a filter and a print area on whole columns are kept, cut to the sheet; only rules wholly past the edge are reported', async () => {
+  const wb = new Workbook();
+  const report = await openXlsx(wb, wholeColumns());
+  const sh = wb.sheets[0];
+  assert.deepEqual(sh.cf.map(e => [e.rule.t, e.ranges]), [['cell', [R('B2:B5000')]]], 'the whole-column format is kept, cut at row 5,000');
+  assert.deepEqual(sh.dv.map(v => [v.type, v.f1, v.ranges]), [['list', '"Paid,Due"', [R('C2:C5000')]]], 'the whole-column drop-down list is kept');
+  assert.deepEqual(sh.filter?.range, R('A1:C5000'), 'the whole-column filter is kept');
+  assert.deepEqual(sh.page?.area, R('A1:D5000'), 'the whole-column print area is kept');
+  const said = report.dropped.join(' | ');
+  assert.ok(said.includes('1 conditional formatting rule on cells past row 5,000 or column IV'), said);
+  assert.ok(said.includes('1 data validation rule on cells past row 5,000 or column IV'), said);
+  assert.ok(!said.includes('filter on cells') && !said.includes('print area'), `nothing said for what was only cut: ${said}`);
+});

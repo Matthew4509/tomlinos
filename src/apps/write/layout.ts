@@ -1,4 +1,4 @@
-// Where TOMLIN Write's pages break. The editor shows the document as one flow of text on a strip of paper; this works
+// Where Write's pages break. The editor shows the document as one flow of text on a strip of paper; this works
 // out, from the height of each line (and each table row), which line starts each new page, and how much space to put
 // before it so it starts at the top of the next sheet. Pages sit one under another, each `pageH` tall with `gap`
 // between them, so every page's writing area is in a known place and the header, footer and the grey gap between

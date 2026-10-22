@@ -1,4 +1,4 @@
-// Letters from a list (mail merge) and ready-made documents (templates) for TOMLIN Write. A letter has fields
+// Letters from a list (mail merge) and ready-made documents (templates) for Write. A letter has fields
 // («Name», «Address»...) that are filled in from each row of a list: the people in Contacts, or a spreadsheet (its
 // first row names the columns). One letter per row, each starting on a new page. No browser needed.
 import { parseVcf } from '../../core/vcard.ts';

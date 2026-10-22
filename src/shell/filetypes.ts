@@ -18,14 +18,14 @@ const AUDIO: FileType = { label: 'Music', icon: 'music', apps: ['player'] };
 const SHEET: FileType = { label: 'Spreadsheet', icon: 'sheet', apps: ['sheet'] };
 /** A zip of XML inside: not searched as text (search.ts reads only the text kinds). */
 const EXCEL: FileType = { label: 'Excel workbook', icon: 'sheet', apps: ['sheet'] };
-/** A Word document (a zip of XML inside, like an Excel workbook): opened in TOMLIN Write. */
+/** A Word document (a zip of XML inside, like an Excel workbook): opened in Write. */
 const WORD: FileType = { label: 'Word document', icon: 'write', apps: ['write'] };
-/** WordPad's rich text and LibreOffice's text documents: opened in TOMLIN Write (and saved from it as Word documents). */
+/** WordPad's rich text and LibreOffice's text documents: opened in Write (and saved from it as Word documents). */
 const RICH: FileType = { label: 'Rich text document', icon: 'write', apps: ['write'] };
 const ODT: FileType = { label: 'OpenDocument text', icon: 'write', apps: ['write'] };
-/** A TOMLIN CAD drawing (JSON inside). */
-const CAD: FileType = { label: 'TOMLIN CAD drawing', icon: 'cad', apps: ['cad'] };
-/** A DXF drawing (AutoCAD's exchange format): opened in TOMLIN CAD, which also writes it for CAM programs. */
+/** A KerfLine drawing (JSON inside). */
+const CAD: FileType = { label: 'KerfLine drawing', icon: 'cad', apps: ['cad'] };
+/** A DXF drawing (AutoCAD's exchange format): opened in KerfLine, which also writes it for CAM programs. */
 const DXF: FileType = { label: 'DXF drawing', icon: 'cad', apps: ['cad'] };
 const CALC: FileType = { label: 'Calculator sheet', icon: 'calculator', apps: ['calculator'] };
 const ARCHIVE: FileType = { label: 'Compressed folder', icon: 'archive', apps: ['archive'] };

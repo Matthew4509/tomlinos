@@ -1,4 +1,4 @@
-// Markdown (.md) in TOMLIN Write: a .md file opens formatted (headings, bold, italic, strikethrough, code, lists inside
+// Markdown (.md) in Write: a .md file opens formatted (headings, bold, italic, strikethrough, code, lists inside
 // lists, numbered lists that start part-way, quotes, tables, line breaks) and saves back as Markdown. What Markdown
 // cannot hold (colours, sizes, typefaces, alignment, pictures, page breaks) is left out on saving, and the window asks
 // first. Our own small reader and writer: common Markdown as people write it, not every corner of the standard.

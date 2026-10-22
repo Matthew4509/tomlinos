@@ -1,4 +1,4 @@
-// Drawing TOMLIN CAD's drawing area on a canvas: the dark blue (or white) background, the scale marks with numbers
+// Drawing KerfLine's drawing area on a canvas: the dark blue (or white) background, the scale marks with numbers
 // along the left and bottom edges, the grid, the origin, every item in its layer's colour, the chosen items dashed,
 // the shape a tool would make, the snap mark with its name, and the selection box.
 import { P, angleOf, at, type Box, type Piece, type Pt } from './geom.ts';

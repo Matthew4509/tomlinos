@@ -1,4 +1,4 @@
-// Rich Text Format (.rtf), the kind WordPad saves and every word processor reads, opened into TOMLIN Write's document:
+// Rich Text Format (.rtf), the kind WordPad saves and every word processor reads, opened into Write's document:
 // paragraphs with their alignment, spacing and indents; bold, italic, underline, strikethrough, raised and lowered text,
 // typeface, size, colour and highlight; line breaks, tabs, page breaks; bullets and numbers (WordPad's and Word's);
 // tables; PNG and JPEG pictures. Read only: Write saves it as a Word document. Our own reader; no browser needed except

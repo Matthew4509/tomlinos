@@ -1,4 +1,4 @@
-// TOMLIN CAD: a 2D drawing program for drawing a part out on a job and machining it at home in a CAM program. The
+// KerfLine: a 2D drawing program for drawing a part out on a job and machining it at home in a CAM program. The
 // window is laid out as classic CAD/CAM programs of the early 2000s were: a menu bar (File, Edit, View, Geometry,
 // Utils, Help), two rows of small toolbar pictures, a column of tools down the left, the Layers panel, a dark blue
 // drawing area with scale marks, the snaps down the right, a command line for typed points and numbers, and a status
@@ -17,7 +17,7 @@ import { P, add, dist, mul, normAngle, sub, unit, type Pt } from './cad/geom.ts'
 import { cadIcon, type CadIcon } from './cad/icons.ts';
 import { parseNumber, parsePoint, parseSize } from './cad/input.ts';
 import {
-  COLOUR_NAMES, CONSTRUCTION, DIMENSIONS, TEXT, isNote, CadProblem, LAYER_COLOURS, LINE_TYPES, TYPE_NAMES, colourName, describe, type LineType, fmt, newDrawing, readTcad, writeTcad, type Drawing, type Ent, type Layer, type Shape, type Units,
+  COLOUR_NAMES, CONSTRUCTION, DIMENSIONS, TEXT, isNote, CadProblem, LAYER_COLOURS, LINE_TYPES, TYPE_NAMES, colourName, describe, type LineType, fmt, newDrawing, readTcad, tooBigToSave, writeTcad, type Drawing, type Ent, type Layer, type Shape, type Units,
 } from './cad/model.ts';
 import { SNAP_NAMES, SNAP_ORDER, findSnaps, type Snap, type SnapMode } from './cad/snap.ts';
 import { PARTS_FOLDER, PART_EXT, layerFor, partList, partNameProblem, placePart, readPart, unitFactor, writePart, type Part } from './cad/parts.ts';
@@ -45,7 +45,7 @@ interface Settings {
   ortho: boolean;
   gridOn: boolean;
   gridSnap: boolean;
-  /** DXF output: text as lines in TOMLIN's letters, construction lines in, hidden layers in. */
+  /** DXF output: text as lines in KerfLine's letters, construction lines in, hidden layers in. */
   dxfTextAsLines: boolean;
   dxfConstruction: boolean;
   dxfHidden: boolean;
@@ -204,7 +204,7 @@ export const cadApp: AppDef = {
           loadedId = '';
           folderHint = parentPath(arg);
           leftOutOnOpen = [
-            read.skipped ? `${read.skipped} item${read.skipped === 1 ? ' is' : 's are'} of a kind this version of TOMLIN CAD does not know` : '',
+            read.skipped ? `${read.skipped} item${read.skipped === 1 ? ' is' : 's are'} of a kind this version of KerfLine does not know` : '',
             read.damaged ? `${read.damaged} item${read.damaged === 1 ? ' is' : 's are'} damaged (${read.why})` : '',
           ].filter(Boolean).join('; ');
         }
@@ -318,7 +318,7 @@ export const cadApp: AppDef = {
     }
     function refreshTitle(): void {
       app.setDirty(version !== savedVersion);
-      app.setTitle(`${label} - TOMLIN CAD`);
+      app.setTitle(`${label} - KerfLine`);
     }
 
     const TOO_BIG = 'That would put a size beyond any number into the drawing (it could not be saved and opened again), so nothing was changed. Check the numbers typed: a scale or a distance may be far too big.';
@@ -862,7 +862,7 @@ export const cadApp: AppDef = {
         rows.push(h('label', { class: 'cad-row' }, h('span', {}, 'Line up'), alignSel));
         if (o.arc) rows.push(h('label', { class: 'cad-row' }, h('span', {}, 'Reads'), readSel));
       }
-      rows.push(h('p', { class: 'dialog-detail' }, 'Drawn in TOMLIN CAD’s own single-line letters (each letter one stroke wide, as an engraving cutter follows it). Type %%d for °, %%c for Ø, %%p for ±.'));
+      rows.push(h('p', { class: 'dialog-detail' }, 'Drawn in KerfLine’s own single-line letters (each letter one stroke wide, as an engraving cutter follows it). Type %%d for °, %%c for Ø, %%p for ±.'));
       return askForm<TextAnswer>(o.title, rows, () => {
         const t = decodeText(words.value.replace(/\r/g, '').replace(/\s+$/, ''));
         if (!t.trim()) return 'Type some words.';
@@ -916,7 +916,7 @@ export const cadApp: AppDef = {
       const hidden = h('input', { type: 'checkbox', checked: settings.dxfHidden });
       const body = h('div', { class: 'cad-dialog' },
         h('p', {}, 'Writes an AutoCAD R12 DXF: the plainest kind, which CAM programs old and new read. Ellipses and curves go as polylines of arcs; dimensions as plain lines and text. Your drawing is not changed (Save keeps everything as .tcad).'),
-        h('label', { class: 'cad-check' }, asLines, ' Text as lines in TOMLIN’s letters (exactly as on screen; for engraving). Off: as text the other program draws in its own letters.'),
+        h('label', { class: 'cad-check' }, asLines, ' Text as lines in KerfLine’s letters (exactly as on screen; for engraving). Off: as text the other program draws in its own letters.'),
         h('label', { class: 'cad-check' }, xlines, ' Construction lines (as long lines across the drawing)'),
         h('label', { class: 'cad-check' }, hidden, ' Items on hidden layers'));
       const ok = await shell.dialogs.ask<boolean>({ title: 'Output a DXF', body, buttons: [{ label: 'Choose where...', value: true, primary: true }, { label: 'Cancel', value: false }], cancel: false });
@@ -956,7 +956,7 @@ export const cadApp: AppDef = {
         }
         if (lossyDxf && target.toLowerCase() === lossyDxf.toLowerCase() && !(await shell.dialogs.confirm({
           title: 'Write over the DXF this came from?',
-          text: `“${baseName(target)}” is the DXF this drawing was opened from. What TOMLIN CAD did not keep when it opened (listed then: heights, thicknesses, colours or line types of items’ own, or items left out) would be gone from it for good.`,
+          text: `“${baseName(target)}” is the DXF this drawing was opened from. What KerfLine did not keep when it opened (listed then: heights, thicknesses, colours or line types of items’ own, or items left out) would be gone from it for good.`,
           ok: 'Write over it',
           danger: true,
           cancel: 'Cancel',
@@ -1103,7 +1103,7 @@ export const cadApp: AppDef = {
       }
       const parts = partList(own.parts);
       const list = h('select', { class: 'field cad-part-list', size: '9', 'aria-label': 'Parts' },
-        ...parts.map((p, i) => h('option', { value: String(i) }, p.starter ? `${p.name}  (comes with TOMLIN CAD)` : p.name)));
+        ...parts.map((p, i) => h('option', { value: String(i) }, p.starter ? `${p.name}  (comes with KerfLine)` : p.name)));
       list.value = '0';
       const pv = h('canvas', { class: 'cad-part-preview', 'aria-hidden': 'true' });
       const about = h('p', { class: 'dialog-detail cad-part-about' });
@@ -1477,7 +1477,7 @@ export const cadApp: AppDef = {
     }
     /** Keeps a copy of a drawing with unsaved changes, so a flat battery or a closed page loses two minutes at most. */
     async function autosave(): Promise<void> {
-      if (!settings.autosave || version === savedVersion || version === autosavedVersion) return;
+      if (!settings.autosave || version === savedVersion || version === autosavedVersion || tooBigToSave(drawing)) return;
       const v = version;
       try {
         await shell.fs.ensureFolder(RECOVERY, { hidden: true });
@@ -1505,7 +1505,7 @@ export const cadApp: AppDef = {
       if (!p) return;
       liveRecovery.delete(p);
       void shell.fs.remove([p]).catch(() => {
-        // Left behind: it is offered the next time TOMLIN CAD opens, and can be deleted there.
+        // Left behind: it is offered the next time KerfLine opens, and can be deleted there.
       });
     }
     /** Copies kept by windows that stopped before their drawing was saved: offered to open (or delete). */
@@ -1534,7 +1534,7 @@ export const cadApp: AppDef = {
       }
       const one = left.length === 1;
       const body = h('div', { class: 'cad-dialog' },
-        h('p', {}, `TOMLIN CAD stopped before ${one ? 'this drawing was' : 'these drawings were'} saved (a flat battery, or the page was closed). The last copy kept of ${one ? 'it' : 'each'}:`),
+        h('p', {}, `KerfLine stopped before ${one ? 'this drawing was' : 'these drawings were'} saved (a flat battery, or the page was closed). The last copy kept of ${one ? 'it' : 'each'}:`),
         h('ul', { class: 'cad-recover-list' }, ...lines.map(t => h('li', {}, t))),
         h('p', { class: 'dialog-detail' }, `${one ? 'It opens' : 'Each opens'} as a drawing not saved yet: Save asks where to keep it.`));
       const answer = await shell.dialogs.ask<'open' | 'delete' | null>({
@@ -1627,20 +1627,20 @@ export const cadApp: AppDef = {
       say(convert.checked ? `Now in ${units === 'mm' ? 'millimetres' : 'inches'}; the sizes were changed to match.` : `Now in ${units === 'mm' ? 'millimetres' : 'inches'}; the numbers were kept as they were.`);
     }
     function showHelp(): void {
-      void shell.dialogs.alert('What TOMLIN CAD does', [
+      void shell.dialogs.alert('What KerfLine does', [
         'Draws: lines, polylines, rectangles (two corners, centre and size, rounded corners), circles (centre and radius or diameter, two points, three points, touching two items with a radius, touching three items), arcs (three points; centre, start, end; start, end, radius; touching two items), ellipses, polygons, slots, curves through points, points, construction lines, and lines touching arcs and circles.',
         'Snaps: end, middle, centre, intersection, quadrant, nearest, perpendicular, tangent and the grid. Tab steps through the snaps under the pointer; F3 turns them all off and on.',
         'Edits (Edit menu): choose by clicking, by a window (drag to the right: wholly inside) or a crossing box (drag to the left: touching), a chain, a layer or a colour; move, copy, rotate, mirror, scale; arrays in rows and columns, round a centre, or along a line; delete.',
         'Typed points: X and Y in their boxes (an empty box is 0), or in the X box x,y   @dx,dy (from the last point)   @length<angle. Numbers may be sums, such as 600/2+15.',
         'CAD menu: trim, extend, break (at a point or between two), fillet and chamfer (two lines or arcs, one corner of a polyline, or every corner), offset (lines, arcs, circles and polylines of them; not ellipses or curves), join lines and arcs into closed geometries, close, set the start point, reverse, explode, and arrows showing which way each runs.',
         'Layers: show, hide, lock, rename, colour, line type, delete, move items onto a layer. Utils: measure a distance or an angle, area and perimeter, list an item, information about the drawing.',
-        'Text (Geometry > Text): words in TOMLIN CAD’s own single-line letters, any height and angle, lined up left, middle or right, several lines, or round an arc or circle. CAD > Explode turns text into lines a cutter can follow.',
+        'Text (Geometry > Text): words in KerfLine’s own single-line letters, any height and angle, lined up left, middle or right, several lines, or round an arc or circle. CAD > Explode turns text into lines a cutter can follow.',
         'Dimensions (Utils > Dimensions): linear (across or up), horizontal, vertical, aligned, radius, diameter, angle and leader notes, on the Dimensions layer. They measure their own points: move or scale one and its number follows (they are not tied to the shapes they measure). Double-click text or a dimension to change it.',
-        'DXF: File > Open reads DXF of any release saved as text (from CAM programs, AutoCAD and others); File > Output > CAD > DXF writes AutoCAD R12 DXF for the CAM program. What a DXF holds that TOMLIN CAD does not draw (hatches, pictures, 3D) is listed when it opens.',
+        'DXF: File > Open reads DXF of any release saved as text (from CAM programs, AutoCAD and others); File > Output > CAD > DXF writes AutoCAD R12 DXF for the CAM program. What a DXF holds that KerfLine does not draw (hatches, pictures, 3D) is listed when it opens.',
         'Photo to trace (View > Photo to trace, or the photo button): open a phone photo under the drawing, scale it by clicking two marks a known distance apart (a tape measure in the photo) and typing that distance, line up an edge that should run straight, move it, and draw over it. It stays in the .tcad, can be hidden or made fainter, and never goes into a DXF. A photo taken at a slant: Straighten a slanted photo, then click the four corners of something rectangular lying flat in it (a benchtop, a door, a sheet of A4 at 297 x 210 mm) in order round its edge and type its real width and height; it is redrawn square and to scale. Only what lies flat on that surface comes out true: anything standing up from it (a splashback, a tap) leans.',
-        'Parts (Geometry > Parts): choose items and save them as a named part with a base point (a hinge-hole pattern, a sink cut-out); insert a part at a point and a turn, as many times as needed. A few common ones come with TOMLIN CAD (a 35 mm hinge cup, a 32 mm shelf-pin row, handle holes): their sizes are the usual ones, and the hardware maker’s drilling sheet decides. Placed parts are plain items, so the DXF needs nothing new. Your parts are drawings in /Documents/CAD parts.',
+        'Parts (Geometry > Parts): choose items and save them as a named part with a base point (a hinge-hole pattern, a sink cut-out); insert a part at a point and a turn, as many times as needed. A few common ones come with KerfLine (a 35 mm hinge cup, a 32 mm shelf-pin row, handle holes): their sizes are the usual ones, and the hardware maker’s drilling sheet decides. Placed parts are plain items, so the DXF needs nothing new. Your parts are drawings in /Documents/CAD parts.',
         'Print to scale (File > Print to scale, Ctrl+P): A4 to A1, Letter and Tabloid; Fit, 1:1, 1:2, 1:5, 1:10 and more, or any 1:n; too big for one sheet, it prints across several to tape together. A title block carries the title, scale, date, page and a 50 mm bar to check with a ruler. Print at actual size (100%). The same pages save as a PDF.',
-        'Saves its own drawings (.tcad), with File > Recent drawings, and keeps a recovery copy of unsaved changes every two minutes (if a flat battery or a closed page stopped it, the next TOMLIN CAD window offers it back; File > Drawings not saved lists them). Not here yet: a CAM program’s own drawing files (open their DXF instead) and outline (hollow) letters. Never here: CAM (toolpaths, G-code), 3D.',
+        'Saves its own drawings (.tcad), with File > Recent drawings, and keeps a recovery copy of unsaved changes every two minutes (if a flat battery or a closed page stopped it, the next KerfLine window offers it back; File > Drawings not saved lists them). Not here yet: a CAM program’s own drawing files (open their DXF instead) and outline (hollow) letters. Never here: CAM (toolpaths, G-code), 3D.',
       ].join('\n\n'));
     }
     function showKeys(): void {
@@ -1657,7 +1657,14 @@ export const cadApp: AppDef = {
 
     // ---- Files -------------------------------------------------------------------------------------------------
     const bytes = () => new TextEncoder().encode(writeTcad(drawing));
+    /** False (and says why) when the drawing would not open again once saved. */
+    async function fitsTheFile(): Promise<boolean> {
+      const big = tooBigToSave(drawing);
+      if (big) await shell.dialogs.alert('Too big to open again', big);
+      return !big;
+    }
     async function save(): Promise<boolean> {
+      if (!(await fitsTheFile())) return false;
       if (!path) return saveAs();
       try {
         const v = version;
@@ -1676,6 +1683,7 @@ export const cadApp: AppDef = {
       }
     }
     async function saveAs(): Promise<boolean> {
+      if (!(await fitsTheFile())) return false;
       const folder = path ? parentPath(path) : folderHint ?? '/Documents';
       let taken: string[] = [];
       try {
@@ -1713,7 +1721,7 @@ export const cadApp: AppDef = {
       }
     }
     async function openDrawing(): Promise<void> {
-      const chosen = await pickFile(shell, { title: 'Open a drawing (TOMLIN CAD or DXF)', folder: path ? parentPath(path) : folderHint ?? '/Documents', accept: ['tcad', 'dxf'], ok: 'Open' });
+      const chosen = await pickFile(shell, { title: 'Open a drawing (KerfLine or DXF)', folder: path ? parentPath(path) : folderHint ?? '/Documents', accept: ['tcad', 'dxf'], ok: 'Open' });
       if (!chosen) return;
       // A new window nothing was drawn in gives way to the drawing opened from it.
       const untouched = !path && !drawing.ents.length && !undoStack.length && !drawing.photo;
@@ -2483,7 +2491,7 @@ export const cadApp: AppDef = {
       { label: 'Units...', action: () => void unitsDialog() },
     ];
     const helpMenu = (): MenuItem[] => [
-      { label: 'What TOMLIN CAD does', action: showHelp },
+      { label: 'What KerfLine does', action: showHelp },
       { label: 'Keys', action: showKeys },
       ...(shell.native ? [{ separator: true } as MenuItem, ...shell.native.help().flatMap(g => g.items.map(i => ({ label: i.label, action: i.run })))] : []),
     ];
@@ -2679,7 +2687,7 @@ export const cadApp: AppDef = {
       void shell.dialogs.alert(`Opened ${label} as a copy`, `Some items could not be opened: ${leftOutOnOpen}. They were left out. Saving this copy over the file would lose them, so Save asks for a name (the file itself is not changed).`);
     }
     else if (dxfReport) {
-      say(`Opened ${label} (a DXF; Save makes a TOMLIN CAD drawing beside it).`);
+      say(`Opened ${label} (a DXF; Save makes a KerfLine drawing beside it).`);
       for (const line of dxfReport.lines) say(line);
       if (dxfReport.leftOut || dxfReport.changed) void shell.dialogs.alert(`Opened ${label}`, dxfReport.lines.join('\n\n'));
     } else say(path ? `Opened ${label}.` : 'A new drawing, in millimetres. Choose a tool, or type one such as line.');

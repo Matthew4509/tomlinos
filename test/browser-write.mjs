@@ -1,4 +1,4 @@
-// Drives TOMLIN Write in a real Chrome: a letter typed and formatted from the ribbon and the keyboard (styles, bold,
+// Drives Write in a real Chrome: a letter typed and formatted from the ribbon and the keyboard (styles, bold,
 // size, colour, centring, bullets and numbering typed as "* " and "1. "), pasted HTML that keeps its formatting and
 // loses its scripts, saving as .docx and opening it again, pages (lines that fill a page carry on at the top of the
 // next, nothing is written in the margins or the gap, a page break), the Layout tab (landscape, margins, page numbers
@@ -75,7 +75,7 @@ async function closeAllWrite() {
 }
 const newDoc = async () => {
   await closeAllWrite();
-  await openApp('tomlin write');
+  await openApp('write');
   await doc().waitFor();
   await W().locator('.wp-furniture').waitFor({ state: 'attached' });
   await doc().click();
@@ -140,11 +140,11 @@ await step('set up a fresh desktop', async () => {
   await page.locator('#desktop .item').first().waitFor({ timeout: 20000 });
 });
 
-await step('TOMLIN Write is first in Start > Office and opens on an empty A4 page', async () => {
+await step('Write is first in Start > Office and opens on an empty A4 page', async () => {
   await page.locator('.start-btn').click();
   await page.locator('.start-menu button', { hasText: 'Office' }).first().click();
   const labels = await page.locator('.start-item').evaluateAll(els => els.map(e => e.getAttribute('data-label')));
-  ok(labels.indexOf('tomlin write') >= 0 && labels.indexOf('tomlin write') < labels.indexOf('spreadsheet'), 'listed before the Spreadsheet: ' + labels.join(', '));
+  ok(labels.indexOf('write') >= 0 && labels.indexOf('write') < labels.indexOf('spreadsheet'), 'listed before the Spreadsheet: ' + labels.join(', '));
   await page.keyboard.press('Escape');
   await newDoc();
   eq(await W().locator('.wp-status').innerText().then(t => /Page 1 of 1/.test(t) && /0 words/.test(t)), true, 'status');
@@ -239,7 +239,7 @@ await step('Save as .docx, close, open it again: styles, formatting and lists ar
   await saveAs('letter-walk');
   await toast('Saved “letter-walk.docx”');
   await closeAllWrite();
-  await openApp('tomlin write');
+  await openApp('write');
   await doc().waitFor();
   await reopen('letter-walk.docx');
   const w = W();
@@ -337,7 +337,7 @@ await step('Print and PDF: the preview shows the pages; the PDF has the same num
   const pdf = readFileSync(file, 'latin1');
   ok(pdf.startsWith('%PDF-1.4'), 'a PDF');
   eq((pdf.match(/\/Type \/Page /g) ?? []).length, r.count, 'pages in the PDF');
-  ok(/\/Producer \(TOMLIN Write\)/.test(pdf), 'made by Write');
+  ok(/\/Producer \(Write\)/.test(pdf), 'made by Write');
 });
 
 await step('a table: 3 by 3, typed in, a row added, two cells merged, a cell shaded; kept through a save', async () => {
@@ -376,7 +376,7 @@ await step('a table: 3 by 3, typed in, a row added, two cells merged, a cell sha
   await saveAs('table-walk');
   await toast('Saved “table-walk.docx”');
   await closeAllWrite();
-  await openApp('tomlin write');
+  await openApp('write');
   await doc().waitFor();
   await reopen('table-walk.docx');
   await W().locator('.wp-doc table').waitFor();
@@ -423,7 +423,7 @@ await step('a picture: inserted from the computer, made page-wide, kept with its
   await page.keyboard.press('Control+S');
   await toast('Saved “table-walk.docx”');
   await closeAllWrite();
-  await openApp('tomlin write');
+  await openApp('write');
   await doc().waitFor();
   await reopen('table-walk.docx');
   await W().locator('.wp-doc img.wp-img').waitFor();
@@ -441,7 +441,7 @@ await step('plain text: Save as .txt asks first, then keeps only the words', asy
   await D().getByRole('button', { name: 'Save the words only' }).click();
   await toast('Saved “plain-walk.txt”');
   await closeAllWrite();
-  await openApp('tomlin write');
+  await openApp('write');
   await doc().waitFor();
   await reopen('plain-walk.txt');
   await W().locator('.wp-doc p', { hasText: 'second line' }).waitFor();
@@ -678,7 +678,7 @@ await step('unsaved work is kept as a recovery copy; after the page stops, the n
   page.once('dialog', d => d.accept());
   await page.goto(BASE, { waitUntil: 'load' });
   await page.locator('#desktop .item').first().waitFor();
-  await openApp('tomlin write');
+  await openApp('write');
   const offer = page.locator('.dialog', { hasText: 'Documents not saved' });
   await offer.waitFor({ timeout: 10000 });
   ok((await offer.innerText()).includes('Document: kept'), 'the copy is listed: ' + (await offer.innerText()));
@@ -689,7 +689,7 @@ await step('unsaved work is kept as a recovery copy; after the page stops, the n
   eq(await page.locator('.win .write').count(), 1, 'the empty window made way for the recovered one');
   await shot('write-recovered');
   await closeAllWrite();
-  await openApp('tomlin write');
+  await openApp('write');
   await doc().waitFor();
   await page.waitForTimeout(1500);
   eq(await page.locator('.dialog', { hasText: 'Documents not saved' }).count(), 0, 'closed on purpose: nothing offered again');

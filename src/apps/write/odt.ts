@@ -1,4 +1,4 @@
-// OpenDocument text (.odt), LibreOffice's and OpenOffice's own kind, opened into TOMLIN Write's document: headings and
+// OpenDocument text (.odt), LibreOffice's and OpenOffice's own kind, opened into Write's document: headings and
 // the Title, paragraphs with their alignment, spacing and indents, text formatting (from the file's styles and the
 // text's own), bullets and numbers inside each other, tables with joined and shaded cells, pictures, page breaks,
 // and the page's size, margins and header and footer. Read only: Write saves it as a Word document.

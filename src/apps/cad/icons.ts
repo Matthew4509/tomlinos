@@ -1,4 +1,4 @@
-// TOMLIN CAD's toolbar pictures, 16 by 16, drawn here from plain lines, circles and arcs: our own drawings, none
+// KerfLine's toolbar pictures, 16 by 16, drawn here from plain lines, circles and arcs: our own drawings, none
 // copied from another program. A red dot marks a point the tool asks for; the snap pictures show the mark the
 // drawing area puts on a snapped point.
 import { svg } from '../../core/dom.ts';

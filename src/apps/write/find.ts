@@ -1,4 +1,4 @@
-// Find and replace in TOMLIN Write: every place the words are found (match case and whole words as asked), shown in
+// Find and replace in Write: every place the words are found (match case and whole words as asked), shown in
 // yellow with the current one in orange, and a replace that keeps the formatting where it happens. Searching is done
 // paragraph by paragraph on the document itself (a match never runs from one paragraph into the next); a picture or a
 // kept part counts as one character that no word matches.

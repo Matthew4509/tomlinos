@@ -9,7 +9,7 @@ import { addressOf, colName, MAX_COLS, MAX_ROWS } from './refs.ts';
 import { cleanValidation, type DvType, type Validation } from './validate.ts';
 import type { Range, Sheet, Workbook } from './workbook.ts';
 import { child, children, escapeXml, tag, type XmlEl } from '../../core/xml.ts';
-import { applyTint, fromExcelFormula, parseRange, rangeText, readColour, toExcelFormula } from './xlsx.ts';
+import { applyTint, clipRange, fromExcelFormula, parseRange, rangeText, readColour, toExcelFormula } from './xlsx.ts';
 
 /** Things in the file that could not be kept, counted while reading. */
 export interface PartsReport {
@@ -17,13 +17,21 @@ export interface PartsReport {
   dvOther: number;
   chartsOther: string[];
   pageOther: number;
+  /** Conditional formatting rules that lie wholly past the edge of this spreadsheet's sheet. */
+  cfPastEdge: number;
+  /** Data validation rules that lie wholly past the edge of this spreadsheet's sheet. */
+  dvPastEdge: number;
 }
 
-export const newPartsReport = (): PartsReport => ({ cfOther: 0, dvOther: 0, chartsOther: [], pageOther: 0 });
+export const newPartsReport = (): PartsReport => ({ cfOther: 0, dvOther: 0, chartsOther: [], pageOther: 0, cfPastEdge: 0, dvPastEdge: 0 });
 
 const on = (v: string | undefined) => v === '1' || v === 'true';
-const sqref = (text: string | undefined): Range[] => (text ?? '').split(/\s+/).filter(Boolean).map(parseRange).filter((r): r is Range => r !== null && r.c0 < MAX_COLS && r.r0 < MAX_ROWS)
-  .map(r => ({ ...r, c1: Math.min(r.c1, MAX_COLS - 1), r1: Math.min(r.r1, MAX_ROWS - 1) }));
+/** A rule's cells ("B2:B1048576 D4"), each block cut to the sheet. pastEdge: the rule names cells, but none on the sheet. */
+function sqrefOf(text: string | undefined): { ranges: Range[]; pastEdge: boolean } {
+  const read = (text ?? '').split(/\s+/).filter(Boolean).map(parseRange).filter((r): r is Range => r !== null);
+  const ranges = read.map(clipRange).filter((r): r is Range => r !== null);
+  return { ranges, pastEdge: read.length > 0 && ranges.length === 0 };
+}
 
 // ---- Conditional formatting -----------------------------------------------------------------------------------------
 
@@ -56,7 +64,8 @@ const OPS_BACK = Object.fromEntries(Object.entries(CELL_OPS).map(([k, v]) => [v,
 export function readCf(ws: XmlEl, dxfs: CfFormat[], theme: string[], report: PartsReport): CfEntry[] {
   const found: Array<{ priority: number; entry: CfEntry }> = [];
   for (const block of children(ws, 'conditionalFormatting')) {
-    const ranges = sqref(block.attrs.sqref);
+    const { ranges, pastEdge } = sqrefOf(block.attrs.sqref);
+    if (pastEdge) report.cfPastEdge += children(block, 'cfRule').length;
     if (!ranges.length) continue;
     for (const r of children(block, 'cfRule')) {
       const fmt = dxfs[Number(r.attrs.dxfId ?? -1)] ?? {};
@@ -185,14 +194,16 @@ function readOneDv(el: XmlEl, ranges: Range[], formula: (name: string) => string
 export function readDv(ws: XmlEl, report: PartsReport): Validation[] {
   const out: Validation[] = [];
   for (const el of children(child(ws, 'dataValidations'), 'dataValidation')) {
-    const ranges = sqref(el.attrs.sqref);
+    const { ranges, pastEdge } = sqrefOf(el.attrs.sqref);
+    if (pastEdge) report.dvPastEdge++;
     if (!ranges.length) continue;
     const v = readOneDv(el, ranges, name => child(el, name)?.text.trim(), report);
     if (v) out.push(v);
   }
   for (const ext of children(child(ws, 'extLst'), 'ext')) {
     for (const el of children(child(ext, 'dataValidations'), 'dataValidation')) {
-      const ranges = sqref(child(el, 'sqref')?.text);
+      const { ranges, pastEdge } = sqrefOf(child(el, 'sqref')?.text);
+      if (pastEdge) report.dvPastEdge++;
       if (!ranges.length) continue;
       const v = readOneDv(el, ranges, name => child(child(el, name), 'f')?.text.trim(), report);
       if (v) out.push(v);
@@ -269,8 +280,8 @@ export function readPage(ws: XmlEl, report: PartsReport): PageSetup | null {
 }
 
 /** "'Sheet 1'!$1:$2,'Sheet 1'!$A:$A" (print titles) or "'Sheet 1'!$A$1:$F$40" (print area), the sheet part dropped. */
-export function readPrintNames(text: string): { area: Range | null; rows: [number, number] | null; cols: [number, number] | null; many: boolean } {
-  const out = { area: null as Range | null, rows: null as [number, number] | null, cols: null as [number, number] | null, many: false };
+export function readPrintNames(text: string): { area: Range | null; rows: [number, number] | null; cols: [number, number] | null; many: boolean; pastEdge: boolean } {
+  const out = { area: null as Range | null, rows: null as [number, number] | null, cols: null as [number, number] | null, many: false, pastEdge: false };
   const parts = text.split(/,(?=(?:[^']*'[^']*')*[^']*$)/).map(p => p.trim().replace(/^.*!/, '').replace(/\$/g, ''));
   for (const p of parts) {
     let m = /^(\d+):(\d+)$/.exec(p);
@@ -284,10 +295,13 @@ export function readPrintNames(text: string): { area: Range | null; rows: [numbe
       out.cols = [Math.min(MAX_COLS - 1, idx(m[1])), Math.min(MAX_COLS - 1, idx(m[2]))];
       continue;
     }
-    const r = parseRange(p);
+    // A print area running past the edge (A1:F1048576) is cut to the sheet; one wholly past it cannot be kept.
+    const whole = parseRange(p);
+    const r = whole && clipRange(whole);
+    if (whole && !r) out.pastEdge = true;
     if (r) {
       if (out.area) out.many = true;
-      else out.area = { ...r, c1: Math.min(r.c1, MAX_COLS - 1), r1: Math.min(r.r1, MAX_ROWS - 1) };
+      else out.area = r;
     }
   }
   return out;

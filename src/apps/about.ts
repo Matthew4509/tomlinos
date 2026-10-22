@@ -30,7 +30,7 @@ export const CREDITS: Credit[] = [
   },
   {
     name: 'ProseMirror',
-    what: 'The editor inside TOMLIN Write: typing, formatting, lists, tables, undo, and reading pasted text.',
+    what: 'The editor inside Write: typing, formatting, lists, tables, undo, and reading pasted text.',
     author: 'Marijn Haverbeke and contributors',
     licence: 'MIT',
     home: 'https://prosemirror.net/',

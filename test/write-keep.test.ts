@@ -1,4 +1,4 @@
-// TOMLIN Write keeps what it used to drop from a Word file: links (a w:hyperlink or a HYPERLINK field) with their
+// Write keeps what it used to drop from a Word file: links (a w:hyperlink or a HYPERLINK field) with their
 // addresses, Heading 4 to 6 (7 to 9 show as 6 and keep their name), the file's own paragraph styles by name, and list
 // numbering such as (a), A., I) and 1.1. Each goes into the file Write saves and comes back when it is opened again.
 // Markdown keeps links and Heading 4 to 6 too. No browser needed. Run: npm test

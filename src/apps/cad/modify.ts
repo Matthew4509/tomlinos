@@ -1,4 +1,4 @@
-// TOMLIN CAD's CAD menu, as plain shape changes: trim (cut away the part between crossings), extend (to the next item
+// KerfLine's CAD menu, as plain shape changes: trim (cut away the part between crossings), extend (to the next item
 // in the way), break (at a point, or between two points), fillet and chamfer (two items, or the corners of a
 // polyline), offset (lines, arcs, circles and polylines of them), join into closed shapes ("geometries", a polyline of
 // lines and arcs with a start and a direction, as a CAM program machines them), close, set the start point, reverse,

@@ -1,9 +1,10 @@
 // What a PNG, JPEG or WebP holds that Photo Editor does not keep (src/apps/photoedit/fileinfo.ts), read from hand-made
-// file starts: frames, camera details, print size, colour profile, 16-bit and CMYK colour; plain files say nothing,
-// and damaged or crafted ones only stop the walk. No browser needed. Run: npm test
+// file starts: frames, camera details, text notes and comments, print size, colour profile, 16-bit and CMYK colour;
+// plain files say nothing, and damaged or crafted ones only stop the walk. Also when writing to the opened file must
+// ask first (an .ora changed by opening it, a photo with details, a moving picture). No browser needed. Run: npm test
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { factsOf, lostBySaving } from '../src/apps/photoedit/fileinfo.ts';
+import { factsOf, lostBySaving, openedFile, overOpened } from '../src/apps/photoedit/fileinfo.ts';
 
 const enc = (t: string) => [...t].map(c => c.charCodeAt(0));
 const be32 = (n: number) => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
@@ -66,6 +67,36 @@ test('a WebP: moving, details and a profile from its VP8X flags, or from its own
   assert.deepEqual(factsOf(webpFile([['VP8X', [0x02 | 0x08 | 0x20, 0, 0, 0, 0, 0, 0, 0, 0, 0]]])), { animated: true, details: true, printSize: false, profile: true, deep: false, cmyk: false });
   const f = factsOf(webpFile([['VP8X', [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]], ['ANIM', [0, 0, 0, 0, 0, 0]], ['EXIF', [1]], ['ICCP', [1, 2]]]));
   assert.equal(f.animated && f.details && f.profile, true);
+});
+
+test('PNG text notes (a caption, a copyright line, generator settings) and JPEG IPTC and comments count as details', () => {
+  for (const type of ['tEXt', 'zTXt', 'iTXt']) {
+    const f = factsOf(pngFile([[type, [...enc('Copyright'), 0, ...enc('Example Studio')]]]));
+    assert.equal(f.details, true, type);
+  }
+  assert.equal(factsOf(pngFile([['tEXt', [...enc('parameters'), 0, ...enc('steps: 20')]]])).details, true, 'a generator\'s settings');
+  assert.equal(factsOf(jpegFile([[0xed, [...enc('Photoshop 3.0\0'), ...enc('8BIM'), 4, 4]], [0xc0, sof(8, 3)]])).details, true, 'APP13 (IPTC)');
+  assert.equal(factsOf(jpegFile([[0xfe, enc('Taken at the harbour')], [0xc0, sof(8, 3)]])).details, true, 'a JPEG comment');
+  assert.match(lostBySaving(factsOf(jpegFile([[0xfe, enc('note')]]))).join(''), /a caption, a copyright line or a comment/);
+});
+
+test('an .ora changed by opening it (groups opened out, modes made Normal) is asked about before Save writes over it', () => {
+  const plain = factsOf(new Uint8Array([0x50, 0x4b, 3, 4]));
+  assert.equal(openedFile('/Pictures/krita.ora', plain), null, 'no changes: nothing to ask');
+  const notes = ['Layer groups were opened out into one list of layers.'];
+  const opened = openedFile('/Pictures/krita.ora', plain, notes);
+  assert.deepEqual(opened, { path: '/Pictures/krita.ora', animated: false, losses: notes });
+  assert.equal(overOpened(opened, '/Pictures/krita.ora'), 'losses');
+});
+
+test('writing to the opened file is checked however it was reached; another name is not', () => {
+  const photo = openedFile('/Pictures/photo.jpg', factsOf(jpegFile([[0xe1, [...enc('Exif\0\0'), 0x4d, 0x4d]]])));
+  // Save, or Save As with the original's own name and Replace: the same path, so the same question.
+  assert.equal(overOpened(photo, '/Pictures/photo.jpg'), 'losses');
+  assert.equal(overOpened(photo, '/Pictures/photo (2).jpg'), null, 'a copy under a free name asks nothing');
+  const moving = openedFile('/Pictures/wave.png', factsOf(pngFile([['acTL', [0, 0, 0, 2, 0, 0, 0, 0]]])));
+  assert.equal(overOpened(moving, '/Pictures/wave.png'), 'moves', 'a moving picture is never written over');
+  assert.equal(overOpened(null, '/Pictures/photo.jpg'), null);
 });
 
 test('a damaged or crafted file only stops the walk: a length past the end, a JPEG without markers', () => {

@@ -37,7 +37,7 @@ const result = await build({
   legalComments: 'none',
   metafile: true,
   outfile: join(out, 'prosemirror.js'),
-  banner: { js: '/* ProseMirror (MIT licence; see prosemirror-LICENSES.txt beside this file). Bundled for TOMLIN Write. */' },
+  banner: { js: '/* ProseMirror (MIT licence; see prosemirror-LICENSES.txt beside this file). Bundled for Write. */' },
 });
 
 // Every package that ended up in the bundle, with its version and licence text.

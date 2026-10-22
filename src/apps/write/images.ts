@@ -1,4 +1,4 @@
-// The pictures in TOMLIN Write documents. The document itself holds only a short id for each picture ("p3"); the bytes
+// The pictures in Write documents. The document itself holds only a short id for each picture ("p3"); the bytes
 // live here, once, shown through a blob: address (the desktop's pages allow pictures from blob: and from itself, never
 // data: addresses or outside sites). Shared by every Write window on the page, so a picture copied from one document
 // pastes into another. A .docx keeps each picture as its own file inside (word/media/).

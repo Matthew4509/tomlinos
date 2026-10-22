@@ -1,4 +1,4 @@
-// Recovery copies (src/shell/recovery.ts), shared by the spreadsheet, TOMLIN Write and Photo Editor: a copy and its
+// Recovery copies (src/shell/recovery.ts), shared by the spreadsheet, Write and Photo Editor: a copy and its
 // note kept only while there are unsaved changes, not written again when nothing changed, gone once the work is
 // saved or the window closed on purpose, and left behind by a page that stopped, to be offered by the next window
 // (open or delete). The Windows program keeps none. A Write copy is a Word document that opens with its pictures.

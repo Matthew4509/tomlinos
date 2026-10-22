@@ -1,4 +1,4 @@
-// Recovery copies for an app's unsaved work, as TOMLIN CAD keeps them: every two minutes, and at once when the page
+// Recovery copies for an app's unsaved work, as KerfLine keeps them: every two minutes, and at once when the page
 // goes to the background, a window with changes not saved keeps a copy in the app's hidden folder, so a flat battery,
 // a crash or a closed page loses two minutes at most. The copy goes once the work is saved or the window is closed on
 // purpose; one left behind is offered by the app's next window. Each copy is two files: the work in a form the app

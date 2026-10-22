@@ -1,4 +1,4 @@
-// TOMLIN Write's document outside the editor: the shape of a document as plain data (the editor's own JSON, so the
+// Write's document outside the editor: the shape of a document as plain data (the editor's own JSON, so the
 // .docx reader and writer and the tests need no editor), the page setup (paper, margins, header and footer), the
 // paragraph styles and how each looks, and the sizes everything is measured in. No browser needed.
 import { PAPERS, type Paper } from '../sheet/print.ts';

@@ -1,4 +1,4 @@
-// Printing and PDF for TOMLIN Write. The pages are read off the screen: every word where the browser drew it (so the
+// Printing and PDF for Write. The pages are read off the screen: every word where the browser drew it (so the
 // lines, and the page breaks, are the ones on screen), the list numbers and bullets, table cells with their shading
 // and lines, pictures, and the header and footer. Printing draws each page as a picture of the paper in the document's
 // own typefaces; the PDF draws it with the typefaces every PDF reader has (Helvetica, Times, Courier), each word at its
@@ -235,7 +235,7 @@ async function jpegOf(id: string): Promise<{ data: Uint8Array; w: number; h: num
 export async function pdfOf(snap: Snapshot, title: string): Promise<Uint8Array<ArrayBuffer>> {
   const doc = new PdfDocument();
   doc.title = title;
-  doc.producer = 'TOMLIN Write';
+  doc.producer = 'Write';
   const names = new Map<string, string | null>();
   for (const items of snap.pages) {
     const page: PdfPage = doc.addPage(snap.size.w, snap.size.h);

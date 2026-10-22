@@ -1,4 +1,4 @@
-// Text and dimensions in TOMLIN CAD: what each is made of when drawn (the letters' strokes, a dimension's lines,
+// Text and dimensions in KerfLine: what each is made of when drawn (the letters' strokes, a dimension's lines,
 // arrowheads and number), the number a dimension shows, and the box round a text for picking it. They are notes on
 // the drawing, not part of the shape: snaps, trim, extend and offset leave them alone.
 import { lineWidth, letterAdvances, letterStrokes, textStrokes, LINE_SPACING, type Align } from './font.ts';

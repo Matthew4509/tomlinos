@@ -1,4 +1,4 @@
-// TOMLIN Write's Word files: a document written as .docx and read back is the same document (styles, spacing, every
+// Write's Word files: a document written as .docx and read back is the same document (styles, spacing, every
 // kind of text formatting, lists inside lists, numbered lists that start part-way, tables with merged and shaded cells,
 // page breaks, pictures, the page setup and the header and footer); what is read always fits the editor's schema; a
 // file made the way Word makes them (theme fonts, styles based on styles, lists that carry on counting, rows merged

@@ -1,4 +1,4 @@
-// TOMLIN Write: a document writer. A File menu and a ribbon laid out like a familiar word processor's (Home: undo,
+// Write: a document writer. A File menu and a ribbon laid out like a familiar word processor's (Home: undo,
 // font, paragraph, styles; Insert: page break, table, picture; Layout: margins, orientation, paper size, header and
 // footer; Table and Picture tabs when one is chosen; Help), the document on pages as it will print, and a status bar
 // with the page, the word count and the zoom. Opens and saves Word documents (.docx) and plain text (.txt); prints and
@@ -106,7 +106,7 @@ export const writeApp: AppDef = {
       pm = await loadProseMirror();
     } catch (error) {
       loading = null;
-      app.root.replaceChildren(h('p', { class: 'app-message', role: 'alert' }, 'The writer could not be loaded. Check the connection to the server, then open TOMLIN Write again.'));
+      app.root.replaceChildren(h('p', { class: 'app-message', role: 'alert' }, 'The writer could not be loaded. Check the connection to the server, then open Write again.'));
       console.error(error);
       return;
     }
@@ -176,7 +176,7 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
   // document as Write writes one, so its pictures, footnotes and page setup come back with it.
   const recovery = createRecovery(shell, app.signal, {
     appId: 'write', folder: '/System/write-recovery', ext: '.docx',
-    appName: 'TOMLIN Write', one: 'document', many: 'documents',
+    appName: 'Write', one: 'document', many: 'documents',
     unsaved: () => !!viewRef && isDirty(),
     token: () => recoveryToken(),
     snapshot: () => writeDocx(viewRef.state.doc.toJSON(), page, label),
@@ -1388,8 +1388,14 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
         } catch {
           // Writing says so if Documents is not there.
         }
-        const entry = await shell.fs.writeFile(joinPath('/Documents', uniqueName(`${name}.docx`, taken)), await writeDocx(merged, page, name), { mustBeNew: true });
-        shell.toast(`Made ${mergeList.rows.length} letters in “${entry.name}” (Documents).`);
+        // A new file does not have the parts a kept text box or chart points at: those go in as their name in brackets.
+        const leftOut: string[] = [];
+        const entry = await shell.fs.writeFile(joinPath('/Documents', uniqueName(`${name}.docx`, taken)), await writeDocx(merged, page, name, undefined, { leftOut }), { mustBeNew: true });
+        const kinds = [...new Set(leftOut)];
+        const note = kinds.length
+          ? ` ${kinds.slice(0, 3).join(', ')}${kinds.length > 3 ? ' and more' : ''} could not go into a new file (they use parts of the original Word file), so each shows as its name in brackets. To have them, copy them in from the original in Word.`
+          : '';
+        shell.toast(`Made ${mergeList.rows.length} letters in “${entry.name}” (Documents).${note}`);
         await shell.openApp('write', joinPath('/Documents', entry.name));
         return;
       }

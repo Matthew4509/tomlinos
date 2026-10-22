@@ -2881,7 +2881,8 @@ export class Workbook {
       let wrap = false;
       try {
         // A pasted "=..." from elsewhere is kept as a formula only if it is one we understand.
-        const entry = parseEntry(field, this.dateOrder);
+        // A CSV split at semicolons writes numbers with a decimal comma (1,5): read as 1.5.
+        const entry = parseEntry(split.delimiter === ';' ? decimalComma(field) : field, this.dateOrder);
         after = entry.cell;
         wrap = !!entry.wrap;
         // A pasted date takes the date format it was written in, unless the cell has a format already.
@@ -2910,7 +2911,7 @@ export class Workbook {
         const v = this.value(s, col, row);
         let t = shown ? this.display(s, col, row) : valueToText(v);
         // Any text that a spreadsheet program would read as a formula (typed, or the result of one) is kept as text.
-        if (typeof v === 'string' && /^[=+\-@\t\r]/.test(t)) t = `'${t}`;
+        if (typeof v === 'string' && runsAsFormula(t)) t = `'${t}`;
         // A copy (tab-separated): a cell with line breaks or tabs goes in quotes, as Excel copies it, so it pastes back
         // as one cell.
         if (delimiter === '\t') {
@@ -3091,7 +3092,7 @@ export function parseDelimited(input: string, given?: '\t'): string[][] {
  * parseDelimited, also saying how big the text really was: `rowCount` rows and `widest` fields in its longest row,
  * counted past the edge of a sheet, where `rows` stops.
  */
-export function splitDelimited(input: string, given?: '\t'): { rows: string[][]; rowCount: number; widest: number } {
+export function splitDelimited(input: string, given?: '\t'): { rows: string[][]; rowCount: number; widest: number; delimiter: string } {
   const firstLine = input.split(/\r?\n/, 1)[0] ?? '';
   const count = (ch: string) => firstLine.split(ch).length - 1;
   const delimiter = given ?? (count('\t') > 0 && count('\t') >= count(',') ? '\t' : count(';') > count(',') ? ';' : ',');
@@ -3131,7 +3132,32 @@ export function splitDelimited(input: string, given?: '\t'): { rows: string[][];
     row.push(field);
     end(row);
   }
-  return { rows, rowCount, widest };
+  return { rows, rowCount, widest, delimiter };
+}
+
+/**
+ * A number written with a decimal comma ("1,5", "1.234,5", "12,5%"), as a CSV split at semicolons writes it (Excel in
+ * much of Europe), put with a decimal point so it reads as a number. "1,500" there is one and a half, not 1500. Any other
+ * text comes back as it was.
+ */
+export function decimalComma(field: string): string {
+  const m = /^\s*([-+]?)(\d{1,3}(?:\.\d{3})+|\d+),(\d+)(%?)\s*$/.exec(field);
+  return m ? `${m[1]}${m[2].replace(/\./g, '')}.${m[3]}${m[4]}` : field;
+}
+
+/**
+ * True when text put in a CSV would run as a formula in another spreadsheet program: it starts with = or @ (or a tab or
+ * a return), or with + or - followed by more than a plain number or a phone number. "+64 21 555 0100", "-12.5" and a
+ * lone "-" are left as they are; "+SUM(A1)" and "-1+2" are not.
+ */
+export function runsAsFormula(text: string): boolean {
+  if (/^[=@\t\r]/.test(text)) return true;
+  if (!/^[+-]/.test(text)) return false;
+  if (text.length === 1) return false;
+  if (/^[+-](?:\d[\d,]*(?:\.\d+)?|\.\d+)(?:e[-+]?\d+)?%?$/i.test(text)) return false;
+  // A phone number: + then digits, with spaces, brackets, dots or dashes between them, at least seven digits.
+  if (/^\+\d[\d ().-]*\d$/.test(text) && (text.match(/\d/g) ?? []).length >= 7) return false;
+  return true;
 }
 
 /** Rows and columns an import or paste could not fit, in words, or '' when it all fitted. */

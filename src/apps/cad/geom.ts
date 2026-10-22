@@ -1,4 +1,4 @@
-// Plane geometry for TOMLIN CAD: points, the simple pieces every drawn item is made of (straight segments, endless
+// Plane geometry for KerfLine: points, the simple pieces every drawn item is made of (straight segments, endless
 // construction lines, arcs, ellipse arcs and cubic curves), and what the drawing tools and snaps ask of them: where
 // two pieces cross, the nearest point on a piece, the foot of a perpendicular, the points where a line from outside
 // touches a piece, tangent lines between circles, and circles touching two or three items. Lines, circles and arcs

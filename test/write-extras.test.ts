@@ -1,4 +1,4 @@
-// TOMLIN Write's footnotes, contents page, mail merge and templates: footnotes written to Word's footnotes part and
+// Write's footnotes, contents page, mail merge and templates: footnotes written to Word's footnotes part and
 // read back (one from a Word file, unchanged, keeps its own note); a page keeps room at its foot for the footnotes
 // of its lines; a contents page written as Word's TOC field and read back; merge fields both ways; letters made from
 // Contacts and from a spreadsheet's rows; every template fits the editor.

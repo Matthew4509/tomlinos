@@ -60,12 +60,19 @@ function encodeOoxml(s: string): string {
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, c => `_x${c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}_`);
 }
 
+/** "B2:B9" as the file gives it, even when it runs past the edge of this spreadsheet's sheet (Excel writes a rule on a whole
+ *  column as B2:B1048576): clipRange cuts it to the sheet. Null when it is not a range at all. */
 export function parseRange(ref: string): Range | null {
   const [a, b] = ref.replace(/\$/g, '').split(':');
-  const ra = parseCellRef(a ?? '');
-  const rb = b === undefined ? ra : parseCellRef(b);
-  if (!ra || !rb) return null;
+  const ra = cellAddress(a ?? '');
+  const rb = b === undefined ? ra : cellAddress(b);
+  if (!ra || !rb || ra.col < 0 || ra.row < 0 || rb.col < 0 || rb.row < 0) return null;
   return { c0: Math.min(ra.col, rb.col), r0: Math.min(ra.row, rb.row), c1: Math.max(ra.col, rb.col), r1: Math.max(ra.row, rb.row) };
+}
+/** A range cut to this spreadsheet's sheet; null when all of it lies past the edge (nothing of it is on the sheet). */
+export function clipRange(r: Range): Range | null {
+  if (r.c0 >= MAX_COLS || r.r0 >= MAX_ROWS) return null;
+  return { ...r, c1: Math.min(r.c1, MAX_COLS - 1), r1: Math.min(r.r1, MAX_ROWS - 1) };
 }
 export const rangeText = (r: Range): string => (r.c0 === r.c1 && r.r0 === r.r1 ? addressOf(r.c0, r.r0) : `${addressOf(r.c0, r.r0)}:${addressOf(r.c1, r.r1)}`);
 
@@ -79,6 +86,17 @@ function cellAddress(ref: string): { col: number; row: number } | null {
 }
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
+
+/**
+ * What saving over the opened Excel file would take out of it, in words for the "Save over?" question; null when nothing
+ * would go. Formulas that only give a different answer here are saved as formulas, so they are not a reason to ask.
+ */
+export function saveOverLosses(report: XlsxReport): string | null {
+  const parts = [...report.dropped];
+  if (report.asValues.count) parts.push(`${plural(report.asValues.count, 'formula')} kept as the answer Excel last saved`);
+  if (!parts.length) return null;
+  return parts.slice(0, 3).join('; ') + (parts.length > 3 ? '; and more' : '');
+}
 
 // ---- Colours -------------------------------------------------------------------------------------------------------
 
@@ -564,6 +582,7 @@ export async function openXlsx(wb: Workbook, bytes: Uint8Array): Promise<XlsxRep
   let cut = 0;
   let hiddenSheets = 0;
   let customFilters = 0;
+  let filtersPastEdge = 0;
   let notesRead = 0;
   let tablesLost = 0;
   let pivotsLost = 0;
@@ -692,7 +711,8 @@ export async function openXlsx(wb: Workbook, bytes: Uint8Array): Promise<XlsxRep
             }
           } else if (kind === 'array' || kind === 'normal') {
             if (raw.trim()) f = fromExcelFormula(raw.trim());
-            const area = kind === 'array' && fEl.attrs.ref ? parseRange(fEl.attrs.ref) : null;
+            const whole = kind === 'array' && fEl.attrs.ref ? parseRange(fEl.attrs.ref) : null;
+            const area = whole && clipRange(whole);
             if (area && (area.c1 > area.c0 || area.r1 > area.r0)) arrays.push(area);
           }
           const was: Value = error !== null ? new CellError(error) : v;
@@ -726,12 +746,16 @@ export async function openXlsx(wb: Workbook, bytes: Uint8Array): Promise<XlsxRep
 
     const merges: number[][] = [];
     for (const m of children(child(ws, 'mergeCells'), 'mergeCell')) {
-      const r = m.attrs.ref ? parseRange(m.attrs.ref) : null;
-      if (r) merges.push([r.c0, r.r0, r.c1, r.r1]);
+      const whole = m.attrs.ref ? parseRange(m.attrs.ref) : null;
+      const r = whole && clipRange(whole);
+      if (r && (r.c1 > r.c0 || r.r1 > r.r0)) merges.push([r.c0, r.r0, r.c1, r.r1]);
     }
     let filter: unknown = null;
     const af = child(ws, 'autoFilter');
-    const afRange = af?.attrs.ref ? parseRange(af.attrs.ref) : null;
+    // A filter on whole columns (A1:F1048576) is cut to the sheet; one wholly past the edge is said below.
+    const afWhole = af?.attrs.ref ? parseRange(af.attrs.ref) : null;
+    const afRange = afWhole && clipRange(afWhole);
+    if (afWhole && !afRange) filtersPastEdge++;
     if (af && afRange && afRange.r1 > afRange.r0) {
       const cols: Record<number, string[]> = {};
       const rules: Record<number, FilterRule> = {};
@@ -947,6 +971,11 @@ export async function openXlsx(wb: Workbook, bytes: Uint8Array): Promise<XlsxRep
   say(parts.cfOther, `${plural(parts.cfOther, 'conditional formatting rule')} of a kind this spreadsheet does not have (icon sets, dates occurring, errors, above or below by standard deviations)`);
   say(parts.dvOther, `${plural(parts.dvOther, 'data validation rule')} this spreadsheet could not read`);
   say(parts.pageOther, 'some print settings (another paper size, manual page breaks, or a different header on the first or even pages)');
+  // Rules on whole columns are kept, cut to the sheet; only one with none of its cells on the sheet is lost.
+  const edge = `past row ${MAX_ROWS.toLocaleString()} or column ${colName(MAX_COLS - 1)}, the edge of a sheet here`;
+  say(parts.cfPastEdge, `${plural(parts.cfPastEdge, 'conditional formatting rule')} on cells ${edge}`);
+  say(parts.dvPastEdge, `${plural(parts.dvPastEdge, 'data validation rule')} on cells ${edge}`);
+  say(filtersPastEdge, `${plural(filtersPastEdge, 'filter')} on cells ${edge}`);
   say(counts.links, 'links on cells (the text is kept)');
   say(counts.protect, 'sheet protection');
   // A <col> can stand for many columns, so these two are said without a number.
@@ -978,6 +1007,7 @@ export async function openXlsx(wb: Workbook, bytes: Uint8Array): Promise<XlsxRep
   say(unreadNames, `${plural(unreadNames, 'named range')} this spreadsheet could not read (formulas that use them keep their last answer)`);
   // A sheet's print area and print titles are names the workbook keeps for it.
   let areas = 0;
+  let areasPastEdge = 0;
   for (const d of children(child(book, 'definedNames'), 'definedName')) {
     const which = (d.attrs.name ?? '').toLowerCase();
     if (which !== '_xlnm.print_area' && which !== '_xlnm.print_titles') continue;
@@ -990,6 +1020,7 @@ export async function openXlsx(wb: Workbook, bytes: Uint8Array): Promise<XlsxRep
       page.area = [read.area.c0, read.area.r0, read.area.c1, read.area.r1];
       if (read.many) areas++;
     }
+    if (which === '_xlnm.print_area' && read.pastEdge) areasPastEdge++;
     if (which === '_xlnm.print_titles') {
       if (read.rows) page.titleRows = read.rows;
       if (read.cols) page.titleCols = read.cols;
@@ -997,6 +1028,7 @@ export async function openXlsx(wb: Workbook, bytes: Uint8Array): Promise<XlsxRep
     sheetOut.page = page;
   }
   say(areas, 'a print area made of several blocks (only its first block is kept)');
+  say(areasPastEdge, `a print area (or a block of one) past row ${MAX_ROWS.toLocaleString()} or column ${colName(MAX_COLS - 1)}, the edge of a sheet here`);
 
   wb.load({
     format: FILE_FORMAT,

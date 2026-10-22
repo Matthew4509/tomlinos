@@ -7,7 +7,7 @@
 // file (an SVG's script, say) can run.
 import { css, h, on } from '../core/dom.ts';
 import { formatSize } from '../core/format.ts';
-import { baseName, parentPath, splitExtension } from '../fs/names.ts';
+import { baseName, parentPath, splitExtension, uniqueName } from '../fs/names.ts';
 import { pickFile, pickSave } from '../shell/filepicker.ts';
 import { extensionOf } from '../shell/filetypes.ts';
 import type { AppDef, AppHandle } from '../shell/types.ts';
@@ -17,7 +17,7 @@ import { MAX_PICTURE_PIXELS, pictureTooBig } from '../core/imagesize.ts';
 import { APPS } from './catalog.ts';
 import { saveOver } from '../shell/savefile.ts';
 import { createRecovery } from '../shell/recovery.ts';
-import { factsOf, lostBySaving } from './photoedit/fileinfo.ts';
+import { factsOf, openedFile, overOpened, type OpenedFile } from './photoedit/fileinfo.ts';
 import { BLUR, convolve3, floodFill, greyscale, hexToRgba, invert, keepShape, mixPixel, rgbToHex, sepia, SHARPEN } from './photoedit/pixels.ts';
 import { Doc, makeCanvas, makeLayer, makeMask, maskToAlpha, paintText, surfaceOf, textBounds, type Layer } from './photoedit/doc.ts';
 import { clipRect, group, PixelPatch, TILE, unionRect, type Rect } from './photoedit/history.ts';
@@ -97,8 +97,9 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
   const flatAgreed = new Set<string>();
   /** Paths for which the person agreed that a JPEG turns see-through parts white. */
   const whiteAgreed = new Set<string>();
-  /** The file opened, if it moves (more frames than the first) or holds what saving over it would take out. */
-  let opened: { path: string; animated: boolean; losses: string[] } | null = null;
+  /** The file opened, if it moves (more frames than the first), holds what saving over it would take out, or (an .ora)
+   *  was changed by opening it. */
+  let opened: OpenedFile | null = null;
 
   // ---- The picture: layers drawn together into one canvas, and one on top for outlines and handles ----
   const display = h('canvas', { class: 'pe-doc', width: 800, height: 600 });
@@ -424,7 +425,8 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     if ('close' in img && typeof img.close === 'function') img.close();
   };
 
-  async function openOraFile(bytes: Uint8Array): Promise<boolean> {
+  /** Opens an .ora into the editor; the changes opening it made (said to the person here) are returned. */
+  async function openOraFile(bytes: Uint8Array): Promise<string[]> {
     const ora = await openOra(bytes);
     const notes = [...ora.notes];
     const { width: w, height: hgt } = ora.stack;
@@ -465,7 +467,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     xf = null;
     doc.reset(w, hgt, layers);
     if (notes.length) await shell.dialogs.alert('Opened, with changes', `Photo Editor opened this layered picture, but:\n\n• ${notes.join('\n• ')}`);
-    return true;
+    return notes;
   }
 
   async function openPath(p: string): Promise<boolean> {
@@ -479,8 +481,10 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       status.textContent = 'Opening...';
       const bytes = await shell.fs.readFile(p);
       const facts = factsOf(bytes);
+      // An .ora from GIMP or Krita may be changed by opening it (groups opened out...): Save asks before making that for good.
+      let oraNotes: string[] = [];
       if (extensionOf(entry.name) === 'ora') {
-        await openOraFile(bytes);
+        oraNotes = await openOraFile(bytes);
       } else {
         // A small file can declare a huge picture: refused from its header, before any decoding.
         const tooBig = pictureTooBig(bytes);
@@ -510,8 +514,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       recoveredName = null;
       recoveredFolder = null;
       flatAgreed.clear();
-      const losses = lostBySaving(facts);
-      opened = facts.animated || losses.length ? { path: p, animated: facts.animated, losses } : null;
+      opened = openedFile(p, facts, oraNotes);
       if (facts.animated) shell.toast(`“${entry.name}” moves: Photo Editor shows its first frame only. Saving makes a new file, so the moving picture stays as it is.`);
       panel.refresh();
       fit();
@@ -610,12 +613,24 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     return false;
   }
 
-  async function saveAs(preferOra = false): Promise<boolean> {
+  /** `copy`: a copy of the opened file is wanted, so the name offered is a free one ("Photo (2).jpg"), never its own. */
+  async function saveAs(preferOra = false, copy = false): Promise<boolean> {
     settle();
     const [stem, ext] = splitExtension(path ? baseName(path) : recoveredName ?? 'Untitled.png');
     const layered = doc.layers.length > 1 || doc.layers.some(l => l.text || l.mask);
     const keep = preferOra || (layered && !path) ? '.ora' : SAVE_TYPES[ext.slice(1).toLowerCase()] ? ext : '.png';
-    const target = await pickSave(shell, { title: 'Save picture as (.png, .jpg, .webp, or .ora to keep the layers)', folder: path ? parentPath(path) : recoveredFolder ?? '/Pictures', name: stem + keep, accept: OPEN_EXTS });
+    const folder = path ? parentPath(path) : recoveredFolder ?? '/Pictures';
+    let name = stem + keep;
+    if (copy) {
+      let taken: string[] = [];
+      try {
+        taken = (await shell.fs.list(folder, true)).map(e => e.name);
+      } catch {
+        // Saving will say the folder is gone.
+      }
+      name = uniqueName(name, taken);
+    }
+    const target = await pickSave(shell, { title: 'Save picture as (.png, .jpg, .webp, or .ora to keep the layers)', folder, name, accept: OPEN_EXTS });
     if (!target) return false;
     let dest = target.path;
     let replace = target.replace;
@@ -625,16 +640,47 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       if (replace && !(await shell.dialogs.confirm({ title: 'Replace it?', text: `“${baseName(dest)}” already exists. Replace it?`, ok: 'Replace', danger: true }))) return false;
     }
     const flat = await flatOk(dest);
-    if (flat === 'ora') return saveAs(true);
+    if (flat === 'ora') return saveAs(true, copy);
     if (!flat) return false;
     return write(dest, replace ? 'any' : 'new');
   }
 
-  /** `how`: 'new' = the name must be free; 'any' = replace whatever is there; 'opened' = replace only the copy opened. */
+  /**
+   * Writing over the file opened: a moving picture never is (a copy is made instead), and what saving would take out
+   * of it is asked about first. True = go on; 'copy' = choose a name for a copy; false = do not save.
+   */
+  async function overOpenedOk(dest: string): Promise<boolean | 'copy'> {
+    const why = overOpened(opened, dest);
+    if (why === 'moves') {
+      await shell.dialogs.alert('Save as a new file', `“${baseName(dest)}” moves (it has more frames than the first). Photo Editor keeps the first frame only, so the file stays as it is; choose a name for the edited copy next.`);
+      return 'copy';
+    }
+    if (why === 'losses' && opened) {
+      const answer = await shell.dialogs.ask<'copy' | 'over' | null>({
+        title: `Save over “${baseName(dest)}”?`,
+        text: `The file holds what Photo Editor does not keep:\n\n• ${opened.losses.join('\n• ')}\n\nSaving over it puts in the picture as Photo Editor has it, so ${opened.losses.length === 1 ? 'that is' : 'these are'} lost from the file for good. Save a copy to keep the file as it is.`,
+        buttons: [{ label: 'Save a copy', value: 'copy', primary: true }, { label: 'Save over it', value: 'over', danger: true }, { label: 'Cancel', value: null }],
+        cancel: null,
+      });
+      if (answer === null) return false;
+      if (answer === 'copy') return 'copy';
+    }
+    return true;
+  }
+
+  /** `how`: 'new' = the name must be free; 'any' = replace whatever is there; 'opened' = replace only the copy opened.
+   *  `asked`: the opened-file question was asked already (Save asks it before the flat-file question). */
   /** True while a save is on its way (a second Ctrl+S then does nothing, rather than racing the first). */
   let saving = false;
-  async function write(dest: string, how: 'new' | 'any' | 'opened'): Promise<boolean> {
+  async function write(dest: string, how: 'new' | 'any' | 'opened', asked = false): Promise<boolean> {
     if (saving) return false;
+    // However the name was reached (Save, or Save As with the opened file's own name and Replace), the opened file's
+    // checks run before it is written over.
+    if (!asked) {
+      const over = await overOpenedOk(dest);
+      if (over === 'copy') return saveAs(false, true);
+      if (!over) return false;
+    }
     saving = true;
     try {
       const before = edits;
@@ -669,24 +715,14 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       shell.toast('No changes to save.');
       return true;
     }
-    if (opened?.path === path && opened.animated) {
-      await shell.dialogs.alert('Save as a new file', `“${baseName(path)}” moves (it has more frames than the first). Photo Editor keeps the first frame only, so the file stays as it is; choose a name for the edited copy next.`);
-      return saveAs();
-    }
-    if (opened?.path === path && opened.losses.length) {
-      const answer = await shell.dialogs.ask<'copy' | 'over' | null>({
-        title: `Save over “${baseName(path)}”?`,
-        text: `The file holds what Photo Editor does not keep: ${opened.losses.join('; ')}. Saving over it takes ${opened.losses.length === 1 ? 'that' : 'them'} out of it for good.`,
-        buttons: [{ label: 'Save a copy', value: 'copy', primary: true }, { label: 'Save over it', value: 'over', danger: true }, { label: 'Cancel', value: null }],
-        cancel: null,
-      });
-      if (answer === null) return false;
-      if (answer === 'copy') return saveAs();
-    }
+    // Asked before the flat-file question, so a copy is offered first; write() then does not ask again.
+    const over = await overOpenedOk(path);
+    if (over === 'copy') return saveAs(false, true);
+    if (!over) return false;
     const flat = await flatOk(path);
     if (flat === 'ora') return saveAs(true);
     if (!flat) return false;
-    return write(path, 'opened');
+    return write(path, 'opened', true);
   }
 
   async function guard(): Promise<boolean> {

@@ -1,4 +1,4 @@
-// TOMLIN Write's pages on screen. The editor is one long strip of paper; this measures every line of every paragraph
+// Write's pages on screen. The editor is one long strip of paper; this measures every line of every paragraph
 // (and every table row) where the browser drew it, asks layout.ts where the pages break, and puts an empty block of
 // the right height before each line that starts a page (a "spacer", which is not part of the document). Over the
 // strip it draws what lies between the writing of one page and the next: the bottom margin with the footer, the grey

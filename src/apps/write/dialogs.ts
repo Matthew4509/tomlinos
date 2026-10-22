@@ -1,4 +1,4 @@
-// TOMLIN Write's small windows: Paragraph (spacing, line spacing, indents), Header and footer, Margins, Insert table,
+// Write's small windows: Paragraph (spacing, line spacing, indents), Header and footer, Margins, Insert table,
 // Picture size and its description. Each asks, checks what was typed, and returns the answer (null when cancelled);
 // the window applies it. Lengths are shown in centimetres, or inches where the paper is Letter.
 import { h, on } from '../../core/dom.ts';

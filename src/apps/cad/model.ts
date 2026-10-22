@@ -1,4 +1,4 @@
-// A TOMLIN CAD drawing: its units, its layers and its items (lines, arcs, circles, ellipses, polylines, curves through
+// A KerfLine drawing: its units, its layers and its items (lines, arcs, circles, ellipses, polylines, curves through
 // points, points and construction lines), kept as the true shapes in millimetres or inches, never as pixels. Also
 // the pieces each item is made of, its snap points, and the .tcad file (JSON) it is saved as.
 import {
@@ -381,9 +381,19 @@ export function describe(e: Ent, u: Units): string[] {
 
 export class CadProblem extends Error {}
 
-const MAX_ITEMS = 200_000;
-const MAX_POINTS = 2_000_000;
+export const MAX_ITEMS = 200_000;
+export const MAX_POINTS = 2_000_000;
 const MAX_TEXT = 10_000;
+export const MAX_TEXT_LENGTH = MAX_TEXT;
+
+/** Why this drawing could not be opened again once saved (more items or points than a .tcad opens), or null. */
+export function tooBigToSave(d: Drawing): string | null {
+  if (d.ents.length > MAX_ITEMS) return `This drawing has ${d.ents.length.toLocaleString('en-GB')} items; a KerfLine drawing opens again with up to ${MAX_ITEMS.toLocaleString('en-GB')}. Delete some, or split it into two drawings, then save.`;
+  let points = 0;
+  for (const e of d.ents) points += e.type === 'poly' ? e.pts.length : e.type === 'spline' ? e.fit.length : 0;
+  if (points > MAX_POINTS) return `This drawing's polylines and curves have ${points.toLocaleString('en-GB')} points; a KerfLine drawing opens again with up to ${MAX_POINTS.toLocaleString('en-GB')}. Delete some, or split it into two drawings, then save.`;
+  return null;
+}
 
 /** The drawing as a .tcad file: plain JSON, numbers at full precision. */
 /** The drawing as a .tcad file; `extra` adds notes of the window's own (a recovery copy's file name). */
@@ -411,10 +421,10 @@ export function readTcad(text: string): { drawing: Drawing; skipped: number; dam
   try {
     data = JSON.parse(text);
   } catch {
-    throw new CadProblem('This file is not a TOMLIN CAD drawing (it is not the JSON a .tcad file holds).');
+    throw new CadProblem('This file is not a KerfLine drawing (it is not the JSON a .tcad file holds).');
   }
   if (!data || typeof data !== 'object' || (data as Record<string, unknown>).tomlinCad !== 1) {
-    throw new CadProblem('This file is not a TOMLIN CAD drawing, or it was saved by a newer version of TOMLIN CAD.');
+    throw new CadProblem('This file is not a KerfLine drawing, or it was saved by a newer version of KerfLine.');
   }
   const o = data as Record<string, unknown>;
   const units: Units = o.units === 'inch' ? 'inch' : 'mm';
@@ -443,7 +453,7 @@ export function readTcad(text: string): { drawing: Drawing; skipped: number; dam
     points += v.length;
     if (points > MAX_POINTS) {
       tooMany = true;
-      throw new CadProblem('it holds more points than TOMLIN CAD opens');
+      throw new CadProblem('it holds more points than KerfLine opens');
     }
     return v.map(pt);
   };
@@ -451,7 +461,8 @@ export function readTcad(text: string): { drawing: Drawing; skipped: number; dam
     for (const raw of o.items) {
       const r = (raw ?? {}) as Record<string, unknown>;
       try {
-        const layer = typeof r.layer === 'string' && layers.some(l => l.name === r.layer) ? r.layer : layers[0].name;
+        const wanted = typeof r.layer === 'string' ? r.layer.trim().slice(0, 64) : '';
+        const layer = layers.some(l => l.name === wanted) ? wanted : layers[0].name;
         let s: Shape | null = null;
         switch (r.type) {
           case 'line':

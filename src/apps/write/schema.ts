@@ -1,4 +1,4 @@
-// What a TOMLIN Write document can hold, for the editor (ProseMirror): paragraphs with a style (Normal, Title, Heading
+// What a Write document can hold, for the editor (ProseMirror): paragraphs with a style (Normal, Title, Heading
 // 1-3) and their own alignment, spacing and indents; bulleted and numbered lists; tables; page breaks; line breaks;
 // pictures; and runs of text in bold, italic, underline, strikethrough, raised or lowered, in a typeface, size, colour
 // and highlight. Pasted HTML (from a web page or from Word) is read through the same rules, so only these things come

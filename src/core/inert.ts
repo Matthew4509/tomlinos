@@ -1,4 +1,4 @@
-// Reading HTML that came from outside (an email's body, text pasted into TOMLIN Write) into a document that is never
+// Reading HTML that came from outside (an email's body, text pasted into Write) into a document that is never
 // shown: such a document runs no scripts and loads nothing, and the caller copies out only what it allows. The page's
 // security policy requires Trusted Types (security-headers.json), so this is the one place a string becomes HTML,
 // through a policy that only this file can use; anything else that tries to put a string into the page as HTML or
@@ -17,7 +17,7 @@ export function parseInert(html: string): Document {
 }
 
 /**
- * `html` as markup for a detached document only: TOMLIN Write's editor (ProseMirror) reads pasted HTML into a document
+ * `html` as markup for a detached document only: Write's editor (ProseMirror) reads pasted HTML into a document
  * made with createHTMLDocument, which has no window, so nothing in it runs or loads.
  */
 export function inertMarkup(html: string): unknown {

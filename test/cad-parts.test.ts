@@ -1,4 +1,4 @@
-// TOMLIN CAD's parts library: the starter parts' sizes, a part saved with its base point and read back, placed at a
+// KerfLine's parts library: the starter parts' sizes, a part saved with its base point and read back, placed at a
 // point and a turn (and from millimetres into an inch drawing), the layers placed items go on, part names, the list,
 // and the two tools. Answers worked out by hand.
 import { test } from 'node:test';

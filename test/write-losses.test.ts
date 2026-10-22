@@ -1,10 +1,11 @@
-// TOMLIN Write tells what it cannot keep from a Word file, so "Save over?" asks before any of it is lost: links inside
+// Write tells what it cannot keep from a Word file, so "Save over?" asks before any of it is lost: links inside
 // the document, list numbering it has no format for, tab stops, right indents, paragraph
 // borders and shading, hidden text, capitals and letter spacing set as formatting, table styles, row heights and
 // cell alignment. A file Write saved itself says none of them. Run: npm test
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { zipDeflate } from '../src/core/zip.ts';
+import { readZip } from '../src/apps/archive/read.ts';
 import { readDocx, writeDocx } from '../src/apps/write/docx.ts';
 import { defaultPage, type NodeJSON } from '../src/apps/write/model.ts';
 
@@ -109,4 +110,50 @@ test('a document Write saved itself (lists, a table, a contents page, a heading)
   };
   const read = await readDocx(await writeDocx(doc, defaultPage()));
   assert.deepEqual(read.dropped, []);
+});
+
+test('a list that uses a Word list style (numStyleLink) takes its levels from that style; one whose style is missing is said', async () => {
+  const styles = '<w:style w:type="numbering" w:styleId="DotList"><w:name w:val="Dot List"/><w:pPr><w:numPr><w:numId w:val="2"/></w:numPr></w:pPr></w:style>';
+  const numbering = '<w:abstractNum w:abstractNumId="0"><w:styleLink w:val="DotList"/><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="•"/></w:lvl></w:abstractNum>'
+    + '<w:abstractNum w:abstractNumId="1"><w:numStyleLink w:val="DotList"/></w:abstractNum>'
+    + '<w:abstractNum w:abstractNumId="3"><w:numStyleLink w:val="GoneList"/></w:abstractNum>'
+    + '<w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num><w:num w:numId="2"><w:abstractNumId w:val="0"/></w:num><w:num w:numId="4"><w:abstractNumId w:val="3"/></w:num>';
+  const item = (id: number) => wp('Item', `<w:numPr><w:ilvl w:val="0"/><w:numId w:val="${id}"/></w:numPr>`);
+  const read = await readDocx(await wordFile(item(1), styles, numbering));
+  assert.equal(read.doc.content?.[0].type, 'bullet_list', 'the list style’s bullets, not 1.');
+  assert.ok(!read.dropped.some(d => /list style/.test(d)), read.dropped.join('\n'));
+  assert.match(await said(item(4), styles, numbering), /lists that use a list style Write could not find in the file \(“GoneList”\)/);
+});
+
+test('a heading numbered by its style (1, 1.1) is said; a plain heading is not', async () => {
+  const styles = '<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:pPr><w:numPr><w:numId w:val="6"/></w:numPr></w:pPr></w:style>'
+    + '<w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/></w:style>';
+  const numbering = '<w:abstractNum w:abstractNumId="5"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1"/></w:lvl></w:abstractNum><w:num w:numId="6"><w:abstractNumId w:val="5"/></w:num>';
+  assert.match(await said(wp('Scope', '<w:pStyle w:val="Heading1"/>'), styles, numbering), /numbered headings \(1, 1\.1 \.\.\.\): shown and saved without their numbers/);
+  assert.equal(await said(wp('Plain', '<w:pStyle w:val="Heading2"/>'), styles, numbering), '');
+});
+
+test('a new file (a recovery copy, mail-merge letters) leaves out kept parts that point at the original file, keeping their label', async () => {
+  const p = (text: string): NodeJSON => ({ type: 'paragraph', content: [{ type: 'text', text }] });
+  const box = '<w:r><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:blip r:embed="rId7"/></a:graphic></wp:inline></w:drawing></w:r>';
+  const doc: NodeJSON = {
+    type: 'doc',
+    content: [
+      { type: 'paragraph', content: [{ type: 'text', text: 'See ' }, { type: 'opaque_inline', attrs: { xml: box, label: 'Chart' } }] },
+      { type: 'opaque_block', attrs: { xml: '<w:altChunk r:id="rId8"/>', label: 'Part brought in from another file' } },
+      { type: 'opaque_block', attrs: { xml: '<w:p><w:r><w:t>Plain kept part</w:t></w:r></w:p>', label: 'Kept' } },
+      p('End'),
+    ],
+  };
+  const leftOut: string[] = [];
+  const bytes = await writeDocx(doc, defaultPage(), '', undefined, { leftOut });
+  const part = async (name: string) => new TextDecoder().decode(await readZip(bytes).find(e => e.parts.join('/') === name)!.read());
+  const xml = await part('word/document.xml');
+  const rels = await part('word/_rels/document.xml.rels');
+  for (const [, id] of xml.matchAll(/\br:(?:id|embed|link)="([^"]*)"/g)) assert.ok(rels.includes(`Id="${id}"`), `${id} has a relationship`);
+  assert.ok(!xml.includes('rId7') && !xml.includes('rId8'), 'no relationship the new file lacks');
+  assert.match(xml, /\[Chart\]/);
+  assert.match(xml, /\[Part brought in from another file\]/);
+  assert.match(xml, /Plain kept part/, 'a kept part that points at nothing stays');
+  assert.deepEqual(leftOut, ['Chart', 'Part brought in from another file']);
 });

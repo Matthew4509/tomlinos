@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { zipStore } from '../src/core/zip.ts';
 import { cutInWords, decodeText, splitDelimited, Workbook } from '../src/apps/sheet/workbook.ts';
 import { MAX_COLS, MAX_ROWS } from '../src/apps/sheet/refs.ts';
-import { openXlsx, saveXlsx } from '../src/apps/sheet/xlsx.ts';
+import { openXlsx, saveOverLosses, saveXlsx } from '../src/apps/sheet/xlsx.ts';
 
 const MAIN = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
 
@@ -117,4 +117,12 @@ test('a plain file says none of them, and neither does a file this spreadsheet s
   own.setStyle(0, { c0: 0, r0: 0, c1: 0, r1: 0 }, old => ({ ...old, b: true, al: 'c', wrap: true }));
   const again = await openXlsx(new Workbook(), await saveXlsx(own));
   assert.deepEqual(again.dropped, []);
+});
+
+test('"Save over?" is asked only when saving would take something out; a different answer alone does not ask', () => {
+  const none = { dropped: [], asValues: { count: 0, examples: [], names: [] }, differ: { count: 0, examples: [] } };
+  assert.equal(saveOverLosses({ ...none, differ: { count: 3, examples: ['B2'] } }), null, 'formulas giving another answer are saved as formulas');
+  assert.equal(saveOverLosses({ ...none, asValues: { count: 2, examples: ['C4'], names: ['CUBEVALUE'] } }), '2 formulas kept as the answer Excel last saved');
+  const said = saveOverLosses({ ...none, dropped: ['sheet protection'], differ: { count: 1, examples: ['A1'] } });
+  assert.equal(said, 'sheet protection', 'no word about formulas kept as their last answer when that was not found');
 });

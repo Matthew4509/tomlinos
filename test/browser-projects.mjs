@@ -109,7 +109,7 @@ await step('My Projects is in the Start menu beside Calendar (Office) and opens 
 await step('add three example projects (name, site, notes); the site is a link', async () => {
   for (const [name, site, notes] of [
     ['My Projects app', 'tomlinos.com', 'A reminder list for TOMLIN OS\nsecond line'],
-    ['Word upgrade', '', 'TOMLIN Write'],
+    ['Word upgrade', '', 'Write'],
     ['Corner Bakery website', 'example.com', ''],
   ]) {
     await P().getByRole('button', { name: 'Add project' }).click();
@@ -299,10 +299,10 @@ await step('Finish moves a project to Finished (its calendar entries stay); Brin
 await step('edit in place: rename and change the site; the calendar entries still belong to it', async () => {
   await row('Word upgrade').locator('.proj-name').click();
   await P().getByRole('button', { name: 'Edit' }).click();
-  await P().getByLabel('Name').fill('Word upgrade (TOMLIN Write)');
+  await P().getByLabel('Name').fill('Word upgrade (Write)');
   await P().getByLabel('Site').fill('tomlinos.com/write');
   await P().getByRole('button', { name: 'Save' }).click();
-  await P().locator('.proj-title', { hasText: 'Word upgrade (TOMLIN Write)' }).waitFor();
+  await P().locator('.proj-title', { hasText: 'Word upgrade (Write)' }).waitFor();
   ok(await P().locator('.proj-entry', { hasText: 'Meet Sam Lee' }).count(), 'still linked to its entries');
   await P().getByRole('button', { name: '‹ All projects' }).click();
 });

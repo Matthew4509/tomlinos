@@ -1,4 +1,4 @@
-// What can be typed on TOMLIN CAD's command line: points as x,y (absolute), @dx,dy (from the last point), @length<angle
+// What can be typed on KerfLine's command line: points as x,y (absolute), @dx,dy (from the last point), @length<angle
 // and length<angle (angles in degrees, anticlockwise from the right), a lone @ for the last point itself, sizes as
 // width,height, and numbers, which may be sums such as 600/2+15 or (35+5)*2. Nothing typed is ever run as code.
 import { P, add, polar, type Pt } from './geom.ts';

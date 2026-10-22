@@ -1,5 +1,6 @@
 // What a PNG, JPEG or WebP file holds that Photo Editor's canvas cannot keep, read from its bytes (no decoding):
-// frames after the first, the details a camera stores (EXIF / XMP: date, camera, sometimes the place), the print size,
+// frames after the first, the details a camera stores (EXIF / XMP: date, camera, sometimes the place; PNG text notes,
+// JPEG IPTC and comments: a caption, a copyright line), the print size,
 // a colour profile, 16-bit or CMYK colour. Saving over the file would take these out of it, so Save asks first.
 // No browser needed. Every walk is capped, so a damaged or crafted file only ends the walk early.
 
@@ -35,7 +36,8 @@ function png(b: Uint8Array): FileFacts {
     if (type === 'IHDR' && data + 9 <= b.length && b[data + 8] > 8) f.deep = true;
     else if (type === 'acTL') f.animated = true;
     else if (type === 'eXIf') f.details = true;
-    else if (type === 'iTXt' && ascii(b, data, 17) === 'XML:com.adobe.xmp') f.details = true;
+    // XMP, and text notes of any other kind (a caption, a copyright line, the settings a generator used).
+    else if (type === 'tEXt' || type === 'zTXt' || type === 'iTXt') f.details = true;
     else if (type === 'iCCP') f.profile = true;
     // Unit 1 = per metre: a real print size (unit 0 is only a shape).
     else if (type === 'pHYs' && data + 9 <= b.length && b[data + 8] === 1) f.printSize = true;
@@ -64,6 +66,8 @@ function jpeg(b: Uint8Array): FileFacts {
     const len = (b[at + 2] << 8) + b[at + 3];
     const data = at + 4;
     if (marker === 0xe1 && (ascii(b, data, 6) === 'Exif\0\0' || ascii(b, data, 28) === 'http://ns.adobe.com/xap/1.0/')) f.details = true;
+    // APP13 (IPTC: caption, keywords, copyright, written by Photoshop and newsrooms) and COM (a comment).
+    else if (marker === 0xed || marker === 0xfe) f.details = true;
     else if (marker === 0xe2 && ascii(b, data, 12) === 'ICC_PROFILE\0') f.profile = true;
     // JFIF: units 1 (inch) or 2 (cm) give a print size.
     else if (marker === 0xe0 && ascii(b, data, 5) === 'JFIF\0' && (b[data + 7] === 1 || b[data + 7] === 2)) f.printSize = true;
@@ -103,10 +107,37 @@ export function factsOf(b: Uint8Array): FileFacts {
   return { ...NONE };
 }
 
+/** The file Photo Editor opened, kept while saving over it would lose something: it moves, or holds what is not kept. */
+export interface OpenedFile {
+  path: string;
+  animated: boolean;
+  losses: string[];
+}
+
+/**
+ * The opened file at `path`, or null when saving over it loses nothing. `notes` are the changes opening it made (an
+ * .ora from GIMP or Krita: groups opened out, blend modes read as Normal, parts past the edge cut off): saving over the
+ * file would make them for good, so they count as losses too.
+ */
+export function openedFile(path: string, f: FileFacts, notes: readonly string[] = []): OpenedFile | null {
+  const losses = [...lostBySaving(f), ...notes];
+  return f.animated || losses.length ? { path, animated: f.animated, losses } : null;
+}
+
+/**
+ * Why writing to `dest` must ask first, however it was reached (Save, or Save As with the opened file's own name):
+ * 'moves' when it is the opened moving picture (never written over), 'losses' when it would lose what is listed, else null.
+ */
+export function overOpened(opened: OpenedFile | null, dest: string): 'moves' | 'losses' | null {
+  if (!opened || opened.path !== dest) return null;
+  if (opened.animated) return 'moves';
+  return opened.losses.length ? 'losses' : null;
+}
+
 /** What saving over the file would take out of it, in words (not the frames: a moving picture is never saved over). */
 export function lostBySaving(f: FileFacts): string[] {
   const out: string[] = [];
-  if (f.details) out.push('the details stored with the photo (such as the date, the camera, and sometimes the place it was taken)');
+  if (f.details) out.push('the details stored with the photo (such as the date, the camera, and sometimes the place it was taken, a caption, a copyright line or a comment)');
   if (f.printSize) out.push('its print size (dots per inch)');
   if (f.profile) out.push('its colour profile (colours may shift a little)');
   if (f.deep) out.push('its 16-bit colour (saved as 8-bit)');

@@ -1,4 +1,4 @@
-// TOMLIN Write's other files and Word files from elsewhere: a Word file with a text box, a comment, a footnote, its own
+// Write's other files and Word files from elsewhere: a Word file with a text box, a comment, a footnote, its own
 // theme and styles is saved back with every part it had (the text box and the references exactly as written, the
 // footnotes and comments parts untouched, its namespaces kept) and opens again the same; a WordPad .rtf (bold, colour,
 // a font, bullets, numbers, a table, a picture, accented letters); a LibreOffice .odt (styles, headings, lists,

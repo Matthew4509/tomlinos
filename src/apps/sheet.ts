@@ -16,7 +16,7 @@ import { codeProblem, formatCode, isDateCode } from './sheet/numfmt.ts';
 import { addressOf, colName, SyntaxProblem } from './sheet/refs.ts';
 import { CellError, formatNumber, type CellStyle, type Line } from './sheet/values.ts';
 import { cutInWords, decodeText, keyOf, MAX_FILE_BYTES, Workbook, type FindOptions, type Found, type Range } from './sheet/workbook.ts';
-import { openXlsx, saveXlsx, type XlsxReport } from './sheet/xlsx.ts';
+import { openXlsx, saveOverLosses, saveXlsx, type XlsxReport } from './sheet/xlsx.ts';
 import { CHART_LABEL, CHART_TYPES } from './sheet/chart.ts';
 import { chartIcon, mountCharts } from './sheet/charts-ui.ts';
 import { MARGINS, pageOf, PAPERS, planPages, type Paper } from './sheet/print.ts';
@@ -1475,9 +1475,10 @@ export const sheetApp: AppDef = {
     async function save(): Promise<boolean> {
       if (!grid.commit()) return false;
       if (!path) return saveAs();
-      if (kind === 'xlsx' && lost) {
-        // Saving over an Excel file would take out of it what this spreadsheet left out when opening it: asked first.
-        const parts = lost.dropped.length ? lost.dropped.slice(0, 3).join('; ') + (lost.dropped.length > 3 ? '; and more' : '') : 'formulas kept as their last answer';
+      // Saving over an Excel file would take out of it what this spreadsheet left out when opening it: asked first.
+      // Formulas that only give a different answer here are saved as formulas, so they alone do not ask.
+      const parts = kind === 'xlsx' && lost ? saveOverLosses(lost) : null;
+      if (parts) {
         const answer = await shell.dialogs.ask<'copy' | 'over' | null>({
           title: `Save over “${label}”?`,
           text: `When it was opened, some parts of this Excel file were left out (${parts}). Saving over the file takes them out of it for good.`,

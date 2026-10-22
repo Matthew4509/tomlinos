@@ -1,4 +1,4 @@
-// TOMLIN Write's page breaks: a known number of lines of a known height fill a page and the next line starts the next
+// Write's page breaks: a known number of lines of a known height fill a page and the next line starts the next
 // page exactly at its top margin; space already put in last time is taken back out first (so a second pass changes
 // nothing); a page break sends what follows to a new page; a line already at the top of a page is never pushed on;
 // and a document that shrinks loses its old spaces. Also the CSS and colour readers used when pasting.
