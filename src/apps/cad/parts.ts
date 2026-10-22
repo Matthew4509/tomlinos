@@ -20,7 +20,7 @@ export interface Part {
   name: string;
   units: Units;
   items: PartItem[];
-  /** One of the parts that come with KerfLine (kept in the program, not in the folder). */
+  /** One of the parts that come with CAD Draft (kept in the program, not in the folder). */
   starter?: boolean;
   /** What it is, for the box that lists the parts. */
   note?: string;
@@ -29,7 +29,7 @@ export interface Part {
 const hole = (x: number, y: number, d: number): PartItem => ({ shape: { type: 'circle', c: P(x, y), r: d / 2 }, layer: GEOMETRY });
 
 /**
- * The parts that come with KerfLine, in millimetres, each with its base point at 0,0. Sizes are the common ones;
+ * The parts that come with CAD Draft, in millimetres, each with its base point at 0,0. Sizes are the common ones;
  * the hardware maker's own drilling sheet decides.
  */
 export const STARTER_PARTS: Part[] = [

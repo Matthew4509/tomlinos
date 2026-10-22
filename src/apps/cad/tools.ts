@@ -1,4 +1,4 @@
-// KerfLine's tools: each asks for what it needs one step at a time (a point, a number, an item to pick, or items
+// CAD Draft's tools: each asks for what it needs one step at a time (a point, a number, an item to pick, or items
 // to select), shows the shape it would make as the pointer moves, and makes it. Points come from clicks (snapped) or
 // the command line; a lone number where a point is asked means that far from the last point towards the pointer.
 import {

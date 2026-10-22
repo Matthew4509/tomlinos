@@ -1,4 +1,4 @@
-// KerfLine session 9: the photo traced over (placed, scaled by two points and a known length, lined up, moved,
+// CAD Draft session 9: the photo traced over (placed, scaled by two points and a known length, lined up, moved,
 // kept in the .tcad), printing to scale (pages, scale, tiling, title block, what lands where on the paper) and the
 // PDF it makes. Answers worked out by hand.
 import { test } from 'node:test';

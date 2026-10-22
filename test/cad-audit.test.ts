@@ -1,4 +1,4 @@
-// KerfLine session 10: each fault the read-only audit of sessions 1-9 found, kept found. One test per area; each
+// CAD Draft session 10: each fault the read-only audit of sessions 1-9 found, kept found. One test per area; each
 // check names the fault it guards.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

@@ -1,4 +1,4 @@
-// KerfLine's own letters: a single-line font (each letter drawn as strokes, as an engraving cutter would follow
+// CAD Draft's own letters: a single-line font (each letter drawn as strokes, as an engraving cutter would follow
 // them), so text looks the same on screen, in a print and when it is turned into lines for machining. Letters are
 // drawn on a grid where capitals are 6 high (small letters 4, tails down to -2); a text's height is its capitals'
 // height, as in DXF. Each stroke is a list of points; "@cx,cy,rx,ry,a0,a1" adds the points of an elliptical arc

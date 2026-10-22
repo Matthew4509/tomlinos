@@ -1,4 +1,4 @@
-// DXF, the hand-over format: KerfLine writes AutoCAD Release 12 DXF (the oldest, plainest kind, which CAM programs
+// DXF, the hand-over format: CAD Draft writes AutoCAD Release 12 DXF (the oldest, plainest kind, which CAM programs
 // of every age read) and reads DXF of any release saved as text. Written: layers with their colours and line types,
 // lines, arcs, circles, polylines with their arcs as bulges, points, and text; ellipses and curves become polylines
 // of arcs within a few thousandths of a millimetre (R12 has no ellipse or spline); dimensions become plain lines and
@@ -126,7 +126,7 @@ export function aciRgb(i: number): [number, number, number] {
   return [Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((b + m) * 255)];
 }
 
-/** The nearest of KerfLine's named colours. */
+/** The nearest of CAD Draft's named colours. */
 export function nearestNamed(rgb: [number, number, number]): string {
   let best = '#ffffff';
   let bestD = Infinity;
@@ -160,7 +160,7 @@ function aciOf(hex: string): number {
 // ---- Writing ---------------------------------------------------------------------------------------------------------
 
 export interface DxfOptions {
-  /** Text as TEXT items (the CAM program's own letters), or as lines in KerfLine's letters. */
+  /** Text as TEXT items (the CAM program's own letters), or as lines in CAD Draft's letters. */
   textAsLines: boolean;
   /** Construction lines as long lines across the drawing (R12 has no endless line). */
   construction: boolean;
@@ -683,7 +683,7 @@ export function readDxf(bytes: Uint8Array): DxfRead {
       unitsNote = 'Units: the file does not say, so its numbers were read as millimetres (600 is 600 mm). If it was drawn in inches, Utils > Units > Inches with "Change the sizes too" off keeps the numbers.';
       break;
     default:
-      unitsNote = `Units: the file gives unit number ${insUnits}, which KerfLine does not know, so its numbers were read as millimetres. If they were not, Utils > Units with "Change the sizes too" off keeps the numbers.`;
+      unitsNote = `Units: the file gives unit number ${insUnits}, which CAD Draft does not know, so its numbers were read as millimetres. If they were not, Utils > Units with "Change the sizes too" off keeps the numbers.`;
   }
 
   // Layers.
@@ -718,7 +718,7 @@ export function readDxf(bytes: Uint8Array): DxfRead {
   let curves = 0;
   let exploded = 0;
   let ownColours = 0;
-  // Kept nowhere in a KerfLine drawing, so said: a height off 0, a thickness, a line type of the item's own.
+  // Kept nowhere in a CAD Draft drawing, so said: a height off 0, a thickness, a line type of the item's own.
   let raised = 0;
   let thick = 0;
   let ownLineTypes = 0;
@@ -1058,12 +1058,12 @@ export function readDxf(bytes: Uint8Array): DxfRead {
   if (exploded) report.push(`${exploded} block${exploded === 1 ? '' : 's'} and dimension${exploded === 1 ? '' : 's'} taken apart into their lines, arcs and text.`);
   if (curves) report.push(`${curves} curve${curves === 1 ? '' : 's'} (splines) drawn as polylines of arcs, each within ${tol} ${units === 'mm' ? 'mm' : 'in'} of the true shape.`);
   for (const note of notes) report.push(note);
-  if (ownColours) report.push(`${ownColours} item${ownColours === 1 ? ' has' : 's have'} a colour of its own in the file: KerfLine draws every item in its layer's colour.`);
-  if (ownLineTypes) report.push(`${ownLineTypes} item${ownLineTypes === 1 ? ' has' : 's have'} a line type of its own in the file (dashed, centre...): KerfLine draws every item in its layer's line type.`);
+  if (ownColours) report.push(`${ownColours} item${ownColours === 1 ? ' has' : 's have'} a colour of its own in the file: CAD Draft draws every item in its layer's colour.`);
+  if (ownLineTypes) report.push(`${ownLineTypes} item${ownLineTypes === 1 ? ' has' : 's have'} a line type of its own in the file (dashed, centre...): CAD Draft draws every item in its layer's line type.`);
   if (raised) report.push(`${raised} item${raised === 1 ? ' sits' : 's sit'} at a height (Z) other than 0: drawn flat, and a DXF output from here puts ${raised === 1 ? 'it' : 'them'} at 0. If the CAM program reads depth from Z, set it again there.`);
   if (thick) report.push(`${thick} item${thick === 1 ? ' has' : 's have'} a thickness (raised walls in 3D): drawn flat, and not kept.`);
   const left = [...leftOut].reduce((t, [, c]) => t + c, 0);
-  if (left) report.push(`Left out (KerfLine does not draw these): ${[...leftOut].map(([kName, c]) => `${c} ${kName}${c === 1 ? '' : 's'}`).join(', ')}.`);
+  if (left) report.push(`Left out (CAD Draft does not draw these): ${[...leftOut].map(([kName, c]) => `${c} ${kName}${c === 1 ? '' : 's'}`).join(', ')}.`);
   if (!d.ents.length) report.push('Nothing in the file could be drawn.');
   // Text longer than a drawing keeps is cut to that length, and said, so the drawing opens again once saved.
   let longText = 0;

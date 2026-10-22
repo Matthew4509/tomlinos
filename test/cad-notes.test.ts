@@ -1,4 +1,4 @@
-// KerfLine sessions 7-8: text (its own single-line letters), dimensions, and DXF out and in, checked against
+// CAD Draft sessions 7-8: text (its own single-line letters), dimensions, and DXF out and in, checked against
 // answers worked out by hand and against DXF written out by hand the way AutoCAD R12 and AutoCAD 2000 write it.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

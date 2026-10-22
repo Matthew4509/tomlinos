@@ -1,4 +1,4 @@
-// KerfLine: straightening a photo taken at a slant. Four corners of a rectangle lying flat in the photo and its real
+// CAD Draft: straightening a photo taken at a slant. Four corners of a rectangle lying flat in the photo and its real
 // width and height redraw the picture square and to scale. The photos here are made up: a known perspective takes a
 // real rectangle into the picture, so where every point must land afterwards is known exactly.
 import { test } from 'node:test';

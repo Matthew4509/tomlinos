@@ -1,4 +1,4 @@
-// KerfLine's CAD menu (trim, extend, break, fillet, chamfer, offset, join, close, start point, reverse, explode) and
+// CAD Draft's CAD menu (trim, extend, break, fillet, chamfer, offset, join, close, start point, reverse, explode) and
 // areas, checked against answers worked out by hand.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

@@ -1,4 +1,4 @@
-// Changing items in KerfLine: moving, rotating, mirroring and scaling them (each kept as its true shape), and
+// Changing items in CAD Draft: moving, rotating, mirroring and scaling them (each kept as its true shape), and
 // finding them: the item under the pointer, the items inside a window or touching a crossing box, and a chain of
 // items joined end to end.
 import {

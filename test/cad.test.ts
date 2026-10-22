@@ -1,4 +1,4 @@
-// KerfLine's geometry, typed input, snaps, edits, tools and .tcad file, checked against answers worked out by hand.
+// CAD Draft's geometry, typed input, snaps, edits, tools and .tcad file, checked against answers worked out by hand.
 // Sizes must come out right to far better than a thousandth of a millimetre.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

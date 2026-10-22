@@ -2090,7 +2090,7 @@ textarea.field { resize: vertical; font: inherit; }
 .wp-note { margin: 0; }
 .wp-count th { text-align: left; padding: 2px 16px 2px 0; font-weight: normal; color: #555; }
 .wp-count td { text-align: right; font-variant-numeric: tabular-nums; }
-/* KerfLine: the classic grey CAD/CAM window of the early 2000s (menu bar, two toolbar rows, a tool column each side,
+/* CAD Draft: the classic grey CAD/CAM window of the early 2000s (menu bar, two toolbar rows, a tool column each side,
    the Layers panel, a dark blue drawing area, a command line and a status bar). Every colour is set here, so the
    desktop's light or dark theme never leaves grey text on grey. */
 .cad { display: flex; flex-direction: column; height: 100%; background: #d4d0c8; color: #000; font: 12px Tahoma, "Segoe UI", Arial, sans-serif; }
@@ -2160,7 +2160,7 @@ textarea.field { resize: vertical; font: inherit; }
 .cad-row textarea.field, .cad-row select.field, .cad-row input[type="text"].field:not(.cad-num) { width: 260px; max-width: 55vw; }
 .cad-words { min-height: 4.5em; resize: vertical; font: 13px Consolas, "Courier New", monospace; }
 
-/* KerfLine's print box: the settings beside a preview of each page; printing uses the sheet's print holder with pages of their own size. */
+/* CAD Draft's print box: the settings beside a preview of each page; printing uses the sheet's print holder with pages of their own size. */
 .cad-print { flex-direction: row; flex-wrap: wrap; align-items: flex-start; gap: 16px; }
 .cad-print > .dialog-problem { flex-basis: 100%; }
 .cad-print-form { display: flex; flex-direction: column; gap: 8px; flex: 1 1 320px; min-width: 0; max-width: 430px; }

@@ -1,6 +1,6 @@
-// KerfLine says what a DXF holds that a drawing does not keep, so nothing is lost quietly when the drawing is output
+// CAD Draft says what a DXF holds that a drawing does not keep, so nothing is lost quietly when the drawing is output
 // again: items at a height (Z) off 0, items with a thickness, items with a line type or a true colour of their own.
-// A DXF KerfLine wrote itself says none of them. Run: npm test
+// A DXF CAD Draft wrote itself says none of them. Run: npm test
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { P } from '../src/apps/cad/geom.ts';
@@ -36,7 +36,7 @@ test('a thickness, a line type of the item’s own and a true colour are each sa
   assert.equal(read.leftOut, 0, 'nothing was left out: all four lines are drawn');
 });
 
-test('a plain DXF, and one KerfLine wrote itself, say none of them', () => {
+test('a plain DXF, and one CAD Draft wrote itself, say none of them', () => {
   const plain = readDxf(entities(lineAt('0')));
   assert.equal(plain.changed, 0);
   const d = newDrawing();

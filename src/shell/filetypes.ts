@@ -23,9 +23,9 @@ const WORD: FileType = { label: 'Word document', icon: 'write', apps: ['write'] 
 /** WordPad's rich text and LibreOffice's text documents: opened in Write (and saved from it as Word documents). */
 const RICH: FileType = { label: 'Rich text document', icon: 'write', apps: ['write'] };
 const ODT: FileType = { label: 'OpenDocument text', icon: 'write', apps: ['write'] };
-/** A KerfLine drawing (JSON inside). */
-const CAD: FileType = { label: 'KerfLine drawing', icon: 'cad', apps: ['cad'] };
-/** A DXF drawing (AutoCAD's exchange format): opened in KerfLine, which also writes it for CAM programs. */
+/** A CAD Draft drawing (JSON inside). */
+const CAD: FileType = { label: 'CAD Draft drawing', icon: 'cad', apps: ['cad'] };
+/** A DXF drawing (AutoCAD's exchange format): opened in CAD Draft, which also writes it for CAM programs. */
 const DXF: FileType = { label: 'DXF drawing', icon: 'cad', apps: ['cad'] };
 const CALC: FileType = { label: 'Calculator sheet', icon: 'calculator', apps: ['calculator'] };
 const ARCHIVE: FileType = { label: 'Compressed folder', icon: 'archive', apps: ['archive'] };
