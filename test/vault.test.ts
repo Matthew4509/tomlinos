@@ -180,6 +180,18 @@ test('encryption: turning on needs the password and a new recovery key; states o
   assert.ok(!JSON.stringify(list).includes(status.vaultKeys.wrapPw));
 });
 
+test('a locked screen says the files are encrypted but hands out no wrapped key; unlocking does', async () => {
+  const locked = await owner.call('lock', {});
+  assert.equal(locked.json.locked, true);
+  for (const answer of [locked.json, (await owner.call('status')).json]) {
+    assert.deepEqual(answer.vaultKeys, { state: 'on', stale: false }, 'no salt, rounds or wraps to guess the password against');
+  }
+  const unlocked = await owner.call('unlock', { password: pw });
+  assert.equal(unlocked.json.locked, false);
+  assert.equal(typeof unlocked.json.vaultKeys.wrapPw, 'string');
+  await unwrapWithPassword(unlocked.json.vaultKeys, pw);
+});
+
 test('a password change must carry the file key wrapped for the new password', async () => {
   assert.equal((await owner.call('password', { password: pw, next: 'harbour-kettle-maple-7' })).status, 400, 'no wrap: refused, nothing changed');
   const next = 'harbour-kettle-maple-7';

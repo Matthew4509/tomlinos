@@ -28,7 +28,8 @@ export interface AuthStatus {
   locked?: boolean;
   user?: PublicUser;
   adopted?: boolean;
-  /** Only for the signed-in person: their wrapped file key, when their files are encrypted. */
+  /** Only for the signed-in person: their wrapped file key, when their files are encrypted. While `locked`, only its
+      `state` and `stale` (no wraps): do not apply it. */
   vaultKeys?: VaultKeys | null;
   /** Set by the sign-in screen (never by the server): the password just typed, so the files open without asking again. */
   password?: string;

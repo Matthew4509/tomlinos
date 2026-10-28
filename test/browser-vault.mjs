@@ -150,6 +150,21 @@ await step('a reload opens the files without asking (the key kept in this browse
   eq(await readSecret(), SECRET, 'the file');
 });
 
+await step('a locked screen hands out no wrapped key; a reload while locked, then the password, opens the files', async () => {
+  const auth = op => page.evaluate(op => fetch(`api/auth.php?op=${op}`, {
+    method: op === 'status' ? 'GET' : 'POST', headers: { 'X-Desktop-Store': '1', 'Content-Type': 'application/json' }, body: op === 'status' ? undefined : '{}',
+  }).then(r => r.json()), op);
+  eq((await auth('lock')).locked, true, 'locked');
+  const keys = (await auth('status')).vaultKeys;
+  eq(JSON.stringify(keys), JSON.stringify({ state: 'on', stale: false }), 'what a locked screen is told');
+  await page.reload();
+  await page.locator('.gate h1', { hasText: 'Locked' }).waitFor({ timeout: 20000 });
+  await page.locator('.gate input[type=password]').fill(pass);
+  await page.locator('.gate-go').click();
+  await desktop();
+  eq(await readSecret(), SECRET, 'the file');
+});
+
 await step('signing out forgets the kept key; signing in again opens the files with the password', async () => {
   await signOut();
   const kept = await page.evaluate(() => new Promise(r => {
@@ -249,8 +264,9 @@ await step('Studio: the real Linux program prints the Fibonacci numbers; Alt+Ent
 });
 
 await step('no page errors in the whole run', async () => {
-  // 401/403: the wrong recovery key on purpose, and signing out. 404: a key not made yet.
-  const real = problems.filter(p => !/40[134]|409/.test(p));
+  // 401/403: the wrong recovery key on purpose, and signing out. 404: a key not made yet. 423: the desktop's own
+  // requests while the screen is locked on purpose.
+  const real = problems.filter(p => !/40[134]|409|423/.test(p));
   eq(real, [], 'console problems');
 });
 

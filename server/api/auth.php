@@ -112,7 +112,14 @@ function signed_in_answer(array $user, array $session): array
 {
     global $dataDir;
 
-    return ['signedIn' => true, 'locked' => !empty($session['locked']), 'user' => auth_public_user($user), 'vaultKeys' => auth_vault_for_owner($user), 'front' => auth_front($dataDir)];
+    // A locked screen tells only whether the files are encrypted, never the wrapped file key: with it, whoever stands at
+    // the locked desktop could guess the password offline, past the unlock tries. Unlocking answers with the key again.
+    $keys = auth_vault_for_owner($user);
+    if ($keys !== null && !empty($session['locked'])) {
+        $keys = ['state' => $keys['state'], 'stale' => $keys['stale']];
+    }
+
+    return ['signedIn' => true, 'locked' => !empty($session['locked']), 'user' => auth_public_user($user), 'vaultKeys' => $keys, 'front' => auth_front($dataDir)];
 }
 
 $ip = (string) ($_SERVER['REMOTE_ADDR'] ?? '');

@@ -88,9 +88,13 @@ async function boot(root: HTMLElement): Promise<void> {
   if (!status.signedIn) status = await signIn(root, api, status);
   let user = status.user as PublicUser;
   const files = new FilesVault(api, store, () => user, next => (user = next));
-  // Every signed-in answer carries the wrapped file key; if one ever does not while the account says it is encrypted,
-  // ask again rather than treat the files as plain.
-  const keysOf = async (s: AuthStatus) => (s.vaultKeys === undefined && s.user && s.user.vault !== 'off' ? (await api.status()).vaultKeys : s.vaultKeys);
+  // Every unlocked signed-in answer carries the wrapped file key; if one ever does not while the account says it is
+  // encrypted, ask again rather than treat the files as plain. A locked answer carries no key (the server keeps it from
+  // a locked screen), so the page keeps what it has until the unlock answers with the key.
+  const keysOf = async (s: AuthStatus) => {
+    const now = s.vaultKeys === undefined && s.user && s.user.vault !== 'off' ? await api.status() : s;
+    return now.locked ? files.keys : now.vaultKeys;
+  };
   files.apply(await keysOf(status));
 
   // First set-up: the owner's recovery key, and encryption if they chose it. Shown once, before the desktop.
