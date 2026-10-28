@@ -235,8 +235,9 @@ function appstore_download_locked(array $app, string $dataDir, string $webRoot):
     if (!is_dir($apps) && !@mkdir($apps, 0755, true)) {
         throw new RuntimeException("PHP may not make the folder $apps.");
     }
-    // Belt and braces: whatever is in apps/, no script runs there and nothing hidden is served.
-    @file_put_contents($apps . '/.htaccess', "Options -Indexes -ExecCGI\nRemoveHandler .php .phtml .phar .cgi .pl .py\n<FilesMatch \"(?i)(\\.(php\\d*|phtml|phar|cgi|pl|py|sh)$|^\\.)\">\n  Require all denied\n</FilesMatch>\n");
+    // Belt and braces: whatever is in apps/, no script runs there, nothing hidden is served, and an app's page opened on
+    // its own is as sandboxed as in its frame (public_html/.htaccess says the same; this covers sites set up before it).
+    @file_put_contents($apps . '/.htaccess', "Options -Indexes -ExecCGI\nRemoveHandler .php .phtml .phar .cgi .pl .py\n<FilesMatch \"(?i)(\\.(php\\d*|phtml|phar|cgi|pl|py|sh)$|^\\.)\">\n  Require all denied\n</FilesMatch>\n<IfModule mod_headers.c>\n  Header always add Content-Security-Policy \"sandbox allow-scripts\"\n</IfModule>\n");
     $zipPath = $dataDir . '/appstore-download-' . bin2hex(random_bytes(4)) . '.zip';
     $final = "$apps/{$app['id']}";
     $fresh = "$final.new";

@@ -78,6 +78,12 @@ security_headers();
 if (preg_match('#^/(apps|reader)/#', $path)) {
     header('Access-Control-Allow-Origin: *');
 }
+// An app's page opened on its own is as sandboxed as in its frame (a second policy, as live: it only adds limits). By
+// the file it reached, not the address: /%61pps/ and, on Windows, /APPS/ reach the same files.
+$apps = $root . DIRECTORY_SEPARATOR . 'apps' . DIRECTORY_SEPARATOR;
+if (strncasecmp($file, $apps, strlen($apps)) === 0) {
+    header('Content-Security-Policy: sandbox allow-scripts', false);
+}
 header('Content-Type: ' . $types[$ext]);
 header('Cache-Control: no-store');
 readfile($file);

@@ -152,6 +152,26 @@ await step('it finds the Reader\'s books (library and Sherlock Holmes) from insi
   ok(problems.length === 0, problems.join(' | '));
 });
 
+await step('its page opened on its own (a link, in a tab of the signed-in browser) is as sandboxed as in its frame', async () => {
+  for (const at of ['/apps/officeprinter/index.html', '/%61pps/officeprinter/index.html']) {
+    const tab = await owner.context().newPage();
+    try {
+      const answer = await tab.goto(`${BASE}${at}?reader=${encodeURIComponent(BASE + '/reader/')}`);
+      ok(/sandbox allow-scripts/.test((await answer.headerValue('content-security-policy')) ?? ''), `${at}: no sandbox policy`);
+      await tab.waitForLoadState('load');
+      const r = await tab.evaluate(async () => ({
+        origin: self.origin,
+        files: await fetch('/api/store.php?op=list&path=%2F', { credentials: 'include', headers: { 'X-Desktop-Store': '1' } }).then(x => x.status, () => 'refused'),
+      }));
+      ok(r.origin === 'null', `${at}: its origin is ${r.origin}, not a sandbox`);
+      ok(r.files !== 200, `${at}: it read the person's files`);
+    } finally {
+      await tab.close();
+    }
+  }
+  problems.splice(0, problems.length, ...problems.filter(p => !/api\/store\.php/.test(p)));
+});
+
 await step('asked by the game, the desktop opens the book in its own Reader window; the same ask from elsewhere is ignored', async () => {
   const ask = { type: 'tomlinos-open-reader', author: 'doyle', work: 'a-study-in-scarlet' };
   await owner.evaluate(m => window.postMessage(m, '*'), ask);
