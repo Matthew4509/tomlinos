@@ -26,6 +26,12 @@ function bytes(string $v): int
 echo "TOMLIN OS server check (PHP " . PHP_VERSION . ")\n";
 echo "This checks the PHP the Terminal runs. The website's PHP is set in the same place on most hosts (cPanel > Select PHP\nVersion), but can differ: if the site still fails after all is OK here, check its settings there.\n";
 line(PHP_VERSION_ID >= 80200, 'PHP 8.2 or newer', 'In cPanel > Select PHP Version, choose 8.2 or newer.');
+// The first release in each branch that fixes two critical bugs in PHP itself (CVE-2026-109618 and CVE-2026-109619: a
+// crafted request can run code on the server). A newer branch than these already has the fixes.
+$patched = ['8.2' => '8.2.35', '8.3' => '8.3.36', '8.4' => '8.4.27', '8.5' => '8.5.12'][PHP_MAJOR_VERSION . '.' . PHP_MINOR_VERSION] ?? null;
+if (PHP_VERSION_ID >= 80200) {
+    line($patched === null || version_compare(PHP_VERSION, $patched, '>='), 'PHP has the latest security fixes' . ($patched ? " ($patched or newer)" : ''), "This PHP misses two critical security fixes. Ask your host to update PHP " . PHP_MAJOR_VERSION . '.' . PHP_MINOR_VERSION . " to $patched or newer (the host installs these; cPanel > Select PHP Version shows the version in use).");
+}
 foreach (['json', 'hash'] as $ext) {
     line(extension_loaded($ext), "PHP extension: $ext", "Tick \"$ext\" in cPanel > Select PHP Version > Extensions.");
 }

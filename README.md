@@ -82,7 +82,8 @@ Ordinary shared web hosting ("LAMP" hosting) is enough:
 
 - **Apache or LiteSpeed** web server (TOMLIN OS's security settings are in `.htaccess` files, which these read). Hosts
   that run nginx only will not apply them.
-- **PHP 8.2 or newer** with Argon2 password hashing. Mail, video titles, the Reader's library and Claude also need
+- **PHP 8.2 or newer**, kept up to date (at least 8.2.35, 8.3.36, 8.4.27 or 8.5.12: these fix two critical security
+  bugs in PHP itself; `server-check.php` says if yours is older), with Argon2 password hashing. Mail, video titles, the Reader's library and Claude also need
   the `openssl` extension; Claude and saving AI models to the server need `curl`.
 - **HTTPS** on your domain (most hosts give a free certificate).
 - A folder **above** your web root that you can upload to, so your files and accounts live outside the part of
