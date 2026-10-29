@@ -79,6 +79,36 @@ test('a daily rule from another calendar now shows every day (it showed only its
   assert.deepEqual(['2026-10-01', '2026-10-02', '2026-10-03'].map(d => occursOn(e, d)), [true, true, false]);
 });
 
+test('repeats from other calendars show on their own days: every 2 weeks, Mon-Wed-Fri, a cancelled day, a rule it cannot show', () => {
+  const read = (rule: string, extra = '', start = 'DTSTART;VALUE=DATE:20261102') =>
+    parseIcs(`BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:r\r\n${start}\r\n${rule}\r\n${extra}SUMMARY:x\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n`)[0];
+  const on = (e: CalEvent, days: string[]) => days.map(d => occursOn(e, d));
+  // 2 Nov 2026 is a Monday. Bins every second Monday.
+  const bins = read('RRULE:FREQ=WEEKLY;INTERVAL=2');
+  assert.deepEqual(on(bins, ['2026-11-02', '2026-11-09', '2026-11-16', '2026-11-23', '2026-11-30']), [true, false, true, false, true]);
+  // Monday, Wednesday and Friday; six showings in all.
+  const mwf = read('RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR;COUNT=6');
+  assert.deepEqual(on(mwf, ['2026-11-02', '2026-11-03', '2026-11-04', '2026-11-06', '2026-11-09', '2026-11-11', '2026-11-13', '2026-11-16']), [true, false, true, true, true, true, true, false]);
+  // Every 2 weeks on Tuesday and Thursday, the week starting on Sunday.
+  const tt = read('RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=TU,TH;WKST=SU', '', 'DTSTART;VALUE=DATE:20261103');
+  assert.deepEqual(on(tt, ['2026-11-03', '2026-11-05', '2026-11-10', '2026-11-12', '2026-11-17', '2026-11-19']), [true, true, false, false, true, true]);
+  // Every other day; every 3 months; every 2 years.
+  assert.deepEqual(on(read('RRULE:FREQ=DAILY;INTERVAL=2'), ['2026-11-03', '2026-11-04']), [false, true]);
+  assert.deepEqual(on(read('RRULE:FREQ=MONTHLY;INTERVAL=3'), ['2026-12-02', '2027-01-02', '2027-02-02']), [false, false, true]);
+  assert.deepEqual(on(read('RRULE:FREQ=YEARLY;INTERVAL=2'), ['2027-11-02', '2028-11-02']), [false, true]);
+  // A cancelled day (EXDATE) does not show, as a date or as a time.
+  assert.deepEqual(on(read('RRULE:FREQ=DAILY', 'EXDATE;VALUE=DATE:20261104,20261106\r\n'), ['2026-11-03', '2026-11-04', '2026-11-05', '2026-11-06']), [true, false, true, false]);
+  assert.deepEqual(on(read('RRULE:FREQ=DAILY', 'EXDATE:20261103T090000\r\n', 'DTSTART:20261102T090000'), ['2026-11-03', '2026-11-04']), [false, true]);
+  // The second Tuesday of each month: not shown on the wrong days; its first day only, and the rule is kept as it was.
+  const second = read('RRULE:FREQ=MONTHLY;BYDAY=2TU', '', 'DTSTART;VALUE=DATE:20261110');
+  assert.deepEqual(on(second, ['2026-11-10', '2026-12-10', '2026-12-08']), [true, false, false]);
+  assert.deepEqual(lines(writeIcs([second]), 'RRULE'), ['RRULE:FREQ=MONTHLY;BYDAY=2TU']);
+  // Changed here to repeat daily: shown and written as plain daily.
+  const daily = { ...bins, repeat: 'daily' as const };
+  assert.deepEqual(on(daily, ['2026-11-03']), [true]);
+  assert.deepEqual(lines(writeIcs([daily]), 'RRULE'), ['RRULE:FREQ=DAILY']);
+});
+
 test('eventsOn: repeat daily, run for 3 days, until', () => {
   const daily = ev({ uid: 'a', repeat: 'daily' });
   const three = ev({ uid: 'b', repeat: 'daily', count: 3 });
@@ -177,6 +207,9 @@ test('the event a filled-in window makes', () => {
   assert.equal((entryFrom(form({ daily: true })) as CalEvent).repeat, 'daily');
   assert.match(entryFrom(form({ daily: true, runDays: 3 })) as string, /not both/);
   assert.match(entryFrom(form({ runDays: 1 })) as string, /2 to/);
+  // Run for ticked with the number box empty or not a number: said, not saved as a one-off.
+  assert.match(entryFrom(form({ runDays: Number.NaN })) as string, /2 to/);
+  assert.match(entryFrom(form({ daily: true, runDays: Number.NaN })) as string, /not both/);
   assert.match(entryFrom(form({ title: '  ' })) as string, /What/);
   const allDay = entryFrom(form({ allDay: true, start: '', hours: '3' })) as CalEvent;
   assert.deepEqual([allDay.start, allDay.end], ['', '']);

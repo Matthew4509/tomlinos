@@ -2,7 +2,27 @@
 // another program, and a .vcf from elsewhere can be opened here. What a card from elsewhere holds that this app does
 // not edit (a photo, web addresses, phone types) is kept and written back as it was; a field changed here is written
 // fresh.
-import { escapeValue, foldLine, idFromText, readLines, splitParts, unescapeValue, writeLine } from './lines.ts';
+import { escapeValue, foldLine, idFromText, isQuotedPrintable, readLines, splitParts, unescapeValue, writeLine, type ContentLine } from './lines.ts';
+
+/** A line's value as text: a quoted-printable one (old phones: =C3=BC for ü) decoded in its CHARSET (UTF-8 if none). */
+function valueText(line: ContentLine): string {
+  if (!isQuotedPrintable(line.raw)) return line.value;
+  const bytes: number[] = [];
+  for (let i = 0; i < line.value.length; i++) {
+    const hex = line.value[i] === '=' ? /^[0-9A-Fa-f]{2}/.exec(line.value.slice(i + 1, i + 3)) : null;
+    if (hex) {
+      bytes.push(Number.parseInt(hex[0], 16));
+      i += 2;
+    } else bytes.push(line.value.charCodeAt(i) & 0xff);
+  }
+  let decoder: TextDecoder;
+  try {
+    decoder = new TextDecoder(line.params.CHARSET || 'utf-8');
+  } catch {
+    decoder = new TextDecoder('utf-8');
+  }
+  return decoder.decode(new Uint8Array(bytes)).replace(/\r\n?/g, '\n');
+}
 
 export interface Contact {
   uid: string;
@@ -64,21 +84,22 @@ export function parseVcf(text: string): Contact[] {
       keep = null;
     } else if (cur && keep) {
       raw.push(line.raw);
-      const v = unescapeValue(line.value);
+      const value = valueText(line);
+      const v = unescapeValue(value);
       const field = FIELD_OF[line.name];
       if (field) (keep.raw[field] ??= []).push(line.raw);
-      if (line.name === 'UID') keep.uid = line.value.slice(0, 200);
-      else if (line.name === 'VERSION') keep.version = line.value.trim().slice(0, 10);
+      if (line.name === 'UID') keep.uid = value.slice(0, 200);
+      else if (line.name === 'VERSION') keep.version = value.trim().slice(0, 10);
       else if (line.name === 'FN') cur.name = v.slice(0, 300);
       else if (line.name === 'N') {
-        const [family, given, middle] = splitParts(line.value);
+        const [family, given, middle] = splitParts(value);
         nameFromN = [given, middle, family].filter(Boolean).join(' ');
-      } else if (line.name === 'ORG') cur.org = splitParts(line.value).filter(Boolean).join(', ').slice(0, 300);
+      } else if (line.name === 'ORG') cur.org = splitParts(value).filter(Boolean).join(', ').slice(0, 300);
       else if (line.name === 'TEL' && v.trim() && cur.phones.length < 20) cur.phones.push(v.trim().slice(0, 60));
       else if (line.name === 'EMAIL' && v.trim() && cur.emails.length < 20) cur.emails.push(v.trim().slice(0, 200));
-      else if (line.name === 'ADR' && !cur.address) cur.address = splitParts(line.value).filter(Boolean).join(', ').slice(0, 500);
+      else if (line.name === 'ADR' && !cur.address) cur.address = splitParts(value).filter(Boolean).join(', ').slice(0, 500);
       else if (line.name === 'BDAY') {
-        const m = /^(\d{4})-?(\d{2})-?(\d{2})/.exec(line.value);
+        const m = /^(\d{4})-?(\d{2})-?(\d{2})/.exec(value);
         if (m) cur.birthday = `${m[1]}-${m[2]}-${m[3]}`;
       } else if (line.name === 'NOTE') cur.notes = v.slice(0, 20000);
       else if (!field) keep.lines.push(line.raw);

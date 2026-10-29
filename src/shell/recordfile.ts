@@ -19,16 +19,21 @@ export interface RecordFile<T> {
   watch(changes: Bus<string[]>, signal: AbortSignal, onList: (list: T[]) => void): void;
 }
 
-export function recordFile<T>(fs: FileSystem, path: string, parse: (text: string) => T[], write: (list: T[]) => string): RecordFile<T> {
-  /** The records and the id of the copy they came from ('' when there is no file yet). */
-  const read = async (): Promise<{ list: T[]; id: string }> => {
+/**
+ * `write` is given the file's text as it was just read (null when there is no file yet), so it can keep what the file
+ * holds outside its records (a calendar's name and to-dos, an event it could not read).
+ */
+export function recordFile<T>(fs: FileSystem, path: string, parse: (text: string) => T[], write: (list: T[], previous: string | null) => string): RecordFile<T> {
+  /** The records, the text they came from and the id of that copy ('' and null when there is no file yet). */
+  const read = async (): Promise<{ list: T[]; text: string | null; id: string }> => {
     const entry = await fs.stat(path);
-    if (!entry) return { list: [], id: '' };
+    if (!entry) return { list: [], text: null, id: '' };
     if (entry.kind !== 'file') throw new FsError(`“${entry.name}” is a folder, not a file.`);
     if (entry.size > MAX_RECORD_FILE) {
       throw new FsError(`“${entry.name}” is ${formatSize(entry.size)}; this app opens files up to ${formatSize(MAX_RECORD_FILE)}. It is safe where it is.`);
     }
-    return { list: parse(await fs.readText(path)), id: entry.id };
+    const text = await fs.readText(path);
+    return { list: parse(text), text, id: entry.id };
   };
   const load = async (): Promise<T[]> => (await read()).list;
   return {
@@ -38,10 +43,10 @@ export function recordFile<T>(fs: FileSystem, path: string, parse: (text: string
       // Written only over the copy the change was made from: if another window or device saved in between, its
       // version is read and the change made again on top of it, so neither undoes the other.
       for (let attempt = 1; ; attempt++) {
-        const { list, id } = await read();
+        const { list, text, id } = await read();
         const next = apply(list);
         try {
-          await fs.writeText(path, write(next), id ? { replacing: id } : { mustBeNew: true });
+          await fs.writeText(path, write(next, text), id ? { replacing: id } : { mustBeNew: true });
           return next;
         } catch (error) {
           const raced = error instanceof FileChanged || (!id && error instanceof FsError && (await fs.stat(path)) !== null);

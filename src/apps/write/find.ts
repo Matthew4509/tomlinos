@@ -21,11 +21,26 @@ export const MOST_HITS = 5000;
 
 const isWordChar = (c: string | undefined) => !!c && /[\p{L}\p{N}_]/u.test(c);
 
+/**
+ * Small letters, one for one: the text keeps its length, so a place found in it is the same place in the document.
+ * (A letter whose small form is longer, such as Turkish İ, which is "i" and a dot, becomes its first letter.)
+ */
+function fold(s: string): string {
+  let out = '';
+  for (const ch of s) {
+    const small = ch.toLocaleLowerCase();
+    if (small.length === ch.length) out += small;
+    else if (ch.length === 1 && (small.codePointAt(0) ?? 0) <= 0xffff) out += small[0];
+    else out += ch;
+  }
+  return out;
+}
+
 /** Every place `query` is found in the document. */
 export function findAll(doc: any, query: string, opts: FindOptions): Hit[] {
   const hits: Hit[] = [];
   if (!query) return hits;
-  const needle = opts.matchCase ? query : query.toLocaleLowerCase();
+  const needle = opts.matchCase ? query : fold(query);
   doc.descendants((node: any, pos: number) => {
     if (hits.length >= MOST_HITS) return false;
     if (!node.isTextblock) return true;
@@ -34,7 +49,7 @@ export function findAll(doc: any, query: string, opts: FindOptions): Hit[] {
     node.forEach((child: any) => {
       text += child.isText ? child.text : '￼'.repeat(child.nodeSize);
     });
-    const hay = opts.matchCase ? text : text.toLocaleLowerCase();
+    const hay = opts.matchCase ? text : fold(text);
     let at = hay.indexOf(needle);
     while (at >= 0 && hits.length < MOST_HITS) {
       const end = at + needle.length;

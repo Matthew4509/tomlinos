@@ -231,6 +231,22 @@ interface WriteCtx {
   fresh: boolean;
   /** The labels of kept parts left out of a new file (each written as its label in brackets instead). */
   leftOut: string[];
+  /** The main part's folder ('word/'), and the relationship ids and part paths (lower case) already in use: a new one
+   *  never takes a name the file has, so saving over a file Write saved before never names anything twice. */
+  dir: string;
+  relIds: Set<string>;
+  partNames: Set<string>;
+}
+
+/** The first of make(1), make(2)... not yet taken (compared in lower case), now taken. */
+function freeName(taken: Set<string>, make: (n: number) => string): string {
+  for (let n = 1; ; n++) {
+    const name = make(n);
+    if (!taken.has(name.toLowerCase())) {
+      taken.add(name.toLowerCase());
+      return name;
+    }
+  }
 }
 
 /** True when a kept part points at another part of the file it came from (a picture, a chart, a link), which a new file
@@ -281,7 +297,9 @@ function pictureRun(node: NodeJSON, ctx: WriteCtx): string {
   if (!pic) return '';
   let media = ctx.media.get(id);
   if (!media) {
-    media = { rid: `rId${ctx.mediaPrefix}Img${ctx.media.size + 1}`, name: `${ctx.mediaPrefix.toLowerCase()}image${ctx.media.size + 1}.${EXTENSION[pic.type]}`, pic };
+    const folder = `${ctx.dir}media/`;
+    const file = freeName(ctx.partNames, n => `${folder}${ctx.mediaPrefix.toLowerCase()}image${n}.${EXTENSION[pic.type]}`);
+    media = { rid: freeName(ctx.relIds, n => `rId${ctx.mediaPrefix}Img${n}`), name: file.slice(folder.length), pic };
     ctx.media.set(id, media);
   }
   let w = Number(node.attrs?.width) || pic.w;
@@ -305,7 +323,7 @@ function pictureRun(node: NodeJSON, ctx: WriteCtx): string {
 function linkRel(href: string, ctx: WriteCtx): string {
   let rid = ctx.links.get(href);
   if (!rid) {
-    rid = `rIdTwLink${ctx.links.size + 1}`;
+    rid = freeName(ctx.relIds, n => `rIdTwLink${n}`);
     ctx.links.set(href, rid);
   }
   return rid;
@@ -564,7 +582,10 @@ export async function writeDocx(doc: NodeJSON, page: PageSetup, title = '', sour
   const bulletNum = source ? most(/w:numId="(\d+)"/g) + 1 : 1;
   const styleText = source?.styles ? partText(source, source.styles) : null;
   const styleIds = new Set([...(styleText ?? '').matchAll(/w:styleId="([^"]{1,80})"/g)].map(m => m[1]));
-  const ctx: WriteCtx = { page, media: new Map(), ordered: [], links: new Map(), styleIds, nextNum: bulletNum + 1, bulletNum, drawingId: 0, bodyPx, mediaPrefix: source ? 'Tw' : '', notes: [], nextNote: 1, keptNotes: source?.notes ?? new Map(), headingPages: extras.headingPages ?? [], allBlocks: doc.content ?? [], fresh: !source, leftOut: extras.leftOut ?? [] };
+  const dir = source ? source.main.slice(0, source.main.lastIndexOf('/') + 1) : 'word/';
+  const relIds = new Set([...(source ? partText(source, source.rels) ?? '' : '').matchAll(/\bId="([^"]{1,200})"/g)].map(m => m[1].toLowerCase()));
+  const partNames = new Set([...(source?.parts.keys() ?? [])].map(name => name.toLowerCase()));
+  const ctx: WriteCtx = { page, media: new Map(), ordered: [], links: new Map(), styleIds, nextNum: bulletNum + 1, bulletNum, drawingId: 0, bodyPx, mediaPrefix: source ? 'Tw' : '', notes: [], nextNote: 1, keptNotes: source?.notes ?? new Map(), headingPages: extras.headingPages ?? [], allBlocks: doc.content ?? [], fresh: !source, leftOut: extras.leftOut ?? [], dir, relIds, partNames };
   if (source?.notes.size) ctx.nextNote = Math.max(...source.notes.keys()) + 1;
   const body = blocksXml(doc.content ?? [], ctx);
   const hasHeader = lineHas(page.header);
@@ -693,11 +714,12 @@ function writeKept(source: DocxSource, ctx: WriteCtx, body: string, pageXml: str
     if (JSON.stringify(page[key]) === JSON.stringify(source[key])) continue;
     sect = sect.replace(new RegExp(`<w:${tag}\\b[^>]*/>`, 'g'), '');
     if (!lineHas(page[key])) continue;
-    const name = `tw-${key}1.xml`;
+    const name = freeName(ctx.partNames, n => `${dir}tw-${key}${n}.xml`).slice(dir.length);
+    const rid = freeName(ctx.relIds, n => `rIdTw${key}${n === 1 ? '' : n}`);
     out.set(dir + name, enc.encode(headerXml(kind, page[key], bodyTwips)));
-    newRels.push(`<Relationship Id="rIdTw${key}" Type="${REL}/${key}" Target="${name}"/>`);
+    newRels.push(`<Relationship Id="${rid}" Type="${REL}/${key}" Target="${name}"/>`);
     newTypes.push(`<Override PartName="/${dir}${name}" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.${key}+xml"/>`);
-    refs.push(`<w:${tag} w:type="default" r:id="rIdTw${key}"/>`);
+    refs.push(`<w:${tag} w:type="default" r:id="${rid}"/>`);
   }
   sect = sect.replace(/^<w:sectPr[^>]*>/, open => open + refs.join(''));
 
@@ -706,7 +728,8 @@ function writeKept(source: DocxSource, ctx: WriteCtx, body: string, pageXml: str
   for (const [prefix, uri] of [['w', NS.w], ['r', NS.r], ['wp', NS.wp], ['a', NS.a], ['pic', NS.pic]]) {
     if (!root.includes(`xmlns:${prefix}=`)) root = root.replace(/>$/, ` xmlns:${prefix}="${uri}">`);
   }
-  out.set(source.main, enc.encode(`${XML_HEAD}${root}<w:body>${body}${sect}</w:body></w:document>`));
+  const mainXml = `${XML_HEAD}${root}<w:body>${body}${sect}</w:body></w:document>`;
+  out.set(source.main, enc.encode(mainXml));
 
   // Styles: the file's own, with Write's styles in place of the ones of the same ids.
   const stylesPath = source.styles ?? `${dir}styles.xml`;
@@ -725,7 +748,7 @@ function writeKept(source: DocxSource, ctx: WriteCtx, body: string, pageXml: str
   if (!styles) {
     styles = stylesXml();
     if (!source.styles) {
-      newRels.push(`<Relationship Id="rIdTwStyles" Type="${REL}/styles" Target="styles.xml"/>`);
+      newRels.push(`<Relationship Id="${freeName(ctx.relIds, n => `rIdTwStyles${n === 1 ? '' : n}`)}" Type="${REL}/styles" Target="styles.xml"/>`);
       newTypes.push(`<Override PartName="/${stylesPath}" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>`);
     }
   }
@@ -741,7 +764,7 @@ function writeKept(source: DocxSource, ctx: WriteCtx, body: string, pageXml: str
   } else {
     numberingText = `${XML_HEAD}<w:numbering xmlns:w="${NS.w}">${numbering.abstracts}${numbering.nums}</w:numbering>`;
     if (!source.numbering) {
-      newRels.push(`<Relationship Id="rIdTwNumbering" Type="${REL}/numbering" Target="numbering.xml"/>`);
+      newRels.push(`<Relationship Id="${freeName(ctx.relIds, n => `rIdTwNumbering${n === 1 ? '' : n}`)}" Type="${REL}/numbering" Target="numbering.xml"/>`);
       newTypes.push(`<Override PartName="/${numberingPath}" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>`);
     }
   }
@@ -752,7 +775,7 @@ function writeKept(source: DocxSource, ctx: WriteCtx, body: string, pageXml: str
     const path = source.footnotes ?? `${dir}footnotes.xml`;
     out.set(path, enc.encode(footnotesXml(ctx.notes, source.footnotes ? partText(source, source.footnotes) : null)));
     if (!source.footnotes) {
-      newRels.push(`<Relationship Id="rIdTwFootnotes" Type="${REL}/footnotes" Target="footnotes.xml"/>`);
+      newRels.push(`<Relationship Id="${freeName(ctx.relIds, n => `rIdTwFootnotes${n === 1 ? '' : n}`)}" Type="${REL}/footnotes" Target="footnotes.xml"/>`);
       newTypes.push(`<Override PartName="/${path}" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"/>`);
     }
   }
@@ -764,10 +787,22 @@ function writeKept(source: DocxSource, ctx: WriteCtx, body: string, pageXml: str
     out.set(`${dir}media/${media.name}`, media.pic.bytes);
     newRels.push(`<Relationship Id="${media.rid}" Type="${REL}/image" Target="media/${media.name}"/>`);
   }
-  const relsText = partText(source, source.rels) ?? `${XML_HEAD}<Relationships xmlns="${NS.rel}"></Relationships>`;
+  let relsText = partText(source, source.rels) ?? `${XML_HEAD}<Relationships xmlns="${NS.rel}"></Relationships>`;
+  let typesText = partText(source, '[Content_Types].xml') ?? `${XML_HEAD}<Types xmlns="${NS.ct}"></Types>`;
+  // Links, pictures, headers and footers Write put in at an earlier save and the text no longer names: taken out, with
+  // their parts, so each save does not add another copy of them.
+  relsText = relsText.replace(/<Relationship\b[^>]*\/>/g, rel => {
+    const id = /\bId="(rIdTw(?:Link|Img|header|footer)\d*)"/.exec(rel)?.[1];
+    if (!id || mainXml.includes(`"${id}"`)) return rel;
+    const target = /\bTarget="([^"]+)"/.exec(rel)?.[1];
+    if (target && !/\bTargetMode="External"/.test(rel) && !target.includes('..') && !target.startsWith('/')) {
+      out.delete(dir + target);
+      typesText = typesText.replace(new RegExp(`<Override\\b[^>]*PartName="/${(dir + target).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"[^>]*/>`, 'g'), '');
+    }
+    return '';
+  });
   out.set(source.rels, enc.encode(relsText.replace(/<\/Relationships>\s*$/, `${newRels.join('')}</Relationships>`)));
 
-  const typesText = partText(source, '[Content_Types].xml') ?? `${XML_HEAD}<Types xmlns="${NS.ct}"></Types>`;
   for (const [ext, type] of [['png', 'image/png'], ['jpeg', 'image/jpeg'], ['gif', 'image/gif']]) {
     if (!new RegExp(`Extension="${ext}"`, 'i').test(typesText)) newTypes.unshift(`<Default Extension="${ext}" ContentType="${type}"/>`);
   }
@@ -1408,6 +1443,10 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
               const n = at(k, 'id') ?? '';
               cur().push(keepRun(el, k, `${k.name === 'footnoteReference' ? 'Footnote' : 'Endnote'} ${n}`, 'footnotes and endnotes'));
             } else if (k.name === 'commentReference') cur().push(keepRun(el, k, 'Comment', 'comments'));
+            // An object from another program (a spreadsheet, a file), ruby over the words, ink: kept as they are.
+            else if (k.name === 'object') cur().push(keepRun(el, k, 'Embedded object', 'embedded objects'));
+            else if (k.name === 'ruby') cur().push(keepRun(el, k, `Ruby: ${words(k).slice(0, 40)}`, 'ruby (pronunciation guides)'));
+            else if (k.name === 'contentPart') cur().push(keepRun(el, k, 'Ink', 'ink drawings'));
           }
           break;
         }

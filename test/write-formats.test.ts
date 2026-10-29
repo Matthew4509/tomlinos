@@ -10,9 +10,10 @@ import { readZip } from '../src/apps/archive/read.ts';
 import { parseXml } from '../src/core/xml.ts';
 import { zipDeflate } from '../src/core/zip.ts';
 import { readDocx, writeDocx } from '../src/apps/write/docx.ts';
+import { addPicture, picture } from '../src/apps/write/images.ts';
 import { findAll, replaceAll } from '../src/apps/write/find.ts';
 import { markdownLoses, readMarkdown, writeMarkdown } from '../src/apps/write/markdown.ts';
-import { plainText, type NodeJSON } from '../src/apps/write/model.ts';
+import { defaultPage, plainText, type NodeJSON } from '../src/apps/write/model.ts';
 import { readOdt } from '../src/apps/write/odt.ts';
 import { readRtf, RtfProblem } from '../src/apps/write/rtf.ts';
 import { buildSchema } from '../src/apps/write/schema.ts';
@@ -117,6 +118,66 @@ test('a header changed in Write replaces the file’s own; paper and margins fol
   assert.ok(text(after.get('[Content_Types].xml')).includes('/word/tw-header1.xml'));
 });
 
+const linksIn = (doc: NodeJSON): Array<{ text: string; href: string }> => {
+  const out: Array<{ text: string; href: string }> = [];
+  const walk = (n: NodeJSON) => {
+    const l = n.marks?.find(m => m.type === 'link');
+    if (n.type === 'text' && l) out.push({ text: n.text ?? '', href: String(l.attrs?.href) });
+    for (const c of n.content ?? []) walk(c);
+  };
+  walk(doc);
+  return out;
+};
+
+/** What would make Word call a saved file damaged: a relationship id or part named twice, or a name that leads nowhere. */
+async function packageProblems(bytes: Uint8Array): Promise<string[]> {
+  const parts = await files(bytes);
+  const problems: string[] = [];
+  const rels = text(parts.get('word/_rels/document.xml.rels'));
+  const ids = [...rels.matchAll(/Id="([^"]+)"/g)].map(m => m[1]);
+  for (const id of new Set(ids.filter((x, i) => ids.indexOf(x) !== i))) problems.push(`relationship ${id} twice`);
+  const overrides = [...text(parts.get('[Content_Types].xml')).matchAll(/PartName="([^"]+)"/g)].map(m => m[1]);
+  for (const o of new Set(overrides.filter((x, i) => overrides.indexOf(x) !== i))) problems.push(`override ${o} twice`);
+  for (const o of overrides) if (!parts.has(o.slice(1))) problems.push(`override ${o} has no part`);
+  for (const m of rels.matchAll(/<Relationship\b([^>]*)\/>/g)) {
+    if (/TargetMode="External"/.test(m[1])) continue;
+    const target = /Target="([^"]+)"/.exec(m[1])![1];
+    if (!parts.has(`word/${target}`)) problems.push(`relationship to ${target} has no part`);
+  }
+  for (const m of text(parts.get('word/document.xml')).matchAll(/r:(?:id|embed)="([^"]+)"/g)) if (!ids.includes(m[1])) problems.push(`document names ${m[1]}, which is not there`);
+  return problems;
+}
+
+test('saving over a file Write saved before keeps every relationship id and part name unique, three times over', async () => {
+  // A 1 x 1 pixel GIF: a second picture, unlike the PNG.
+  const GIF = Uint8Array.from(atob('R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw=='), c => c.charCodeAt(0));
+  const para = (content: NodeJSON[]): NodeJSON => ({ type: 'paragraph', attrs: { style: 'normal' }, content });
+  const link = (words: string, href: string): NodeJSON => ({ type: 'text', text: words, marks: [{ type: 'link', attrs: { href } }] });
+  const pic = (bytes: Uint8Array): NodeJSON => ({ type: 'image', attrs: { src: addPicture(bytes)!, width: 20, height: 20, alt: '' } });
+  // Session 1: a new document with a link, a picture and a header.
+  const first = { ...defaultPage(), header: { l: 'One', c: '', r: '' } };
+  let bytes = await writeDocx({ type: 'doc', content: [para([link('shop', 'https://example.com/')]), para([pic(PNG)])] }, first, '');
+  assert.deepEqual(await packageProblems(bytes), [], 'a new file');
+  // Sessions 2 and 3: opened again, a new picture and a new link added, the header changed, saved over the file.
+  const added: Array<[Uint8Array, string]> = [[GIF, 'https://example.org/two'], [GIF, 'https://example.net/three']];
+  for (const [i, [img, href]] of added.entries()) {
+    const read = await readDocx(bytes);
+    const doc: NodeJSON = { ...read.doc, content: [...read.doc.content!, para([link('more', href)]), para([pic(img)])] };
+    bytes = await writeDocx(doc, { ...read.page, header: { l: `Header ${i + 2}`, c: '', r: '' } }, '', read.source);
+    assert.deepEqual(await packageProblems(bytes), [], `save ${i + 2}`);
+  }
+  const back = await readDocx(bytes);
+  assert.deepEqual(linksIn(back.doc).map(l => l.href), ['https://example.com/', 'https://example.org/two', 'https://example.net/three']);
+  const kinds: string[] = [];
+  const walk = (n: NodeJSON) => {
+    if (n.type === 'image') kinds.push(picture(String(n.attrs?.src))!.type);
+    n.content?.forEach(walk);
+  };
+  walk(back.doc);
+  assert.deepEqual(kinds, ['image/png', 'image/gif', 'image/gif'], 'each picture is still its own picture');
+  assert.equal(back.page.header.l, 'Header 3');
+});
+
 test('a WordPad file: bold, colour, a font, bullets, numbers, a table, a picture, accents and Unicode', async () => {
   const hex = [...PNG].map(b => b.toString(16).padStart(2, '0')).join('');
   const rtf = '{\\rtf1\\ansi\\ansicpg1252\\deff0{\\fonttbl{\\f0\\fnil\\fcharset0 Calibri;}{\\f1\\fnil\\fcharset2 Symbol;}{\\f2\\froman Georgia;}}'
@@ -216,6 +277,35 @@ test('Markdown both ways: headings, bold, italic, code, lists in lists, numbered
   assert.deepEqual(markdownLoses({ type: 'doc', content: [{ type: 'paragraph', attrs: { align: 'center' }, content: [{ type: 'text', text: 'x', marks: [{ type: 'color', attrs: { value: '#ff0000' } }] }] }] }).length, 2);
 });
 
+test('Markdown: what opening a .md changes is said, a code block saves back as one, and footnotes, fields and contents count as losses', () => {
+  const md = '# Readme\n\n![logo](logo.png)\n\n---\n\n> quoted line\n\n```\nconst a = `x`;\n\nb();\n```\n\nSee [docs][1].\n\n[1]: https://example.com/\n';
+  const changes = new Set<string>();
+  const doc = readMarkdown(md, changes);
+  assert.deepEqual([...changes].sort(), [
+    'lines across the page',
+    'pictures (each shows as its description)',
+    'quotes (shown as indented italics)',
+    'reference-style links (shown as their words)',
+  ]);
+  const none = new Set<string>();
+  readMarkdown('# Plain\n\nJust **words**, a [link](https://example.com/) and `code`.\n', none);
+  assert.deepEqual([...none], []);
+  // A code block goes back as a code block, its backticks and blank line included.
+  const out = writeMarkdown(doc);
+  assert.ok(out.includes('```\nconst a = `x`;\n\nb();\n```'), out);
+  assert.equal(writeMarkdown(readMarkdown(out)), out, 'and reads back the same');
+  // Inline code holding a backtick keeps it.
+  assert.equal(writeMarkdown(readMarkdown('Run `` a`b `` now.\n')), 'Run `` a`b `` now.\n');
+  const rich: NodeJSON = { type: 'doc', content: [
+    { type: 'toc', attrs: {} },
+    { type: 'paragraph', attrs: { style: 'normal' }, content: [
+      { type: 'text', text: 'Dear ' }, { type: 'field', attrs: { name: 'First' } }, { type: 'footnote', attrs: { text: 'A note', id: null } },
+    ] },
+  ] };
+  const loses = markdownLoses(rich);
+  for (const what of ['footnotes', 'merge fields', 'the contents page']) assert.ok(loses.includes(what), `${what}: ${loses.join('; ')}`);
+});
+
 test('a hostile Markdown file (very long lines of spaces, dashes and stars) opens quickly', () => {
   const started = Date.now();
   const doc = readMarkdown(`# ${' '.repeat(80000)}x\n${'- '.repeat(40000)}x\n${'*a '.repeat(40000)}\nline${' '.repeat(80000)}y\n## Head ##\n`);
@@ -244,4 +334,10 @@ test('find and replace: case, whole words, across formatting, never across parag
     if (n.isText && n.text.startsWith('dog') && n.marks.some(m => m.type.name === 'strong')) boldDog = true;
   });
   assert.ok(boldDog, 'the bold Cat became a bold dog');
+  // A letter whose small form is longer (Turkish İ is "i" plus a dot): what is found is still where it is.
+  const turkish = schema.nodeFromJSON({ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'İzmir cat and cat' }] }] });
+  const tState = pm.EditorState.create({ doc: turkish });
+  const tHits = findAll(turkish, 'cat', { matchCase: false, wholeWord: false });
+  assert.equal(tState.apply(replaceAll(tState, tHits, 'dog')).doc.textContent, 'İzmir dog and dog');
+  assert.deepEqual(findAll(turkish, 'izmir', { matchCase: false, wholeWord: true }), [{ from: 1, to: 6 }]);
 });

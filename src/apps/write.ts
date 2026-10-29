@@ -239,7 +239,9 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
         lost = read.dropped;
         readOnly = true;
       } else if (ext === '.md' || ext === '.markdown') {
-        startDoc = readMarkdown(new TextDecoder('utf-8').decode(bytes));
+        const changes = new Set<string>();
+        startDoc = readMarkdown(new TextDecoder('utf-8').decode(bytes), changes);
+        lost = [...changes];
         kind = 'md';
       } else if (ext === '.txt' || ext === '.text' || ext === '') {
         startDoc = docFromText(new TextDecoder('utf-8').decode(bytes));
@@ -1113,10 +1115,13 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
 
   async function save(): Promise<boolean> {
     if (!path) return saveAs();
-    if (lost.length && kind === 'docx') {
+    if (lost.length && (kind === 'docx' || kind === 'md')) {
+      const listed = `${lost.slice(0, 3).join('; ')}${lost.length > 3 ? '; and more' : ''}`;
       const answer = await shell.dialogs.ask<'copy' | 'over' | null>({
         title: `Save over “${label}”?`,
-        text: `When it was opened, Write could not show some parts of this Word file (${lost.slice(0, 3).join('; ')}${lost.length > 3 ? '; and more' : ''}). Saving over the file takes them out of it for good.`,
+        text: kind === 'md'
+          ? `When it was opened, Write showed some parts of this Markdown file differently (${listed}). Saving over the file writes them as Write shows them.`
+          : `When it was opened, Write could not show some parts of this Word file (${listed}). Saving over the file takes them out of it for good.`,
         buttons: [{ label: 'Save a copy', value: 'copy', primary: true }, { label: 'Save over it', value: 'over', danger: true }, { label: 'Cancel', value: null }],
         cancel: null,
       });
@@ -1980,9 +1985,11 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
       parts.push(h('p', { class: 'dialog-text' }, 'Write keeps these as they are, shown as grey labels in the text; saving puts them back unchanged:'), h('ul', { class: 'xlsx-list' }, ...keptParts.map(d => h('li', {}, d))));
     }
     if (lost.length) {
-      parts.push(h('p', { class: 'dialog-text' }, 'These are left out (Write cannot show them yet):'), h('ul', { class: 'xlsx-list' }, ...lost.map(d => h('li', {}, d))));
+      parts.push(h('p', { class: 'dialog-text' }, kind === 'md' ? 'These show differently from the file:' : 'These are left out (Write cannot show them yet):'), h('ul', { class: 'xlsx-list' }, ...lost.map(d => h('li', {}, d))));
     }
-    const detail = source
+    const detail = kind === 'md'
+      ? 'The file itself has not been changed. Saving over it would write these as Write shows them, so Save asks first.'
+      : source
       ? (lost.length ? 'The file itself has not been changed. Saving over it would leave out what is listed as left out, so Save asks first.' : 'The file itself has not been changed.')
       : 'The file itself has not been changed. Save makes a Word document (.docx) beside it.';
     void shell.dialogs.ask<true>({

@@ -138,7 +138,7 @@ export async function askEntry(shell: Shell, o: EntryOptions): Promise<CalEvent 
       start: timeIn.value,
       hours: hoursIn.value,
       daily: !appt && daily.checked,
-      runDays: !appt && runFor.checked ? Number(runDays.value) : 0,
+      runDays: !appt && runFor.checked ? Number(runDays.value.trim() || Number.NaN) : 0,
       remind: Number(remindSel.value),
       notes: noteIn.value,
       where: appt ? whereIn.value : undefined,

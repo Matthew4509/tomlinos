@@ -46,6 +46,42 @@ interface EventKeep {
   was: { date: string; start: string; end: string; repeat: Repeat; count: number; until: string; where: string };
   /** Everything in the file outside its events (time zones, the calendar's name), shared by all its events. */
   calendar: string[];
+  /** The file's repeat rule beyond its kind: every how many (INTERVAL), on which weekdays (BYDAY, 0 = Sunday), the
+   *  week's first day (WKST). Used while the event keeps that rule. */
+  shape?: { every: number; days: number[]; weekStart: number };
+  /** Days a repeat skips (EXDATE: a showing cancelled in the other calendar). */
+  skip?: string[];
+}
+
+const WEEKDAYS = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
+
+/**
+ * What a repeat rule shows here: its kind and shape, or 'none' (its first day only) for a rule this calendar cannot
+ * show on the right days (the second Tuesday of each month, say), so it never shows on wrong ones.
+ */
+function ruleOf(rule: string, date: string): { repeat: Repeat; shape?: EventKeep['shape'] } {
+  const repeat = repeatOf(rule);
+  if (repeat === 'none') return { repeat };
+  const part = (name: string) => new RegExp(`(?:^|;)${name}=([^;]*)`, 'i').exec(rule)?.[1]?.toUpperCase();
+  if (['BYSETPOS', 'BYYEARDAY', 'BYWEEKNO', 'BYHOUR', 'BYMINUTE', 'BYSECOND'].some(p => part(p) !== undefined)) return { repeat: 'none' };
+  const intervalText = part('INTERVAL');
+  const every = intervalText === undefined ? 1 : Number(intervalText);
+  if (!Number.isInteger(every) || every < 1 || every > 1000) return { repeat: 'none' };
+  const [, m, d] = date.split('-').map(Number);
+  const byMonthDay = part('BYMONTHDAY');
+  if (byMonthDay !== undefined && (repeat === 'daily' || repeat === 'weekly' || byMonthDay !== String(d))) return { repeat: 'none' };
+  const byMonth = part('BYMONTH');
+  if (byMonth !== undefined && (repeat !== 'yearly' || byMonth !== String(m))) return { repeat: 'none' };
+  const weekStart = WEEKDAYS.indexOf(part('WKST') ?? 'MO');
+  let days: number[] = [];
+  const byDay = part('BYDAY');
+  if (byDay !== undefined) {
+    days = byDay.split(',').map(code => WEEKDAYS.indexOf(code.trim()));
+    // A numbered weekday (2TU), weekdays on a monthly or yearly rule, or weekdays every other day: not shown here.
+    if (days.some(n => n < 0) || repeat === 'monthly' || repeat === 'yearly' || (repeat === 'daily' && every > 1)) return { repeat: 'none' };
+    days = [...new Set(days)].sort((a, b) => a - b);
+  }
+  return { repeat, shape: { every, days, weekStart: weekStart < 0 ? 1 : weekStart } };
 }
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -136,10 +172,19 @@ const EDITED = new Set(['UID', 'SUMMARY', 'DESCRIPTION', 'DTSTART', 'DTEND', 'DU
 const CALENDAR_OWN = new Set(['VERSION', 'PRODID']);
 
 export function parseIcs(text: string): CalEvent[] {
+  return readIcs(text).events;
+}
+
+/**
+ * The events, and what the file holds besides them: its own lines and parts (time zones, to-dos, the calendar's name)
+ * and each event this calendar cannot read (a start it cannot make out), line for line.
+ */
+function readIcs(text: string): { events: CalEvent[]; calendar: string[]; unread: string[][] } {
   const events: CalEvent[] = [];
   const calendar: string[] = [];
+  const unread: string[][] = [];
   const seen = new Map<string, number>();
-  let cur: (Partial<CalEvent> & { keep: EventKeep; raw: string[]; recurrence: string }) | null = null;
+  let cur: (Partial<CalEvent> & { keep: EventKeep; raw: string[]; recurrence: string; ruleText?: string }) | null = null;
   // Inner parts (an event's alarms; the calendar's time zones) are kept whole, line for line.
   let depth = 0;
   let inCalendar = false;
@@ -160,6 +205,11 @@ export function parseIcs(text: string): CalEvent[] {
     } else if (end === 'VEVENT' && cur) {
       if (cur.date) {
         const keep = cur.keep;
+        if (cur.ruleText !== undefined) {
+          const shown = ruleOf(cur.ruleText, cur.date);
+          cur.repeat = shown.repeat;
+          if (shown.shape) keep.shape = shown.shape;
+        }
         const fileUid = keep.uid;
         // A moved or changed showing of a repeating event shares its series' UID: it gets its own key here, so an
         // edit or delete of one never takes the other with it.
@@ -177,7 +227,7 @@ export function parseIcs(text: string): CalEvent[] {
         keep.was = { date: e.date, start: e.start, end: e.end, repeat: e.repeat, count: e.count ?? 0, until: e.until ?? '', where: e.where ?? '' };
         e.keep = keep;
         events.push(e);
-      }
+      } else unread.push(['BEGIN:VEVENT', ...cur.raw]);
       cur = null;
     } else if (begin) {
       depth = 1;
@@ -196,6 +246,7 @@ export function parseIcs(text: string): CalEvent[] {
         // One rule is shown and edited; a second (rare, and gone from the standard) is kept but not shown.
         if (!cur.keep.rule.length) {
           cur.repeat = repeatOf(line.value);
+          cur.ruleText = line.value;
           Object.assign(cur, limitsOf(line.value));
         }
         cur.keep.rule.push(line.raw);
@@ -210,19 +261,32 @@ export function parseIcs(text: string): CalEvent[] {
         if (PROJECT_ID.test(v)) cur.project = v;
       }
       if (line.name === 'RECURRENCE-ID') cur.recurrence = line.value.trim().slice(0, 40);
+      if (line.name === 'EXDATE') {
+        for (const value of line.value.split(',').slice(0, 1000)) {
+          const day = parseStamp({ ...line, value })?.date;
+          if (day) (cur.keep.skip ??= []).push(day);
+        }
+      }
       if (line.name === 'DTSTART' || line.name === 'DTEND' || line.name === 'DURATION') cur.keep.time.push(line.raw);
       else if (!EDITED.has(line.name)) cur.keep.lines.push(line.raw);
     } else if (inCalendar && !CALENDAR_OWN.has(line.name)) {
       calendar.push(line.raw);
     }
   }
-  return events;
+  return { events, calendar, unread };
 }
 
-export function writeIcs(events: CalEvent[]): string {
+/**
+ * The calendar file for these events. Given the file's text as it was read before the change (`previous`), what it
+ * holds besides the events (its name, time zones, to-dos, events this calendar cannot read) is written back as it was,
+ * even when no event from it is left.
+ */
+export function writeIcs(events: CalEvent[], previous?: string | null): string {
   const out = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//TomlinOS//Calendar//EN'];
-  const calendar = events.find(e => e.keep?.calendar.length)?.keep?.calendar ?? [];
+  const before = typeof previous === 'string' ? readIcs(previous) : null;
+  const calendar = before ? before.calendar : events.find(e => e.keep?.calendar.length)?.keep?.calendar ?? [];
   for (const raw of calendar) out.push(foldLine(raw));
+  for (const raw of before?.unread.flat() ?? []) out.push(foldLine(raw));
   for (const e of events) {
     const k = e.keep;
     out.push('BEGIN:VEVENT', writeLine('UID', k?.uid || e.uid), writeLine('SUMMARY', escapeValue(e.title)));
@@ -274,30 +338,53 @@ const daysIn = (y: number, m: number) => new Date(Date.UTC(y, m, 0)).getUTCDate(
 function showingIndex(e: CalEvent, day: string): number {
   if (day === e.date) return 0;
   if (e.repeat === 'none' || day < e.date) return -1;
+  // The file's own rule (every 2 weeks, on Mondays and Fridays) while the event keeps it; a repeat chosen here is plain.
+  const shape = e.keep && e.keep.rule.length && e.keep.was.repeat === e.repeat ? e.keep.shape : undefined;
+  const every = shape?.every ?? 1;
   const [y, m, d] = e.date.split('-').map(Number);
   const [Y, M, D] = day.split('-').map(Number);
   if (e.repeat === 'yearly') {
-    if (M !== m || D !== d) return -1;
-    if (!(m === 2 && d === 29)) return Y - y;
+    if (M !== m || D !== d || (Y - y) % every) return -1;
+    if (!(m === 2 && d === 29)) return (Y - y) / every;
     let n = 0;
-    for (let yy = y; yy < Y; yy++) if (daysIn(yy, 2) === 29) n++;
+    for (let yy = y; yy < Y; yy += every) if (daysIn(yy, 2) === 29) n++;
     return n;
   }
   if (e.repeat === 'monthly') {
-    if (D !== d) return -1;
     const months = (Y - y) * 12 + (M - m);
-    if (d <= 28) return months;
+    if (D !== d || months % every) return -1;
+    if (d <= 28) return months / every;
     let n = 0;
-    for (let i = 0; i < months; i++) if (daysIn(y + Math.floor((m - 1 + i) / 12), ((m - 1 + i) % 12) + 1) >= d) n++;
+    for (let i = 0; i < months; i += every) if (daysIn(y + Math.floor((m - 1 + i) / 12), ((m - 1 + i) % 12) + 1) >= d) n++;
     return n;
   }
   const diff = Math.round((Date.UTC(Y, M - 1, D) - Date.UTC(y, m - 1, d)) / 86400000);
-  if (e.repeat === 'daily') return diff;
-  return diff % 7 === 0 ? diff / 7 : -1;
+  if (shape?.days.length) return weekdayIndex(diff, new Date(Date.UTC(y, m - 1, d)).getUTCDay(), shape);
+  if (e.repeat === 'daily') return diff % every ? -1 : diff / every;
+  return diff % (7 * every) === 0 ? diff / (7 * every) : -1;
+}
+
+/**
+ * Which showing a day `diff` days after the first is, for a rule on certain weekdays every `every` weeks (weeks
+ * starting on `weekStart`, as the file says); -1 when it does not show then. The first day counts as a showing even
+ * if it is not one of the weekdays, as the standard says.
+ */
+function weekdayIndex(diff: number, firstDay: number, shape: NonNullable<EventKeep['shape']>): number {
+  const place = (weekday: number) => (weekday - shape.weekStart + 7) % 7;
+  const places = shape.days.map(place).sort((a, b) => a - b);
+  const startPlace = place(firstDay);
+  const at = startPlace + diff;
+  const week = Math.floor(at / 7);
+  const here = at % 7;
+  if (week % shape.every || !places.includes(here)) return -1;
+  const firstWeek = places.filter(p => p >= startPlace).length + (places.includes(startPlace) ? 0 : 1);
+  if (week === 0) return places.filter(p => p < here).length - places.filter(p => p < startPlace).length + (places.includes(startPlace) ? 0 : 1);
+  return firstWeek + (week / shape.every - 1) * places.length + places.filter(p => p < here).length;
 }
 
 /** Does the event fall on this day (YYYY-MM-DD), counting its repeats and where they end ("for 3 days", "until")? */
 export function occursOn(e: CalEvent, day: string): boolean {
+  if (e.repeat !== 'none' && e.keep?.skip?.includes(day)) return false;
   if (day === e.date) return true;
   if (e.repeat === 'none' || day < e.date) return false;
   if (e.until && day > e.until) return false;

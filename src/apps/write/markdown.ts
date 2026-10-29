@@ -7,6 +7,9 @@ import { linkHref, type MarkJSON, type NodeJSON } from './model.ts';
 
 const CODE_FACE = 'Consolas';
 
+/** While a file is being read: what opening it changes (said to the person, so Save asks before writing over it). */
+let changing: Set<string> | undefined;
+
 /** Inline Markdown as text runs: **bold**, *italic* / _italic_, ~~struck~~, `code`, [words](address), \escapes. */
 export function inlineMd(text: string, base: MarkJSON[] = []): NodeJSON[] {
   const out: NodeJSON[] = [];
@@ -35,11 +38,19 @@ export function inlineMd(text: string, base: MarkJSON[] = []): NodeJSON[] {
         continue;
       }
       if (ch === '`') {
-        const end = s.indexOf('`', i + 1);
+        // Code between runs of backticks of the same length (``a`b`` holds a backtick); one space inside each end is
+        // padding, not code.
+        let n = 1;
+        while (s[i + n] === '`') n++;
+        const fence = '`'.repeat(n);
+        let end = s.indexOf(fence, i + n);
+        while (end > 0 && s[end + n] === '`') end = s.indexOf(fence, end + n + 1);
         if (end > i) {
           flush();
-          push(s.slice(i + 1, end), [...marks, { type: 'font', attrs: { face: CODE_FACE } }]);
-          i = end + 1;
+          let code = s.slice(i + n, end);
+          if (code.length > 2 && code.startsWith(' ') && code.endsWith(' ') && code.trim()) code = code.slice(1, -1);
+          push(code, [...marks, { type: 'font', attrs: { face: CODE_FACE } }]);
+          i = end + n;
           continue;
         }
       }
@@ -49,6 +60,7 @@ export function inlineMd(text: string, base: MarkJSON[] = []): NodeJSON[] {
         const end = close > 0 ? s.indexOf(')', close + 2) : -1;
         if (close > 0 && end > 0) {
           plain += s.slice(i + 2, close);
+          changing?.add('pictures (each shows as its description)');
           i = end + 1;
           continue;
         }
@@ -118,8 +130,18 @@ const para = (text: string, attrs: Record<string, unknown> = {}, base: MarkJSON[
 
 const LIST = /^( *)([-*+]|\d{1,9}[.)])\s+(.*)$/;
 
-/** A .md file as a document. */
-export function readMarkdown(source: string): NodeJSON {
+/** A .md file as a document. What reading it changes (pictures shown as words, quotes as italics...) is added to
+ *  `changes`, if given. */
+export function readMarkdown(source: string, changes?: Set<string>): NodeJSON {
+  changing = changes;
+  try {
+    return readBlocks(source);
+  } finally {
+    changing = undefined;
+  }
+}
+
+function readBlocks(source: string): NodeJSON {
   const lines = source.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n').split('\n');
   const blocks: NodeJSON[] = [];
   let i = 0;
@@ -150,6 +172,7 @@ export function readMarkdown(source: string): NodeJSON {
     }
     if (/^([-*_])\1{2,}$/.test(line.replace(/\s+/g, ''))) {
       // A line across the page: nothing to show in a document that has none; the paragraphs stay apart.
+      changing?.add('lines across the page');
       i++;
       continue;
     }
@@ -180,6 +203,7 @@ export function readMarkdown(source: string): NodeJSON {
       const quote: string[] = [];
       while (i < lines.length && /^\s*>/.test(lines[i])) quote.push(lines[i++].replace(/^\s*> ?/, ''));
       blocks.push(para(quote.join('\n'), { indent: 36 }, [{ type: 'em' }]));
+      changing?.add('quotes (shown as indented italics)');
       continue;
     }
     if (LIST.test(line)) {
@@ -224,6 +248,8 @@ export function readMarkdown(source: string): NodeJSON {
     // A paragraph: lines until a blank line or something else starts.
     const text: string[] = [];
     while (i < lines.length && lines[i].trim() && !/^(#{1,6}\s|\s*```|\s*~~~|\s*>|\s*\|)/.test(lines[i]) && !(text.length && LIST.test(lines[i]))) text.push(lines[i++]);
+    // "[1]: https://..." gives the address for [words][1] elsewhere; both stay as words here.
+    if (text.some(l => /^ {0,3}\[[^\]]+\]:\s*\S/.test(l))) changing?.add('reference-style links (shown as their words)');
     blocks.push(para(text.join('\n').trim()));
   }
   return { type: 'doc', content: blocks.length ? blocks : [{ type: 'paragraph' }] };
@@ -232,6 +258,17 @@ export function readMarkdown(source: string): NodeJSON {
 /** Text with Markdown's own signs escaped where they would mean something. */
 const escapeMd = (s: string): string => s.replace(/([\\`*_[\]~|])/g, '\\$1').replace(/^(#{1,6}\s|>|\d+[.)]\s|[-+*]\s)/, '\\$1');
 
+/** Inline code: in single backticks, or in a longer run (with a space inside each end) when it holds backticks. */
+function codeSpan(text: string): string {
+  if (!text.includes('`')) return `\`${text}\``;
+  const fence = '`'.repeat(Math.max(...(text.match(/`+/g) ?? []).map(r => r.length)) + 1);
+  return `${fence} ${text} ${fence}`;
+}
+
+/** A paragraph that is a line of a code block as read: all in the code typeface (or empty), with no space after. */
+const isCodeLine = (b: NodeJSON): boolean => b.type === 'paragraph' && (b.attrs?.style ?? 'normal') === 'normal' && b.attrs?.after === 0
+  && (b.content ?? []).every(n => n.type === 'text' && n.marks?.length === 1 && n.marks[0].type === 'font' && n.marks[0].attrs?.face === CODE_FACE);
+
 function inlineToMd(nodes: NodeJSON[] | undefined): string {
   let out = '';
   for (const n of nodes ?? []) {
@@ -239,7 +276,7 @@ function inlineToMd(nodes: NodeJSON[] | undefined): string {
     else if (n.type === 'text') {
       const types = new Set((n.marks ?? []).map(m => m.type));
       const code = (n.marks ?? []).some(m => m.type === 'font' && /consolas|courier|mono/i.test(String(m.attrs?.face)));
-      let t = code ? `\`${(n.text ?? '').replace(/`/g, '')}\`` : escapeMd(n.text ?? '');
+      let t = code ? codeSpan(n.text ?? '') : escapeMd(n.text ?? '');
       // Markers go inside the text's own spaces ("**bold** next", not "**bold **next").
       const lead = /^\s*/.exec(t)![0];
       const trail = /\s*$/.exec(t)![0];
@@ -264,6 +301,9 @@ export function markdownLoses(doc: NodeJSON): string[] {
     if (n.type === 'image') lost.add('pictures');
     if (n.type === 'page_break') lost.add('page breaks');
     if (n.type === 'opaque_inline' || n.type === 'opaque_block') lost.add('the parts of a Word file shown as grey labels');
+    if (n.type === 'footnote') lost.add('footnotes');
+    if (n.type === 'field') lost.add('merge fields');
+    if (n.type === 'toc') lost.add('the contents page');
     if (n.type === 'paragraph' && (n.attrs?.align || n.attrs?.before !== undefined && n.attrs?.before !== null)) lost.add('alignment and spacing');
     for (const m of n.marks ?? []) {
       if (m.type === 'color' || m.type === 'highlight' || m.type === 'size' || m.type === 'underline' || m.type === 'vert') lost.add('colours, sizes, underlining and raised or lowered text');
@@ -281,7 +321,18 @@ export function markdownLoses(doc: NodeJSON): string[] {
 export function writeMarkdown(doc: NodeJSON): string {
   const out: string[] = [];
   const blocks = (nodes: NodeJSON[], indent: string) => {
-    for (const b of nodes) {
+    for (let at = 0; at < nodes.length; at++) {
+      const b = nodes[at];
+      // Lines of a code block (as a code block reads) go back as one, word for word.
+      if (isCodeLine(b) && b.content?.length) {
+        let last = at;
+        for (let k = at + 1; k < nodes.length && isCodeLine(nodes[k]); k++) if (nodes[k].content?.length) last = k;
+        const code = nodes.slice(at, last + 1).map(p => (p.content ?? []).map(n => n.text ?? '').join(''));
+        const fence = '`'.repeat(Math.max(3, ...code.map(l => Math.max(0, ...(l.match(/`+/g) ?? []).map(r => r.length + 1)))));
+        out.push(indent + fence, ...code.map(l => (l ? indent + l : '')), indent + fence, '');
+        at = last;
+        continue;
+      }
       if (b.type === 'paragraph') {
         const style = b.attrs?.style;
         const text = inlineToMd(b.content);

@@ -35,3 +35,21 @@ test('CAD Draft: a drawing too big to open again is refused at Save with the rea
   d.ents = [{ id: 1, layer: 'Geometry', type: 'poly', pts: Array.from({ length: 2_000_001 }, (_, i) => ({ x: i, y: 0 })), bulges: [], closed: false }];
   assert.match(String(tooBigToSave(d)), /opens again with up to 2,000,000/);
 });
+
+test('CAD Draft: every drawing Save lets through opens again with nothing damaged (layers, long words)', () => {
+  const layer = (name: string) => ({ name, colour: '#ffffff', on: true, locked: false, lineType: 'continuous' as const });
+  // 1,001 layers (an architect's DXF can have that many): Save says why, rather than writing a file that never opens.
+  const many = drawingWith();
+  many.layers = Array.from({ length: 1001 }, (_, i) => layer(`L${i}`));
+  assert.match(String(tooBigToSave(many)), /1,001 layers/);
+  // A leader's words and a text over 10,000 letters: also said at Save.
+  const leader: Ent = { id: 1, layer: 'Geometry', type: 'dim', kind: 'leader', pts: [{ x: 0, y: 0 }, { x: 5, y: 5 }], dir: 0, h: 3.5, arrow: 2.5, dp: 2, text: 'x'.repeat(10_001) };
+  assert.match(String(tooBigToSave(drawingWith(leader))), /10,000 letters/);
+  // Just inside every limit: saved, and it opens again whole.
+  const edge = drawingWith({ ...leader, text: 'x'.repeat(10_000) });
+  edge.layers = Array.from({ length: 1000 }, (_, i) => layer(`L${i}`));
+  edge.ents[0].layer = 'L0';
+  assert.equal(tooBigToSave(edge), null);
+  const back = readTcad(writeTcad(edge));
+  assert.deepEqual([back.damaged, back.skipped, back.drawing.layers.length, back.drawing.ents.length], [0, 0, 1000, 1]);
+});

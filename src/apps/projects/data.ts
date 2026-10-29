@@ -206,7 +206,7 @@ export interface EntryForm {
   /** '' or a number of hours as typed. */
   hours: string;
   daily: boolean;
-  /** 0, or 2 and up: that many days in a row. */
+  /** 0 (Run for not ticked), or 2 and up: that many days in a row. NaN when ticked with no number in the box. */
   runDays: number;
   remind: number;
   notes: string;
@@ -235,8 +235,10 @@ export function entryFrom(form: EntryForm, uid: string = crypto.randomUUID()): C
       end = e;
     }
   }
-  if (form.daily && form.runDays) return 'Choose Repeat daily or Run for days, not both.';
-  if (form.runDays && (!Number.isInteger(form.runDays) || form.runDays < 2 || form.runDays > MAX_RUN_DAYS)) return `Run for: choose 2 to ${MAX_RUN_DAYS} days.`;
+  // Run for is ticked whenever runDays is not 0 (an empty or unreadable number box comes as NaN, and is said).
+  const runFor = form.runDays !== 0;
+  if (form.daily && runFor) return 'Choose Repeat daily or Run for days, not both.';
+  if (runFor && (!Number.isInteger(form.runDays) || form.runDays < 2 || form.runDays > MAX_RUN_DAYS)) return `Run for: choose 2 to ${MAX_RUN_DAYS} days.`;
   const event: CalEvent = {
     uid,
     title: title.slice(0, 500),

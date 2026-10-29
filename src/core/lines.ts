@@ -9,9 +9,19 @@ export interface ContentLine {
   raw: string;
 }
 
+/** A line whose value is quoted-printable (old vCard 2.1, from phones): =C3=BC for ü, and "=" at the end for "goes on". */
+export const isQuotedPrintable = (line: string): boolean => /^[^:]*QUOTED-PRINTABLE/i.test(line);
+
 /** Joins folded lines and splits the text into content lines. Lines that do not parse are skipped, never fatal. */
 export function readLines(text: string): ContentLine[] {
-  const raw = text.replace(/\r\n?/g, '\n').replace(/\n[ \t]/g, '').split('\n');
+  const raw: string[] = [];
+  for (const line of text.replace(/\r\n?/g, '\n').split('\n')) {
+    const last = raw.length - 1;
+    // A quoted-printable value goes on after an "=" at the line's end; any other folded line starts with a space.
+    if (last >= 0 && raw[last].endsWith('=') && isQuotedPrintable(raw[last])) raw[last] = raw[last].slice(0, -1) + line;
+    else if (last >= 0 && (line.startsWith(' ') || line.startsWith('\t'))) raw[last] += line.slice(1);
+    else raw.push(line);
+  }
   const out: ContentLine[] = [];
   for (const line of raw) {
     // The name and its parameters end at the first colon outside quotes (a quoted parameter may hold one).
@@ -63,6 +73,20 @@ const utf8Length = (ch: string): number => {
  * through an emoji would leave two halves that are saved as two "?" marks.
  */
 export function foldLine(line: string): string {
+  // A quoted-printable line (all plain letters) folds its own way: "=" at the end of each piece, never inside "=C3".
+  if (isQuotedPrintable(line) && line.length > 75) {
+    const pieces: string[] = [];
+    let at = 0;
+    while (line.length - at > 75) {
+      let cut = at + 74;
+      if (line[cut - 1] === '=') cut -= 1;
+      else if (line[cut - 2] === '=') cut -= 2;
+      pieces.push(`${line.slice(at, cut)}=`);
+      at = cut;
+    }
+    pieces.push(line.slice(at));
+    return pieces.join('\r\n');
+  }
   const parts: string[] = [];
   let cur = '';
   let bytes = 0;

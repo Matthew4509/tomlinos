@@ -4,7 +4,7 @@
 // A formula whose answer is a list (=SORT(A2:A9), =FILTER(...), =A1:A5*2) fills the cells below and to the right of it
 // ("spills"), as in Excel 365; nothing is stored in those cells, so typing in one of them stops the list (#SPILL!).
 import { localeDateOrder, readDateTime, shortDateCode, type DateOrder } from './dates.ts';
-import { evaluateCell, givesList, leadingFunction, parseFormula, text as valueToText, type Context, type Grid, type Node } from './formula.ts';
+import { evaluateCell, givesList, leadingFunction, MAX_FORMULA_LENGTH, parseFormula, text as valueToText, type Context, type Grid, type Node } from './formula.ts';
 import { codeProblem, formatCode, isDateCode, type Formatted } from './numfmt.ts';
 import { plural } from '../../core/format.ts';
 import { colName, MAX_COLS, MAX_ROWS, mapRefs, parseCellRef, renameSheetInFormula, shiftFormula, SyntaxProblem, tokenize, type Ref } from './refs.ts';
@@ -1989,10 +1989,25 @@ export class Workbook {
     return null;
   }
 
+  /**
+   * Refuses a rename that would make a cell's formula longer than a formula may be (such a workbook would not open
+   * again), naming the first cell it would happen in.
+   */
+  private refuseLongFormulas(rewrite: (f: string) => string, what: string, onSheet: (sheet: Sheet) => boolean): void {
+    for (const sheet of this.sheets) {
+      if (!onSheet(sheet)) continue;
+      for (const [key, cell] of sheet.cells) {
+        if (cell.f === undefined || rewrite(cell.f).length <= MAX_FORMULA_LENGTH) continue;
+        throw new SyntaxProblem(`With ${what}, the formula in ${sheet.name}!${colName(key % MAX_COLS)}${Math.floor(key / MAX_COLS) + 1} would be longer than ${MAX_FORMULA_LENGTH.toLocaleString('en-GB')} characters, the most a formula may have. Choose a shorter name.`);
+      }
+    }
+  }
+
   renameSheet(s: number, name: string): void {
     const problem = this.sheetNameProblem(name, s);
     if (problem) throw new SyntaxProblem(problem);
     const old = this.sheets[s].name;
+    this.refuseLongFormulas(f => renameSheetInFormula(f, old, name), 'that sheet name', () => true);
     this.snapshotChange(() => {
       for (const sheet of this.sheets) {
         for (const cell of sheet.cells.values()) if (cell.f !== undefined) cell.f = renameSheetInFormula(cell.f, old, name);
@@ -2607,6 +2622,7 @@ export class Workbook {
     if (problem) throw new SyntaxProblem(problem);
     const f = this.nameRef(ref);
     const renamed = name.trim() !== old.name;
+    if (renamed) this.refuseLongFormulas(formula => renameInFormula(formula, old.name, name.trim()), 'that name', sheet => !old.scope || sheet.name.toLowerCase() === old.scope.toLowerCase());
     this.snapshotChange(() => {
       this.names[at] = { name: name.trim(), ref: f, ...(old.scope ? { scope: old.scope } : {}), ...(comment ? { comment } : {}) };
       if (!renamed) return;
@@ -2702,7 +2718,9 @@ export class Workbook {
         if (!Number.isInteger(col) || !Number.isInteger(row) || (col as number) < 0 || (col as number) >= MAX_COLS || (row as number) < 0 || (row as number) >= MAX_ROWS) return bad('a cell is outside the sheet');
         const cell: Cell = {};
         if (typeof f === 'string') {
-          if (f.length > 4000) return bad('a formula is too long');
+          // Up to 8 times the longest a formula may be typed: one made longer by a rename before such renames were
+          // refused still opens (it shows #NAME? until it is shortened), instead of the whole file being refused.
+          if (f.length > MAX_FORMULA_LENGTH * 8) return bad('a formula is too long');
           cell.f = f;
         } else if (typeof v === 'number' && Number.isFinite(v)) cell.v = v;
         else if (typeof v === 'string' && v.length <= MAX_TEXT) cell.v = v;

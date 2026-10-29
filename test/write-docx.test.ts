@@ -219,3 +219,18 @@ test('a text box, a comment, a footnote: kept (as grey labels) and listed, never
   assert.ok(read.kept.includes('comments'));
   assert.ok(read.kept.includes('footnotes and endnotes'));
 });
+
+test('an embedded object (a spreadsheet inside the document), ruby and ink: kept and listed, never dropped quietly', async () => {
+  const O = 'xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:v="urn:schemas-microsoft-com:vml"';
+  const object = `<w:object ${O}><v:shape id="s1"/><o:OLEObject Type="Embed" ProgID="Excel.Sheet.12" ShapeID="s1" r:id="rId9"/></w:object>`;
+  const ruby = '<w:ruby><w:rt><w:r><w:t>かん</w:t></w:r></w:rt><w:rubyBase><w:r><w:t>漢</w:t></w:r></w:rubyBase></w:ruby>';
+  const ink = '<w:contentPart r:id="rId10"/>';
+  const body = `<w:p><w:r><w:t xml:space="preserve">Before </w:t></w:r><w:r>${object}</w:r><w:r>${ruby}</w:r><w:r>${ink}</w:r><w:r><w:t xml:space="preserve"> after</w:t></w:r></w:p>`;
+  const read = await readDocx(await wordFile(body));
+  for (const what of ['embedded objects', 'ruby (pronunciation guides)', 'ink drawings']) assert.ok(read.kept.includes(what), `${what}: ${read.kept.join('; ')}`);
+  const labels = (read.doc.content![0].content ?? []).filter(n => n.type === 'opaque_inline').map(n => n.attrs?.label);
+  assert.equal(labels.length, 3, JSON.stringify(read.doc.content![0]));
+  const saved = await readZip(await writeDocx(read.doc, read.page, '', read.source)).find(e => e.parts.join('/') === 'word/document.xml')!.read();
+  const xml = new TextDecoder().decode(saved);
+  assert.ok(xml.includes('ProgID="Excel.Sheet.12"') && xml.includes('<w:rubyBase>') && xml.includes('<w:contentPart r:id="rId10"/>'), 'all three are written back');
+});

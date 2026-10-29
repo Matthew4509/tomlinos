@@ -102,3 +102,30 @@ test('several changes in one batch are one Undo', () => {
   wb.redo();
   assert.deepEqual(['A2', 'B5'].map(a => at(wb, a)), ['1', '2']);
 });
+
+test('a sheet rename that would make a formula too long is refused, and a file holding such a formula still opens', () => {
+  const wb = new Workbook();
+  wb.addSheet();
+  assert.equal(wb.sheets[1].name, 'Sheet2');
+  // About 4,000 letters, each part naming Sheet2: renaming Sheet2 to a long name with spaces more than doubles it.
+  const sum = (ref: string) => `SUM(${Array(130).fill(ref).join(',')})`;
+  const long = `=${[0, 1, 2].map(() => sum('Sheet2!A1')).join('+')}`;
+  assert.ok(long.length > 3800 && long.length <= 4000);
+  wb.setInput(0, 0, 0, long);
+  wb.setInput(1, 0, 0, '1');
+  assert.equal(at(wb, 'A1'), '390');
+  assert.throws(() => wb.renameSheet(1, 'Quarterly results 2026'), SyntaxProblem);
+  assert.equal(wb.sheets[1].name, 'Sheet2', 'the sheet keeps its name');
+  assert.equal(wb.editText(0, 0, 0), long, 'the formula is as it was');
+  assert.equal(at(wb, 'A1'), '390');
+  // A short new name still goes through.
+  wb.renameSheet(1, 'Totals');
+  assert.ok(wb.editText(0, 0, 0).startsWith('=SUM(Totals!A1,'));
+  // A file saved before this was refused (a formula past the limit) opens, with that formula kept.
+  const raw = JSON.parse(wb.serialize());
+  const tooLong = `=${[0, 1, 2].map(() => sum("'Quarterly results 2026'!A1")).join('+')}`;
+  raw.sheets[0].cells.find((c: unknown[]) => c[0] === 0 && c[1] === 0)[3] = tooLong.slice(1);
+  const again = new Workbook();
+  again.load(raw);
+  assert.equal(again.editText(0, 0, 0), tooLong);
+});

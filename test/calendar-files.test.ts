@@ -123,3 +123,53 @@ test('a quoted parameter may hold a colon or semicolon', () => {
   assert.equal(l.params.CN, 'Lee: Ann; PhD');
   assert.equal(l.value, 'mailto:ann@example.com');
 });
+
+test('adding an event keeps the file\'s to-dos, its calendar name and an event this calendar cannot read', async () => {
+  const { FileSystem } = await import('../src/fs/fs.ts');
+  const { MemoryStore } = await import('../src/store/memory-store.ts');
+  const { recordFile } = await import('../src/shell/recordfile.ts');
+  const fs = new FileSystem(new MemoryStore());
+  await fs.ensureFolder('/Documents');
+  const thunderbird = [
+    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Mozilla.org/NONSGML Mozilla Calendar V1.1//EN', 'X-WR-CALNAME:Home',
+    'BEGIN:VTODO', 'UID:todo-1', 'SUMMARY:Buy milk', 'END:VTODO',
+    // A start time with no seconds: this calendar cannot read it, so it is not shown, but it is not ours to throw away.
+    'BEGIN:VEVENT', 'UID:odd-1', 'DTSTART:20261110T1000', 'SUMMARY:Odd one', 'END:VEVENT',
+    'END:VCALENDAR', '',
+  ].join('\r\n');
+  await fs.writeText('/Documents/Calendar.ics', thunderbird);
+  const file = recordFile(fs, '/Documents/Calendar.ics', parseIcs, writeIcs);
+  assert.deepEqual(await file.load(), [], 'nothing here can be shown');
+  // One click on "Add to calendar" in My Projects.
+  await file.change(list => [...list, { uid: 'new-1', title: 'New', date: '2026-11-11', start: '09:00', end: '', notes: '', repeat: 'none', remind: -1 }]);
+  const saved = await fs.readText('/Documents/Calendar.ics');
+  for (const kept of ['X-WR-CALNAME:Home', 'BEGIN:VTODO', 'SUMMARY:Buy milk', 'UID:odd-1', 'DTSTART:20261110T1000', 'SUMMARY:Odd one']) assert.ok(saved.includes(kept), `${kept} is still in the file`);
+  assert.deepEqual((await file.load()).map(e => e.title), ['New']);
+  // Deleting the last event read from another calendar keeps its calendar's name and time zones too.
+  await fs.writeText('/Documents/Calendar.ics', GOOGLE);
+  await file.change(() => []);
+  const emptied = await fs.readText('/Documents/Calendar.ics');
+  assert.ok(emptied.includes('X-WR-CALNAME:Work') && emptied.includes('TZID:Australia/Sydney'), emptied);
+  assert.ok(!emptied.includes('Stand-up'), 'the deleted event is gone');
+});
+
+test('a vCard 2.1 card from a phone: quoted-printable names and notes read as words, and survive saving another card', () => {
+  const phone = [
+    'BEGIN:VCARD', 'VERSION:2.1',
+    'N;CHARSET=UTF-8;ENCODING=QUOTED-PRINTABLE:M=C3=BCller;J=C3=BCrgen;;;',
+    'FN;CHARSET=UTF-8;ENCODING=QUOTED-PRINTABLE:J=C3=BCrgen M=C3=BCller',
+    // A note over two lines: "=0D=0A" is the line break, and the "=" at the end says the line carries on below.
+    'NOTE;ENCODING=QUOTED-PRINTABLE:line one=0D=0A=', 'line two',
+    'TEL;CELL:+111',
+    'END:VCARD',
+    'BEGIN:VCARD', 'VERSION:2.1', 'FN:Other', 'END:VCARD', '',
+  ].join('\r\n');
+  const cards = parseVcf(phone);
+  assert.equal(cards.length, 2);
+  assert.equal(cards[0].name, 'Jürgen Müller');
+  assert.equal(cards[0].notes, 'line one\nline two');
+  assert.deepEqual(cards[0].phones, ['+111']);
+  cards[1].name = 'Other Person';
+  const again = parseVcf(writeVcf(cards));
+  assert.deepEqual(again.map(c => [c.name, c.notes, c.phones]), [['Jürgen Müller', 'line one\nline two', ['+111']], ['Other Person', '', []]]);
+});

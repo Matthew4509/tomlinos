@@ -385,6 +385,8 @@ export const MAX_ITEMS = 200_000;
 export const MAX_POINTS = 2_000_000;
 const MAX_TEXT = 10_000;
 export const MAX_TEXT_LENGTH = MAX_TEXT;
+/** The most layers a drawing opens again with. */
+export const MAX_LAYERS = 1000;
 
 /** Why this drawing could not be opened again once saved (more items or points than a .tcad opens), or null. */
 export function tooBigToSave(d: Drawing): string | null {
@@ -392,6 +394,9 @@ export function tooBigToSave(d: Drawing): string | null {
   let points = 0;
   for (const e of d.ents) points += e.type === 'poly' ? e.pts.length : e.type === 'spline' ? e.fit.length : 0;
   if (points > MAX_POINTS) return `This drawing's polylines and curves have ${points.toLocaleString('en-GB')} points; a CAD Draft drawing opens again with up to ${MAX_POINTS.toLocaleString('en-GB')}. Delete some, or split it into two drawings, then save.`;
+  if (d.layers.length > MAX_LAYERS) return `This drawing has ${d.layers.length.toLocaleString('en-GB')} layers; a CAD Draft drawing opens again with up to ${MAX_LAYERS.toLocaleString('en-GB')}. Delete the ones not needed (the … beside a layer › Delete the layer), then save.`;
+  const long = d.ents.filter(e => (e.type === 'text' || e.type === 'dim') && e.text.length > MAX_TEXT).length;
+  if (long) return `${long === 1 ? 'A text or dimension' : `${long.toLocaleString('en-GB')} texts or dimensions`} in this drawing ${long === 1 ? 'has' : 'have'} more than ${MAX_TEXT.toLocaleString('en-GB')} letters, the most one opens again with. Shorten ${long === 1 ? 'it' : 'them'}, then save.`;
   return null;
 }
 
@@ -429,7 +434,7 @@ export function readTcad(text: string): { drawing: Drawing; skipped: number; dam
   const o = data as Record<string, unknown>;
   const units: Units = o.units === 'inch' ? 'inch' : 'mm';
   const layers: Layer[] = [];
-  if (!Array.isArray(o.layers) || o.layers.length > 1000) throw new CadProblem('Its list of layers is missing or too long.');
+  if (!Array.isArray(o.layers) || o.layers.length > MAX_LAYERS) throw new CadProblem('Its list of layers is missing or too long.');
   for (const l of o.layers) {
     const r = (l ?? {}) as Record<string, unknown>;
     const name = typeof r.name === 'string' ? r.name.trim().slice(0, 64) : '';
