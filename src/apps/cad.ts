@@ -69,11 +69,11 @@ const RECOVERY_IN_USE_MS = 5 * 60 * 1000;
  *  told to shell/recovery.ts, so another tab that asks hears this page is keeping it. */
 const liveRecovery = new Set<string>();
 const holdRecovery = (p: string) => {
-  holdRecovery(p);
+  liveRecovery.add(p);
   holdCopy(p);
 };
 const releaseRecovery = (p: string) => {
-  releaseRecovery(p);
+  liveRecovery.delete(p);
   releaseCopy(p);
 };
 /** The note beside a copy ("<id>.note.json" for "<id>.tcad"), refreshed while the copy is in use. */

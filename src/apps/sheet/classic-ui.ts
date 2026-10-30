@@ -26,9 +26,18 @@ export interface MenuBar {
 
 export function menuBar(shell: Shell, signal: AbortSignal, menus: BarMenu[], opts: { before(): boolean; returnFocus(): HTMLElement | null }): MenuBar {
   let openAt = -1;
-  /** Which menu last closed, and when: the press on its own name that closed it must not open it again. */
-  let closed = { at: -1, time: 0 };
+  /**
+   * Which menu was open when the current press began. The menu layer closes an open menu on any press outside it,
+   * before the press reaches a name here; a press on the open menu's own name must then not open it again, while a
+   * press on the name of a menu that had just closed (an item chosen a moment before) opens it. (Telling the two
+   * apart by time once swallowed a quick click: a fast person, or a test, saw the menu not open.) This listener is added
+   * once, before any menu is shown, so it hears each press before the menu layer's own.
+   */
+  let openAtPress = -1;
   let pressClosed = -1;
+  on(document, 'pointerdown', () => {
+    openAtPress = shell.menus.isOpen ? openAt : -1;
+  }, signal, { capture: true });
   const titles = menus.map((m, i) => {
     const at = m.label.toLowerCase().indexOf(m.key.toLowerCase());
     const name = at < 0 ? [m.label] : [m.label.slice(0, at), h('u', {}, m.label[at]), m.label.slice(at + 1)];
@@ -46,9 +55,9 @@ export function menuBar(shell: Shell, signal: AbortSignal, menus: BarMenu[], opt
       }
       open(i, false);
     }, signal);
-    // The same press, a moment after the menu layer closed the menu for it.
+    // This press began while this menu was open: the menu layer has just closed it for this press.
     on(b, 'pointerdown', () => {
-      pressClosed = closed.at === i && performance.now() - closed.time < 50 ? i : -1;
+      pressClosed = openAtPress === i ? i : -1;
     }, signal);
     on(b, 'pointerenter', () => {
       if (openAt >= 0 && openAt !== i && shell.menus.isOpen) open(i, false);
@@ -74,7 +83,6 @@ export function menuBar(shell: Shell, signal: AbortSignal, menus: BarMenu[], opt
       onClose: () => {
         if (openAt !== i) return;
         openAt = -1;
-        closed = { at: i, time: performance.now() };
         titles[i].setAttribute('aria-expanded', 'false');
       },
     });

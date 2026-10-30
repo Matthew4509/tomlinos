@@ -1604,6 +1604,10 @@ await step('Spreadsheet: View > Classic swaps the ribbon for a menu bar and two 
   await menuRow('Total row').click();
   await title('Table Design').click();
   eq(await menuRow('Total row').getAttribute('aria-checked'), 'true', 'Table > Total row is on');
+  // A second click on the open menu's name closes it (and does not open it again straight away).
+  await title('Table Design').click();
+  await page.waitForTimeout(150);
+  eq(await page.locator('.menu .menu-item').count(), 0, 'a click on the open menu\'s name closes it');
   await page.keyboard.press('Escape');
   eq(await cell('A5'), 'Total', 'the total row is there');
   await goTo('D10');
