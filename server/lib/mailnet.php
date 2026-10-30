@@ -387,7 +387,7 @@ final class Imap
                     $use = $u;
                 }
             }
-            $out[] = ['name' => self::fromUtf7($raw), 'raw' => $raw, 'delim' => (string) ($t[1] ?? '/'), 'use' => $use];
+            $out[] = ['name' => mail_utf8(self::fromUtf7($raw)), 'raw' => mail_utf8($raw), 'delim' => (string) ($t[1] ?? '/'), 'use' => $use];
         }
 
         return $out;
@@ -453,10 +453,10 @@ final class Imap
             }
             $rows[] = [
                 'uid' => (int) ($f['UID'] ?? 0),
-                'flags' => array_values(array_map('strval', (array) ($f['FLAGS'] ?? []))),
+                'flags' => array_values(array_map(static fn ($v) => mail_utf8((string) $v), (array) ($f['FLAGS'] ?? []))),
                 'size' => (int) ($f['RFC822.SIZE'] ?? 0),
-                'date' => (string) ($f['INTERNALDATE'] ?? ''),
-                'head' => $head,
+                'date' => mail_utf8((string) ($f['INTERNALDATE'] ?? '')),
+                'head' => mail_utf8($head),
             ];
         }
         usort($rows, static fn ($a, $b) => $b['uid'] <=> $a['uid']);
@@ -660,6 +660,20 @@ final class Smtp
     }
 }
 
+/**
+ * Text the page can be sent: valid UTF-8. Mail headers are bytes, and an old-style message with one Latin-1 byte
+ * (Subject: caf\xE9) used to make json_encode give up on the whole folder listing. Bytes that are not UTF-8 are read
+ * as Latin-1, which every byte is; the browser's reader then sees text and leaves it alone.
+ */
+function mail_utf8(string $s): string
+{
+    if ($s === '' || preg_match('//u', $s) === 1) {
+        return $s;
+    }
+
+    return (string) preg_replace_callback('/[\x80-\xff]/', static fn ($m) => chr(0xC0 | (ord($m[0]) >> 6)) . chr(0x80 | (ord($m[0]) & 0x3f)), $s);
+}
+
 // ---- Building a message to send ------------------------------------------------------------------------------------
 
 /** A header word, encoded when it is not plain ASCII (RFC 2047). */
@@ -715,8 +729,9 @@ function mail_build(array $m): string
     $h = [
         'Date: ' . date(DATE_RFC2822),
         'From: ' . mail_address($m['from'], $m['fromName'] ?? ''),
-        // One address a line: a header line may be at most 998 characters, and 40 addresses on one line pass that.
-        'To: ' . implode(",\r\n ", $m['to']),
+        // One address a line: a header line may be at most 998 characters, and 40 addresses on one line pass that. A
+        // message to Bcc only names nobody here, the way mail programs do, rather than carrying an empty "To:" line.
+        'To: ' . ($m['to'] ? implode(",\r\n ", $m['to']) : 'undisclosed-recipients:;'),
     ];
     if ($m['cc']) {
         $h[] = 'Cc: ' . implode(",\r\n ", $m['cc']);

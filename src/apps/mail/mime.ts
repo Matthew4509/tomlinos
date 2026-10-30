@@ -65,24 +65,51 @@ export function decodeQP(bin: string, header = false): string {
   return s.replace(/=([0-9A-Fa-f]{2})/g, (_, h: string) => String.fromCharCode(parseInt(h, 16)));
 }
 
+/**
+ * Base64 to a binary string. Stray characters are dropped; a run that ends in padding ("=") is decoded on its own,
+ * so a part padded on every line still comes out whole; one odd character at the end is dropped rather than the lot.
+ */
 export function decodeBase64(bin: string): string {
-  const clean = bin.replace(/[^A-Za-z0-9+/]/g, '');
-  const padded = clean + '='.repeat((4 - (clean.length % 4)) % 4);
-  try {
-    return atob(padded.length % 4 === 1 ? padded.slice(0, -1) : padded);
-  } catch {
-    return '';
+  let out = '';
+  for (const run of bin.replace(/[^A-Za-z0-9+/=]/g, '').match(/[A-Za-z0-9+/]+=*/g) ?? []) {
+    const clean = run.replace(/=+$/, '');
+    const whole = clean.length % 4 === 1 ? clean.slice(0, -1) : clean;
+    try {
+      out += atob(whole + '='.repeat((4 - (whole.length % 4)) % 4));
+    } catch {
+      // Not base64 at all: this run gives nothing, the rest still counts.
+    }
   }
+  return out;
 }
 
-/** "=?UTF-8?B?...?=" and friends in a header, decoded. Spaces between two encoded words are dropped (RFC 2047). */
+/**
+ * "=?UTF-8?B?...?=" and friends in a header, decoded. Spaces between two encoded words are dropped (RFC 2047), and
+ * words that touch and share a character set are decoded as one: a letter's bytes may be split across two words.
+ */
 export function decodeWords(value: string): string {
   const word = /=\?([^?\s]+)\?([BbQq])\?([^?\s]*)\?=/g;
   const joined = value.replace(/(=\?[^?\s]+\?[BbQq]\?[^?\s]*\?=)\s+(?==\?)/g, '$1');
-  return joined.replace(word, (_, charset: string, enc: string, text: string) => {
+  let out = '';
+  let at = 0;
+  let run: { charset: string; bin: string } | null = null;
+  const flush = () => {
+    if (run) out += decodeCharset(bytesOf(run.bin), run.charset);
+    run = null;
+  };
+  for (const m of joined.matchAll(word)) {
+    const [whole, charsetRaw, enc, text] = m;
+    const charset = charsetRaw.split('*')[0];
     const bin = enc.toUpperCase() === 'B' ? decodeBase64(text) : decodeQP(text, true);
-    return decodeCharset(bytesOf(bin), charset.split('*')[0]);
-  });
+    if (m.index !== at || !run || run.charset.toLowerCase() !== charset.toLowerCase()) {
+      flush();
+      out += joined.slice(at, m.index);
+      run = { charset, bin };
+    } else run.bin += bin;
+    at = m.index + whole.length;
+  }
+  flush();
+  return out + joined.slice(at);
 }
 
 /** Header fields, names in lower case, each with every value it had (folded lines joined). */
@@ -100,23 +127,36 @@ export function parseHeaders(bin: string): Map<string, string[]> {
 
 const first = (h: Map<string, string[]>, name: string) => h.get(name)?.[0] ?? '';
 
-/** Header text as people read it: bytes read as UTF-8 when they are, encoded words decoded. */
-export function headerText(raw: string): string {
-  // Raw 8-bit bytes in a header are almost always UTF-8 nowadays.
-  let s = raw;
-  if (/[\x80-\xff]/.test(raw)) {
-    try {
-      s = new TextDecoder('utf-8', { fatal: true }).decode(bytesOf(raw));
-    } catch {
-      s = decodeCharset(bytesOf(raw), 'windows-1252');
-    }
+/**
+ * Raw header bytes (a binary string, one character per byte) as text. Raw 8-bit bytes in a header are almost always
+ * UTF-8 nowadays; when they are not, Windows Latin-1. A string that already holds text (a character above U+00FF, which
+ * no byte can be: the folder list arrives from the server as text) is left as it is, where it used to be read as bytes
+ * and "€" became "¬".
+ */
+function rawText(raw: string): string {
+  if (!/[\x80-\xff]/.test(raw) || /[^\x00-\xff]/.test(raw)) return raw;
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytesOf(raw));
+  } catch {
+    return decodeCharset(bytesOf(raw), 'windows-1252');
   }
-  return decodeWords(s).replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '');
 }
 
-/** "Ann <a@b.c>, "Lee, Bo" <d@e.f>, g@h.i" -> addresses. Group names ("Team: a@b;") are dropped, members kept. */
+/** Control characters that have no place in a shown header, and the direction-flipping marks that disguise a name. */
+const unseen = (s: string) => s.replace(/[\u0000-\u0008\u000b-\u001f\u007f‪-‮⁦-⁩]/g, '');
+
+/** Header text as people read it: bytes read as UTF-8 when they are, encoded words decoded. */
+export function headerText(raw: string): string {
+  return unseen(decodeWords(rawText(raw)));
+}
+
+/**
+ * "Ann <a@b.c>, "Lee, Bo" <d@e.f>, g@h.i" -> addresses. Group names ("Team: a@b;") are dropped, members kept. The
+ * line is split into people BEFORE encoded words are decoded: a name encoded as "support@bank.com <...>," used to
+ * come out as a second sender, and Reply went to it.
+ */
 export function parseAddresses(raw: string): Address[] {
-  const text = headerText(raw);
+  const text = rawText(raw);
   const out: Address[] = [];
   let cur = '';
   let quoted = false;
@@ -126,8 +166,8 @@ export function parseAddresses(raw: string): Address[] {
     cur = '';
     if (!part) return;
     const m = /^(.*?)<([^<>]+)>\s*$/.exec(part);
-    if (m) out.push({ name: m[1].trim().replace(/^"|"$/g, '').replace(/\\(.)/g, '$1'), email: m[2].trim() });
-    else if (part.includes('@')) out.push({ name: '', email: part.replace(/\s*\(.*\)\s*$/, '') });
+    if (m) out.push({ name: unseen(decodeWords(m[1].trim().replace(/^"|"$/g, '').replace(/\\(.)/g, '$1'))), email: unseen(m[2].trim()) });
+    else if (part.includes('@')) out.push({ name: '', email: unseen(part.replace(/\s*\(.*\)\s*$/, '')) });
   };
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
@@ -259,6 +299,8 @@ export function parseMessage(bytes: Uint8Array): Message {
       }
       return;
     }
+    // A name in the modern form (filename*=UTF-8''...) is text already (parseContentType decoded it); headerText
+    // leaves text alone and decodes the old forms (raw bytes, encoded words).
     const name = headerText(disp.params.filename ?? ct.params.name ?? '');
     const data = decodeBody(body, encoding);
     // The body is the plain and HTML text that is not marked as an attachment; everything else is an attachment.

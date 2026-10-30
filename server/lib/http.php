@@ -36,14 +36,16 @@ function api_fail(int $status, string $message, array $extra = []): never
         header('Retry-After: ' . max(1, (int) $extra['wait']));
     }
     header('Content-Type: application/json');
-    echo json_encode(['error' => $message] + $extra);
+    echo json_encode(['error' => $message] + $extra, JSON_INVALID_UTF8_SUBSTITUTE);
     exit;
 }
 
+// A string that is not valid UTF-8 (one old-style Latin-1 byte in a mail header, say) used to make json_encode give up
+// on the whole answer, so the page received nothing. Such a byte becomes U+FFFD (the "unknown character" mark) instead.
 function api_json(array $body): never
 {
     header('Content-Type: application/json');
-    echo json_encode($body, JSON_UNESCAPED_SLASHES);
+    echo json_encode($body, JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
     exit;
 }
 

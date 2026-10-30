@@ -369,8 +369,10 @@ body.is-dragging .win-body { pointer-events: none; }
   @keyframes win-in { from { opacity: 0; transform: scale(.97); } to { opacity: 1; transform: none; } }
 }
 
-.bin-set { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
-.bin-set select { width: auto; flex: 1; }
+/* Wraps, and its list box may shrink below its longest choice: at phone width a row's words and list box used to run
+   past the window's edge (453 px in 373), and the whole Settings body scrolled sideways. */
+.bin-set { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 6px 0; }
+.bin-set select { width: auto; flex: 1; min-width: 0; max-width: 100%; }
 .field.num { width: 90px; }
 
 /* Uploads and downloads: a small panel above the taskbar, one card per running transfer, each with Cancel. */
@@ -1042,6 +1044,21 @@ textarea.field { resize: vertical; font: inherit; }
 :root[data-theme="dark"] .editor-text, :root[data-theme="dark"] .rename { background: #15181e; color: var(--ink); }
 :root[data-theme="dark"] .btn, :root[data-theme="dark"] .tool { background: linear-gradient(to bottom, #3e4452, #2c313b); color: var(--ink); border-color: #5a6275; }
 :root[data-theme="dark"] .btn.danger { background: linear-gradient(to bottom, #c0463c, #8f1f18); }
+/* Boxes that were white or pale blue whatever the theme (a note, the Calculator's screen and keys, Task Manager, the AI
+   set-up, Mail's set-up form) showed the dark theme's pale ink on white: 1.2 : 1, unreadable. Each takes a dark face. */
+:root[data-theme="dark"] .tm, :root[data-theme="dark"] .ai, :root[data-theme="dark"] .mail.ticket > .mail-setup, :root[data-theme="dark"] .calc-sheet { background: var(--paper); }
+:root[data-theme="dark"] .mail-note, :root[data-theme="dark"] .ai-device { background: #2a3140; border-color: var(--line); }
+:root[data-theme="dark"] .mail-note.warn { background: #4a2420; border-color: #8f3b33; }
+:root[data-theme="dark"] .calc-screen { background: #15181e; }
+:root[data-theme="dark"] .calc-display.building { color: var(--accent); }
+:root[data-theme="dark"] .calc-key { background: linear-gradient(to bottom, #3e4452, #2c313b); border-color: #5a6275; }
+:root[data-theme="dark"] .calc-key.fn { background: linear-gradient(to bottom, #353b48, #262b35); }
+:root[data-theme="dark"] .calc-key.op { background: linear-gradient(to bottom, #3a4761, #2a3449); }
+:root[data-theme="dark"] .calc-key:active { background: #1a1d24; }
+:root[data-theme="dark"] .calc-row { border-bottom-color: var(--line); }
+:root[data-theme="dark"] .calc-cell { border-right-color: var(--line); }
+:root[data-theme="dark"] .calc-cell.blank { background: var(--face); }
+:root[data-theme="dark"] .calc-cell.sum { background: #2a3140; }
 
 /* ---- Xfce (Greybird, the look Debian's Xfce desktop ships): flat light-grey title bars and panel, blue selection -- */
 .theme-swatch[data-theme-sample="xfce"] .swatch-chip { background: linear-gradient(#f2f2f1, #cfcfcd); box-shadow: inset 0 -4px 0 #398ee7; }

@@ -2,15 +2,18 @@
 // uses, finding and replacing. A text box always holds "\n" line ends, so the file's own ending is remembered and put
 // back on save; before this, a Windows file (CRLF) was quietly saved with Linux endings.
 
-export type Eol = '\r\n' | '\n';
+export type Eol = '\r\n' | '\n' | '\r';
 
-export const EOL_NAMES: Record<Eol, string> = { '\r\n': 'Windows (CRLF)', '\n': 'Unix (LF)' };
+export const EOL_NAMES: Record<Eol, string> = { '\r\n': 'Windows (CRLF)', '\n': 'Unix (LF)', '\r': 'Old Mac (CR)' };
 
 /** The ending most of the file's lines use; a file with none gets `fallback`. */
 export function detectEol(text: string, fallback: Eol = '\r\n'): Eol {
   const crlf = (text.match(/\r\n/g) ?? []).length;
   const lf = (text.match(/\n/g) ?? []).length - crlf;
-  if (crlf === 0 && lf === 0) return fallback;
+  // A bare "\r" (no "\n" after it) is the old Mac ending; before this it was read as a Windows one and saved as LF.
+  const cr = (text.match(/\r(?!\n)/g) ?? []).length;
+  if (crlf === 0 && lf === 0 && cr === 0) return fallback;
+  if (cr > crlf && cr > lf) return '\r';
   return crlf >= lf ? '\r\n' : '\n';
 }
 
@@ -42,11 +45,27 @@ export interface FindOptions {
   backwards?: boolean;
 }
 
+/**
+ * Small letters, one for one: the text keeps its length, so a place found in it is the same place in the box. (A letter
+ * whose small form is longer, such as Turkish İ, which is "i" and a dot, becomes its first letter.) Plain toLowerCase()
+ * made the folded text longer, so every match after such a letter pointed one place too far. Same as Write's find.ts.
+ */
+function fold(s: string): string {
+  let out = '';
+  for (const ch of s) {
+    const small = ch.toLocaleLowerCase();
+    if (small.length === ch.length) out += small;
+    else if (ch.length === 1 && (small.codePointAt(0) ?? 0) <= 0xffff) out += small[0];
+    else out += ch;
+  }
+  return out;
+}
+
 /** The next match after `from` (or before it, backwards), wrapping round the end; null when there is none. */
 export function findNext(text: string, query: string, from: number, options: FindOptions): { start: number; end: number; wrapped: boolean } | null {
   if (!query) return null;
-  const hay = options.matchCase ? text : text.toLowerCase();
-  const needle = options.matchCase ? query : query.toLowerCase();
+  const hay = options.matchCase ? text : fold(text);
+  const needle = options.matchCase ? query : fold(query);
   let at: number;
   let wrapped = false;
   if (options.backwards) {

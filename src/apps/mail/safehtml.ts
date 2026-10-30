@@ -25,12 +25,20 @@ export interface SafeResult {
   blocked: number;
 }
 
+/**
+ * The HTML as it is handed to the parser: styles and on...= handlers (onclick, onerror) taken out first. The page's
+ * policy would block them anyway, but the browser reports each one as a security error while parsing, which hides
+ * real errors. (The allow-list in safeHtml is what makes the result safe, not this.)
+ */
+export function preStrip(html: string): string {
+  return html
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, '')
+    .replace(/\s(?:style|on[a-z]+)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '');
+}
+
 /** `inline` maps a cid (without <>) to an address of that picture's bytes (a blob: URL the caller made). */
 export function safeHtml(html: string, doc: Document, inline: Map<string, string> = new Map()): SafeResult {
-  // Styles are removed before parsing: the page's policy would block them anyway, but each block is reported as an
-  // error, which hides real ones. (The allow-list below is what makes the result safe, not this.)
-  const unstyled = html.replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, '').replace(/\sstyle\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '');
-  const parsed = parseInert(unstyled);
+  const parsed = parseInert(preStrip(html));
   const frag = doc.createDocumentFragment();
   let blocked = 0;
   let count = 0;

@@ -40,13 +40,21 @@ export function run(values: number[], ops: Op[]): number {
   return terms.reduce((total, t, i) => (i === 0 ? t : apply(total, signs[i - 1], t)), 0);
 }
 
-/** Up to 12 significant digits, no trailing zeros, no "-0"; very large or small numbers in e-notation. */
+/**
+ * Up to 15 significant digits (every digit the keypad takes, and as many as a number holds for sure) with at most 12
+ * decimal places, no trailing zeros, no "-0"; very large or small numbers in e-notation. Fewer digits would round a
+ * typed 15-digit number and carry the rounded value on into the next sum; more decimal places would show the binary
+ * rounding noise a fraction carries (0.1 + 0.2).
+ */
 export function show(n: number): string {
   if (!Number.isFinite(n)) return 'Too big';
   if (Object.is(n, -0) || n === 0) return '0';
   const abs = Math.abs(n);
   if (abs >= 1e15 || abs < 1e-9) return n.toExponential(8).replace(/\.?0+e/, 'e');
-  return String(parseFloat(n.toPrecision(12)));
+  const full = String(parseFloat(n.toPrecision(15)));
+  const dot = full.indexOf('.');
+  const decimals = dot < 0 || full.includes('e') ? 0 : full.length - dot - 1;
+  return decimals > 12 ? String(parseFloat(n.toFixed(12))) : full;
 }
 
 // ---- The calculator ------------------------------------------------------------------------------------------------
@@ -56,8 +64,14 @@ export class Calculator {
   /** Numbers and operators pressed so far (the entry is not in them until an operator or = is pressed). */
   values: number[] = [];
   ops: Op[] = [];
-  /** The next digit starts a new number (after an operator, =, or → cell). */
+  /** The next digit starts a new number (after an operator, =, ± on a result, or → cell). */
   fresh = true;
+  /**
+   * Something was pressed since the last operator (a digit, ±, ⌫, CE), so that operator is settled: the next one is
+   * a new step, not a correction of it. Before this, ± on a result cleared `fresh` instead, and the next digit was
+   * glued onto the result ("-1e+15" then 5 became -1e+155).
+   */
+  private touched = false;
   error: string | null = null;
 
   get display(): string {
@@ -77,6 +91,7 @@ export class Calculator {
 
   digit(d: string): void {
     if (this.error) this.clear();
+    this.touched = true;
     if (this.fresh) {
       this.entry = d === '.' ? '0.' : d;
       this.fresh = false;
@@ -90,6 +105,7 @@ export class Calculator {
   back(): void {
     if (this.error) return this.clear();
     if (this.fresh) return;
+    this.touched = true;
     this.entry = this.entry.length > 1 && this.entry !== '-0' ? this.entry.slice(0, -1) : '0';
     if (this.entry === '-') this.entry = '0';
   }
@@ -98,7 +114,7 @@ export class Calculator {
     if (this.error) return;
     if (this.entry === '0') return;
     this.entry = this.entry.startsWith('-') ? this.entry.slice(1) : '-' + this.entry;
-    this.fresh = false;
+    this.touched = true;
   }
 
   private fail(error: unknown): void {
@@ -106,11 +122,12 @@ export class Calculator {
     this.values = [];
     this.ops = [];
     this.fresh = true;
+    this.touched = false;
   }
 
   operator(op: Op): void {
     if (this.error) return;
-    if (this.op !== null && this.fresh) {
+    if (this.op !== null && !this.touched) {
       this.ops[this.ops.length - 1] = op; // pressed twice: the second one counts
       return;
     }
@@ -124,6 +141,7 @@ export class Calculator {
       this.fail(error);
     }
     this.fresh = true;
+    this.touched = false;
   }
 
   equals(): void {
@@ -137,12 +155,14 @@ export class Calculator {
       this.fail(error);
     }
     this.fresh = true;
+    this.touched = false;
   }
 
   clearEntry(): void {
     if (this.error) return this.clear();
     this.entry = '0';
     this.fresh = false;
+    this.touched = true;
   }
 
   clear(): void {
@@ -151,6 +171,7 @@ export class Calculator {
     this.ops = [];
     this.error = null;
     this.fresh = true;
+    this.touched = false;
   }
 
   /** Puts a number in the display as if typed (used when a sheet cell is sent back). */
@@ -158,6 +179,7 @@ export class Calculator {
     this.error = null;
     this.entry = show(n);
     this.fresh = true;
+    this.touched = true;
   }
 }
 
@@ -286,7 +308,10 @@ export function sumProblem(data: SheetData, target: string, sum: Sum): string | 
 
 /** Reads a saved sheet file; anything unexpected is dropped, not trusted. */
 export function parseSheet(text: string): SheetData {
-  const raw = JSON.parse(text) as Partial<SheetData>;
+  const parsed: unknown = JSON.parse(text);
+  // JSON that is not an object ("null", a number, a list) is damaged, not missing: say so rather than fail on `.rows`.
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new SyntaxError('not a sheet');
+  const raw = parsed as Partial<SheetData>;
   const data = emptySheet(Math.min(200, Math.max(1, Math.floor(Number(raw.rows) || 10))));
   const okId = (id: string) => /^[LABR](\d{1,3}|f1|f2)$/.test(id);
   for (const [id, v] of Object.entries(raw.values ?? {})) if (okId(id) && typeof v === 'string') data.values[id] = v.slice(0, 200);
