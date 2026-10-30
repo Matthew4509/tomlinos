@@ -1047,6 +1047,8 @@ textarea.field { resize: vertical; font: inherit; }
 /* Boxes that were white or pale blue whatever the theme (a note, the Calculator's screen and keys, Task Manager, the AI
    set-up, Mail's set-up form) showed the dark theme's pale ink on white: 1.2 : 1, unreadable. Each takes a dark face. */
 :root[data-theme="dark"] .tm, :root[data-theme="dark"] .ai, :root[data-theme="dark"] .mail.ticket > .mail-setup, :root[data-theme="dark"] .calc-sheet { background: var(--paper); }
+/* Mail and a new message outside the Panel (the Panel's ticket layout has dark colours of its own). */
+:root[data-theme="dark"] .mail:not(.ticket), :root[data-theme="dark"] .compose { background: var(--paper); }
 :root[data-theme="dark"] .mail-note, :root[data-theme="dark"] .ai-device { background: #2a3140; border-color: var(--line); }
 :root[data-theme="dark"] .mail-note.warn { background: #4a2420; border-color: #8f3b33; }
 :root[data-theme="dark"] .calc-screen { background: #15181e; }

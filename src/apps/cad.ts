@@ -8,6 +8,7 @@ import { css, h, on } from '../core/dom.ts';
 import { baseName, parentPath, uniqueName } from '../fs/names.ts';
 import type { MenuItem } from '../shell/menu.ts';
 import { pickFile, pickSave } from '../shell/filepicker.ts';
+import { heldInOtherTabs, holdCopy, releaseCopy } from '../shell/recovery.ts';
 import { saveOver } from '../shell/savefile.ts';
 import type { AppDef } from '../shell/types.ts';
 import { APPS } from './catalog.ts';
@@ -64,8 +65,17 @@ const RECOVERY = '/System/cad-recovery';
 const AUTOSAVE_MS = 2 * 60 * 1000;
 /** A copy's note written more recently than this belongs to a window still open somewhere (as shell/recovery.ts has it). */
 const RECOVERY_IN_USE_MS = 5 * 60 * 1000;
-/** The recovery copies windows open now are keeping (in this page), which are not offered as left behind. */
+/** The recovery copies windows open now are keeping (in this page), which are not offered as left behind. Each is also
+ *  told to shell/recovery.ts, so another tab that asks hears this page is keeping it. */
 const liveRecovery = new Set<string>();
+const holdRecovery = (p: string) => {
+  holdRecovery(p);
+  holdCopy(p);
+};
+const releaseRecovery = (p: string) => {
+  releaseRecovery(p);
+  releaseCopy(p);
+};
 /** The note beside a copy ("<id>.note.json" for "<id>.tcad"), refreshed while the copy is in use. */
 const recoveryNoteOf = (p: string) => p.replace(/\.tcad$/i, '') + '.note.json';
 /** The photo made ready for paper: its JPEG (for a PDF) and an address for it (for the preview and printing). */
@@ -194,7 +204,7 @@ export const cadApp: AppDef = {
           label = typeof from.label === 'string' && from.label ? from.label : 'Drawing';
           folderHint = typeof from.path === 'string' ? parentPath(from.path) : null;
           recoveryPath = arg;
-          liveRecovery.add(arg);
+          holdRecovery(arg);
           recovered = true;
           // Said to be in use from now on, so another window offered the same copy a moment later does not open it too.
           void shell.fs.writeText(recoveryNoteOf(arg), JSON.stringify({ label, path: typeof from.path === 'string' ? from.path : null }), { hidden: true }).catch(() => {});
@@ -1504,12 +1514,14 @@ export const cadApp: AppDef = {
         await shell.fs.ensureFolder(RECOVERY, { hidden: true });
         recoveryPath ??= `${RECOVERY}/${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}.tcad`;
         const p = recoveryPath;
-        liveRecovery.add(p);
-        await writeRecoveryNote(p);
+        holdRecovery(p);
+        // The drawing first, the note after: a page that closes in between leaves a copy that is still offered (its name
+        // is inside the drawing too), where note-first could leave a note with no drawing.
         await shell.fs.writeText(p, writeTcad(drawing, { recovery: { label, path } }), { hidden: true });
+        await writeRecoveryNote(p);
         // Saved (or closed) while the copy was being written: the copy is not needed after all.
         if (recoveryPath !== p || version === savedVersion) {
-          liveRecovery.delete(p);
+          releaseRecovery(p);
           if (recoveryPath === p) recoveryPath = null;
           await shell.fs.remove([p, recoveryNoteOf(p)]).catch(() => {});
           return;
@@ -1525,7 +1537,7 @@ export const cadApp: AppDef = {
       recoveryPath = null;
       autosavedVersion = -1;
       if (!p) return;
-      liveRecovery.delete(p);
+      releaseRecovery(p);
       void shell.fs.remove([p, recoveryNoteOf(p)]).catch(() => {
         // Left behind: it is offered the next time CAD Draft opens, and can be deleted there.
       });
@@ -1534,15 +1546,18 @@ export const cadApp: AppDef = {
     async function offerRecovery(asked: boolean): Promise<void> {
       let left: Entry[] = [];
       let elsewhere = 0;
+      let recent = 0;
       try {
         const entries = await shell.fs.list(RECOVERY, true);
-        // A copy whose note was written lately is being kept by a window open elsewhere: not left behind, so not offered
-        // (opening it would make two windows write over each other; Delete would destroy it).
-        const noteWritten = new Map(entries.filter(e => e.name.endsWith('.note.json')).map(e => [e.name, e.modified]));
-        const inUse = (e: Entry) => Date.now() - (noteWritten.get(recoveryNoteOf(e.name)) ?? 0) < RECOVERY_IN_USE_MS;
+        // A copy a window in another tab is keeping is not left behind, so it is not offered (opening it would make two
+        // windows write over each other; Delete would destroy it). As shell/recovery.ts does.
         const copies = entries.filter(e => e.kind === 'file' && /\.tcad$/i.test(e.name) && !liveRecovery.has(`${RECOVERY}/${e.name}`));
-        left = copies.filter(e => !inUse(e));
+        const held = await heldInOtherTabs(copies.map(e => `${RECOVERY}/${e.name}`));
+        left = copies.filter(e => !held.has(`${RECOVERY}/${e.name}`));
         elsewhere = copies.length - left.length;
+        // Another device cannot be asked: a copy whose note is recent is offered, saying it may be open there.
+        const noteWritten = new Map(entries.filter(e => e.name.endsWith('.note.json')).map(e => [e.name, e.modified]));
+        recent = left.filter(e => Date.now() - (noteWritten.get(recoveryNoteOf(e.name)) ?? 0) < RECOVERY_IN_USE_MS).length;
       } catch {
         // No recovery folder yet: nothing was left behind.
       }
@@ -1570,7 +1585,8 @@ export const cadApp: AppDef = {
       const body = h('div', { class: 'cad-dialog' },
         h('p', {}, `CAD Draft stopped before ${one ? 'this drawing was' : 'these drawings were'} saved (a flat battery, or the page was closed). The last copy kept of ${one ? 'it' : 'each'}:`),
         h('ul', { class: 'cad-recover-list' }, ...lines.map(t => h('li', {}, t))),
-        h('p', { class: 'dialog-detail' }, `${one ? 'It opens' : 'Each opens'} as a drawing not saved yet: Save asks where to keep it.`));
+        h('p', { class: 'dialog-detail' }, `${one ? 'It opens' : 'Each opens'} as a drawing not saved yet: Save asks where to keep it.`),
+        recent ? h('p', { class: 'dialog-detail' }, `${one ? 'It was' : recent === 1 ? 'One of them was' : `${recent} of them were`} kept in the last few minutes. If ${recent === 1 ? 'it is' : 'they are'} still open on another device, choose Later: Delete would remove the copy that window is keeping.`) : null);
       const answer = await shell.dialogs.ask<'open' | 'delete' | null>({
         title: 'Drawings not saved', body,
         buttons: [{ label: one ? 'Open it' : 'Open them', value: 'open', primary: true }, { label: one ? 'Delete it' : 'Delete them', value: 'delete', danger: true }, { label: 'Later', value: null }],

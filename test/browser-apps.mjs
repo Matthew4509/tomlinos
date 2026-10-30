@@ -5,7 +5,7 @@ import { chromium } from 'playwright-core';
 import { HIDDEN_APPS } from '../src/release.ts';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { deflateRawSync } from 'node:zlib';
+import { crc32, deflateRawSync } from 'node:zlib';
 import { startFakeMail, USER as MAIL_USER, PASS as MAIL_PASS } from './fake-mail.mjs';
 import { startFakeAnthropic, KEY as AI_KEY } from './fake-anthropic.mjs';
 import { startFakeHuggingFace, SHARD_BYTES } from './fake-huggingface.mjs';
@@ -51,7 +51,8 @@ function makeZip() {
     head.writeUInt32LE(0x04034b50, 0);
     head.writeUInt16LE(20, 4);
     head.writeUInt16LE(deflate ? 8 : 0, 8);
-    head.writeUInt32LE(0, 14); // CRC not checked by the opener
+    // Each file's CRC-32 (its checksum), as a real zip has: the opener checks it, and refuses a file that does not match.
+    head.writeUInt32LE(crc32(raw), 14);
     head.writeUInt32LE(data.length, 18);
     head.writeUInt32LE(raw.length, 22);
     head.writeUInt16LE(nameBuf.length, 26);
@@ -61,6 +62,7 @@ function makeZip() {
     c.writeUInt16LE(20, 4);
     c.writeUInt16LE(20, 6);
     c.writeUInt16LE(deflate ? 8 : 0, 10);
+    c.writeUInt32LE(crc32(raw), 16);
     c.writeUInt32LE(data.length, 20);
     c.writeUInt32LE(raw.length, 24);
     c.writeUInt16LE(nameBuf.length, 28);

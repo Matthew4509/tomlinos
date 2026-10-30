@@ -12,3 +12,4 @@ desktop-data/
 *.zip
 HANDOFF*
 TOKEN-LOG*
+/server/update/

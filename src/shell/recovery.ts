@@ -17,6 +17,52 @@ export const IN_USE_MS = 5 * 60 * 1000;
 /** The copies windows open now are keeping (in this page), which are not offered as left behind. */
 const live = new Set<string>();
 
+/**
+ * Other tabs of this browser are asked which of some copies they are keeping (a message channel every tab of the
+ * desktop listens on), so a copy a live tab keeps is never offered as left behind, while one whose page stopped (a
+ * crash, a closed tab) is offered at once. Another device cannot be asked: see the note in offer().
+ */
+let channel: BroadcastChannel | null = null;
+const answers = new Map<string, (held: string[]) => void>();
+function tabs(): BroadcastChannel | null {
+  if (channel || typeof BroadcastChannel === 'undefined') return channel;
+  channel = new BroadcastChannel('tomlinos-recovery');
+  // (In Node, for the tests: the channel must not keep the process running.)
+  (channel as unknown as { unref?: () => void }).unref?.();
+  channel.onmessage = (event: MessageEvent) => {
+    const m = event.data as { ask?: string; paths?: unknown; answer?: string; held?: unknown };
+    if (typeof m?.ask === 'string' && Array.isArray(m.paths)) {
+      const held = m.paths.filter((p): p is string => typeof p === 'string' && live.has(p));
+      if (held.length) channel!.postMessage({ answer: m.ask, held });
+    } else if (typeof m?.answer === 'string' && Array.isArray(m.held)) {
+      answers.get(m.answer)?.(m.held.filter((p): p is string => typeof p === 'string'));
+    }
+  };
+  return channel;
+}
+
+/** Which of these copies a window in another tab of this browser is keeping now (asked, with a short wait). */
+export async function heldInOtherTabs(paths: string[]): Promise<Set<string>> {
+  const held = new Set<string>();
+  const c = tabs();
+  if (!c || !paths.length) return held;
+  const id = Math.random().toString(36).slice(2);
+  answers.set(id, list => list.forEach(p => held.add(p)));
+  c.postMessage({ ask: id, paths });
+  await new Promise(r => setTimeout(r, 300));
+  answers.delete(id);
+  return held;
+}
+
+/** This page keeps (or no longer keeps) the copy at `path`, for another tab's question. CAD Draft calls these too. */
+export function holdCopy(path: string): void {
+  tabs();
+  live.add(path);
+}
+export function releaseCopy(path: string): void {
+  live.delete(path);
+}
+
 export interface RecoveryNote {
   /** The name the work had ("Budget.xlsx", "Untitled"). */
   label: string;
@@ -73,7 +119,7 @@ export function createRecovery(shell: Shell, signal: AbortSignal, o: RecoveryOpt
     mine = null;
     keptToken = Symbol('none');
     if (!p) return;
-    live.delete(p);
+    releaseCopy(p);
     void shell.fs.remove([p, noteOf(p, o.ext)]).catch(() => {
       // Left behind: the next window offers it, and it can be deleted there.
     });
@@ -102,14 +148,14 @@ export function createRecovery(shell: Shell, signal: AbortSignal, o: RecoveryOpt
       await shell.fs.ensureFolder(o.folder, { hidden: true });
       mine ??= `${o.folder}/${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}${o.ext}`;
       const p = mine;
-      live.add(p);
+      holdCopy(p);
       const data = await o.snapshot();
       await writeNote(p);
       if (typeof data === 'string') await shell.fs.writeText(p, data, { hidden: true });
       else await shell.fs.writeFile(p, data, { hidden: true });
       // Saved, replaced or closed while the copy was being written: it is not needed after all.
       if (mine !== p || !o.unsaved()) {
-        live.delete(p);
+        releaseCopy(p);
         if (mine === p) mine = null;
         await shell.fs.remove([p, noteOf(p, o.ext)]).catch(() => {});
         return;
@@ -131,7 +177,7 @@ export function createRecovery(shell: Shell, signal: AbortSignal, o: RecoveryOpt
 
   async function adopt(path: string): Promise<RecoveryNote> {
     mine = path;
-    live.add(path);
+    holdCopy(path);
     let note: RecoveryNote = { label: 'Untitled', path: null };
     try {
       const n = JSON.parse(await shell.fs.readText(noteOf(path, o.ext))) as { label?: unknown; path?: unknown };
@@ -151,15 +197,19 @@ export function createRecovery(shell: Shell, signal: AbortSignal, o: RecoveryOpt
     }
     let left: Entry[] = [];
     let elsewhere = 0;
+    let recent = 0;
     try {
       const entries = await shell.fs.list(o.folder, true);
-      // A copy whose note was written lately is being kept by a window open in another tab or on another device: not
-      // left behind, so not offered (opening it would make two windows write over each other; Delete would destroy it).
-      const noteWritten = new Map(entries.filter(e => e.name.endsWith('.note.json')).map(e => [e.name, e.modified]));
-      const inUse = (e: Entry) => Date.now() - (noteWritten.get(noteOf(e.name, o.ext)) ?? 0) < IN_USE_MS;
       const copies = entries.filter(e => e.kind === 'file' && e.name.endsWith(o.ext) && !live.has(`${o.folder}/${e.name}`));
-      left = copies.filter(e => !inUse(e));
+      // A copy a window in another tab is keeping is not left behind, so it is not offered (opening it would make two
+      // windows write over each other; Delete would destroy it).
+      const held = await heldInOtherTabs(copies.map(e => `${o.folder}/${e.name}`));
+      left = copies.filter(e => !held.has(`${o.folder}/${e.name}`));
       elsewhere = copies.length - left.length;
+      // Another device cannot be asked. A copy whose note was written lately may be one a window there is keeping
+      // (its note is written again every two minutes), or one whose page has just stopped: it is offered, saying so.
+      const noteWritten = new Map(entries.filter(e => e.name.endsWith('.note.json')).map(e => [e.name, e.modified]));
+      recent = left.filter(e => Date.now() - (noteWritten.get(noteOf(e.name, o.ext)) ?? 0) < IN_USE_MS).length;
     } catch {
       // No folder yet: nothing was left behind.
     }
@@ -187,7 +237,8 @@ export function createRecovery(shell: Shell, signal: AbortSignal, o: RecoveryOpt
     const body = h('div', { class: 'recover-offer' },
       h('p', { class: 'dialog-text' }, `${o.appName} stopped before ${single ? `this ${o.one} was` : `these ${o.many} were`} saved (a flat battery, a crash, or the page was closed). The last copy kept of ${single ? 'it' : 'each'}:`),
       h('ul', { class: 'xlsx-list' }, ...lines.map(t => h('li', {}, t))),
-      h('p', { class: 'dialog-detail' }, `${single ? 'It opens' : 'Each opens'} as not saved yet: Save asks where to keep it, so the file it came from stays as it was.`));
+      h('p', { class: 'dialog-detail' }, `${single ? 'It opens' : 'Each opens'} as not saved yet: Save asks where to keep it, so the file it came from stays as it was.`),
+      recent ? h('p', { class: 'dialog-detail' }, `${single ? 'It was' : recent === 1 ? 'One of them was' : `${recent} of them were`} kept in the last few minutes. If ${recent === 1 ? 'it is' : 'they are'} still open on another device, choose Later: Delete would remove the copy that window is keeping.`) : null);
     const answer = await shell.dialogs.ask<'open' | 'delete' | null>({
       title: `${o.many[0].toUpperCase()}${o.many.slice(1)} not saved`,
       body,
