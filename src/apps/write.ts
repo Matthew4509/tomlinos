@@ -41,6 +41,8 @@ const MAX_FILE_BYTES = 50 * 1024 * 1024;
 /** A picture bigger than this is refused when inserted (Word documents with many photos get large quickly). */
 const MAX_PICTURE_BYTES = 15 * 1024 * 1024;
 const ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2];
+/** Documents shorter than this (about 25 pages) have their words counted on every change. */
+const COUNT_AT_ONCE = 100_000;
 /** Pictures that can go in a document by pasting or dropping (WebP and BMP go in as a PNG). */
 const PICTURE_TYPES = /^image\/(png|jpeg|gif|webp|bmp)$/;
 /** Said when a text file's accents had to be guessed. */
@@ -1910,12 +1912,20 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
     view.focus();
   }
   let wordsFor: any = null;
+  let wordsTimer = 0;
+  function countNow(): void {
+    wordsTimer = 0;
+    const n = countWords(view.state.doc.textBetween(0, view.state.doc.content.size, '\n', ' '));
+    wordsLabel.textContent = `${n.toLocaleString()} ${n === 1 ? 'word' : 'words'}`;
+  }
   function syncStatus(): void {
     pageLabel.textContent = `Page ${Math.min(pageCount, pageOfCursor(view, paper, box()))} of ${pageCount}`;
     if (wordsFor !== view.state.doc) {
       wordsFor = view.state.doc;
-      const n = countWords(view.state.doc.textBetween(0, view.state.doc.content.size, '\n', ' '));
-      wordsLabel.textContent = `${n.toLocaleString()} ${n === 1 ? 'word' : 'words'}`;
+      if (wordsTimer) clearTimeout(wordsTimer);
+      // Counting a long document takes long enough to feel in the typing: it waits for a short pause.
+      if (view.state.doc.content.size < COUNT_AT_ONCE) countNow();
+      else wordsTimer = window.setTimeout(countNow, 300);
     }
   }
 
@@ -2016,6 +2026,7 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
   }, app.signal);
   app.signal.addEventListener('abort', () => {
     if (layoutFrame) cancelAnimationFrame(layoutFrame);
+    if (wordsTimer) clearTimeout(wordsTimer);
     view.destroy();
   });
 

@@ -6,7 +6,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { bodyTop, paginate, type Geometry, type Unit } from '../src/apps/write/layout.ts';
-import { htmlIsOnlyPicture, lengthPt, lightness, paraAttrs, pastedHtml, readColour, readCss, readFace } from '../src/apps/write/schema.ts';
+import { sameSpacers, spacerDecorations } from '../src/apps/write/measure.ts';
+import { buildSchema, htmlIsOnlyPicture, lengthPt, lightness, paraAttrs, pastedHtml, readColour, readCss, readFace } from '../src/apps/write/schema.ts';
 import { pageBox, defaultPage, cleanPage, marginProblem } from '../src/apps/write/model.ts';
 
 // A4 at 96 pixels to the inch with 1 inch margins: 1123 tall, 96 top, 931 for the writing; 24 between sheets.
@@ -135,4 +136,14 @@ test('HTML holding only a picture (a browser\'s Copy image) is the picture; HTML
   assert.equal(htmlIsOnlyPicture('<p>Words <img src="a.png"> around it</p>'), false);
   assert.equal(htmlIsOnlyPicture('<table><tr><td></td></tr></table>'), false, 'a table with empty cells is still a table');
   assert.equal(htmlIsOnlyPicture('Just words'), false);
+});
+
+test('page spaces that have not moved count as the same, so a keystroke measures the pages once, not five times', async () => {
+  const pm = await import('../public/vendor/prosemirror.js' as string);
+  const doc = buildSchema(pm).nodeFromJSON({ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Words' }] }] });
+  const spacers = [{ pos: 1, height: 40.5 }, { pos: 3, height: 12 }];
+  // What the layout compares each round: the spaces it worked out against the spaces already in the document.
+  const inPlace = spacerDecorations(pm, doc, spacers).find().map((d: { from: number; spec: { height?: number } }) => ({ pos: d.from, height: d.spec.height ?? 0 }));
+  assert.deepEqual(inPlace, spacers);
+  assert.equal(sameSpacers(spacers, inPlace), true);
 });

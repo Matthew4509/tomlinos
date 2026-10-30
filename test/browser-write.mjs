@@ -821,6 +821,49 @@ await step('Letters as a PDF leave the letter on screen alone: it never shows th
   eq(await W().locator('.wp-doc').count(), 1, 'nothing left behind from making them');
   ok((await doc().innerText()).includes('typed meanwhile'), 'the typing stays: ' + (await doc().innerText()));
   eq(await doc().locator('.wp-field').count(), 1, 'the field is still a field');
+  // The PDF made out of sight is the real thing: a contents page, a table and a footnote in it, one page set per letter.
+  await tab('Insert');
+  await W().locator('.ribbon .rb', { hasText: 'Contents page' }).click();
+  await doc().focus();
+  await page.keyboard.press('Control+End');
+  await W().locator('.ribbon .rb', { hasText: 'Footnote' }).click();
+  await D().locator('input, textarea').first().fill('A note at the foot');
+  await D().getByRole('button', { name: 'Insert' }).click();
+  await doc().evaluate(el => {
+    const dt = new DataTransfer();
+    dt.setData('text/html', '<h1>A heading</h1><table><tr><td>A cell</td></tr></table><p>After it</p>');
+    el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+  });
+  await settle();
+  const sent = [];
+  const listen = r => {
+    const body = r.postDataBuffer();
+    if (body?.includes('%PDF-')) sent.push(body.toString('latin1'));
+  };
+  page.on('request', listen);
+  await tab('Mailings');
+  await rb('Letters as a PDF').click();
+  await page.locator('.toast', { hasText: 'Made 2 letters' }).last().waitFor();
+  await settle();
+  page.off('request', listen);
+  eq(sent.length, 1, 'one PDF written');
+  const pages = (sent[0].match(/\/Type \/Page /g) ?? []).length;
+  ok(pages >= 2, 'a page or more for each letter: ' + pages);
+  await closeAllWrite();
+});
+
+await step('in a long document the word count catches up after a short pause', async () => {
+  await newDoc();
+  await doc().evaluate(el => {
+    const dt = new DataTransfer();
+    dt.setData('text/html', Array.from({ length: 800 }, () => `<p>${'word '.repeat(40)}</p>`).join(''));
+    el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+  });
+  await W().locator('.wp-status', { hasText: '32,000 words' }).waitFor();
+  await doc().focus();
+  await page.keyboard.press('Control+End');
+  await page.keyboard.type(' more');
+  await W().locator('.wp-status', { hasText: '32,001 words' }).waitFor();
   await closeAllWrite();
 });
 
