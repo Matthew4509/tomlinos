@@ -111,3 +111,14 @@ test('pasted HTML: style blocks and comments go, style attributes are renamed (n
   assert.equal(pastedHtml('<img src=x onerror="go()"><img/ONLOAD=go()><p onclick = \'x\' data-on="keep">only=text</p>'),
     '<img src=x data-wp-onerror="go()"><img/data-wp-ONLOAD=go()><p data-wp-onclick = \'x\' data-on="keep">only=text</p>');
 });
+
+test('a kept part shown by Write has a token that brings it back on paste; a token Write never made brings nothing', async () => {
+  const { keptToken, keptPart } = await import('../src/apps/write/schema.ts');
+  const xml = '<w:r><mc:AlternateContent>a chart</mc:AlternateContent></w:r>';
+  const token = keptToken(xml, 'Chart');
+  assert.equal(keptToken(xml, 'Chart'), token, 'the same part, the same token');
+  assert.notEqual(keptToken(xml, 'Chart 2'), token);
+  assert.deepEqual(keptPart(token), { xml, label: 'Chart' });
+  assert.equal(keptPart('made-up'), undefined);
+  assert.equal(keptPart(null), undefined);
+});

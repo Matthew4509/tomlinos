@@ -1024,7 +1024,7 @@ export const sheetApp: AppDef = {
       const matches = (): Found[] => wb.findAll(wb.active, opts()).filter(m => !wb.sheets[m.s].hiddenRows.has(m.row) && !wb.sheets[m.s].hiddenCols.has(m.col));
       const goTo = (m: Found) => {
         if (m.s !== wb.active) {
-          grid.setActiveSheet(m.s);
+          if (!grid.setActiveSheet(m.s)) return;
           drawTabs();
         }
         grid.goTo(m.col, m.row);
@@ -1294,7 +1294,7 @@ export const sheetApp: AppDef = {
     const modernBtn = btn('Modern', 'Modern: the ribbon, with its tabs', () => void setLook('modern'), 'text-rb');
 
     const insertPivot = () => void insertPivotDialog(ctx, (s, col, row) => {
-      grid.setActiveSheet(s);
+      if (!grid.setActiveSheet(s)) return;
       drawTabs();
       grid.goTo(col, row);
     });
@@ -2030,7 +2030,7 @@ export const sheetApp: AppDef = {
       wb.sheets.forEach((sh, i) => {
         const b = h('button', { type: 'button', class: `sheet-tab${i === wb.active ? ' active' : ''}`, role: 'tab', 'aria-selected': String(i === wb.active), title: 'Double-click to rename' }, sh.name);
         on(b, 'click', () => {
-          grid.setActiveSheet(i);
+          if (!grid.setActiveSheet(i)) return;
           drawTabs();
           showBreaks();
           grid.focus();
@@ -2076,6 +2076,7 @@ export const sheetApp: AppDef = {
     }
 
     async function remove(i: number): Promise<void> {
+      if (!grid.commit()) return;
       const ok = await shell.dialogs.confirm({ title: 'Delete this sheet?', text: `“${wb.sheets[i].name}” and everything on it will be deleted. You can undo this with Ctrl+Z until you close the window.`, ok: 'Delete sheet', danger: true });
       if (!ok) return;
       try {

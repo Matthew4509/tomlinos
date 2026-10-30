@@ -18,6 +18,25 @@ export type PM = Record<string, any>;
  */
 export const LINE_CSS = 1.15;
 
+/** The kept parts this page has shown, by a random token each (and the token of each, by its Word code and label). */
+const keptByToken = new Map<string, { xml: string; label: string }>();
+const tokenOfKept = new Map<string, string>();
+
+/** The token for a kept part, made the first time it is shown; the same part always gets the same one. */
+export function keptToken(xml: string, label: string): string {
+  const key = `${label}\u0000${xml}`;
+  let token = tokenOfKept.get(key);
+  if (!token) {
+    token = crypto.randomUUID();
+    tokenOfKept.set(key, token);
+    keptByToken.set(token, { xml, label });
+  }
+  return token;
+}
+
+/** The kept part a token stands for, or undefined for one this page never made (from elsewhere, or made up). */
+export const keptPart = (token: string | null): { xml: string; label: string } | undefined => (token ? keptByToken.get(token) : undefined);
+
 /**
  * Pasted HTML with every tag's style attribute renamed data-wp-style (read by the rules below, never applied), and its
  * event handlers (onclick=, onerror=...) renamed data-wp-on... so even the never-shown copy it is read from holds none.
@@ -338,19 +357,23 @@ export function buildSchema(pm: PM): any {
         toDOM: () => ['div', { class: 'wp-toc', contenteditable: 'false' }],
       },
       // Parts of a Word file Write cannot show (a text box, a chart, a comment, an equation): a grey label in the text,
-      // kept and written back exactly as they were. Never made from pasted HTML.
+      // kept and written back exactly as they were. Made from pasted HTML only when Write itself put it there (cut and
+      // paste goes through the clipboard as HTML): a part carries a token Write remembers, so a label made up in HTML
+      // from elsewhere stays words and can never bring its own Word code into a file.
       opaque_inline: {
         inline: true,
         group: 'inline',
         atom: true,
         attrs: { xml: { default: '' }, label: { default: '' } },
-        toDOM: (node: any) => ['span', { class: 'wp-opaque', contenteditable: 'false', title: `${node.attrs.label}: kept as it is in the Word file` }, node.attrs.label],
+        parseDOM: [{ tag: 'span.wp-opaque[data-wp-kept]', priority: 60, getAttrs: (el: HTMLElement) => keptPart(el.getAttribute('data-wp-kept')) ?? false }],
+        toDOM: (node: any) => ['span', { class: 'wp-opaque', contenteditable: 'false', 'data-wp-kept': keptToken(node.attrs.xml, node.attrs.label), title: `${node.attrs.label}: kept as it is in the Word file` }, node.attrs.label],
       },
       opaque_block: {
         group: 'block',
         atom: true,
         attrs: { xml: { default: '' }, label: { default: '' } },
-        toDOM: (node: any) => ['div', { class: 'wp-opaque-block', contenteditable: 'false', title: 'Kept as it is in the Word file' }, node.attrs.label],
+        parseDOM: [{ tag: 'div.wp-opaque-block[data-wp-kept]', priority: 60, getAttrs: (el: HTMLElement) => keptPart(el.getAttribute('data-wp-kept')) ?? false }],
+        toDOM: (node: any) => ['div', { class: 'wp-opaque-block', contenteditable: 'false', 'data-wp-kept': keptToken(node.attrs.xml, node.attrs.label), title: 'Kept as it is in the Word file' }, node.attrs.label],
       },
       text: { group: 'inline' },
       hard_break: {

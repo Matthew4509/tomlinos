@@ -103,7 +103,8 @@ export interface Grid {
   deleteContents(): void;
   insert(axis: 'row' | 'col'): void;
   remove(axis: 'row' | 'col'): void;
-  setActiveSheet(i: number): void;
+  /** Moves to another sheet; false (staying put) when the cell being typed in cannot be finished. */
+  setActiveSheet(i: number): boolean;
   widen(r: Range): void;
   /** Sizes rows to their wrapped text (rows sized by hand are left alone). */
   fitRows(): void;
@@ -433,8 +434,10 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
     redraw();
   }
 
-  function setActiveSheet(i: number): void {
-    commit();
+  function setActiveSheet(i: number): boolean {
+    // A cell being typed in is finished first; when it cannot be (a formula with a problem, a value its rule refuses),
+    // the sheet stays put with the editor open, so what was typed never lands in the other sheet.
+    if (!commit()) return false;
     state.perSheet.set(grid.wb.active, { anchor: { ...state.anchor }, cursor: { ...state.cursor } });
     grid.wb.active = i;
     const saved = state.perSheet.get(i);
@@ -445,6 +448,7 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
     scroller.scrollTop = 0;
     changed();
     grid.onChange();
+    return true;
   }
 
   // ---- Drawing ---------------------------------------------------------------------------------------------------
@@ -1334,7 +1338,7 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
       // A name: go to its cells; a new name: give it to the selected cells, as Excel's Name box does.
       const named = grid.wb.nameRange(typed, grid.wb.active);
       if (named) {
-        if (named.s !== grid.wb.active) setActiveSheet(named.s);
+        if (named.s !== grid.wb.active && !setActiveSheet(named.s)) return;
         select(named.range, { col: named.range.c0, row: named.range.r0 });
         reveal(named.range.c0, named.range.r0);
         scroller.focus({ preventScroll: true });

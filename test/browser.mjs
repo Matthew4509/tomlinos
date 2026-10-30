@@ -343,21 +343,29 @@ await step('the clock opens a calendar with today marked', async () => {
 
 await step('a change made in a second tab appears in the first without reloading', async () => {
   const other = await context.newPage();
-  await other.goto(BASE, { waitUntil: 'load' });
-  await other.locator('#desktop .item').first().waitFor({ timeout: 30000 });
-  await other.locator('#desktop .item', { hasText: 'My Files' }).dblclick();
-  await other.locator('.item', { hasText: /^Documents$/ }).dblclick();
-  await other.locator('.item', { hasText: scratch }).dblclick();
-  await other.locator('.crumb', { hasText: scratch }).waitFor();
-  await other.locator('.explorer-view').focus();
-  await other.keyboard.press('ContextMenu');
-  await other.locator('.menu-item').filter({ has: other.locator('.menu-label', { hasText: /^New$/ }) }).first().click();
-  await other.locator('.menu-item').filter({ has: other.locator('.menu-label', { hasText: /^Folder$/ }) }).first().click();
-  await other.locator('input.rename').fill('FromTab2');
-  await other.keyboard.press('Enter');
-  await other.locator('.item', { hasText: 'FromTab2' }).waitFor();
+  try {
+    await other.goto(BASE, { waitUntil: 'load' });
+    // The second tab in front, as a person typing in it has it: Chrome (156.0.8078) gives keys only to the front tab.
+    await other.bringToFront();
+    await other.locator('#desktop .item').first().waitFor({ timeout: 30000 });
+    await other.locator('#desktop .item', { hasText: 'My Files' }).dblclick();
+    await other.locator('.item', { hasText: /^Documents$/ }).dblclick();
+    await other.locator('.item', { hasText: scratch }).dblclick();
+    await other.locator('.crumb', { hasText: scratch }).waitFor();
+    await other.locator('.explorer-view').focus();
+    await other.keyboard.press('ContextMenu');
+    await other.locator('.menu-item').filter({ has: other.locator('.menu-label', { hasText: /^New$/ }) }).first().click();
+    await other.locator('.menu-item').filter({ has: other.locator('.menu-label', { hasText: /^Folder$/ }) }).first().click();
+    await other.locator('input.rename').fill('FromTab2');
+    await other.keyboard.press('Enter');
+    await other.locator('.item', { hasText: 'FromTab2' }).waitFor();
+  } finally {
+    // Closed even when a step above fails, and the first tab in front again: a tab left open would take the keys
+    // and file pickers of every step after this one.
+    await other.close();
+    await page.bringToFront();
+  }
   await item('FromTab2', '.win').waitFor({ timeout: 8000 });
-  await other.close();
 });
 
 await step('windows drag by the title bar, resize from an edge, maximise, minimise from the taskbar', async () => {
@@ -983,6 +991,22 @@ await step('Spreadsheet: sheets: add, rename and switch; a formula can refer to 
   await dlg.locator('input').fill('Totals');
   await dlg.getByRole('button', { name: 'Rename' }).click();
   await page.locator('.sheet-tab', { hasText: 'Totals' }).waitFor();
+  await page.locator('.sheet-tab', { hasText: 'Sheet1' }).click();
+  eq(await cell('A2'), 'Pens', 'back on sheet 1');
+  // A formula still being typed that cannot be finished: a click on another sheet's tab says so and stays put (it once
+  // moved anyway, with the editor still open, so the next Enter wrote the formula into the other sheet).
+  const before = await cell('C1');
+  await page.keyboard.type('=A1+');
+  await page.locator('.sheet-tab', { hasText: 'Totals' }).click();
+  const problem = page.locator('.dialog', { hasText: 'problem with this formula' });
+  await problem.waitFor();
+  await problem.getByRole('button', { name: 'OK' }).click();
+  eq((await page.locator('.sheet-tab.active').innerText()).trim(), 'Sheet1', 'still on Sheet1');
+  await page.keyboard.press('Escape');
+  eq(await cell('C1'), before, 'Esc leaves the cell as it was');
+  await page.locator('.sheet-tab', { hasText: 'Totals' }).click();
+  eq(await cell('A1'), '41.5', 'the other sheet is untouched');
+  eq(await page.locator('.sheet .formula-input').inputValue(), '=Sheet1!B6*2', 'its formula too');
   await page.locator('.sheet-tab', { hasText: 'Sheet1' }).click();
   eq(await cell('A2'), 'Pens', 'back on sheet 1');
 });

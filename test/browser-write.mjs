@@ -523,6 +523,33 @@ await step('Markdown, WordPad and a Word file with a text box open formatted; th
   await D().getByRole('button', { name: 'OK' }).click();
   await W().locator('.wp-doc .wp-opaque', { hasText: 'Text box' }).waitFor();
   ok((await doc().innerText()).includes('and more'), 'the typing was saved with it');
+  // Cut and paste (the editor's own clipboard: HTML): the text box comes back as the kept part, not as its label's
+  // words, and is still in the file after a save. A label made up in pasted HTML stays words.
+  await doc().focus();
+  await page.keyboard.press('Control+A');
+  await doc().evaluate(el => {
+    const dt = new DataTransfer();
+    el.dispatchEvent(new ClipboardEvent('cut', { clipboardData: dt, bubbles: true, cancelable: true }));
+    window.__cut = dt;
+  });
+  eq(await W().locator('.wp-doc .wp-opaque').count(), 0, 'cut: the text box went with the rest');
+  await doc().evaluate(el => {
+    el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: window.__cut, bubbles: true, cancelable: true }));
+    const forged = new DataTransfer();
+    forged.setData('text/html', '<p><span class="wp-opaque" data-wp-kept="made-up">Fake chart</span></p>');
+    forged.setData('text/plain', 'Fake chart');
+    el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: forged, bubbles: true, cancelable: true }));
+  });
+  await W().locator('.wp-doc .wp-opaque', { hasText: 'Text box' }).waitFor();
+  eq(await W().locator('.wp-doc .wp-opaque').count(), 1, 'pasted back: one kept part, the text box; the made-up one is words');
+  ok((await doc().innerText()).includes('Fake chart'), 'the made-up label pastes as its words');
+  await page.keyboard.press('Control+S');
+  await toast('Saved “elsewhere.docx”');
+  await closeAllWrite();
+  await newDoc();
+  await reopen('elsewhere.docx');
+  await D().getByRole('button', { name: 'OK' }).click();
+  await W().locator('.wp-doc .wp-opaque', { hasText: 'Text box: Inside the box' }).waitFor({ timeout: 10000 });
 });
 
 await step('a Word file with a link and a Heading 5 keeps both through a save; Ctrl+K makes a link; the ▾ beside Numbering gives (a)', async () => {
