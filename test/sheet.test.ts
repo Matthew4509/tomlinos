@@ -287,3 +287,9 @@ test('a height set by hand: Undo also puts back that the row was fitting its tex
   assert.equal(wb.sheets[0].rowH.get(0), 40);
   assert.equal(wb.sheets[0].rowFit.has(0), true);
 });
+
+test('sorting: numbers, text, TRUE/FALSE, then errors, and empty cells after all of them', () => {
+  const wb = book({ A1: '=1/0', A3: 'x', A4: '5', A5: '=TRUE', B1: 'error', B2: 'blank', B3: 'text', B4: 'number', B5: 'yes' });
+  wb.sortRange(0, { c0: 0, r0: 0, c1: 1, r1: 4 }, 0, true);
+  assert.deepEqual(['B1', 'B2', 'B3', 'B4', 'B5'].map(a => at(wb, a)), ['number', 'text', 'yes', 'error', 'blank']);
+});

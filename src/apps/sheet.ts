@@ -2084,7 +2084,7 @@ export const sheetApp: AppDef = {
 
     async function remove(i: number): Promise<void> {
       if (!grid.commit()) return;
-      const ok = await shell.dialogs.confirm({ title: 'Delete this sheet?', text: `“${wb.sheets[i].name}” and everything on it will be deleted. You can undo this with Ctrl+Z until you close the window.`, ok: 'Delete sheet', danger: true });
+      const ok = await shell.dialogs.confirm({ title: 'Delete this sheet?', text: `“${wb.sheets[i].name}” and everything on it will be deleted. You can undo this with Ctrl+Z until you close the window, as long as it is one of your last 100 changes.`, ok: 'Delete sheet', danger: true });
       if (!ok) return;
       try {
         wb.deleteSheet(i);

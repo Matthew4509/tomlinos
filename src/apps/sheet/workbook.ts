@@ -1672,7 +1672,7 @@ export class Workbook {
     if (!keys.length) return;
     const rows: number[] = [];
     for (let row = r.r0; row <= r.r1; row++) rows.push(row);
-    const rank = (v: Value) => (v === null ? 3 : typeof v === 'number' ? 0 : typeof v === 'boolean' ? 2 : v instanceof CellError ? 4 : 1);
+    const rank = (v: Value) => (v === null ? 4 : typeof v === 'number' ? 0 : typeof v === 'boolean' ? 2 : v instanceof CellError ? 3 : 1);
     const values = new Map(rows.map(row => [row, keys.map(k => this.value(s, k.col, row))]));
     const sorted = [...rows].sort((a, b) => {
       const ka = values.get(a)!;

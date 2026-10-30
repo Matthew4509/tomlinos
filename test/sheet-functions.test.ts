@@ -373,3 +373,17 @@ test('COUNTIF, SUMIF and the other -IF(S) functions read ~ as "the next characte
   assert.equal(v(wb, 'D6'), 2, 'a plain ? is still any one character');
   assert.equal(v(wb, 'D7'), 4, 'a plain * is still anything');
 });
+
+test('a sum too big for a number is the error #NUM!, so ISERROR sees it and a saved file keeps it', () => {
+  assert.equal(calc('ISERROR(1E+308*10)'), true);
+  assert.equal(calc('1E+308*10'), '#NUM!');
+  assert.equal(calc('1E+308+1E+308'), '#NUM!');
+  assert.equal(calc('-1E+308-1E+308'), '#NUM!');
+  assert.equal(calc('1E+308/1E-308'), '#NUM!');
+});
+
+test('PRODUCT with no numbers to multiply gives 0, as Excel does', () => {
+  assert.equal(calc('PRODUCT(A1:A2)'), 0);
+  assert.equal(calc('PRODUCT(A1:A2)', { A1: 'x' }), 0);
+  assert.equal(calc('PRODUCT(A1:A2)', { A1: '3', A2: '4' }), 12);
+});

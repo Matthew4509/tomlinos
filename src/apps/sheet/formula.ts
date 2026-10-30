@@ -783,18 +783,18 @@ export class Ev {
     const b = toNumber(r);
     if (b instanceof CellError) return b;
     switch (op) {
-      case '+': return clean(a + b);
-      case '-': return clean(a - b);
-      case '*': return clean(a * b);
-      case '/': return b === 0 ? E.DIV0 : clean(a / b);
-      case '^': {
-        const v = Math.pow(a, b);
-        return Number.isFinite(v) ? clean(v) : E.NUM;
-      }
+      // Too big for a number is the error #NUM!, not Infinity (which ISERROR would not see and a saved file cannot hold).
+      case '+': return fits(a + b);
+      case '-': return fits(a - b);
+      case '*': return fits(a * b);
+      case '/': return b === 0 ? E.DIV0 : fits(a / b);
+      case '^': return fits(Math.pow(a, b));
     }
     return E.VALUE;
   }
 }
+
+const fits = (v: number): Value => (Number.isFinite(v) ? clean(v) : E.NUM);
 
 function unary(op: '-' | '+' | '%', v: Value): Value {
   if (v instanceof CellError) return v;
@@ -1029,7 +1029,7 @@ function lookupTable(ev: Ev, args: Node[], depth: number): Grid | CellError {
 
 const FUNCTIONS: Record<string, Fn> = {
   SUM: (ev, a, d) => { const n = numbers(ev, a, d); return n instanceof CellError ? n : clean(n.reduce((x, y) => x + y, 0)); },
-  PRODUCT: (ev, a, d) => { const n = numbers(ev, a, d); return n instanceof CellError ? n : clean(n.reduce((x, y) => x * y, 1)); },
+  PRODUCT: (ev, a, d) => { const n = numbers(ev, a, d); return n instanceof CellError ? n : n.length ? clean(n.reduce((x, y) => x * y, 1)) : 0; },
   AVERAGE: (ev, a, d) => { const n = numbers(ev, a, d); return n instanceof CellError ? n : n.length ? clean(n.reduce((x, y) => x + y, 0) / n.length) : E.DIV0; },
   // A loop, not Math.min(...n): spreading a range of hundreds of thousands of cells overflows the call stack.
   MIN: (ev, a, d) => { const n = numbers(ev, a, d); return n instanceof CellError ? n : n.length ? n.reduce((x, y) => (y < x ? y : x)) : 0; },
