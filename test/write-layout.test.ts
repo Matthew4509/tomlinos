@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { bodyTop, paginate, type Geometry, type Unit } from '../src/apps/write/layout.ts';
-import { lengthPt, lightness, paraAttrs, pastedHtml, readColour, readCss, readFace } from '../src/apps/write/schema.ts';
+import { htmlIsOnlyPicture, lengthPt, lightness, paraAttrs, pastedHtml, readColour, readCss, readFace } from '../src/apps/write/schema.ts';
 import { pageBox, defaultPage, cleanPage, marginProblem } from '../src/apps/write/model.ts';
 
 // A4 at 96 pixels to the inch with 1 inch margins: 1123 tall, 96 top, 931 for the writing; 24 between sheets.
@@ -121,4 +121,18 @@ test('a kept part shown by Write has a token that brings it back on paste; a tok
   assert.deepEqual(keptPart(token), { xml, label: 'Chart' });
   assert.equal(keptPart('made-up'), undefined);
   assert.equal(keptPart(null), undefined);
+});
+
+test('HTML holding only a picture (a browser\'s Copy image) is the picture; HTML with words is the words (Word and Excel add a picture of them)', () => {
+  assert.equal(htmlIsOnlyPicture('<img src="https://example.com/a.png" alt="A cat">'), true);
+  assert.equal(htmlIsOnlyPicture('<meta charset="utf-8"><img src="a.png"/>'), true);
+  assert.equal(htmlIsOnlyPicture('<html><body>\r\n<!--StartFragment--><img src="a.png"><!--EndFragment-->\r\n</body></html>'), true);
+  assert.equal(htmlIsOnlyPicture('<p>&nbsp;<img src="a.png"></p>'), true, 'an empty space is not words');
+  assert.equal(htmlIsOnlyPicture('<style>p { color: red }</style><!-- a note --><img src="a.png">'), true, 'a style block and a comment are not words');
+  assert.equal(htmlIsOnlyPicture(''), true, 'no HTML at all');
+  assert.equal(htmlIsOnlyPicture('<p>A cell</p>'), false);
+  assert.equal(htmlIsOnlyPicture('<table><tr><td>42</td></tr></table>'), false, 'a table copied from a spreadsheet');
+  assert.equal(htmlIsOnlyPicture('<p>Words <img src="a.png"> around it</p>'), false);
+  assert.equal(htmlIsOnlyPicture('<table><tr><td></td></tr></table>'), false, 'a table with empty cells is still a table');
+  assert.equal(htmlIsOnlyPicture('Just words'), false);
 });

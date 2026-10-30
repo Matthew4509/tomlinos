@@ -38,6 +38,16 @@ export function keptToken(xml: string, label: string): string {
 export const keptPart = (token: string | null): { xml: string; label: string } | undefined => (token ? keptByToken.get(token) : undefined);
 
 /**
+ * True when a clipboard's HTML holds a picture at most, and no words or tables. A browser's "Copy image" gives a picture
+ * with HTML like this. Word and Excel give their words as HTML with a picture of them too: those paste as the words.
+ */
+export function htmlIsOnlyPicture(html: string): boolean {
+  const body = pastedHtml(html);
+  if (/<(table|hr)\b/i.test(body)) return false;
+  return !body.replace(/<[^>]*>/g, '').replace(/&nbsp;|&#160;|&#xa0;|\s/gi, '');
+}
+
+/**
  * Pasted HTML with every tag's style attribute renamed data-wp-style (read by the rules below, never applied), and its
  * event handlers (onclick=, onerror=...) renamed data-wp-on... so even the never-shown copy it is read from holds none.
  */

@@ -28,10 +28,42 @@ export function contactsList(vcf: string): MergeList {
   return { from: 'Contacts', columns: CONTACT_COLUMNS, rows };
 }
 
+/**
+ * Text with a tab between columns and a line to a row, as rows of cells. A cell with a line break or a tab in it comes in
+ * quotes (with any quote in it doubled), as a spreadsheet copies one. A quote that does not close such a cell is just a
+ * quote, so one stray quote never swallows the rows after it.
+ */
+function readTable(tsv: string): string[][] {
+  const s = tsv.replace(/\r\n?/g, '\n');
+  const rows: string[][] = [[]];
+  let i = 0;
+  while (i <= s.length) {
+    let cell: string | null = null;
+    if (s[i] === '"') {
+      let j = i + 1;
+      while (j < s.length && (s[j] !== '"' || s[j + 1] === '"')) j += s[j] === '"' ? 2 : 1;
+      if (j < s.length && (j + 1 === s.length || s[j + 1] === '\t' || s[j + 1] === '\n')) {
+        cell = s.slice(i + 1, j).replace(/""/g, '"');
+        i = j + 1;
+      }
+    }
+    if (cell === null) {
+      let j = i;
+      while (j < s.length && s[j] !== '\t' && s[j] !== '\n') j++;
+      cell = s.slice(i, j);
+      i = j;
+    }
+    rows[rows.length - 1].push(cell);
+    if (s[i] === '\n') rows.push([]);
+    i++;
+  }
+  return rows;
+}
+
 /** A table of text (tab between columns, a line a row; the first row names the columns) as a list. Empty rows go. */
 export function tableList(tsv: string, from: string): MergeList {
-  const lines = tsv.replace(/\r\n?/g, '\n').split('\n');
-  const head = (lines.shift() ?? '').split('\t').map(h => h.trim());
+  const lines = readTable(tsv);
+  const head = (lines.shift() ?? []).map(h => h.trim());
   // Columns with no name get one ("Column 3"); a name used twice gets a number.
   const seen = new Map<string, number>();
   const columns = head.map((h, i) => {
@@ -43,8 +75,7 @@ export function tableList(tsv: string, from: string): MergeList {
   });
   while (columns.length && !head[columns.length - 1]) columns.pop();
   const rows: Row[] = [];
-  for (const line of lines) {
-    const cells = line.split('\t');
+  for (const cells of lines) {
     if (!cells.some(c => c.trim())) continue;
     const row: Row = {};
     columns.forEach((c, i) => {
@@ -79,24 +110,30 @@ const columnFor = (row: Row, name: string): string | undefined => {
 
 /** The document with its fields filled in from one row (a field the row lacks is left empty). */
 export function fillFields(doc: NodeJSON, row: Row): NodeJSON {
-  const fill = (n: NodeJSON): NodeJSON | null => {
+  const fill = (n: NodeJSON): NodeJSON[] => {
     if (n.type === 'field') {
-      const text = columnFor(row, String(n.attrs?.name ?? '')) ?? '';
-      return text ? (n.marks?.length ? { type: 'text', text, marks: n.marks } : { type: 'text', text }) : null;
+      // A value with a line break (a two-line address) goes in as a line break.
+      const look = n.marks?.length ? { marks: n.marks } : {};
+      const out: NodeJSON[] = [];
+      (columnFor(row, String(n.attrs?.name ?? '')) ?? '').split('\n').forEach((text, i) => {
+        if (i) out.push({ type: 'hard_break', ...look });
+        if (text) out.push({ type: 'text', text, ...look });
+      });
+      return out;
     }
-    if (!n.content) return n;
+    if (!n.content) return [n];
     const content: NodeJSON[] = [];
     for (const c of n.content) {
-      const f = fill(c);
-      if (!f) continue;
-      // Text next to text with the same look joins (as the editor keeps it).
-      const last = content[content.length - 1];
-      if (f.type === 'text' && last?.type === 'text' && JSON.stringify(last.marks ?? []) === JSON.stringify(f.marks ?? [])) content[content.length - 1] = { ...last, text: (last.text ?? '') + f.text };
-      else content.push(f);
+      for (const f of fill(c)) {
+        // Text next to text with the same look joins (as the editor keeps it).
+        const last = content[content.length - 1];
+        if (f.type === 'text' && last?.type === 'text' && JSON.stringify(last.marks ?? []) === JSON.stringify(f.marks ?? [])) content[content.length - 1] = { ...last, text: (last.text ?? '') + f.text };
+        else content.push(f);
+      }
     }
-    return content.length ? { ...n, content } : { ...n, content: undefined };
+    return [content.length ? { ...n, content } : { ...n, content: undefined }];
   };
-  return fill(doc) ?? { type: 'doc', content: [{ type: 'paragraph' }] };
+  return fill(doc)[0];
 }
 
 /** One letter per row, each on a new page, in one document. */
