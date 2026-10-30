@@ -47,6 +47,23 @@ test('a reminder falls the chosen minutes before the start; all-day ones at 09:0
   assert.equal(reminderAt(ev({ remind: -1 }), '2026-09-26'), null);
 });
 
+test('an all-day event\'s "1 day before" goes off at 09:00 the day before, not on the day itself', () => {
+  assert.equal(reminderAt(ev({ start: '', remind: 1440 }), '2026-09-26'), new Date(2026, 8, 25, 9, 0).getTime());
+  assert.equal(reminderAt(ev({ start: '', remind: 30 }), '2026-09-26'), new Date(2026, 8, 26, 8, 30).getTime());
+});
+
+test('"1 day before" is the same clock time the day before, across a clock change (daylight saving)', () => {
+  const zone = process.env.TZ;
+  process.env.TZ = 'Europe/Berlin';
+  try {
+    // The clocks in Berlin go back on 25 October 2026, so that day before is 25 hours away.
+    assert.equal(reminderAt(ev({ date: '2026-10-25', start: '10:00', remind: 1440 }), '2026-10-25'), new Date(2026, 9, 24, 10, 0).getTime());
+  } finally {
+    if (zone === undefined) delete process.env.TZ;
+    else process.env.TZ = zone;
+  }
+});
+
 test('a contact survives writing and reading back; a phone export with N only and typed fields reads', () => {
   const c = { ...emptyContact(), name: 'Jane O\'Neil; Gardener', org: 'Gardens, Ltd', phones: ['+61 400 000 000', '02 9999 9999'], emails: ['jane@example.com'], address: '1 Key St, Sydney', birthday: '1980-02-29', notes: 'Prefers\nmornings' };
   assert.deepEqual(bare(parseVcf(writeVcf([c]))[0]), c);

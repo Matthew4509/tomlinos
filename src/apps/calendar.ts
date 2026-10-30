@@ -5,7 +5,7 @@
 // The month is one keyboard stop: arrow keys move the day, Enter or a double-click adds an event on it.
 import { h, on } from '../core/dom.ts';
 import { baseName } from '../fs/names.ts';
-import { CALENDAR_PATH, REMIND_CHOICES, addDays, addMonths, dateKey, eventsOn, isDate, isTime, monthCells, parseIcs, repeatLabel, timeLabel, weekdayNames, writeIcs, type CalEvent, type Repeat } from '../core/ical.ts';
+import { CALENDAR_PATH, REMIND_CHOICES, addDays, addMonths, dateKey, eventsShownOn, isDate, isTime, monthCells, occursOn, parseIcs, repeatLabel, timeLabel, weekdayNames, writeIcs, type CalEvent, type Repeat } from '../core/ical.ts';
 import { recordFile } from '../shell/recordfile.ts';
 import type { AppDef } from '../shell/types.ts';
 import { APPS } from './catalog.ts';
@@ -27,6 +27,8 @@ export const calendarApp: AppDef = {
     const today = dateKey(new Date());
     let chosen = today;
     let [year, month] = [new Date().getFullYear(), new Date().getMonth()];
+    /** The side panel holds a form: looking at another month must not throw away what is typed in it. */
+    let editing = false;
     /** Aborted on every redraw of the side panel, so its buttons' listeners never pile up. */
     let sideDraw = new AbortController();
     const fresh = () => {
@@ -54,10 +56,10 @@ export const calendarApp: AppDef = {
       for (let w = 0; w < 6; w++) {
         rows.push(h('div', { class: 'cal-row', role: 'row' }, ...days.slice(w * 7, w * 7 + 7).map(d => {
           const key = dateKey(d);
-          const list = eventsOn(events, key);
+          const list = eventsShownOn(events, key);
           return h('div', {
             role: 'gridcell', tabindex: key === chosen ? 0 : -1,
-            class: `cal-cell${d.getMonth() !== month ? ' other' : ''}${key === today ? ' today' : ''}${key === chosen ? ' chosen' : ''}`,
+            class: `cal-cell${d.getMonth() !== month ? ' other' : ''}${key === today ? ' today' : ''}${key === chosen ? ' chosen' : ''}${list.length ? ' busy' : ''}`,
             'aria-selected': String(key === chosen), 'aria-current': key === today ? 'date' : null,
             'aria-label': `${d.toLocaleDateString(undefined, { dateStyle: 'full' })}${list.length ? `, ${list.length} event${list.length === 1 ? '' : 's'}` : ''}`,
             'data-day': key,
@@ -71,8 +73,9 @@ export const calendarApp: AppDef = {
 
     function drawDay(focusAfter = false): void {
       const signal = fresh();
+      editing = false;
       const [y, m, d] = chosen.split('-').map(Number);
-      const rows = eventsOn(events, chosen).map(e => {
+      const rows = eventsShownOn(events, chosen).map(e => {
         const b = h('button', { type: 'button', class: 'cal-event' },
           h('span', { class: 'cal-event-time' }, timeLabel(e)),
           h('span', { class: 'cal-event-title' }, e.title),
@@ -111,12 +114,27 @@ export const calendarApp: AppDef = {
 
     function edit(existing: CalEvent | null): void {
       const signal = fresh();
+      editing = true;
       const e: CalEvent = existing ? { ...existing } : { uid: crypto.randomUUID(), title: '', date: chosen, start: '', end: '', notes: '', repeat: 'none', remind: -1 };
       const titleIn = h('input', { type: 'text', class: 'field', value: e.title, maxlength: 500, 'aria-label': 'What' });
-      const dateIn = h('input', { type: 'date', class: 'field', value: e.date, 'aria-label': 'Date' });
+      // A repeat is one event: its date is the day of its first showing, whichever showing was opened, and moving it
+      // moves them all. Named for what it is, so that is never a surprise.
+      const isSeries = !!existing && e.repeat !== 'none';
+      const dateName = isSeries ? 'First day' : 'Date';
+      const dateIn = h('input', { type: 'date', class: 'field', value: e.date, 'aria-label': dateName });
       const allDay = h('input', { type: 'checkbox', checked: !e.start });
       const startIn = h('input', { type: 'time', class: 'field', value: e.start || '09:00', 'aria-label': 'Starts' });
       const endIn = h('input', { type: 'time', class: 'field', value: e.end, 'aria-label': 'Ends' });
+      // Only for an event past midnight or over several days. It moves along with the date, so it keeps its length.
+      const endDayIn = h('input', { type: 'date', class: 'field', value: e.endDate ?? '', 'aria-label': 'Ends on' });
+      let dateWas = e.date;
+      dateIn.addEventListener('change', () => {
+        if (endDayIn.value && isDate(endDayIn.value) && isDate(dateWas) && isDate(dateIn.value)) {
+          const [[y0, m0, d0], [y1, m1, d1]] = [dateWas, dateIn.value].map(v => v.split('-').map(Number));
+          endDayIn.value = addDays(endDayIn.value, Math.round((Date.UTC(y1, m1 - 1, d1) - Date.UTC(y0, m0 - 1, d0)) / 86400000));
+        }
+        if (isDate(dateIn.value)) dateWas = dateIn.value;
+      }, { signal });
       const whereIn = h('input', { type: 'text', class: 'field', value: e.where ?? '', maxlength: 500, 'aria-label': 'Where' });
       const repeatSel = h('select', { class: 'field', 'aria-label': 'Repeats' }, ...REPEATS.map(([v, l]) => h('option', { value: v }, l)));
       repeatSel.value = e.repeat;
@@ -151,9 +169,11 @@ export const calendarApp: AppDef = {
       side.replaceChildren(
         h('h3', {}, existing ? 'Change event' : 'New event'),
         h('label', { class: 'form-row' }, 'What ', titleIn),
-        h('label', { class: 'form-row' }, 'Date ', dateIn),
+        h('label', { class: 'form-row' }, `${dateName} `, dateIn),
+        ...(isSeries ? [h('p', { class: 'hint cal-series' }, 'This changes every showing, not only the one you opened.')] : []),
         h('label', { class: 'form-check' }, allDay, ' All day'),
         times,
+        h('label', { class: 'form-row' }, 'Ends on, if a later day ', endDayIn),
         h('label', { class: 'form-row' }, 'Where ', whereIn),
         h('label', { class: 'form-row' }, 'Repeats ', repeatSel),
         ends,
@@ -169,11 +189,19 @@ export const calendarApp: AppDef = {
         if (!titleIn.value.trim()) return void (problem.textContent = 'Give the event a name.');
         if (!isDate(dateIn.value)) return void (problem.textContent = 'Choose a date.');
         if (!allDay.checked && !isTime(start)) return void (problem.textContent = 'Choose a start time, or tick All day.');
-        if (end && (!isTime(end) || end <= start)) return void (problem.textContent = 'The end time must be after the start time (or leave it empty).');
-        const saved: CalEvent = { ...e, title: titleIn.value.trim(), date: dateIn.value, start, end, notes: notesIn.value, where: whereIn.value.trim(), repeat: repeatSel.value as Repeat, ...limits(), remind: Number(remindSel.value) };
+        const endDay = endDayIn.value;
+        if (endDay && !isDate(endDay)) return void (problem.textContent = 'That end day is not a real date.');
+        if (endDay && endDay < dateIn.value) return void (problem.textContent = 'The end day cannot be before the start.');
+        const later = endDay > dateIn.value;
+        if (later && !allDay.checked && !end) return void (problem.textContent = 'Choose an end time for that end day, or clear the end day.');
+        if (end && (!isTime(end) || (!later && end <= start))) return void (problem.textContent = 'The end time must be after the start time, or choose a later end day (or leave it empty).');
+        const saved: CalEvent = { ...e, title: titleIn.value.trim(), date: dateIn.value, start, end, endDate: later ? endDay : undefined, notes: notesIn.value, where: whereIn.value.trim(), repeat: repeatSel.value as Repeat, ...limits(), remind: Number(remindSel.value) };
         if (await save(list => [...list.filter(x => x.uid !== saved.uid), saved], [saveBtn, del])) {
-          chosen = saved.date;
-          showMonthOf(chosen);
+          // Saving a later showing stays on that day, unless the event was moved off it.
+          if (saved.date !== e.date || !occursOn(saved, chosen)) {
+            chosen = saved.date;
+            showMonthOf(chosen);
+          }
           draw(true);
         }
       }, { signal });
@@ -209,7 +237,12 @@ export const calendarApp: AppDef = {
     }, app.signal);
     const shift = (n: number) => {
       [year, month] = addMonths(year, month, n);
+      // The chosen day comes along (the same date, or the month's last if shorter): it is the month's one keyboard
+      // stop, so the month shown always has one.
+      const day = Math.min(Number(chosen.slice(8)), new Date(year, month + 1, 0).getDate());
+      chosen = dateKey(new Date(year, month, day));
       drawMonth();
+      if (!editing) drawDay();
     };
     on(prev, 'click', () => shift(-1), app.signal);
     on(next, 'click', () => shift(1), app.signal);

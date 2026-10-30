@@ -13,7 +13,7 @@ export interface RecordFile<T> {
   readonly path: string;
   /** The records, or [] when the file does not exist yet. Throws (in words) for a file too big or unreadable. */
   load(): Promise<T[]>;
-  /** Reads again, applies one change, writes. Returns the new list. */
+  /** Reads again, applies one change, writes. Returns the new list, as reading the file again would give it. */
   change(apply: (list: T[]) => T[]): Promise<T[]>;
   /** Calls back with the fresh list whenever the file's folder changes (another window, another tab). */
   watch(changes: Bus<string[]>, signal: AbortSignal, onList: (list: T[]) => void): void;
@@ -44,10 +44,11 @@ export function recordFile<T>(fs: FileSystem, path: string, parse: (text: string
       // version is read and the change made again on top of it, so neither undoes the other.
       for (let attempt = 1; ; attempt++) {
         const { list, text, id } = await read();
-        const next = apply(list);
+        const written = write(apply(list), text);
         try {
-          await fs.writeText(path, write(next, text), id ? { replacing: id } : { mustBeNew: true });
-          return next;
+          await fs.writeText(path, written, id ? { replacing: id } : { mustBeNew: true });
+          // Read from what was written, so what the app holds has the ids the next read will give.
+          return parse(written);
         } catch (error) {
           const raced = error instanceof FileChanged || (!id && error instanceof FsError && (await fs.stat(path)) !== null);
           if (!raced || attempt >= 5) throw error;
