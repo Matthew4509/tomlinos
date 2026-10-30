@@ -783,18 +783,18 @@ export class Ev {
     const b = toNumber(r);
     if (b instanceof CellError) return b;
     switch (op) {
-      case '+': return clean(a + b);
-      case '-': return clean(a - b);
-      case '*': return clean(a * b);
-      case '/': return b === 0 ? E.DIV0 : clean(a / b);
-      case '^': {
-        const v = Math.pow(a, b);
-        return Number.isFinite(v) ? clean(v) : E.NUM;
-      }
+      // Too big for a number is the error #NUM!, not Infinity (which ISERROR would not see and a saved file cannot hold).
+      case '+': return fits(a + b);
+      case '-': return fits(a - b);
+      case '*': return fits(a * b);
+      case '/': return b === 0 ? E.DIV0 : fits(a / b);
+      case '^': return fits(Math.pow(a, b));
     }
     return E.VALUE;
   }
 }
+
+const fits = (v: number): Value => (Number.isFinite(v) ? clean(v) : E.NUM);
 
 function unary(op: '-' | '+' | '%', v: Value): Value {
   if (v instanceof CellError) return v;
@@ -934,7 +934,28 @@ function grid(ev: Ev, n: Node | undefined, depth = 0): Grid | CellError {
   return [[ev.scalar(n, depth + 1)]];
 }
 
-/** A SUMIF-style condition: 5, ">5", "<>x", "=abc", "a*" (with * and ? wildcards). */
+/** AND (`all`) and OR: text in a cell or range is skipped, as Excel does; if that leaves nothing to go on, #VALUE!. */
+function allOrAny(ev: Ev, args: Node[], depth: number, all: boolean): Value {
+  const got = collect(ev, args, depth);
+  if (got instanceof CellError) return got;
+  let r = all;
+  let skipped = false;
+  let seen = false;
+  for (const { v, fromRange } of got) {
+    if (v === null || v === '') continue;
+    if (fromRange && typeof v === 'string') {
+      skipped = true;
+      continue;
+    }
+    const b = toBool(v);
+    if (b instanceof CellError) return b;
+    seen = true;
+    r = all ? r && b : r || b;
+  }
+  return skipped && !seen ? E.VALUE : r;
+}
+
+/** A SUMIF-style condition: 5, ">5", "<>x", "=abc", "a*" (with * and ? wildcards, and ~ before either meaning the character itself). */
 function makeMatcher(criteria: Value): ((v: Value) => boolean) | CellError {
   if (criteria instanceof CellError) return criteria;
   let op = '=';
@@ -951,7 +972,7 @@ function makeMatcher(criteria: Value): ((v: Value) => boolean) | CellError {
     return v => ((v === null || v === '') === (op === '='));
   }
   if (typeof operand === 'string') {
-    const pattern = new RegExp('^' + operand.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$', 'is');
+    const pattern = new RegExp('^' + wildcard(operand) + '$', 'is');
     return v => {
       const hit = typeof v === 'string' && pattern.test(v);
       return op === '<>' ? !hit : op === '=' ? hit : typeof v === 'string' && compare(op, v, operand as string);
@@ -1008,7 +1029,7 @@ function lookupTable(ev: Ev, args: Node[], depth: number): Grid | CellError {
 
 const FUNCTIONS: Record<string, Fn> = {
   SUM: (ev, a, d) => { const n = numbers(ev, a, d); return n instanceof CellError ? n : clean(n.reduce((x, y) => x + y, 0)); },
-  PRODUCT: (ev, a, d) => { const n = numbers(ev, a, d); return n instanceof CellError ? n : clean(n.reduce((x, y) => x * y, 1)); },
+  PRODUCT: (ev, a, d) => { const n = numbers(ev, a, d); return n instanceof CellError ? n : n.length ? clean(n.reduce((x, y) => x * y, 1)) : 0; },
   AVERAGE: (ev, a, d) => { const n = numbers(ev, a, d); return n instanceof CellError ? n : n.length ? clean(n.reduce((x, y) => x + y, 0) / n.length) : E.DIV0; },
   // A loop, not Math.min(...n): spreading a range of hundreds of thousands of cells overflows the call stack.
   MIN: (ev, a, d) => { const n = numbers(ev, a, d); return n instanceof CellError ? n : n.length ? n.reduce((x, y) => (y < x ? y : x)) : 0; },
@@ -1065,8 +1086,8 @@ const FUNCTIONS: Record<string, Fn> = {
     const v = ev.scalar(a[0] ?? { t: 'str', v: '' }, d + 1);
     return v instanceof CellError ? ev.scalar(a[1] ?? { t: 'str', v: '' }, d + 1) : v;
   },
-  AND: (ev, a, d) => { const all = collect(ev, a, d); if (all instanceof CellError) return all; let r = true; for (const { v } of all) { if (v === null || typeof v === 'string' && v === '') continue; const b = toBool(v); if (b instanceof CellError) return b; r = r && b; } return r; },
-  OR: (ev, a, d) => { const all = collect(ev, a, d); if (all instanceof CellError) return all; let r = false; for (const { v } of all) { if (v === null || typeof v === 'string' && v === '') continue; const b = toBool(v); if (b instanceof CellError) return b; r = r || b; } return r; },
+  AND: (ev, a, d) => allOrAny(ev, a, d, true),
+  OR: (ev, a, d) => allOrAny(ev, a, d, false),
   NOT: (ev, a, d) => { const b = toBool(ev.scalar(a[0] ?? { t: 'bool', v: false }, d + 1)); return b instanceof CellError ? b : !b; },
   TRUE: () => true,
   FALSE: () => false,

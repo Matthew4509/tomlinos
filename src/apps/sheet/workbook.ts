@@ -28,6 +28,8 @@ const OLD_FILE_FORMAT = 'myiaos-sheet';
 export const MAX_CELLS = 400_000;
 export const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const MAX_CHANGES_PER_EDIT = 120_000;
+/** How many different cell looks (styles) a workbook holds, in a file or being worked on. Excel's own limit is under this. */
+export const MAX_STYLES = 70_000;
 const MAX_UNDO = 100;
 const MAX_TEXT = 32_000;
 const MAX_SHEETS = 50;
@@ -233,7 +235,12 @@ interface Change {
   before?: Cell;
   after?: Cell;
 }
-type UndoEntry = { kind: 'cells'; changes: Change[] } | { kind: 'snap'; before: string; after: string };
+type UndoEntry =
+  | { kind: 'cells'; changes: Change[] }
+  /** `run`: a name shared by steps that count as one (a chart nudged with the arrow keys). */
+  | { kind: 'snap'; before: string; after: string; run?: string }
+  /** How a sheet is shown (a width, freeze panes, gridlines): small enough to be two little actions, not two copies of the workbook. */
+  | { kind: 'view'; before: () => void; after: () => void };
 
 export interface Entry {
   cell?: Cell;
@@ -320,6 +327,13 @@ export class Workbook {
   /** Parsed formulas, by their text, so a formula that is rewritten in place is always read again. */
   private ast = new Map<string, Node | CellError>();
   private undoStack: UndoEntry[] = [];
+  /** The copy the last structural step ended on: the next one starts from it, if nothing has changed since. */
+  private lastDump: { version: number; active: number; text: string } | null = null;
+  /** Set while asOneStep runs: the view changes that will be one Undo step. */
+  private viewGroup: { before: Array<() => void>; after: Array<() => void> } | null = null;
+  /** Finds a look already in `styles` without comparing it against every one (see internStyle). */
+  private styleIds = new Map<string, number>();
+  private styleIdsOf: { list: CellStyle[]; length: number } | null = null;
   private redoStack: UndoEntry[] = [];
   /** Rows and columns the last importText could not fit on the sheet. */
   lastCut = { rows: 0, cols: 0 };
@@ -724,10 +738,19 @@ export class Workbook {
     for (const [k, v] of Object.entries(style)) if (v !== undefined && v !== false && v !== null) (clean as Record<string, unknown>)[k] = v;
     const json = JSON.stringify(clean, Object.keys(clean).sort());
     if (json === '{}') return 0;
-    const at = this.styles.findIndex((s, i) => i > 0 && JSON.stringify(s, Object.keys(s).sort()) === json);
-    if (at > 0) return at;
-    this.styles.push(clean);
-    return this.styles.length - 1;
+    if (this.styleIdsOf?.list !== this.styles || this.styleIdsOf.length !== this.styles.length) {
+      // A file was opened, or the list changed some other way: looked through once, not once per cell.
+      this.styleIds.clear();
+      for (let i = this.styles.length - 1; i > 0; i--) this.styleIds.set(JSON.stringify(this.styles[i], Object.keys(this.styles[i]).sort()), i);
+    }
+    let at = this.styleIds.get(json);
+    if (at === undefined) {
+      if (this.styles.length >= MAX_STYLES) throw new SyntaxProblem(`A workbook holds up to ${MAX_STYLES.toLocaleString()} different cell looks. Clear the formatting of some cells, save and open the file again, then try once more.`);
+      at = this.styles.push(clean) - 1;
+      this.styleIds.set(json, at);
+    }
+    this.styleIdsOf = { list: this.styles, length: this.styles.length };
+    return at;
   }
 
   // ---- Changing cells (with undo) ----------------------------------------------------------------------------------
@@ -867,8 +890,16 @@ export class Workbook {
     if (changes.length) this.applyChanges(changes);
   }
 
+  /** What formatting a selection reaches: all of it, or if that is too many cells (Select All, several whole columns) as far as the sheet is used. */
+  formatArea(s: number, r: Range): Range {
+    if ((r.c1 - r.c0 + 1) * (r.r1 - r.r0 + 1) <= MAX_CHANGES_PER_EDIT) return r;
+    const used = this.usedBounds(s);
+    return { ...r, r1: Math.min(r.r1, Math.max(r.r0, used.rows - 1)), c1: Math.min(r.c1, Math.max(r.c0, used.cols - 1)) };
+  }
+
   /** Changes formatting for every cell in the range (creating empty formatted cells where needed). */
-  setStyle(s: number, r: Range, patch: (old: CellStyle) => CellStyle): void {
+  setStyle(s: number, range: Range, patch: (old: CellStyle) => CellStyle): void {
+    const r = this.formatArea(s, range);
     const total = (r.c1 - r.c0 + 1) * (r.r1 - r.r0 + 1);
     if (total > MAX_CHANGES_PER_EDIT) throw new SyntaxProblem('That is too many cells to format at once.');
     const changes: Change[] = [];
@@ -1641,7 +1672,7 @@ export class Workbook {
     if (!keys.length) return;
     const rows: number[] = [];
     for (let row = r.r0; row <= r.r1; row++) rows.push(row);
-    const rank = (v: Value) => (v === null ? 3 : typeof v === 'number' ? 0 : typeof v === 'boolean' ? 2 : v instanceof CellError ? 4 : 1);
+    const rank = (v: Value) => (v === null ? 4 : typeof v === 'number' ? 0 : typeof v === 'boolean' ? 2 : v instanceof CellError ? 3 : 1);
     const values = new Map(rows.map(row => [row, keys.map(k => this.value(s, k.col, row))]));
     const sorted = [...rows].sort((a, b) => {
       const ka = values.get(a)!;
@@ -1807,12 +1838,57 @@ export class Workbook {
 
   // ---- Rows, columns, sheets ---------------------------------------------------------------------------------------
 
-  private snapshotChange(fn: () => void): void {
-    const before = this.serialize();
+  private snapshotChange(fn: () => void, run?: string): void {
+    // The step before ended on this very workbook: one copy serves as its "after" and this one's "before".
+    const last = this.lastDump;
+    const before = last && last.version === this.version && last.active === this.active ? last.text : this.dump(false);
     fn();
-    const after = this.serialize();
-    this.pushUndo({ kind: 'snap', before, after });
+    const after = this.dump(false);
+    const top = this.undoStack[this.undoStack.length - 1];
+    if (run !== undefined && top?.kind === 'snap' && top.run === run) {
+      top.after = after;
+      this.redoStack = [];
+    } else this.pushUndo({ kind: 'snap', before, after, ...(run === undefined ? {} : { run }) });
     this.touch();
+    this.lastDump = { version: this.version, active: this.active, text: after };
+  }
+
+  /** A change to how a sheet is shown, already made: its own Undo step, so restoring a copy from an earlier structural step cannot take it away. */
+  private viewStep(before: () => void, after: () => void, join = false): void {
+    this.version++;
+    if (this.viewGroup) {
+      this.viewGroup.before.push(before);
+      this.viewGroup.after.push(after);
+      return;
+    }
+    const top = this.undoStack[this.undoStack.length - 1];
+    if (join && top?.kind === 'view') {
+      top.after = after;
+      this.redoStack = [];
+    } else this.pushUndo({ kind: 'view', before, after });
+  }
+
+  /** Several widths or heights changed together (a whole selection): one Undo. */
+  asOneStep(fn: () => void): void {
+    if (this.viewGroup) return fn();
+    const group: { before: Array<() => void>; after: Array<() => void> } = { before: [], after: [] };
+    this.viewGroup = group;
+    try {
+      fn();
+    } finally {
+      this.viewGroup = null;
+      if (group.after.length) {
+        this.pushUndo({
+          kind: 'view',
+          before: () => {
+            for (let i = group.before.length - 1; i >= 0; i--) group.before[i]();
+          },
+          after: () => {
+            for (const f of group.after) f();
+          },
+        });
+      }
+    }
   }
 
   /** Inserts (n > 0) or deletes (n < 0, at..at-n-1) rows or columns, moving cells and rewriting formulas. */
@@ -2046,12 +2122,30 @@ export class Workbook {
     });
   }
 
-  setSize(s: number, axis: 'row' | 'col', index: number, size: number | null): void {
-    const map = axis === 'row' ? this.sheets[s].rowH : this.sheets[s].colW;
-    if (size === null) map.delete(index);
-    else map.set(index, Math.max(axis === 'row' ? 12 : 16, Math.min(axis === 'row' ? 400 : 800, Math.round(size))));
-    // A height set by hand stays as set: fitting the text no longer changes it.
-    if (axis === 'row') this.sheets[s].rowFit.delete(index);
+  /** A width or height, one Undo step. `join`: part of the same drag as the step before, so it adds to that one. */
+  setSize(s: number, axis: 'row' | 'col', index: number, size: number | null, join = false): void {
+    const put = (to: number | undefined, fit: boolean) => () => {
+      const sheet = this.sheets[s];
+      const map = axis === 'row' ? sheet.rowH : sheet.colW;
+      if (to === undefined) map.delete(index);
+      else map.set(index, to);
+      // A height set by hand stays as set: fitting the text no longer changes it.
+      if (axis === 'row' && fit) sheet.rowFit.add(index);
+      else if (axis === 'row') sheet.rowFit.delete(index);
+    };
+    const sheet = this.sheets[s];
+    const next = size === null ? undefined : Math.max(axis === 'row' ? 12 : 16, Math.min(axis === 'row' ? 400 : 800, Math.round(size)));
+    const was = (axis === 'row' ? sheet.rowH : sheet.colW).get(index);
+    const wasFit = axis === 'row' && sheet.rowFit.has(index);
+    if (was === next && !wasFit) return;
+    const after = put(next, false);
+    after();
+    this.viewStep(put(was, wasFit), after, join);
+  }
+
+  /** Widens a column for a number that would not fit: part of the edit that caused it, so not an Undo step of its own. */
+  fitColumn(s: number, col: number, width: number): void {
+    this.sheets[s].colW.set(col, Math.max(16, Math.min(800, Math.round(width))));
     this.version++;
   }
 
@@ -2163,21 +2257,28 @@ export class Workbook {
 
   // ---- Freeze panes, hidden rows and columns -----------------------------------------------------------------------
 
-  /** The lines between cells shown on screen, or not (View > Gridlines). Not an undo step, as in Excel. */
+  /** The lines between cells shown on screen, or not (View > Gridlines). */
   setGridlines(s: number, on: boolean): void {
-    if (this.sheets[s].noGrid === !on) return;
-    this.sheets[s].noGrid = !on;
-    this.version++;
+    const was = !!this.sheets[s].noGrid;
+    if (was === !on) return;
+    const put = (noGrid: boolean) => () => {
+      this.sheets[s].noGrid = noGrid;
+    };
+    put(!on)();
+    this.viewStep(put(was), put(!on));
   }
 
-  /** Keeps `rows` rows and `cols` columns in view while the rest scrolls (0, 0: nothing frozen). Not an undo step, as in Excel. */
+  /** Keeps `rows` rows and `cols` columns in view while the rest scrolls (0, 0: nothing frozen). */
   setFreeze(s: number, rows: number, cols: number): void {
     const f = this.sheets[s].freeze;
     const r = Math.max(0, Math.min(MAX_ROWS - 1, Math.floor(rows)));
     const c = Math.max(0, Math.min(MAX_COLS - 1, Math.floor(cols)));
     if (f.rows === r && f.cols === c) return;
-    this.sheets[s].freeze = { rows: r, cols: c };
-    this.version++;
+    const put = (freeze: { rows: number; cols: number }) => () => {
+      this.sheets[s].freeze = freeze;
+    };
+    put({ rows: r, cols: c })();
+    this.viewStep(put(f), put({ rows: r, cols: c }));
   }
 
   /** Hides (or shows again) rows or columns from..to. */
@@ -2455,6 +2556,11 @@ export class Workbook {
       this.load(JSON.parse(which === 'before' ? e.before : e.after), true);
       return;
     }
+    if (e.kind === 'view') {
+      (which === 'before' ? e.before : e.after)();
+      this.version++;
+      return;
+    }
     for (const ch of which === 'before' ? [...e.changes].reverse() : e.changes) {
       const cell = which === 'before' ? ch.before : ch.after;
       if (cell) this.sheets[ch.sheet].cells.set(ch.key, cell);
@@ -2532,14 +2638,15 @@ export class Workbook {
   }
 
   /** Changes a chart (moved, resized, retitled...), or deletes it (null). */
-  setChart(s: number, id: number, chart: Chart | null): void {
+  /** `run`: steps with the same name, one straight after another, are one Undo (a chart nudged with the arrow keys). */
+  setChart(s: number, id: number, chart: Chart | null, run?: string): void {
     const sheet = this.sheets[s];
     const i = sheet.charts.findIndex(c => c.id === id);
     if (i < 0) return;
     this.snapshotChange(() => {
       if (chart) sheet.charts[i] = { ...chart, id };
       else sheet.charts.splice(i, 1);
-    });
+    }, run);
   }
 
   /** Puts a chart in front of the others (last drawn), or behind them. */
@@ -2669,13 +2776,28 @@ export class Workbook {
 
   // ---- Saving and loading ------------------------------------------------------------------------------------------
 
+  /** The workbook as a saved file holds it: looks no cell uses any more are left out. */
   serialize(): string {
+    return this.dump(true);
+  }
+
+  /** `prune`: leave out looks no cell uses. Not for Undo's copies: its other steps know looks by their place in the list. */
+  private dump(prune: boolean): string {
+    let styles = this.styles;
+    const place = new Map<number, number>();
+    if (prune) {
+      for (const sh of this.sheets) for (const c of sh.cells.values()) if (c.s) place.set(c.s, 0);
+      const ids = [...place.keys()].sort((a, b) => a - b);
+      ids.forEach((id, i) => place.set(id, i + 1));
+      styles = [this.styles[0], ...ids.map(id => this.styles[id])];
+    }
+    const idOf = (c: Cell) => (prune ? place.get(c.s ?? 0) ?? 0 : c.s ?? 0);
     const sheets = this.sheets.map(sh => ({
       name: sh.name,
       colW: Object.fromEntries(sh.colW),
       rowH: Object.fromEntries(sh.rowH),
       rowFit: [...sh.rowFit],
-      cells: [...sh.cells].map(([k, c]) => (c.n !== undefined ? [colOfKey(k), rowOfKey(k), c.v ?? null, c.f ?? null, c.s ?? 0, c.n] : [colOfKey(k), rowOfKey(k), c.v ?? null, c.f ?? null, c.s ?? 0])),
+      cells: [...sh.cells].map(([k, c]) => (c.n !== undefined ? [colOfKey(k), rowOfKey(k), c.v ?? null, c.f ?? null, idOf(c), c.n] : [colOfKey(k), rowOfKey(k), c.v ?? null, c.f ?? null, idOf(c)])),
       merges: sh.merges.map(m => [m.c0, m.r0, m.c1, m.r1]),
       freeze: [sh.freeze.rows, sh.freeze.cols],
       hiddenRows: [...sh.hiddenRows],
@@ -2690,7 +2812,7 @@ export class Workbook {
       ...(sh.pivots.length ? { pivots: sh.pivots.map(p => ({ ...p, last: p.last ? rangeArray(p.last) : null })) } : {}),
       ...(sh.noGrid ? { noGrid: true } : {}),
     }));
-    return JSON.stringify({ format: FILE_FORMAT, version: 1, symbol: this.symbol, active: this.active, styles: this.styles, sheets, ...(this.names.length ? { names: this.names } : {}) });
+    return JSON.stringify({ format: FILE_FORMAT, version: 1, symbol: this.symbol, active: this.active, styles, sheets, ...(this.names.length ? { names: this.names } : {}) });
   }
 
   /** Loads a saved workbook, checking every field. Throws SyntaxProblem with a plain reason if the file is not one. */
@@ -2704,7 +2826,7 @@ export class Workbook {
     if (!Array.isArray(d.sheets) || d.sheets.length < 1 || d.sheets.length > MAX_SHEETS) return bad('no sheets');
     const styles: CellStyle[] = [{}];
     if (Array.isArray(d.styles)) {
-      for (const raw of d.styles.slice(1, 5000)) styles.push(cleanStyle(raw));
+      for (const raw of d.styles.slice(1, MAX_STYLES)) styles.push(cleanStyle(raw));
     }
     const sheets: Sheet[] = [];
     let total = 0;

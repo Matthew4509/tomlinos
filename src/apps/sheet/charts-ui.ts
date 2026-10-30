@@ -84,6 +84,8 @@ export function mountCharts(ctx: SheetContext): ChartLayer {
   }
 
   /** Puts every frame where its chart is, redrawing the ones that changed. Called after each grid redraw. */
+  let nudgeRun = 0;
+
   function sync(): void {
     const edge = grid.scrollEdge();
     // Inside the cells: not over the headings, the frozen rows and columns, or the scroll bars.
@@ -180,11 +182,13 @@ export function mountCharts(ctx: SheetContext): ChartLayer {
       } else if (moves[event.key]) {
         event.preventDefault();
         const at = placeOf(ch);
-        moveTo(ch, at.x + moves[event.key][0] * grid.zoom(), at.y + moves[event.key][1] * grid.zoom());
+        moveTo(ch, at.x + moves[event.key][0] * grid.zoom(), at.y + moves[event.key][1] * grid.zoom(), undefined, `nudge ${id} ${nudgeRun}`);
       } else return;
       event.stopPropagation();
     }, signal);
     on(el, 'focus', () => select(id, false), signal);
+    // Arrow-key moves are one Undo until the chart is left, so holding a key cannot use up the Undo steps.
+    on(el, 'blur', () => { nudgeRun++; }, signal);
     on(el, 'contextmenu', (event: MouseEvent) => {
       event.preventDefault();
       event.stopPropagation();
@@ -195,13 +199,13 @@ export function mountCharts(ctx: SheetContext): ChartLayer {
   }
 
   /** Moves a chart so its top-left corner is at (x, y) in the clip box: its cell and the offset into it are worked out. */
-  function moveTo(ch: Chart, x: number, y: number, size?: { w: number; h: number }): void {
+  function moveTo(ch: Chart, x: number, y: number, size?: { w: number; h: number }, run?: string): void {
     const edge = grid.scrollEdge();
     const spot = grid.cellAt(Math.max(edge.x, x + edge.x), Math.max(edge.y, y + edge.y));
     const next: Chart = { ...ch, at: { col: spot.col, row: spot.row, dx: Math.round(spot.dx), dy: Math.round(spot.dy) }, ...(size ?? {}) };
     if (JSON.stringify(next) === JSON.stringify(ch)) return;
     try {
-      wb.setChart(wb.active, ch.id, next);
+      wb.setChart(wb.active, ch.id, next, run);
       ctx.onChange();
       sync();
     } catch (error) {

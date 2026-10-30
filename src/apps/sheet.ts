@@ -243,11 +243,12 @@ export const sheetApp: AppDef = {
       await shell.dialogs.ask<true>({ title: `Opened “${name}”`, body: h('div', { class: 'xlsx-report' }, ...items), buttons: [{ label: 'OK', value: true, primary: true }], cancel: true });
       grid.focus();
     }
+    // A value still being typed counts as unsaved: closing the window asks, rather than dropping it without a word.
+    const unsaved = () => wb.version !== savedVersion || grid.editPending();
     const refresh = () => {
-      const dirty = wb.version !== savedVersion;
-      app.setDirty(dirty);
+      app.setDirty(unsaved());
       app.setTitle(label);
-      if (!dirty) recovery.drop();
+      if (wb.version === savedVersion) recovery.drop();
     };
 
     // ---- Small helpers ---------------------------------------------------------------------------------------------
@@ -473,10 +474,12 @@ export const sheetApp: AppDef = {
           const c = grid.clip();
           if (!c || !grid.commit()) return;
           const at = grid.sel().c0;
-          for (let i = 0; i <= c.range.c1 - c.range.c0; i++) {
-            const w = wb.sheets[c.sheet].colW.get(c.range.c0 + i);
-            wb.setSize(wb.active, 'col', at + i, w ?? null);
-          }
+          wb.asOneStep(() => {
+            for (let i = 0; i <= c.range.c1 - c.range.c0; i++) {
+              const w = wb.sheets[c.sheet].colW.get(c.range.c0 + i);
+              wb.setSize(wb.active, 'col', at + i, w ?? null);
+            }
+          });
           onChange();
         } },
       ];
@@ -561,7 +564,7 @@ export const sheetApp: AppDef = {
     /** A style change that depends on where each cell is in the selection (its outer edges): borders. One Undo. */
     const edgeStyle = (fn: (s: CellStyle, edge: { t: boolean; b: boolean; l: boolean; r: boolean }) => CellStyle) => {
       if (!grid.commit()) return;
-      const sel = grid.sel();
+      const sel = wb.formatArea(wb.active, grid.sel());
       try {
         // One step: a single Undo takes the whole border back.
         wb.batch(() => {
@@ -1245,10 +1248,12 @@ export const sheetApp: AppDef = {
       if (v === null) return;
       const n = Number(v);
       const [from, to] = axis === 'row' ? [sel.r0, Math.min(sel.r1, sel.r0 + 4999)] : [sel.c0, sel.c1];
-      for (let i = from; i <= to; i++) {
-        if (n === 0) continue;
-        wb.setSize(wb.active, axis, i, axis === 'row' ? n / 0.75 : n * 7 + 5);
-      }
+      wb.asOneStep(() => {
+        for (let i = from; i <= to; i++) {
+          if (n === 0) continue;
+          wb.setSize(wb.active, axis, i, axis === 'row' ? n / 0.75 : n * 7 + 5);
+        }
+      });
       // 0 hides them, as in Excel.
       if (n === 0) wb.setHidden(wb.active, axis, from, to, true);
       grid.fitRows();
@@ -1256,7 +1261,9 @@ export const sheetApp: AppDef = {
     };
     const fitRowHeight = () => {
       const sel = grid.sel();
-      for (let r = sel.r0; r <= Math.min(sel.r1, sel.r0 + 4999); r++) wb.setSize(wb.active, 'row', r, null);
+      wb.asOneStep(() => {
+        for (let r = sel.r0; r <= Math.min(sel.r1, sel.r0 + 4999); r++) wb.setSize(wb.active, 'row', r, null);
+      });
       grid.fitRows();
       onChange();
     };
@@ -2077,7 +2084,7 @@ export const sheetApp: AppDef = {
 
     async function remove(i: number): Promise<void> {
       if (!grid.commit()) return;
-      const ok = await shell.dialogs.confirm({ title: 'Delete this sheet?', text: `“${wb.sheets[i].name}” and everything on it will be deleted. You can undo this with Ctrl+Z until you close the window.`, ok: 'Delete sheet', danger: true });
+      const ok = await shell.dialogs.confirm({ title: 'Delete this sheet?', text: `“${wb.sheets[i].name}” and everything on it will be deleted. You can undo this with Ctrl+Z until you close the window, as long as it is one of your last 100 changes.`, ok: 'Delete sheet', danger: true });
       if (!ok) return;
       try {
         wb.deleteSheet(i);
@@ -2195,6 +2202,7 @@ export const sheetApp: AppDef = {
     grid.onSelect = syncToolbar;
     grid.onEdit = editing => {
       mode.textContent = editing ? 'Edit' : 'Ready';
+      app.setDirty(unsaved());
     };
 
     app.root.append(tabsRow, ribbon, classicBar, formulaBar, main, tabsBar, status);
@@ -2277,7 +2285,7 @@ export const sheetApp: AppDef = {
     // A program of its own asks as a desktop spreadsheet does when its window closes with unsaved changes.
     if (shell.native) {
       app.onClose(async () => {
-        if (wb.version === savedVersion) return true;
+        if (!unsaved()) return true;
         const answer = await shell.dialogs.ask<'save' | 'drop' | null>({
           title: shell.native!.product,
           text: `Do you want to save the changes you made to “${label}”?`,

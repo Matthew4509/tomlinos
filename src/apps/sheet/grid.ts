@@ -84,6 +84,8 @@ export interface Grid {
   sel(): Range;
   active(): { col: number; row: number };
   editing(): boolean;
+  /** A cell is being edited and its text is no longer what the cell holds: work that closing the window would lose. */
+  editPending(): boolean;
   focus(): void;
   redraw(): void;
   select(r: Range, active?: { col: number; row: number }): void;
@@ -198,6 +200,7 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
     sel,
     active: () => ({ ...state.cursor }),
     editing: () => state.editing,
+    editPending: () => state.editing && cellInput.value !== grid.wb.editText(grid.wb.active, state.cursor.col, state.cursor.row),
     focus: () => scroller.focus({ preventScroll: true }),
     redraw,
     select,
@@ -246,7 +249,9 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
       if (!state.editing) changed();
     },
     fitColumns: (c0, c1) => {
-      for (let c = c0; c <= c1; c++) autoFit('col', c, true);
+      grid.wb.asOneStep(() => {
+        for (let c = c0; c <= c1; c++) autoFit('col', c, true);
+      });
     },
     showNotes: false,
     onNote: () => {},
@@ -260,6 +265,7 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
         input.focus();
         placeEditor();
         fx.update(input);
+        grid.onEdit(true);
         return;
       }
       beginEdit(text);
@@ -1085,6 +1091,7 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
     (input === cellInput ? formulaInput : cellInput).value = input.value;
     state.pointAt = null;
     placeEditor();
+    grid.onEdit(true);
   }
 
   function beginEdit(initial: string | null, from: 'cell' | 'bar' = 'cell'): void {
@@ -1265,11 +1272,9 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
   const syncFrom = (src: HTMLTextAreaElement, dst: HTMLTextAreaElement) => () => {
     dst.value = src.value;
     state.pointAt = null;
-    if (!state.editing) {
-      // Typing in the formula bar starts an edit of the current cell.
-      state.editing = true;
-      grid.onEdit(true);
-    }
+    // Typing in the formula bar starts an edit of the current cell; every change is told, so "unsaved" keeps up.
+    state.editing = true;
+    grid.onEdit(true);
     placeEditor();
     fx.update(src);
   };
@@ -1278,6 +1283,7 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
     (input === cellInput ? formulaInput : cellInput).value = input.value;
     state.pointAt = null;
     placeEditor();
+    grid.onEdit(true);
   }, signal);
   for (const input of [cellInput, formulaInput]) {
     on(input, 'keyup', (event: KeyboardEvent) => {
@@ -1405,6 +1411,7 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
     other.value = input.value;
     input.setSelectionRange(start + text.length, start + text.length);
     fx.update(input);
+    grid.onEdit(true);
   }
 
   // ---- Mouse -----------------------------------------------------------------------------------------------------
@@ -1562,9 +1569,13 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
     const start = edge.axis === 'col' ? event.clientX : event.clientY;
     const original = edge.axis === 'col' ? (sheet.colW.get(edge.index) ?? COL_W) : (sheet.rowH.get(edge.index) ?? ROW_H);
     const abort = new AbortController();
+    // One Undo for the whole drag.
+    let moved = false;
     on(scroller, 'pointermove', (e: PointerEvent) => {
       const delta = ((edge.axis === 'col' ? e.clientX : e.clientY) - start) / state.zoom;
-      grid.wb.setSize(grid.wb.active, edge.axis, edge.index, original + delta);
+      const was = grid.wb.version;
+      grid.wb.setSize(grid.wb.active, edge.axis, edge.index, original + delta, moved);
+      moved ||= grid.wb.version !== was;
       redraw();
     }, abort.signal);
     const end = () => {
@@ -1594,7 +1605,7 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
         need = Math.max(need, ctx.measureText(grid.wb.display(grid.wb.active, c, row)).width + 10 + (style?.ind ? style.ind * 9 : 0));
       }
       if (need > COL_W) {
-        grid.wb.setSize(grid.wb.active, 'col', c, Math.min(need, 300));
+        grid.wb.fitColumn(grid.wb.active, c, Math.min(need, 300));
         any = true;
       }
     }
