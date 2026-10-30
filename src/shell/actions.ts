@@ -202,7 +202,10 @@ export class FileActions {
     }
   }
 
-  /** Moves paths into a folder. A name already taken there is not replaced: the moved item gets " (2)" added. */
+  /**
+   * Moves paths into a folder, one at a time so one failure does not stop the rest. A name already taken there is not
+   * replaced: the moved item gets " (2)" added, in the same change as the move (so it is never renamed where it stood).
+   */
   async moveInto(paths: string[], destFolder: string): Promise<void> {
     const fs = this.shell.fs;
     const failures: Failure[] = [];
@@ -215,20 +218,7 @@ export class FileActions {
       }
       if (nameKey(parentPath(path)) === nameKey(joinPath(destFolder))) continue;
       try {
-        const taken = (await fs.list(destFolder, true)).map(e => e.name);
-        const finalName = uniqueName(name, taken);
-        let source = path;
-        if (finalName !== name) {
-          await fs.rename(path, finalName);
-          source = joinPath(parentPath(path), finalName);
-        }
-        try {
-          await fs.move([source], destFolder);
-        } catch (error) {
-          // Not moved: it keeps its own name where it was, rather than " (2)".
-          if (source !== path) await fs.rename(source, name).catch(() => undefined);
-          throw error;
-        }
+        await fs.move([path], destFolder, { keepBoth: true });
       } catch (error) {
         failures.push({ name, reason: describeError(error) });
       }

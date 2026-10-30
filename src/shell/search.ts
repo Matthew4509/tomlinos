@@ -27,27 +27,30 @@ const MAX_CONTENT_FILE = 1024 * 1024;
 const MAX_CONTENT_TOTAL = 64 * 1024 * 1024;
 const CONTENT_TYPES = new Set(['Text document', 'Code or data file', 'RISC-V program', 'Spreadsheet', 'Calendar', 'Contacts', 'Web link']);
 
+/** The form text is compared in: one Unicode spelling ("é" typed two ways is one letter, as names.ts says) and lower case. */
+const fold = (text: string) => text.normalize('NFC').toLowerCase();
+
 /** Lower-case words; an item matches when every word is found. */
 export function searchWords(query: string): string[] {
-  return query.toLowerCase().split(/\s+/).filter(Boolean).slice(0, 8);
+  return fold(query).split(/\s+/).filter(Boolean).slice(0, 8);
 }
 
 export function matchesAll(text: string, words: string[]): boolean {
-  const lower = text.toLowerCase();
+  const lower = fold(text);
   return words.every(w => lower.includes(w));
 }
 
 /** The line holding the first word, trimmed to about 120 characters around it. */
 export function snippetOf(text: string, words: string[]): string {
-  const lower = text.toLowerCase();
-  const at = lower.indexOf(words[0]);
-  if (at < 0) return '';
-  const lineStart = text.lastIndexOf('\n', at) + 1;
-  const lineEnd = text.indexOf('\n', at);
-  const line = text.slice(lineStart, lineEnd < 0 ? undefined : lineEnd);
-  const pos = at - lineStart;
-  const from = Math.max(0, pos - 50);
-  return (from > 0 ? '…' : '') + line.slice(from, from + 120).trim() + (line.length > from + 120 ? '…' : '');
+  // Found line by line: lower-casing can change a text's length (a Turkish İ becomes two characters), so a place found
+  // in the whole lowered text would point at the wrong letters of the original.
+  for (const line of text.split('\n')) {
+    const pos = fold(line).indexOf(words[0]);
+    if (pos < 0) continue;
+    const from = Math.max(0, pos - 50);
+    return (from > 0 ? '…' : '') + line.slice(from, from + 120).trim() + (line.length > from + 120 ? '…' : '');
+  }
+  return '';
 }
 
 /** Returns how many hits there were, and whether the search stopped at the limit. */

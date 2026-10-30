@@ -17,7 +17,7 @@ import { createFolderView } from './foldview.ts';
 import { fileTypeOf } from './filetypes.ts';
 import { isAppShortcut, openShortcut } from './appshortcut.ts';
 import { iconDefs } from './icons.ts';
-import { readInstalled, writeInstalled } from './installed.ts';
+import { changeInstalled, readInstalled } from './installed.ts';
 import { bindDesktopKeys } from './keys.ts';
 import { NoticeCentre } from './notices.ts';
 import { startReminders } from './reminders.ts';
@@ -147,12 +147,9 @@ class DesktopShell implements Shell {
 
   async setInstalled(id: string, on: boolean): Promise<void> {
     if ((on && !this.storeApps.has(id)) || this.installedApps.has(id) === on) return;
-    // The list as kept now (another device may have changed it), read strictly: one that cannot be read is not replaced.
-    const next = new Set(await readInstalled(this.fs, true));
-    if (on) next.add(id);
-    else next.delete(id);
-    // Saved first: if the person's files cannot be written, nothing changes on screen either.
-    await writeInstalled(this.fs, [...next]);
+    // Changed on top of the list as kept now (another tab or device may have added to it meanwhile), read strictly: one
+    // that cannot be read is not replaced. Saved first: if the person's files cannot be written, nothing changes on screen.
+    const next = new Set(await changeInstalled(this.fs, ids => void (on ? ids.add(id) : ids.delete(id))));
     this.installedApps = next;
     if (on) this.registerApp(storeAppDef(this.storeApps.get(id)!));
     else this.unregisterStoreApp(id);

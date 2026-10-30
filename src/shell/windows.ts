@@ -31,6 +31,8 @@ export class Win {
   title: string;
   iconName: IconName;
   state: State = 'normal';
+  /** Maximised when it was minimised, so it comes back from the taskbar maximised, not at its old size. */
+  wasMax = false;
   dirty = false;
   guard: (() => boolean | Promise<boolean>) | null = null;
   /** Hears the argument when a single-window app is opened again while this window is open. */
@@ -236,10 +238,7 @@ export class WindowManager {
   focus(win: Win): void {
     // A window already closed (held by the window switcher or a taskbar menu opened before it closed) stays closed.
     if (!this.wins.has(win.id)) return;
-    if (win.state === 'min') {
-      win.state = 'normal';
-      this.applyState(win);
-    }
+    if (win.state === 'min') this.unminimise(win);
     this.order = this.order.filter(w => w !== win);
     this.order.push(win);
     this.order.forEach((w, i) => {
@@ -262,12 +261,25 @@ export class WindowManager {
 
   minimise(win: Win): void {
     if (win.fixed || !this.wins.has(win.id)) return;
-    win.state = 'min';
-    this.applyState(win);
+    this.hide(win);
     win.el.classList.remove('active');
     const next = this.front();
     if (next) this.focus(next);
     else this.changed.emit();
+  }
+
+  /** Minimises, remembering whether it was maximised. */
+  private hide(win: Win): void {
+    win.wasMax = win.state === 'max';
+    win.state = 'min';
+    this.applyState(win);
+  }
+
+  /** Brings a minimised window back as it was: maximised if it was, at its size otherwise. */
+  private unminimise(win: Win): void {
+    win.state = win.wasMax ? 'max' : 'normal';
+    win.wasMax = false;
+    this.applyState(win);
   }
 
   toggleMax(win: Win): void {
@@ -287,18 +299,12 @@ export class WindowManager {
     const open = this.list().filter(w => w.state !== 'min' && !w.fixed);
     if (open.length) {
       this.hidden = open;
-      for (const w of open) {
-        w.state = 'min';
-        this.applyState(w);
-      }
+      for (const w of open) this.hide(w);
       this.changed.emit();
     } else if (this.hidden.length) {
-      const back = this.hidden.filter(w => this.wins.has(w.id));
+      const back = this.hidden.filter(w => this.wins.has(w.id) && w.state === 'min');
       this.hidden = [];
-      for (const w of back) {
-        w.state = 'normal';
-        this.applyState(w);
-      }
+      for (const w of back) this.unminimise(w);
       if (back.length) this.focus(back[back.length - 1]);
     }
   }

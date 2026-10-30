@@ -61,12 +61,18 @@ function findEntry(folder: FolderRecord, name: string): Entry | undefined {
   return folder.entries.find(e => nameKey(e.name) === key);
 }
 
-/** Drops any path inside another path of the list: acting on the outer one already covers it. */
+/**
+ * Drops any path inside another path of the list: acting on the outer one already covers it. The same item named twice
+ * (in another letter case or Unicode spelling) counts once, not as each inside the other and so dropped altogether.
+ */
 function outermost(paths: string[]): string[] {
-  const norm = [...new Set(paths.map(p => joinPath(p)))];
   const key = (p: string) => nameKey(p) + '/';
-  return norm.filter(p => !norm.some(q => q !== p && key(p).startsWith(key(q))));
+  const norm = [...new Map(paths.map(p => [key(p), joinPath(p)])).values()];
+  return norm.filter(p => !norm.some(q => key(q) !== key(p) && key(p).startsWith(key(q))));
 }
+
+/** A folder reached through a remembered copy is gone: the copy was old, so the change is worked out again from fresh ones. */
+class StaleRead extends Error {}
 
 function checkName(name: string): void {
   const problem = nameProblem(name);
@@ -79,17 +85,36 @@ class Change {
   private read = new Map<string, { version: string; folder: FolderRecord }>();
   private written = new Map<string, FolderRecord>();
   readonly ops: StoreOp[] = [];
+  /**
+   * The first attempt may read remembered copies, which another window may have made old; a later one has dropped them,
+   * so what it reads is what is there. Anything missing on the first attempt is looked for again on a second (StaleRead).
+   */
+  private fresh: boolean;
 
-  constructor(fs: FileSystem) {
+  constructor(fs: FileSystem, fresh: boolean) {
     this.fs = fs;
+    this.fresh = fresh;
   }
 
   async folder(key: string): Promise<FolderRecord> {
+    const folder = await this.folderIfThere(key);
+    if (!folder) throw new FsError('A folder is not there any more. It may have been deleted in another window.');
+    return folder;
+  }
+
+  /** The folder's record, or null when the record itself is gone (a damaged store: store-check calls it "missing"). */
+  async folderIfThere(key: string): Promise<FolderRecord | null> {
     const written = this.written.get(key);
     if (written) return written;
     let seen = this.read.get(key);
     if (!seen) {
-      seen = await this.fs.loadFolder(key);
+      const loaded = await this.fs.loadFolderIfThere(key);
+      if (!loaded) {
+        // Another window may have deleted and remade the folder above it: the remembered copy named a record that is gone.
+        if (!this.fresh) throw new StaleRead();
+        return null;
+      }
+      seen = loaded;
       this.read.set(key, seen);
     }
     return structuredClone(seen.folder);
@@ -100,12 +125,18 @@ class Change {
     return this.read.get(key)?.version ?? '';
   }
 
+  /** Something a path names is not in the folder read: said so, unless the folder was a remembered copy that may be old. */
+  private missing(message: string): never {
+    if (!this.fresh) throw new StaleRead();
+    throw new FsError(message);
+  }
+
   /** Walks a path of folder names from the root; returns the folder's key. */
   async folderKey(path: string): Promise<string> {
     let key = ROOT_KEY;
     for (const part of splitPath(path)) {
       const entry = findEntry(await this.folder(key), part);
-      if (!entry) throw new FsError(`The folder "${part}" is not there any more. It may have been moved or deleted.`);
+      if (!entry) this.missing(`The folder "${part}" is not there any more. It may have been moved or deleted.`);
       if (entry.kind !== 'folder') throw new FsError(`"${part}" is a file, not a folder.`);
       key = entry.id;
     }
@@ -117,7 +148,7 @@ class Change {
     if (!name) throw new FsError('That is the top folder; it cannot be changed.');
     const parent = await this.folderKey(parentPath(path));
     const entry = findEntry(await this.folder(parent), name);
-    if (!entry) throw new FsError(`"${name}" is not there any more. It may have been moved or deleted.`);
+    if (!entry) this.missing(`"${name}" is not there any more. It may have been moved or deleted.`);
     return { parent, entry };
   }
 
@@ -135,16 +166,20 @@ class Change {
     this.ops.push({ op: 'del', key, expect: kind === 'folder' ? this.versionOf(key) : '*' });
   }
 
-  /** Every record under a folder, deepest first, for deleting it. */
+  /** Every record under a folder, deepest first, for deleting it. A folder whose own record is gone has nothing to drop. */
   async collect(entry: Entry, into: Array<{ key: string; kind: 'file' | 'folder' }>): Promise<void> {
     if (entry.kind === 'folder') {
-      for (const child of (await this.folder(entry.id)).entries) await this.collect(child, into);
+      const folder = await this.folderIfThere(entry.id);
+      if (!folder) return;
+      for (const child of folder.entries) await this.collect(child, into);
     }
     into.push({ key: entry.id, kind: entry.kind });
   }
 
   async bytesOf(entry: Entry): Promise<Uint8Array> {
-    return this.fs.readRecord(entry.id, entry.name);
+    const record = await this.fs.store.get(entry.id);
+    if (!record) this.missing(`"${entry.name}" is not there any more. It may have been deleted in another window.`);
+    return record.data;
   }
 
   /**
@@ -195,13 +230,17 @@ export class FileSystem {
   }
 
   async loadFolder(key: string, fresh = false): Promise<{ version: string; folder: FolderRecord }> {
+    const loaded = await this.loadFolderIfThere(key, fresh);
+    if (!loaded) throw new FsError('A folder is not there any more. It may have been deleted in another window.');
+    return loaded;
+  }
+
+  /** As loadFolder, but null when the folder's record is gone. */
+  async loadFolderIfThere(key: string, fresh = false): Promise<{ version: string; folder: FolderRecord } | null> {
     const cached = !fresh && this.cache.get(key);
     if (cached) return cached;
     const record = await this.store.get(key);
-    if (!record) {
-      if (key === ROOT_KEY) return this.createRoot();
-      throw new FsError('A folder is not there any more. It may have been deleted in another window.');
-    }
+    if (!record) return key === ROOT_KEY ? this.createRoot() : null;
     const loaded = { version: record.version, folder: decodeFolder(key, record.data) };
     this.cache.set(key, loaded);
     return loaded;
@@ -252,11 +291,17 @@ export class FileSystem {
 
   private async attempt<T>(plan: (c: Change) => Promise<{ result: T; changed: string[] }>): Promise<T> {
     for (let attempt = 1; ; attempt++) {
-      const c = new Change(this);
-      const { result, changed } = await plan(c);
+      const c = new Change(this, attempt > 1);
+      let done: { result: T; changed: string[] };
       try {
+        done = await plan(c);
         c.commitCache(await this.store.commit(c.commitOps()));
       } catch (error) {
+        // A remembered copy that turned out old costs one more look, at once; a clash with another window waits its turn.
+        if (error instanceof StaleRead) {
+          this.cache.clear();
+          continue;
+        }
         if (!(error instanceof StoreConflict)) throw error;
         this.cache.clear();
         if (attempt >= MAX_TRIES) {
@@ -265,8 +310,8 @@ export class FileSystem {
         await new Promise(resolve => setTimeout(resolve, Math.random() * 30 * attempt));
         continue;
       }
-      for (const listener of this.listeners) listener(changed);
-      return result;
+      for (const listener of this.listeners) listener(done.changed);
+      return done.result;
     }
   }
 
@@ -274,17 +319,23 @@ export class FileSystem {
 
   /** The entries of a folder, read fresh from the store. Hidden entries only when asked. */
   async list(path: string, withHidden = false): Promise<Entry[]> {
+    try {
+      return await this.listFrom(path, withHidden, false);
+    } catch (error) {
+      // The remembered folders on the way may be old (another window moved, deleted or remade one): looked at again
+      // fresh before saying it is gone.
+      if (!(error instanceof FsError)) throw error;
+      this.cache.clear();
+      return this.listFrom(path, withHidden, true);
+    }
+  }
+
+  private async listFrom(path: string, withHidden: boolean, fresh: boolean): Promise<Entry[]> {
     let key = ROOT_KEY;
     for (const part of splitPath(path)) {
-      const entry = findEntry((await this.loadFolder(key)).folder, part);
-      if (!entry || entry.kind !== 'folder') {
-        // The cached copy may be old; look again before saying it is gone.
-        const again = findEntry((await this.loadFolder(key, true)).folder, part);
-        if (!again || again.kind !== 'folder') throw new FsError(`The folder "${part}" is not there. It may have been moved or deleted.`);
-        key = again.id;
-      } else {
-        key = entry.id;
-      }
+      const entry = findEntry((await this.loadFolder(key, fresh)).folder, part);
+      if (!entry || entry.kind !== 'folder') throw new FsError(`The folder "${part}" is not there. It may have been moved or deleted.`);
+      key = entry.id;
     }
     const { folder } = await this.loadFolder(key, true);
     return folder.entries.filter(e => withHidden || !e.hidden).map(e => ({ ...e }));
@@ -372,18 +423,23 @@ export class FileSystem {
     });
   }
 
-  /** Creates any missing folders along a path (for the desktop's own System folder and its settings). */
+  /** Creates any missing folders along a path (for the desktop's own System folder and its settings). A file in the way is refused. */
   async ensureFolder(path: string, options: { hidden?: boolean } = {}): Promise<void> {
     const parts = splitPath(path);
     for (let i = 1; i <= parts.length; i++) {
       const sub = joinPath(...parts.slice(0, i));
-      if (!(await this.exists(sub))) {
+      let there = await this.stat(sub);
+      if (!there) {
         try {
           await this.mkdir(sub, i === parts.length ? options : {});
+          continue;
         } catch (error) {
-          if (!(error instanceof FsError && (await this.exists(sub)))) throw error;
+          // Made in another window at the same moment: theirs will do, as long as it is a folder.
+          there = error instanceof FsError ? await this.stat(sub) : null;
+          if (!there) throw error;
         }
       }
+      if (there.kind !== 'folder') throw new FsError(`"${there.name}" is a file, not a folder.`);
     }
   }
 
@@ -401,8 +457,11 @@ export class FileSystem {
     });
   }
 
-  /** Moves entries into a folder, keeping their names. Refuses (and moves nothing) if a name is already taken. */
-  async move(paths: string[], toFolder: string): Promise<Entry[]> {
+  /**
+   * Moves entries into a folder, keeping their names. A name already taken there refuses the whole move (nothing is moved),
+   * or with `keepBoth` the moved item gets " (2)", " (3)"... added, in the same change, so nothing is renamed and then left.
+   */
+  async move(paths: string[], toFolder: string, options: { keepBoth?: boolean } = {}): Promise<Entry[]> {
     return this.change(async c => {
       const destKey = await c.folderKey(toFolder);
       const ancestors = await this.ancestorKeys(c, toFolder);
@@ -419,10 +478,11 @@ export class FileSystem {
         c.saveFolder(parent, from);
         const dest = await c.folder(destKey);
         const clash = findEntry(dest, entry.name);
-        if (clash) throw new FsError(`"${toFolder}" already has something called "${clash.name}". Nothing was moved.`);
-        dest.entries.push(entry);
+        if (clash && !options.keepBoth) throw new FsError(`"${toFolder}" already has something called "${clash.name}". Nothing was moved.`);
+        const placed = clash ? { ...entry, name: uniqueName(entry.name, dest.entries.map(e => e.name)) } : entry;
+        dest.entries.push(placed);
         c.saveFolder(destKey, dest);
-        moved.push({ ...entry });
+        moved.push({ ...placed });
         changed.add(parentPath(path));
       }
       return { result: moved, changed: [...changed] };

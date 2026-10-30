@@ -4,7 +4,7 @@
 // Documents › Books, listed in a hidden index (/System/reader-books.json) with where it came from. Only this window's
 // own frame is answered: the lock screen's Reader gets nothing, so a locked screen shows no saved books.
 import { h, on } from '../core/dom.ts';
-import { joinPath, uniqueName } from '../fs/names.ts';
+import { cleanName, joinPath, uniqueName } from '../fs/names.ts';
 import type { AppDef } from '../shell/types.ts';
 import { APPS } from './catalog.ts';
 
@@ -27,8 +27,11 @@ interface SavedBook {
 
 /** A file name for a book: its title and author, without characters a file name cannot hold, at most 100 letters. */
 export function bookFileName(title: string, author: string): string {
-  const base = `${title} - ${author}`.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 100).trim();
-  return `${base || 'Book'}.txt`;
+  const base = `${title} - ${author}`.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '').replace(/\s+/g, ' ').trim();
+  // Cut to whole letters, then made a usable name: cleanName drops direction marks and the like, and keeps the name under
+  // the 255-byte limit (100 Chinese or Japanese letters are 300 bytes).
+  const short = cleanName(Array.from(base).slice(0, 100).join(''));
+  return cleanName(`${short === 'Untitled' ? 'Book' : short}.txt`);
 }
 
 /** Only rows that make sense: a Gutenberg number, a title, a path in Documents › Books. */

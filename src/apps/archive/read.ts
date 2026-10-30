@@ -2,9 +2,27 @@
 // Nothing inside an archive is trusted: every stored name is split into parts and each part made safe, so "../x",
 // "/etc/x" or "C:\x" can only ever land inside the folder being extracted to. Unpacking stops at a size cap, so a
 // small file that claims to hold gigabytes ("zip bomb") is refused part-way instead of filling the store.
+import { crc32 } from '../../core/zip.ts';
 import { cleanName } from '../../fs/names.ts';
 
 export class ArchiveError extends Error {}
+
+// The upper half of the old DOS code page (CP437), which zip names are in unless the "names are UTF-8" flag is set:
+// Windows' own zipper and older tools still write it, so "Köln" arrives as 4B 94 6C 6E.
+const CP437_HIGH =
+  'ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜ¢£¥₧ƒáíóúñÑªº¿⌐¬½¼¡«»░▒▓│┤╡╢╖╕╣║╗╝╜╛┐└┴┬├─┼╞╟╚╔╩╦╠═╬╧╨╤╥╙╘╒╓╫╪┘┌█▄▌▐▀αßΓπΣσµτΦΘΩδ∞φε∩≡±≥≤⌠⌡÷≈°∙·√ⁿ²■ ';
+
+/** A zip entry's name: UTF-8 when flagged so, or when it reads as UTF-8 anyway (some tools never set the flag); else CP437. */
+export function zipName(bytes: Uint8Array, utf8Flag: boolean): string {
+  if (!utf8Flag) {
+    try {
+      return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    } catch {
+      return Array.from(bytes, b => (b < 0x80 ? String.fromCharCode(b) : CP437_HIGH[b - 0x80])).join('');
+    }
+  }
+  return new TextDecoder('utf-8').decode(bytes);
+}
 
 export interface ArchiveEntry {
   /** Safe parts, e.g. ["docs", "a.txt"]; never "", ".", "..". */
@@ -88,13 +106,14 @@ export function readZip(b: Uint8Array): ArchiveEntry[] {
     if (at + 46 > b.length || u32(b, at) !== 0x02014b50) throw new ArchiveError('The table of contents of this .zip is damaged.');
     const flags = u16(b, at + 8);
     const method = u16(b, at + 10);
+    const crc = u32(b, at + 16);
     const packed = u32(b, at + 20);
     const size = u32(b, at + 24);
     const nameLen = u16(b, at + 28);
     const extraLen = u16(b, at + 30);
     const commentLen = u16(b, at + 32);
     const local = u32(b, at + 42);
-    const rawName = new TextDecoder('utf-8').decode(b.subarray(at + 46, at + 46 + nameLen));
+    const rawName = zipName(b.subarray(at + 46, at + 46 + nameLen), (flags & 0x800) !== 0);
     at += 46 + nameLen + extraLen + commentLen;
     const parts = safeParts(rawName);
     if (parts.length === 0) continue;
@@ -110,15 +129,20 @@ export function readZip(b: Uint8Array): ArchiveEntry[] {
       const start = local + 30 + u16(b, local + 26) + u16(b, local + 28);
       const data = b.subarray(start, start + packed);
       if (data.length < packed) throw new ArchiveError(`“${parts.join('/')}” is cut short in this .zip.`);
+      // Every byte is checked against the sum the .zip carries (CRC-32): a damaged file is refused, not quietly extracted.
+      const checked = (out: Uint8Array): Uint8Array => {
+        if (crc32(out) !== crc) throw new ArchiveError(`“${parts.join('/')}” is damaged in this .zip (its bytes do not add up to the sum the .zip carries).`);
+        return out;
+      };
       if (method === 0) {
         // Stored as it is: the two sizes must agree, or a size check made on the listed size would mean nothing.
         if (packed !== size) throw new ArchiveError(`“${parts.join('/')}” is not the size the .zip says. It may be damaged.`);
-        return data.slice();
+        return checked(data.slice());
       }
       if (method === 8) {
         const out = await unpack(data, 'deflate-raw', Math.min(MAX_ENTRY, size));
         if (out.length !== size) throw new ArchiveError(`“${parts.join('/')}” did not unpack to the size the .zip says. It may be damaged.`);
-        return out;
+        return checked(out);
       }
       throw new ArchiveError(`“${parts.join('/')}” is packed a way this opener does not read (method ${method}). Only the usual "deflate" and "stored" are read.`);
     };

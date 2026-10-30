@@ -256,9 +256,12 @@ export const explorerApp: AppDef = {
       } else if (event.ctrlKey && event.key.toLowerCase() === 'l') {
         event.preventDefault();
         editPath();
-      } else if (event.altKey && event.key === 'ArrowLeft') backBtn.click();
-      else if (event.altKey && event.key === 'ArrowRight') forwardBtn.click();
-      else if (event.altKey && event.key === 'ArrowUp') up();
+      } else if (event.altKey && !event.ctrlKey && !event.metaKey) {
+        // Alt alone: Ctrl+Alt+arrow snaps the window (keys.ts) and must not also go Back, Forward or Up.
+        if (event.key === 'ArrowLeft') backBtn.click();
+        else if (event.key === 'ArrowRight') forwardBtn.click();
+        else if (event.key === 'ArrowUp') up();
+      }
     }, app.signal);
 
     await show();
