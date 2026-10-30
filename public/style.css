@@ -2218,6 +2218,32 @@ textarea.field { resize: vertical; font: inherit; }
   .cad-paper-tabloid-landscape { page: cad-tabloid-landscape; }
 }
 @media (max-width: 760px) { .cad-panel { width: 150px; } .cad-xy { min-width: 0; } }
+/* A phone: one toolbar row that scrolls sideways, Layers over the drawing (not beside it), everything else wrapped so it stays on screen. */
+@media (max-width: 720px) {
+  .cad-tbs { display: flex; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; border-bottom: 1px solid #b0aca4; touch-action: pan-x; }
+  .cad-tb { flex-wrap: nowrap; border: 0; }
+  .cad-tb + .cad-tb { border-left: 1px solid #808080; }
+  .cad-tb .cad-btn { flex: none; }
+  .cad-body { position: relative; }
+  .cad-panel { position: absolute; z-index: 5; top: 0; bottom: 0; left: 0; width: min(240px, 75%); margin: 0; box-shadow: 2px 0 8px rgba(0, 0, 0, .4); }
+  .cad-col { overflow-y: auto; scrollbar-width: none; }
+  .cad-col .cad-btn { flex: none; }
+  .cad-history { height: 34px; }
+  .cad-command-line { flex-wrap: wrap; }
+  .cad-prompt { flex: 1 1 100%; max-width: 100%; min-height: 32px; white-space: normal; }
+  .cad-input { flex: 1 1 0; min-width: 0; }
+  .cad-xyin { flex: 1 1 0; min-width: 0; }
+  .cad-coord { flex: 1 1 0; width: 0; min-width: 0; }
+  .cad-status { flex-wrap: wrap; height: auto; }
+  .cad-cell { padding: 0 5px; }
+  .cad-msg { flex: 1 1 70px; }
+  .cad-xy { flex: 1 1 72px; }
+}
+@media (max-width: 720px) and (pointer: coarse) {
+  .cad-tbs { scrollbar-width: none; }
+  .cad-cell { height: 28px; }
+  .cad-input, .cad-coord { height: 28px; font-size: 16px; }
+}
 .cad-lock, .cad-more { flex: none; width: 20px; height: 18px; padding: 0; font-size: 12px; line-height: 1; background: none; color: #000; border: 1px solid transparent; border-radius: 0; }
 .cad-lock:hover, .cad-more:hover { border-color: #fff #808080 #808080 #fff; }
 .cad-lock { opacity: .45; }

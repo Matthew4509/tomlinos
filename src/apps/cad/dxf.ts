@@ -561,7 +561,7 @@ export interface DxfRead {
   /** Lines for the report shown after opening. */
   report: string[];
   leftOut: number;
-  /** Items whose height, thickness, own colour or own line type the drawing does not keep (all said in `report`). */
+  /** Items the drawing does not keep as they are in the file (all said in `report`): a height, a thickness, an own colour or line type, blocks and true dimensions taken apart, splines redrawn. */
   changed: number;
 }
 
@@ -718,6 +718,7 @@ export function readDxf(bytes: Uint8Array): DxfRead {
   const notes = new Set<string>();
   let total = 0;
   let curves = 0;
+  let fitCurves = 0;
   let exploded = 0;
   let ownColours = 0;
   // Kept nowhere in a CAD Draft drawing, so said: a height off 0, a thickness, a line type of the item's own.
@@ -838,10 +839,12 @@ export function readDxf(bytes: Uint8Array): DxfRead {
           const flags = num(r, 70);
           const pts: Pt[] = [];
           const bulges: number[] = [];
+          let deep = false;
           while (n < recs.length && recs[n].type === 'VERTEX') {
             const v = recs[n++];
             const vf = num(v, 70);
             if (vf & 16 || vf & 128) continue;
+            if (Math.abs(num(v, 30)) > 1e-9) deep = true;
             pts.push(flipX(ptOf(v, 10), f));
             bulges.push((f < 0 ? -1 : 1) * num(v, 42));
           }
@@ -851,6 +854,8 @@ export function readDxf(bytes: Uint8Array): DxfRead {
             break;
           }
           if (flags & 8) notes.add('3D polylines were laid flat (their heights dropped).');
+          // Its points' heights (a polyline's own height was counted above).
+          if (deep && Math.abs(num(r, 30)) <= 1e-9) raised++;
           if (pts.length >= 2) put({ type: 'poly', pts, bulges, closed: !!(flags & 1) });
           else counted(leftOut, 'polyline with fewer than two points');
           break;
@@ -862,6 +867,7 @@ export function readDxf(bytes: Uint8Array): DxfRead {
             const fit = r.tags.filter(t => t[0] === 11).map((t, j) => P(Number(t[1]), Number(fy[j]?.[1] ?? 0)));
             if (fit.length >= 2) {
               put({ type: 'spline', fit, closed: !!(num(r, 70) & 1) });
+              fitCurves++;
               notes.add('Curves saved with only their fit points were drawn as smooth curves through those points (the shape may differ very slightly).');
             } else leave('SPLINE');
           } else if (shape) {
@@ -1074,7 +1080,7 @@ export function readDxf(bytes: Uint8Array): DxfRead {
     longText++;
   }
   if (longText) report.push(`${longText} text item${longText === 1 ? ' was' : 's were'} longer than ${MAX_TEXT_LENGTH.toLocaleString('en-GB')} letters: cut to that length.`);
-  return { drawing: d, report, leftOut: left, changed: ownColours + ownLineTypes + raised + thick + longText };
+  return { drawing: d, report, leftOut: left, changed: ownColours + ownLineTypes + raised + thick + longText + exploded + curves + fitCurves };
 }
 
 /** Every number in a shape is a real number (not Infinity or NaN). */
