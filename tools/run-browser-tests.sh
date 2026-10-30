@@ -4,7 +4,7 @@
 # (Running them all at once can overload a computer and fail steps at random; one at a time, a red result means
 # something. Takes about 20 minutes.)
 #   bash tools/run-browser-tests.sh [parent-folder-for-data]
-# SUITES="desktop cad" runs only those (by the names below).
+# SUITES="desktop cad" runs only those (by the names below). TEST_PORT=3401 uses another port than 3043.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 PARENT="${1:-${TMPDIR:-/tmp}}"
@@ -20,7 +20,7 @@ PHP_FLAGS="-d opcache.enable=0 -d display_errors=0"
 [ -f "$PHPDIR/ext/php_openssl.dll" ] && PHP_FLAGS="-d opcache.enable=0 -d display_errors=0 -d extension_dir=$PHPDIR/ext -d extension=openssl -d extension=mbstring -d extension=curl -d openssl.cafile=$PHPDIR/extras/cacert.pem"
 LOGS="$PARENT/tomlinos-browser-logs-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$LOGS"
-PORT=3043
+PORT="${TEST_PORT:-3043}"
 # Two runs at once share this port and fail each other at random (a stopped run can keep going underneath).
 if netstat -ano 2>/dev/null | grep -qE "[:.]$PORT +.*LISTEN"; then
   echo "Port $PORT is already in use: another test run (or its server) is still going. Stop it first:"
