@@ -64,7 +64,10 @@ export function newGeneralKey(): Promise<CryptoKey> {
 }
 
 export interface Wrap {
+  /** The hander's public key, which the wrap was made with. */
   fromPub: string;
+  /** The receiver's public key, which the wrap was made for: the server refuses a wrap made for a key since replaced. */
+  toPub: string;
   iv: string;
   ct: string;
 }
@@ -76,11 +79,17 @@ export async function wrapGeneral(mine: ChatKeys, forUser: string, forPub: strin
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const raw = new Uint8Array(await crypto.subtle.exportKey('raw', key));
   const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: enc.encode(label) }, kek, raw));
-  return { fromPub: mine.pub, iv: b64(iv), ct: b64(ct) };
+  return { fromPub: mine.pub, toPub: forPub, iv: b64(iv), ct: b64(ct) };
 }
 
-/** Opens the General key someone wrapped for me. Kept extractable: I may have to hand it on to the next person. */
-export async function unwrapGeneral(mine: ChatKeys, meId: string, wrap: Wrap, epoch: number): Promise<CryptoKey> {
+/**
+ * Opens the General key someone wrapped for me. Kept extractable: I may have to hand it on to the next person.
+ * `senderPub` is the hander's public key as the server lists it now (null when they have none): a wrap made with any
+ * other key is not opened, so a General key cannot be swapped under me without the people list showing a changed key.
+ * Left out (undefined), the wrap's own word is taken.
+ */
+export async function unwrapGeneral(mine: ChatKeys, meId: string, wrap: Wrap, epoch: number, senderPub?: string | null): Promise<CryptoKey> {
+  if (senderPub !== undefined && senderPub !== wrap.fromPub) throw new Error('This General key was not wrapped with the sender\'s current chat key (their key changed, or the wrap was tampered with), so it was not opened.');
   const label = `general|${epoch}|${meId}`;
   const kek = await agreed(mine, wrap.fromPub, label, 'tomlinos-chat-wrap', ['decrypt']);
   const raw = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(wrap.iv), additionalData: enc.encode(label) }, kek, unb64(wrap.ct));

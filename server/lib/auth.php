@@ -527,17 +527,24 @@ function auth_sessions_of(string $dataDir, string $userId): array
     return $out;
 }
 
-/** Signs a person out everywhere except the session whose file id is $keep. Returns how many ended. */
+/**
+ * Signs a person out everywhere except the session whose file id is $keep. Returns how many ended.
+ * Under the accounts lock, the same one auth_session_update holds: a session in the middle of refreshing its "last
+ * seen" time (read, then write back) would otherwise write its file back after it was deleted here, and a stolen
+ * sign-in would outlive the password change or "sign out everywhere" meant to end it.
+ */
 function auth_sessions_end_all(string $dataDir, string $userId, ?string $keep = null): int
 {
-    $n = 0;
-    foreach (array_keys(auth_sessions_of($dataDir, $userId)) as $id) {
-        if ($id !== $keep && @unlink(auth_dir($dataDir) . '/sessions/' . $id . '.json')) {
-            $n++;
+    return auth_locked($dataDir, static function () use ($dataDir, $userId, $keep): int {
+        $n = 0;
+        foreach (array_keys(auth_sessions_of($dataDir, $userId)) as $id) {
+            if ($id !== $keep && @unlink(auth_dir($dataDir) . '/sessions/' . $id . '.json')) {
+                $n++;
+            }
         }
-    }
 
-    return $n;
+        return $n;
+    });
 }
 
 // ---- Brakes on guessing -------------------------------------------------------------------------------------------------
@@ -555,12 +562,20 @@ function auth_throttle_key(string $name, string $ip): string
     return strtolower($name) . '|' . $ip;
 }
 
-/** An IPv6 visitor usually has a whole /64 to pick addresses from, so the brake counts the /64, not each address. */
+/**
+ * An IPv6 visitor usually has a whole /64 to pick addresses from, so the brake counts the /64, not each address.
+ * An IPv4 visitor seen through an IPv6 socket arrives as "::ffff:1.2.3.4": that is the IPv4 address 1.2.3.4, counted
+ * as such (counted as the /64 "::/64", every IPv4 visitor would share one bucket, and five wrong tries by anyone would
+ * hold the real person out).
+ */
 function auth_throttle_ip(string $ip): string
 {
     $bin = @inet_pton($ip);
     if ($bin === false || strlen($bin) !== 16) {
         return $ip;
+    }
+    if (substr($bin, 0, 12) === str_repeat("\0", 10) . "\xff\xff") {
+        return (string) inet_ntop(substr($bin, 12));
     }
 
     return inet_ntop(substr($bin, 0, 8) . str_repeat("\0", 8)) . '/64';
@@ -890,7 +905,9 @@ function current_session(string $dataDir): ?array
 
         return null;
     }
-    if (time() - (int) $session['seen'] >= 60) {
+    // A locked screen is not someone at work: the requests its page keeps sending (and being refused for) do not count
+    // as activity, or a desktop left locked would never idle out. Unlocking is the activity that counts again.
+    if (empty($session['locked']) && time() - (int) $session['seen'] >= 60) {
         // Only "seen" changes, on a fresh read under the lock: a copy read before a lock must never be written back.
         $session = auth_session_update($dataDir, $token, static fn (array $s): array => ['seen' => time()] + $s);
         if ($session === null) {
@@ -928,6 +945,55 @@ function require_admin(array $user): void
     if (empty($user['admin'])) {
         api_fail(403, 'Only the owner of this desktop can manage other people.');
     }
+}
+
+/**
+ * Checks the password (and the two-step code, when it is on) before a change to the account, or before one of the
+ * owner's actions that reach beyond their own account (adding a person, deleting a store app, installing an update):
+ * someone at an unlocked, unattended desktop cannot do those without the password.
+ * With two-step on, an unused recovery code is taken in place of the authenticator's code (and used up), so someone
+ * whose phone is lost can still turn two-step off, make new codes or change their password.
+ */
+function confirm_identity(string $dataDir, array $user, array $body): void
+{
+    // The same brake as signing in: someone at an unlocked, unattended desktop cannot try passwords at full speed.
+    $ip = (string) ($_SERVER['REMOTE_ADDR'] ?? '');
+    $wait = auth_throttle_take($dataDir, $ip, $user['name']);
+    if ($wait > 0) {
+        api_fail(429, sprintf('Too many wrong tries. Wait %s, then try again.', $wait >= 90 ? ceil($wait / 60) . ' minutes' : $wait . ' seconds'), ['wait' => $wait]);
+    }
+    if (!password_verify(body_str($body, 'password'), $user['hash'])) {
+        api_fail(403, 'That password is not right, so nothing was changed. Type your current password.');
+    }
+    if (!empty($user['totp']['enabled'])) {
+        $code = strtolower(trim(body_str($body, 'code')));
+        $step = auth_totp_check($user['totp']['secret'], $code, (int) ($user['totp']['last'] ?? 0));
+        if ($step === null || !auth_totp_use($dataDir, $user['id'], $step)) {
+            if (!auth_recovery_use($dataDir, $user['id'], $code)) {
+                api_fail(403, 'That two-step code is not right (or was already used), so nothing was changed. Type the code your authenticator shows now, or one of your recovery codes.');
+            }
+        }
+    }
+    auth_throttle_clear($dataDir, $user['name']);
+    auth_throttle_refund($dataDir, $ip);
+}
+
+/** Uses up one of a person's recovery codes, under the lock. False when it is not one of their unused codes. */
+function auth_recovery_use(string $dataDir, string $userId, string $typed): bool
+{
+    $hashed = hash_hmac('sha256', auth_recovery_form($typed), auth_pepper($dataDir));
+
+    return auth_locked($dataDir, static function () use ($dataDir, $userId, $hashed): bool {
+        $users = auth_users($dataDir);
+        $at = isset($users[$userId]) ? array_search($hashed, $users[$userId]['recovery'] ?? [], true) : false;
+        if ($at === false) {
+            return false;
+        }
+        array_splice($users[$userId]['recovery'], (int) $at, 1);
+        auth_save_users($dataDir, $users);
+
+        return true;
+    });
 }
 
 /**

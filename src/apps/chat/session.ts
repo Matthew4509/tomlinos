@@ -248,7 +248,10 @@ export class ChatSession {
     }
     if (!this.generalKey && g.wrap) {
       try {
-        this.generalKey = await unwrapGeneral(keys, state.me, g.wrap, g.epoch);
+        // Opened only when the wrap was made with the hander's current key, as the people list shows it: a wrap made
+        // with any other key is not trusted (their key changed since, or someone changed the wrap).
+        const hander = g.wrap.from === state.me ? keys.pub : (state.people.find(p => p.id === g.wrap!.from)?.pub ?? null);
+        this.generalKey = await unwrapGeneral(keys, state.me, g.wrap, g.epoch, hander);
         await this.reopen('general');
       } catch {
         this.generalKey = null;
@@ -273,7 +276,14 @@ export class ChatSession {
     // Hand the key on to everyone with a chat key who has not got it (new people, or someone who replaced their key).
     for (const p of state.people) {
       if (p.me || !p.pub || p.hasGeneral || p.disabled) continue;
-      const wrap = await wrapGeneral(keys, p.id, p.pub, this.generalKey, g.epoch);
+      let wrap: Wrap;
+      try {
+        wrap = await wrapGeneral(keys, p.id, p.pub, this.generalKey, g.epoch);
+      } catch {
+        // Their key is not a usable one (the server refuses such keys; an older one may still hold one): skipped, so one
+        // bad key does not stop everyone else from getting the General key or the deletes from applying.
+        continue;
+      }
       try {
         await this.api.call('wrap', { body: { user: p.id, epoch: g.epoch, ...wrap } });
         p.hasGeneral = true;

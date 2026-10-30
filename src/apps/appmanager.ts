@@ -4,6 +4,7 @@
 // person adds it to their own desktop with Install, or takes it off with Remove. Nobody gets a store app unasked.
 // New versions of TOMLIN OS itself arrive as a System update, signed by TOMLIN OS and fetched by this TOMLIN OS's own server
 // (server/lib/updater.php); only the owner installs one. Opened with "updates" it starts there.
+import { askIdentity } from '../auth/identity.ts';
 import { h, on } from '../core/dom.ts';
 import { formatSize } from '../core/format.ts';
 import { ServiceApi } from '../net/service.ts';
@@ -98,20 +99,22 @@ export const appManagerApp: AppDef = {
       if (!signal.aborted) paint();
     }
 
-    /** The owner downloads, updates or deletes a store app on this server. */
+    /**
+     * The owner downloads, updates or deletes a store app on this server. The server asks for the owner's own password
+     * first (as it does for adding a person): code put on the server, or an app taken from everyone, is not something
+     * a passer-by at an unlocked desktop may do.
+     */
     async function serverChange(op: 'download' | 'delete', a: StoreApp, button: HTMLButtonElement): Promise<void> {
       if (!appsApi) return;
-      if (op === 'delete' && !(await shell.dialogs.confirm({
-        title: `Delete ${a.title} from this server?`,
-        text: `Nobody on this TOMLIN OS will have ${a.title} until it is downloaded again. Files people made with it stay in their own files.`,
-        ok: 'Delete from server',
-        danger: true,
-      }))) return;
+      const who = await askIdentity(shell, op === 'delete'
+        ? { title: `Delete ${a.title} from this server?`, text: `Nobody on this TOMLIN OS will have ${a.title} until it is downloaded again. Files people made with it stay in their own files.`, ok: 'Delete from server', danger: true, signal }
+        : { title: `Download ${a.title} to this server?`, text: `${a.title} is put on this server for everyone here to install. Only apps signed by TOMLIN OS can be downloaded, and each runs shut off from people's files.`, ok: 'Download', signal });
+      if (!who) return;
       button.disabled = true;
       const was = button.textContent;
       button.textContent = op === 'delete' ? 'Deleting...' : 'Downloading...';
       try {
-        const r = await appsApi.call<{ apps: StoreApp[] }>(op, { body: { id: a.id } });
+        const r = await appsApi.call<{ apps: StoreApp[] }>(op, { body: { id: a.id, password: who.password, code: who.code } });
         shell.setStoreApps(r.apps);
         if (store) store.here = r.apps;
         shell.toast(op === 'delete' ? `${a.title} is deleted from this server.` : `${a.title} is on this server: press Install to add it to your desktop.`);
@@ -235,13 +238,18 @@ export const appManagerApp: AppDef = {
       panel.append(...rows.filter((r): r is HTMLElement => !!r), again);
     }
 
+    /** Install or Go back: the owner's own password first (the server asks for it), as for the store apps above. */
     async function act(op: 'install' | 'rollback', button: HTMLButtonElement, words: string): Promise<void> {
       if (!api) return;
+      const who = await askIdentity(shell, op === 'install'
+        ? { title: 'Install this update?', text: 'The new version replaces this TOMLIN OS\'s own files; everyone\'s files and settings are kept, and the version from before is kept to go back to.', ok: 'Install', signal }
+        : { title: 'Go back to the earlier version?', text: 'The files from before the last update are put back. Everyone\'s files and settings are kept.', ok: 'Go back', signal });
+      if (!who) return;
       button.disabled = true;
       const note = h('p', { class: 'hint', role: 'status' }, words);
       button.after(note);
       try {
-        const r = await api.call<{ version: string }>(op, { body: {} });
+        const r = await api.call<{ version: string }>(op, { body: { password: who.password, code: who.code } });
         note.textContent = `TOMLIN OS ${r.version} is installed. Restarting the desktop to use it...`;
         setTimeout(() => location.reload(), 1500);
       } catch (error) {

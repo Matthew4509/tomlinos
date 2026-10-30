@@ -55,8 +55,11 @@ if ($op === 'check' && $method === 'GET') {
 if ($method !== 'POST' || !in_array($op, ['install', 'rollback'], true)) {
     api_fail(404, 'Unknown request.');
 }
-api_body();
+$body = api_body();
 require_admin($user);
+// Replacing the site's own code, or putting an earlier version back, is as far-reaching as it gets: the owner's own
+// password (and code) first, as adding a person does, so someone at the owner's unlocked, unattended desktop cannot.
+confirm_identity($root, $user, $body);
 @set_time_limit(300);
 try {
     if ($op === 'install') {
