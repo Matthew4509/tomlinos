@@ -276,13 +276,27 @@ export function inHerOwnWords(answer: string, name = DEFAULT_NAME): string {
 
 // ---- Her files, and the conversation the model is given ----
 
+/**
+ * The file's text, or the defaults written as a new file when there is none. A read that fails (a dropped connection,
+ * a locked store) is tried once more, and the defaults are only ever written where no file stands (`mustBeNew`): before
+ * this, one failed read of her memory replaced everything she knew with the defaults.
+ */
 async function readOrMake(fs: FileSystem, path: string, text: string): Promise<string> {
+  try {
+    return await fs.readText(path);
+  } catch {
+    // Tried again below.
+  }
   try {
     return await fs.readText(path);
   } catch {
     await fs.ensureFolder('/System', { hidden: true });
     await fs.ensureFolder(PERSONA_FOLDER, { hidden: true });
-    await fs.writeText(path, text, { hidden: true });
+    try {
+      await fs.writeText(path, text, { hidden: true, mustBeNew: true });
+    } catch {
+      // A file is there after all and just could not be read: she answers from the defaults this once and keeps it.
+    }
     return text;
   }
 }

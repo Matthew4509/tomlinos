@@ -63,35 +63,59 @@ export function globToRegex(glob: string): RegExp {
 }
 const hasGlob = (s: string) => /[*?]/.test(s);
 
-/** Splits a command line into words: "double" and 'single' quotes, backslash escapes. */
-export function splitWords(line: string): string[] {
-  const out: string[] = [];
+/** A word of a command line, and whether any of its * or ? was quoted or escaped (then it is a name, not a pattern). */
+export interface Word {
+  text: string;
+  literal: boolean;
+}
+
+/**
+ * Splits a command line into words: "double" and 'single' quotes, backslash escapes. Each word remembers whether a
+ * wildcard in it was quoted: rm "Documents/*.txt" names one file, as in every shell, and used to bin every .txt.
+ */
+export function splitWordsQuoted(line: string): Word[] {
+  const out: Word[] = [];
   let cur = '';
+  let literal = false;
   let quote: string | null = null;
   let started = false;
+  const add = (c: string, quoted: boolean) => {
+    cur += c;
+    if (quoted && (c === '*' || c === '?')) literal = true;
+  };
+  const push = () => {
+    out.push({ text: cur, literal });
+    cur = '';
+    literal = false;
+  };
   for (let i = 0; i < line.length; i++) {
     const c = line[i];
     if (quote) {
       if (c === quote) quote = null;
-      else if (c === '\\' && quote === '"' && i + 1 < line.length) cur += line[++i];
-      else cur += c;
+      else if (c === '\\' && quote === '"' && i + 1 < line.length) add(line[++i], true);
+      else add(c, true);
     } else if (c === '"' || c === "'") {
       quote = c;
       started = true;
     } else if (c === '\\' && i + 1 < line.length) {
-      cur += line[++i];
+      add(line[++i], true);
       started = true;
     } else if (/\s/.test(c)) {
-      if (started) out.push(cur);
+      if (started) push();
       cur = '';
       started = false;
     } else {
-      cur += c;
+      add(c, false);
       started = true;
     }
   }
-  if (started) out.push(cur);
+  if (started) push();
   return out;
+}
+
+/** The words alone. */
+export function splitWords(line: string): string[] {
+  return splitWordsQuoted(line).map(w => w.text);
 }
 
 class Fail extends Error {}
@@ -166,11 +190,15 @@ export class TerminalShell {
     }
   }
 
-  /** Expands *.txt style words against the folder they point into. A pattern matching nothing stays as typed. */
-  private async expand(words: string[]): Promise<string[]> {
+  /**
+   * Expands *.txt style words against the folder they point into. A pattern matching nothing stays as typed, and so
+   * does one that was quoted or escaped (a Word marked literal).
+   */
+  private async expand(words: Array<string | Word>): Promise<string[]> {
     const out: string[] = [];
-    for (const w of words) {
-      if (!hasGlob(w.slice(w.lastIndexOf('/') + 1)) || w.startsWith('-')) {
+    for (const word of words) {
+      const w = typeof word === 'string' ? word : word.text;
+      if ((typeof word !== 'string' && word.literal) || !hasGlob(w.slice(w.lastIndexOf('/') + 1)) || w.startsWith('-')) {
         out.push(w);
         continue;
       }
@@ -217,8 +245,9 @@ export class TerminalShell {
       line = m[1];
       redirect = { path: m[3], append: m[2] === '>>' };
     }
-    const [cmd, ...raw] = splitWords(line);
-    const args = cmd === 'find' || cmd === 'grep' || cmd === 'echo' ? raw : await this.expand(raw);
+    const [first, ...raw] = splitWordsQuoted(line);
+    const cmd = first.text;
+    const args = cmd === 'find' || cmd === 'grep' || cmd === 'echo' ? raw.map(w => w.text) : await this.expand(raw);
     const flags = new Set(args.filter(a => /^-[a-zA-Z]+$/.test(a)).flatMap(a => [...a.slice(1)]));
     const plain = args.filter(a => !/^-[a-zA-Z]+$/.test(a));
     const out = await this.command(cmd, args, flags, plain);
@@ -267,13 +296,15 @@ export class TerminalShell {
         if (!files.length) throw new Fail(`${cmd}: which file?`);
         if (!Number.isInteger(n) || n < 0) throw new Fail(`${cmd}: invalid number of lines`);
         const lines = (await this.readText(this.resolve(files[0]), files[0])).replace(/\n$/, '').split('\n');
-        return (cmd === 'head' ? lines.slice(0, n) : lines.slice(-n)).map(text => ({ text }));
+        // slice(-0) is the whole file, so "tail -n 0" is spelt out: nothing.
+        return (cmd === 'head' ? lines.slice(0, n) : n === 0 ? [] : lines.slice(-n)).map(text => ({ text }));
       }
       case 'wc': {
         if (!plain.length) throw new Fail('wc: which file?');
         return Promise.all(plain.map(async a => {
           const t = await this.readText(this.resolve(a), a);
-          const lines = t.split('\n').length - (t.endsWith('\n') ? 1 : 0);
+          // An empty file has no lines (split gives one empty piece).
+          const lines = t === '' ? 0 : t.split('\n').length - (t.endsWith('\n') ? 1 : 0);
           return { text: `${String(lines).padStart(7)} ${String(t.split(/\s+/).filter(Boolean).length).padStart(7)} ${String(new TextEncoder().encode(t).length).padStart(7)} ${a}` };
         }));
       }
@@ -321,7 +352,9 @@ export class TerminalShell {
           if (cmd === 'rmdir' && (e.kind !== 'folder' || (await fs.list(path, true)).length)) throw new Fail(`rmdir: failed to remove '${a}': ${e.kind !== 'folder' ? 'Not a directory' : 'Directory not empty'}`);
           const why = this.machine.protectedReason(path);
           if (why) throw new Fail(`rm: cannot remove '${a}': ${why}`);
-          if (this.cwd === path || this.cwd.startsWith(path + '/')) throw new Fail(`rm: cannot remove '${a}': you are standing in it (cd out first)`);
+          // Compared the way the file system compares names (letter case and Unicode spelling aside), so /documents/work
+          // is the same folder as /Documents/Work.
+          if (nameKey(this.cwd) === nameKey(path) || nameKey(this.cwd).startsWith(nameKey(path) + '/')) throw new Fail(`rm: cannot remove '${a}': you are standing in it (cd out first)`);
           paths.push(path);
         }
         const said = await this.machine.trash(paths);

@@ -16,8 +16,9 @@ function setAttrs(el: Element, attrs: Attrs): void {
       throw new Error(`Attribute "${key}" is not allowed; use css() or on().`);
     }
     // An address that runs script (javascript:, vbscript:) or carries a whole page (data:) is never set, whoever passed
-    // it: a contact's website or an event's link must not become a way to run code in the desktop.
-    if (URL_ATTRS.has(lower) && typeof value === 'string' && /^[\s\u0000-\u001f]*(javascript|vbscript|data):/i.test(value)) {
+    // it: a contact's website or an event's link must not become a way to run code in the desktop. Browsers drop a tab
+    // or line break anywhere in an address before reading it ("java\tscript:" runs), so the check drops them first.
+    if (URL_ATTRS.has(lower) && typeof value === 'string' && /^[\s\u0000-\u001f]*(javascript|vbscript|data):/i.test(value.replace(/[\t\n\r]/g, ''))) {
       throw new Error(`That address is not allowed in "${key}".`);
     }
     el.setAttribute(key, value === true ? '' : String(value));

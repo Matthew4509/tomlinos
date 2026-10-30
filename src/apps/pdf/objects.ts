@@ -360,7 +360,8 @@ export interface Page {
 }
 
 export class PdfDocument {
-  private objects = new Map<number, { obj: Obj }>();
+  /** Every object by number, with where in the file it was found (`at`): a copy found later in the file wins. */
+  private objects = new Map<number, { obj: Obj; at: number }>();
   private decoded = new Map<Stream, Uint8Array>();
   pages: Page[] = [];
 
@@ -438,7 +439,7 @@ export class PdfDocument {
             re.lastIndex = end;
           } else lexer.pos = save;
         }
-        this.objects.set(parseInt(m[1], 10), { obj });
+        this.objects.set(parseInt(m[1], 10), { obj, at: m.index });
         if (obj instanceof Stream && obj.dict.map.get('Type') instanceof Name && (obj.dict.map.get('Type') as Name).name === 'XRef') trailers.push(obj.dict);
       } catch (error) {
         if (error instanceof PdfError) throw error;
@@ -455,7 +456,8 @@ export class PdfDocument {
     if (trailers.some(t => t.map.has('Encrypt'))) {
       throw new PdfError('This PDF is password-protected or encrypted. This viewer cannot open those yet.');
     }
-    // Objects packed inside object streams.
+    // Objects packed inside object streams. A copy packed in a stream that comes later in the file than a plain copy
+    // (an incremental save) replaces it, as a later plain copy would.
     for (const [, entry] of [...this.objects]) {
       const o = entry.obj;
       if (!(o instanceof Stream) || !(o.dict.map.get('Type') instanceof Name) || (o.dict.map.get('Type') as Name).name !== 'ObjStm') continue;
@@ -465,15 +467,19 @@ export class PdfDocument {
         const first = this.num(o.dict.map.get('First'), 0);
         const head = new Lexer(bytes, 0);
         const pairs: Array<[number, number]> = [];
-        for (let i = 0; i < n; i++) {
+        // The count is what the file claims (a trillion, in one damaged file): the table is read only as far as the
+        // bytes go, and only as far as the first object starts, so the loop ends when the data does.
+        for (let i = 0; i < n && head.pos < Math.min(bytes.length, first || bytes.length); i++) {
           const a = head.read(false);
           const b = head.read(false);
+          if (a === undefined || b === undefined) break;
           if (typeof a === 'number' && typeof b === 'number') pairs.push([a, b]);
         }
         for (const [onum, off] of pairs) {
-          if (this.objects.has(onum)) continue;
+          const had = this.objects.get(onum);
+          if (had && had.at > entry.at) continue;
           const value = new Lexer(bytes, first + off).read(true);
-          if (value !== undefined && !(value instanceof Cmd)) this.objects.set(onum, { obj: value });
+          if (value !== undefined && !(value instanceof Cmd)) this.objects.set(onum, { obj: value, at: entry.at });
         }
       } catch (error) {
         if (error instanceof PdfError && error.message.includes('more than')) throw error;

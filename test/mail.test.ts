@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { decodeWords, parseAddresses, parseContentType, parseMessage, replySubject, showAddress, summary } from '../src/apps/mail/mime.ts';
 import { splitAddresses } from '../src/apps/mail/compose.ts';
+import { preStrip } from '../src/apps/mail/safehtml.ts';
 
 const enc = (s: string) => new Uint8Array(Buffer.from(s, 'latin1'));
 const utf8 = (s: string) => new Uint8Array(Buffer.from(s, 'utf8'));
@@ -117,6 +118,13 @@ test('a hostile message cannot nest parts forever, and a missing boundary is sur
   const m = parseMessage(enc(`Subject: deep\r\n${body}`));
   assert.equal(m.subject, 'deep');
   assert.equal(parseMessage(enc('Content-Type: multipart/mixed\r\n\r\nno boundary')).text, null);
+});
+
+test('what the HTML cleaner hands to the parser has no style= and no on...= handler left (each one the browser would log as a security error)', () => {
+  const html = '<style>p{color:red}</style><p style="color:red" onclick="alert(1)" onerror=\'alert(2)\' onmouseover=alert(3)>Hi <b data-x="onclick=">there</b></p><img src="x" onerror="alert(4)">';
+  const handed = preStrip(html);
+  assert.doesNotMatch(handed, /\s(style|on[a-z]+)\s*=/i, handed);
+  assert.match(handed, /<p\s*>Hi <b data-x="onclick=">there<\/b><\/p><img src="x"\s*>/, 'the text, tags and harmless attributes stay');
 });
 
 test('reply subjects never pile up', () => {

@@ -37,14 +37,15 @@ export interface Bus {
 
 export const ABI_NAMES = ['zero', 'ra', 'sp', 'gp', 'tp', 't0', 't1', 't2', 's0', 's1', 'a0', 'a1', 'a2', 'a3', 'a4', 'a5', 'a6', 'a7',
  's2', 's3', 's4', 's5', 's6', 's7', 's8', 's9', 's10', 's11', 't3', 't4', 't5', 't6'];
-const REGISTER_INDEX: Record<string, number> = {};
+/* No prototype: a plain object also answers for "constructor" and "toString", so those read as register names. */
+const REGISTER_INDEX: Record<string, number> = Object.create(null);
 ABI_NAMES.forEach((n, i) => { REGISTER_INDEX[n] = i; REGISTER_INDEX['x' + i] = i; });
 REGISTER_INDEX.fp = 8;
 
 /** x0..x31 as a number, or null. */
 export const registerIndex = (token: string): number | null => {
  const i = REGISTER_INDEX[token.trim().toLowerCase()];
- return i === undefined ? null : i;
+ return typeof i === 'number' ? i : null;
 };
 
 /* ---------- the processor ---------- */
@@ -271,6 +272,7 @@ function splitArgs(text: string): string[] {
 function unescape(s: string): string {
  return s.replace(/\\(n|t|r|0|\\|"|')/g, (_, c) => ({ n: '\n', t: '\t', r: '\r', '0': '\0', '\\': '\\', '"': '"', "'": "'" }[c as string] as string));
 }
+const utf8Bytes = (s: string): Uint8Array => new TextEncoder().encode(s);
 
 export function assemble(source: string): Assembled {
  const fail = (line: number, message: string): Assembled => ({ image: new Uint8Array(0), base: TEXT_BASE, textSize: 0, dataStart: TEXT_BASE, labels: {}, listing: [], error: { line, message } });
@@ -312,12 +314,12 @@ export function assemble(source: string): Assembled {
   if (!om) return fail(line, `This line is not an instruction or directive: ${text}`);
   const op = om[1].toLowerCase(), rest = om[2].trim();
   if (op.startsWith('.')) {
-   if (op === '.text' || op === '.data') { section = op.slice(1) as 'text' | 'data'; for (const p of pendingLabels) if (!p.section) p.section = section; continue; }
+   if (op === '.text' || op === '.data') { section = op.slice(1) as 'text' | 'data'; continue; }
    if (op === '.globl' || op === '.global' || op === '.section' || op === '.equ' || op === '.set' || op === '.eqv' || op === '.option') continue;
    const args = splitArgs(rest);
    let size = 0;
    if (op === '.word') size = 4 * args.length; else if (op === '.half') size = 2 * args.length; else if (op === '.byte') size = args.length;
-   else if (op === '.string' || op === '.asciz' || op === '.ascii') { if (args.length !== 1 || !/^".*"$/.test(args[0])) return fail(line, `${op} needs one quoted string.`); size = unescape(args[0].slice(1, -1)).length + (op === '.ascii' ? 0 : 1); }
+   else if (op === '.string' || op === '.asciz' || op === '.ascii') { if (args.length !== 1 || !/^".*"$/.test(args[0])) return fail(line, `${op} needs one quoted string.`); size = utf8Bytes(unescape(args[0].slice(1, -1))).length + (op === '.ascii' ? 0 : 1); }
    else if (op === '.space' || op === '.zero') { const n = parseNumber(args[0] ?? ''); if (n === null || n < 0) return fail(line, `${op} needs a byte count.`); if (n > IMAGE_LIMIT) return fail(line, `${op} ${n} is larger than program memory (${IMAGE_LIMIT} bytes).`); size = n; }
    else if (op === '.align') { const n = parseNumber(args[0] ?? ''); if (n === null || n < 0 || n > 16) return fail(line, '.align needs a power of two exponent from 0 to 16.'); size = -(1 << n); }
    else return fail(line, `Unknown directive ${op}.`);
@@ -336,13 +338,22 @@ export function assemble(source: string): Assembled {
   if (op === 'li') { if (args.length !== 2) return fail(line, 'li takes a register and a value: li t0, 100'); const v = evalExpr(args[1], constants, null); if (v === null) return fail(line, `li needs a constant value, not ${args[1]}. Use la for a label.`); if (fits12(v)) words = 1; }
   items.push({ line, source: text, section, kind: 'ins', op, args, size: 4 * words, addr: 0 });
   bindLabels(items[items.length - 1]);
-  function bindLabels(item: Item) { for (const p of pendingLabels) (item as Item & { labels?: string[] }).labels = [...((item as Item & { labels?: string[] }).labels ?? []), p.name]; pendingLabels.length = 0; }
+  /* A label takes the next item in ITS OWN section: `buf:` written under .data and followed by .text used to land on
+     the first instruction instead of on the data that came later. Labels of the other section stay pending. */
+  function bindLabels(item: Item) {
+   const rest: typeof pendingLabels = [];
+   for (const p of pendingLabels) { if (p.section === item.section) (item as Item & { labels?: string[] }).labels = [...((item as Item & { labels?: string[] }).labels ?? []), p.name]; else rest.push(p); }
+   pendingLabels.splice(0, pendingLabels.length, ...rest);
+  }
  }
- /* Layout: text in order, then data in order, each aligned as asked. */
+ /* Layout: text in order, then data in order, each aligned as asked. A label with nothing after it in its section
+    takes the end of that section. */
  let addr = TEXT_BASE;
- const place = (sec: 'text' | 'data') => { for (const it of items) { if (it.section !== sec) continue; if (it.size < 0) { const a = -it.size; addr = (addr + a - 1) & ~(a - 1); it.size = 0; } it.addr = addr; for (const l of (it as Item & { labels?: string[] }).labels ?? []) labels[l] = addr; addr += it.size; } };
+ const place = (sec: 'text' | 'data') => {
+  for (const it of items) { if (it.section !== sec) continue; if (it.size < 0) { const a = -it.size; addr = (addr + a - 1) & ~(a - 1); it.size = 0; } it.addr = addr; for (const l of (it as Item & { labels?: string[] }).labels ?? []) labels[l] = addr; addr += it.size; }
+  for (const p of pendingLabels) if (p.section === sec) labels[p.name] = addr;
+ };
  place('text'); const textSize = addr - TEXT_BASE; addr = (addr + 3) & ~3; const dataStart = addr; place('data');
- for (const p of pendingLabels) labels[p.name] = addr;   // a label at the very end
  const localAddr = (l: { item: number }) => l.item < items.length ? items[l.item].addr : addr;
  const resolveLocals = (text: string, at: number): string => text.replace(/(?<![\w$.])(\d+)([fb])(?![\w])/g, (m, num, dir) => {
   const defs = locals.filter(l => l.num === num);
@@ -362,7 +373,8 @@ export function assemble(source: string): Assembled {
     const width = it.op === '.word' ? 4 : it.op === '.half' ? 2 : 1;
     for (const a of it.args) { const v = evalExpr(a, constants, labels); if (v === null) return fail(it.line, `Cannot read ${a} as a value.`); for (let k = 0; k < width; k++) image[o++] = (v >>> (8 * k)) & 0xff; }
    } else if (it.op === '.string' || it.op === '.asciz' || it.op === '.ascii') {
-    const s = unescape(it.args[0].slice(1, -1)); for (let k = 0; k < s.length; k++) image[o++] = s.charCodeAt(k) & 0xff; if (it.op !== '.ascii') image[o++] = 0;
+    /* UTF-8 bytes, as every assembler writes them: "€" is three bytes, not one UTF-16 unit cut to its low byte. */
+    const s = utf8Bytes(unescape(it.args[0].slice(1, -1))); for (let k = 0; k < s.length; k++) image[o++] = s[k]; if (it.op !== '.ascii') image[o++] = 0;
    }
    continue;
   }
@@ -387,6 +399,9 @@ export function parseNumber(t: string): number | null {
  else if (/^\d+$/.test(t)) v = parseInt(t, 10);
  else if (/^'(\\.|[^'\\])'$/.test(t)) v = unescape(t.slice(1, -1)).charCodeAt(0);
  if (v === null || !Number.isFinite(v)) return null;
+ /* A 32-bit machine: anything past 0xFFFFFFFF, or below -2^31, is not a number it can hold. It used to wrap silently
+    (0x100000000 became 0). */
+ if (v > 0xffffffff || (neg && v > 0x80000000)) return null;
  return (neg ? -v : v) | 0;
 }
 /** A value: a number, a symbol, %hi(sym), %lo(sym), or terms of those joined by + and -.

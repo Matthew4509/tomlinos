@@ -468,7 +468,8 @@ export class Machine {
         if (((this.control >> 4) & 0xf) === 1) this.text = [];
         return;
       case 'CURSOR':
-        this.cursor = value & 0xffff;
+        // Kept on the screen: a row past the last used to grow the text past its rows.
+        this.cursor = (Math.min((value >> 8) & 0xff, TEXT_ROWS - 1) << 8) | Math.min(value & 0xff, TEXT_COLS - 1);
         return;
       case 'TEXT_OUT':
         this.textOut(value & 0xff);
