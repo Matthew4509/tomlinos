@@ -1,6 +1,7 @@
 // Which built-in models this TOMLIN OS offers, whether each is saved here (browsers then get it from this TOMLIN OS) or not
 // (browsers fetch it from Hugging Face, where its makers publish it), and the owner's Save / Remove
 // (server/api/models.php). Without the server (the browser-only copy) only models/models.json is read.
+import type { Identity } from '../../auth/identity.ts';
 import { readLocalJson } from '../../core/local.ts';
 import type { ServiceApi } from '../../net/service.ts';
 import type { FileSystem } from '../../fs/fs.ts';
@@ -61,19 +62,20 @@ export async function listModels(api: ServiceApi | null): Promise<ModelList> {
 
 /**
  * The owner's Save: asks the server for one piece after another until the model is saved, or `stop()` returns true,
- * or the server refuses (its words are thrown). `onProgress` gets bytes held and in all after each piece.
+ * or the server refuses (its words are thrown). `onProgress` gets bytes held and in all after each piece. `who` (the
+ * owner's password and code) goes with the first piece only: the server asks for it to start a save, not to carry one on.
  */
-export async function saveModel(api: ServiceApi, id: string, onProgress: (have: number, total: number) => void, stop: () => boolean): Promise<boolean> {
-  for (;;) {
-    const r = await api.call<{ saved: boolean; have?: number; total?: number }>('piece', { body: { id } });
+export async function saveModel(api: ServiceApi, id: string, onProgress: (have: number, total: number) => void, stop: () => boolean, who: Identity | null = null): Promise<boolean> {
+  for (let first = true; ; first = false) {
+    const r = await api.call<{ saved: boolean; have?: number; total?: number }>('piece', { body: { id, ...(first ? who : null) } });
     if (typeof r.have === 'number' && typeof r.total === 'number') onProgress(r.have, r.total);
     if (r.saved) return true;
     if (stop()) return false;
   }
 }
 
-export async function removeModel(api: ServiceApi, id: string): Promise<void> {
-  await api.call('remove', { body: { id } });
+export async function removeModel(api: ServiceApi, id: string, who: Identity): Promise<void> {
+  await api.call('remove', { body: { id, ...who } });
 }
 
 /** Where a model comes from, in words for the person. */

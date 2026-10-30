@@ -452,3 +452,42 @@ test('turning off: a page that still seals is refused, a sealed record left on d
     restore();
   }
 });
+
+test('turning off: a plain file that starts with the seal marker does not block "off" for ever, and only that exact file is let through (F28)', async () => {
+  const restore = asSam();
+  try {
+    const p = page();
+    const key = await newFileKey();
+    const parts = await recoveryParts(newRecoveryKey());
+    assert.equal((await sam.call('vault', { state: 'migrating-on', password: SAM_PW, ...(await wrapWithPassword(key, SAM_PW, ROUNDS)), wrapRk: await wrapWithRecovery(key, parts.kek), rkAuth: parts.auth })).status, 200);
+    p.store.state = 'migrating-on';
+    p.store.fileKey = key;
+    await p.store.migrate(() => undefined);
+    assert.equal((await sam.call('vault', { state: 'on' })).status, 200);
+    p.store.state = 'on';
+    const lookalike = new Uint8Array(64).fill(7);
+    lookalike.set([0x00, 0x4d, 0x59, 0x49, 0x45, 0x4e, 0x43, 0x01]);
+    await p.fs.writeFile('/Documents/lookalike.bin', lookalike);
+
+    assert.equal((await sam.call('vault', { state: 'migrating-off', password: SAM_PW })).status, 200);
+    p.store.state = 'migrating-off';
+    await p.store.migrate(() => undefined);
+    // The server cannot tell it from a sealed file: the page, which holds the key, has to say so, about these bytes.
+    await p.store.migrate(() => undefined);
+    const said = p.store.plainLookalikes;
+    assert.equal(Object.keys(said).length, 1, 'the page found the one file its key does not open');
+    assert.equal((await sam.call('vault', { state: 'off' })).status, 409, 'not said: it still looks sealed');
+    const [one] = Object.keys(said);
+    assert.equal((await sam.call('vault', { state: 'off', plainLookalikes: { [one]: 'a'.repeat(64) } })).status, 409, 'said about other bytes: refused');
+    // A really sealed file left behind is not let through by what was said about another file.
+    plant(PLANTED, await seal(key, PLANTED, new TextEncoder().encode('left behind sealed')));
+    assert.equal((await sam.call('vault', { state: 'off', plainLookalikes: said })).status, 409, 'a sealed file still blocks "off"');
+    await p.store.migrate(() => undefined);
+    const off = await sam.call('vault', { state: 'off', plainLookalikes: p.store.plainLookalikes });
+    assert.equal(off.status, 200, JSON.stringify(off.json));
+    assert.equal(off.json.vaultKeys, null);
+    assert.deepEqual((await rawRecords()).get(one), lookalike, 'the file is exactly as it was');
+  } finally {
+    restore();
+  }
+});

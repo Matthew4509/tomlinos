@@ -156,7 +156,7 @@ test('clearing General with more than 1,000 messages tells open screens about ev
 });
 
 test('"vanish after 3 days" also deletes old messages in a Direct conversation between two people who never open Chat again', { skip: noPhp }, async () => {
-  assert.equal((await call('owner', 'settings', { vanishDays: 3 })).status, 200);
+  assert.equal((await call('owner', 'settings', { vanishDays: 3, password: 'chat-test-passphrase-1' })).status, 200);
   const pat = await auth('user-create', { name: 'pat', next: 'chat-test-passphrase-3', password: 'chat-test-passphrase-1', display: 'Pat' }, people.owner.cookie);
   const dir = join(chatRoot, 'chat');
   const [a, b] = [pat.data.user.id, people.sam.id].sort();
@@ -174,7 +174,7 @@ test('a General key wrapped for a public key someone has since replaced is refus
   const s1 = (await newKeys()).keys;
   assert.equal((await call('owner', 'key', { pub: o.pub, replace: true })).status, 200);
   assert.equal((await call('sam', 'key', { pub: s1.pub, replace: true })).status, 200);
-  const reset = await call('owner', 'reset', {});
+  const reset = await call('owner', 'reset', { password: 'chat-test-passphrase-1' });
   const epoch: number = reset.data.epoch;
   const gKey = await newGeneralKey();
   assert.equal((await call('owner', 'wrap', { user: people.owner.id, epoch, genesis: true, ...(await wrapGeneral(o, people.owner.id, o.pub, gKey, epoch)) })).status, 200);

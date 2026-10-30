@@ -1,6 +1,6 @@
 // The owner's own password (and two-step code, or a recovery code) asked for in a dialog before an action that reaches
 // beyond their own account: deleting a store app from the server, installing a System update, going back to the earlier
-// version. The server asks for it (confirm_identity in server/lib/auth.php), as it does for adding a person, so someone
+// version, saving or removing an AI model on the server, changing how long everyone's Chat messages are kept. The server asks for it (confirm_identity in server/lib/auth.php), as it does for adding a person, so someone
 // at the owner's unlocked, unattended desktop cannot do these.
 import { h } from '../core/dom.ts';
 import type { Shell } from '../shell/types.ts';

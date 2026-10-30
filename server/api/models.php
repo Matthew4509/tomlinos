@@ -5,9 +5,10 @@
 //                   running it), and how long until a removed one can be saved again
 //   POST op=piece   {id}  the owner: fetch the next piece (16 MB at most) of a model onto this TOMLIN OS. The page asks
 //                   again until the answer says saved; a stopped save carries on where it stopped. A file Hugging Face
-//                   or GitHub no longer has stops the save, with the reason
-//   POST op=remove  {id}  the owner: delete a saved model (and a save in progress) to free the space; also a retired
-//                   one (MODEL_RETIRED) still saved here. It can be saved again a day later
+//                   or GitHub no longer has stops the save, with the reason. Starting a save also takes {password, code}
+//                   (confirm_identity); the pieces after it do not, because a two-step code works only once
+//   POST op=remove  {id, password, code}  the owner: delete a saved model (and a save in progress) to free the space;
+//                   also a retired one (MODEL_RETIRED) still saved here. It can be saved again a day later
 // Signed-in people only; saving and removing are the owner's.
 declare(strict_types=1);
 
@@ -141,7 +142,8 @@ switch ("$method $op") {
 
     case 'POST piece': {
         require_admin($user);
-        $id = $idFrom(api_body());
+        $body = api_body();
+        $id = $idFrom($body);
         if (!is_dir($root . '/models') && !mkdir($root . '/models', 0700, true) && !is_dir($root . '/models')) {
             api_fail(500, 'The server could not make its working folder for model saves.');
         }
@@ -160,6 +162,10 @@ switch ("$method $op") {
                 if (($wait = models_resave_wait($root, $id)) > 0) {
                     api_fail(429, sprintf('%s was removed from this TOMLIN OS less than a day ago, so it can be saved again in %s. Until then, browsers fetch it from Hugging Face.', MODEL_CATALOG[$id]['name'], $waitWords($wait)), ['wait' => $wait]);
                 }
+                // Filling the server's disk reaches beyond the owner's own account: the owner's own password (and code)
+                // first, so someone at the owner's unlocked, unattended desktop cannot start it. Asked once, here: a
+                // save with a plan was already confirmed, and only finishes what the owner asked for.
+                confirm_identity($root, $user, $body);
                 $plan = models_make_plan($id);
                 $need = 0;
                 foreach ($plan['files'] as $f) {
@@ -197,6 +203,8 @@ switch ("$method $op") {
         $body = api_body();
         $id = body_str($body, 'id');
         $name = MODEL_RETIRED[$id] ?? MODEL_CATALOG[$idFrom($body)]['name'];
+        // Taking a model away from everyone on this TOMLIN OS: the owner's own password (and code) first.
+        confirm_identity($root, $user, $body);
         $lock = is_dir($root . '/models') ? fopen($root . '/models/' . $id . '.lock', 'c') : null;
         if ($lock === false || ($lock && !flock($lock, LOCK_EX | LOCK_NB))) {
             api_fail(409, 'This model is being saved right now. Stop the save first, then remove it.');

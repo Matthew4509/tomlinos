@@ -10,6 +10,7 @@ import { createHmac } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { gunzipSync } from 'node:zlib';
 import { base32Decode, base32Encode, parseOtpauth, totpAt } from '../src/core/totp.ts';
 import { PHP, portFree } from './php-bin.ts';
 
@@ -426,9 +427,19 @@ test('the book library answers signed-in people only: a visitor or a locked scre
   assert.equal((await books('index', null)).status, 401);
   assert.equal((await books('book/1661', null)).status, 401);
   assert.equal((await books('ping', owner)).status, 204);
-  const list = await books('index', owner);
+  // Read with node:http, compressed as a browser asks for it. Node's own fetch stops on an internal check of its own
+  // (undici's assert(!this.paused)) when PHP's test server closes the connection during a large compressed answer; the
+  // answer itself is right, so that failure said nothing about this library.
+  const list = await new Promise<{ status: number; body: Buffer }>((resolve, reject) => {
+    request({ host: '127.0.0.1', port: PORT, path: '/api/books.php?path=index', headers: { 'X-Desktop-Store': '1', 'Accept-Encoding': 'gzip', Cookie: owner.cookie } }, res => {
+      const parts: Buffer[] = [];
+      res.on('data', part => parts.push(part));
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(parts) }));
+      res.on('error', reject);
+    }).on('error', reject).end();
+  });
   assert.equal(list.status, 200);
-  assert.ok(((await list.json()) as { books: unknown[] }).books.length > 50000, 'the whole list, for the owner');
+  assert.ok((JSON.parse(gunzipSync(list.body).toString()) as { books: unknown[] }).books.length > 50000, 'the whole list, for the owner');
   assert.equal((await books('book/../../x', owner)).status, 404, 'only numbered books');
   assert.equal((await owner.call('lock', {})).json.locked, true);
   assert.equal((await books('ping', owner)).status, 423, 'a locked screen shows no library');

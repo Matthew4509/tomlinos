@@ -1,6 +1,7 @@
 // Settings: the wallpaper (a plain colour by default; your own colour or one of your pictures), the colour scheme, the
 // screensaver, the AI (the built-in model and keys for AI services: assistant/aisettings.ts), the Recycle Bin, and where
 // the desktop keeps its files. Opened with "ai" it starts at the AI section. Nothing here can erase files.
+import { askIdentity } from '../auth/identity.ts';
 import { h, on } from '../core/dom.ts';
 import { THEMES, BIN_DAYS_MAX, BIN_LIMIT_MAX_MB, BIN_LIMIT_MIN_MB, DEFAULT_COLOUR, WALLPAPER_COLOURS } from '../shell/session.ts';
 import { extensionOf } from '../shell/filetypes.ts';
@@ -152,18 +153,20 @@ export const settingsApp: AppDef = {
       }).catch(() => (vanishNote.textContent = 'Chat is not reachable just now.'));
       on(vanishPick, 'change', async () => {
         const days = Number(vanishPick.value);
-        if (days) {
-          const ok = await shell.dialogs.confirm({ title: `Messages vanish after ${days} days?`, text: `Chat messages older than ${days} days are deleted from the server now, and from then on, for everyone on this desktop. This cannot be undone.`, ok: 'Delete old messages', danger: true });
-          if (!ok) {
-            void chatApi.call<{ vanishDays: number }>('settings').then(r => (vanishPick.value = String(r.vanishDays)));
-            return;
-          }
+        const putBack = () => void chatApi.call<{ vanishDays: number }>('settings').then(r => (vanishPick.value = String(r.vanishDays)));
+        const who = await askIdentity(shell, days
+          ? { title: `Messages vanish after ${days} days?`, text: `Chat messages older than ${days} days are deleted from the server now, and from then on, for everyone on this desktop. This cannot be undone.`, ok: 'Delete old messages', danger: true, signal: app.signal }
+          : { title: 'Keep messages until someone deletes them?', text: 'For everyone on this desktop.', ok: 'Keep them', signal: app.signal });
+        if (!who) {
+          putBack();
+          return;
         }
         try {
-          await chatApi.call('settings', { body: { vanishDays: days } });
+          await chatApi.call('settings', { body: { vanishDays: days, ...who } });
           vanishNote.textContent = days ? `Saved: messages vanish after ${days} days.` : 'Saved: messages are kept until someone deletes them.';
         } catch (error) {
           vanishNote.textContent = error instanceof Error ? error.message : 'It could not be saved.';
+          putBack();
         }
       }, app.signal);
     }

@@ -249,3 +249,13 @@ test('someone who signed in with a recovery code (phone lost) can turn two-step 
   const off = await c.call('totp-disable', { password: PASS, code: recovery[1] });
   assert.equal(off.status, 200, `turning two-step off with a recovery code answered ${off.status}: ${JSON.stringify(off.json)}`);
 });
+
+test('someone at the owner\'s unlocked desktop cannot start saving an AI model, or remove one, without the password (a re-check, F31)', { skip: noPhp }, async () => {
+  const id = 'Qwen3.5-0.8B-q4f32_1-MLC';
+  for (const body of [{ id }, { id, password: 'not-the-password-at-all' }]) {
+    assert.equal((await owner.api('models.php', 'piece', body)).status, 403, 'starting a save needs the password');
+    assert.equal((await owner.api('models.php', 'remove', body)).status, 403, 'removing needs the password');
+  }
+  assert.equal((await owner.api('models.php', 'remove', { id: 'made-up', password: PASS })).status, 400, 'a made-up model is still only a bad request');
+  assert.equal((await owner.api('models.php', 'remove', { id, password: PASS })).status, 200, 'with the password it goes ahead');
+});

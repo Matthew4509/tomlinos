@@ -28,8 +28,9 @@ desktop: they are saved on your server.
 - **AI:** Qwen 3.5 0.8B (the default), Gemma 2 2B or Qwen 3.5 4B run in the browser
   on your own graphics chip (WebGPU): nothing you type leaves your device. Chat › Agents also does Summarise, Rewrite and
   Ask about a file. Optionally, each person can add their own Claude or OpenRouter key (Settings › AI), each with a
-  monthly spending cap. The built-in models are pinned to fixed versions and checked (SHA-256) before use; the model's
-  program is checked in the browser before it runs. If Hugging Face or GitHub ever drops a pinned version, a model
+  monthly spending cap. The built-in models are pinned to fixed versions. A copy saved on your server is checked (SHA-256, a
+  fingerprint of the file) as it is saved; a browser fetching a model from Hugging Face asks for the pinned version but
+  does not check those files' fingerprints itself. The model's program is checked in the browser before it runs. If Hugging Face or GitHub ever drops a pinned version, a model
   already saved on the server keeps working; otherwise Find AI models searches Hugging Face for another one to use.
 - **Reader:** Sherlock Holmes built in; signed-in people also get the Project Gutenberg library (60,000-odd free
   books, searched on your server) and can save books to their own files.
@@ -38,16 +39,22 @@ desktop: they are saved on your server.
 ## Security, in short
 
 - Accounts with Argon2 password hashing, brakes on password guessing, two-step sign-in (authenticator app) with
-  recovery codes, and a screen lock with a PIN.
+  recovery codes, and a screen lock with a PIN. While locked, the server refuses that session your files. The lock
+  covers your windows rather than closing them, so someone with the browser's developer tools (its built-in inspection
+  panel) could still read what was on screen: sign out if you leave a computer with someone you do not trust.
 - **Optional file encryption, in the browser** (My account > Encryption > Encrypt my files): every file is sealed
   with AES-256-GCM using a key that the server only ever holds wrapped by your password (PBKDF2-SHA256, 600,000
   rounds) and by a recovery key that never leaves your browser. With encryption on, the stored files cannot be read
-  by the desktop's owner account or by anyone who copies the data folder. Lose both the password and the recovery
-  key and the files cannot be recovered. This protects data at rest: whoever controls the server could change its
+  by the desktop's owner account or by anyone who copies the data folder. The server still sees how many stored records
+  you have, their sizes and when they changed, and, for chat, who talks to whom and when. Lose both the password and the
+  recovery key and the files cannot be recovered. This protects data at rest: whoever controls the server could change its
   code to capture a password as it is typed, so run TOMLIN OS on a server you control or trust.
 - Chat is end to end only when everyone in a conversation has file encryption on (the app says which). Mail
   passwords and the chat key are stored as plain files unless file encryption is on. The owner account can reset
-  other people's passwords, which opens their files unless those files are encrypted.
+  other people's passwords, which opens their files unless those files are encrypted. A reset does not open encrypted
+  files, and the new password alone cannot turn their encryption off or replace their keys: the person's recovery key is
+  needed first. So a reset can cost the person their encrypted files: without their recovery key, they may never open
+  them again.
 - What chat's encryption does not do, so you can judge it: a direct chat's key is worked out from the two people's
   long-term keys (ECDH P-256) and does not change from message to message, so someone who later gets one of those keys
   can open the earlier messages still kept. General has one key shared by everyone in it: a person added later is given
@@ -62,7 +69,9 @@ desktop: they are saved on your server.
   a fresh site first cannot make themselves its owner.
 - The real PHP code and all data sit outside the web root; strict security headers (Content Security Policy with
   Trusted Types, HSTS) are sent on every page. Adding a person, switching an account off or on, setting someone's
-  password and turning off their two-step all ask for the owner's own password first.
+  password, turning off their two-step, deleting a store app from the server, installing or going back from a System
+  update, starting to save or removing a model on the server, and changing how long everyone's chat messages are kept
+  all ask for the owner's own password first.
 
 No software is perfectly secure. Keep your host's PHP up to date, use HTTPS, and keep backups. IF using cpanel, you can
 use their inbuilt tool to password protect that root folder for additional security. 
