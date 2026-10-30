@@ -723,6 +723,191 @@ await step('unsaved work is kept as a recovery copy; after the page stops, the n
   await closeAllWrite();
 });
 
+await step('an older Windows text file keeps its accents, says Write guessed, and asks before saving over it', async () => {
+  // "café" with é as one byte, as Windows-1252 stores it (not UTF-8, the usual way today).
+  writeFileSync(join(dir, 'old-windows.txt'), Uint8Array.from([0x63, 0x61, 0x66, 0xe9]));
+  await upload([join(dir, 'old-windows.txt')]);
+  await newDoc();
+  await reopen('old-windows.txt');
+  await page.waitForFunction(() => [...document.querySelectorAll('.win .wp-doc')].some(d => d.textContent.startsWith('caf')));
+  eq(await doc().innerText().then(t => t.trim()), 'café', 'the accent is read');
+  await D().getByText('Windows-1252').waitFor();
+  await D().getByRole('button', { name: 'OK' }).click();
+  await doc().focus();
+  await page.keyboard.press('Control+S');
+  await D().getByRole('button', { name: 'Save over it' }).click();
+  await toast('Saved “old-windows.txt”');
+  await closeAllWrite();
+  await newDoc();
+  await reopen('old-windows.txt');
+  await page.waitForFunction(() => [...document.querySelectorAll('.win .wp-doc')].some(d => d.textContent.startsWith('caf')));
+  eq(await doc().innerText().then(t => t.trim()), 'café', 'still there, now in UTF-8');
+  await page.waitForTimeout(300);
+  eq(await page.locator('.dialog').count(), 0, 'UTF-8 needs no guess, so nothing is said');
+  await closeAllWrite();
+});
+
+await step('a recovery copy of a Word file from elsewhere keeps its chart: back as the grey part, not as the word [Chart]', async () => {
+  const chart = '<w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><wp:extent cx="100" cy="100"/><wp:docPr id="1" name="Chart 1"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId7"/></a:graphicData></a:graphic></wp:inline></w:drawing>';
+  writeFileSync(join(dir, 'with-chart.docx'), await zipDeflate([
+    { name: '[Content_Types].xml', data: enc.encode('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'), modified: 0 },
+    { name: '_rels/.rels', data: enc.encode('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'), modified: 0 },
+    { name: 'word/document.xml', data: enc.encode(`<?xml version="1.0"?><w:document ${W_NS}><w:body><w:p><w:r><w:t xml:space="preserve">Sales </w:t></w:r><w:r>${chart}</w:r></w:p><w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr></w:body></w:document>`), modified: 0 },
+    { name: 'word/_rels/document.xml.rels', data: enc.encode('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId7" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="charts/chart1.xml"/></Relationships>'), modified: 0 },
+    { name: 'word/charts/chart1.xml', data: enc.encode('<?xml version="1.0"?><c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"/>'), modified: 0 },
+  ]));
+  await upload([join(dir, 'with-chart.docx')]);
+  await newDoc();
+  await reopen('with-chart.docx');
+  await D().getByRole('button', { name: 'OK' }).click();
+  await W().locator('.wp-doc .wp-opaque', { hasText: 'Chart' }).waitFor();
+  await doc().focus();
+  await page.keyboard.press('Control+End');
+  await page.keyboard.type(' typed');
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { get: () => 'hidden', configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+    delete document.visibilityState;
+  });
+  await page.waitForTimeout(1500);
+  page.once('dialog', d => d.accept());
+  await page.goto(BASE, { waitUntil: 'load' });
+  await page.locator('#desktop .item').first().waitFor();
+  await openApp('write');
+  await page.locator('.dialog', { hasText: 'Documents not saved' }).getByRole('button', { name: 'Open it' }).click();
+  await page.locator('.toast', { hasText: 'Recovered “with-chart.docx”' }).first().waitFor();
+  await doc().waitFor();
+  ok((await doc().innerText()).includes('typed'), 'the typing is back');
+  ok(!(await doc().innerText()).includes('[Chart]'), 'not the word in brackets');
+  await W().locator('.wp-doc .wp-opaque', { hasText: 'Chart' }).waitFor();
+  await D().getByRole('button', { name: 'OK' }).click();
+  await saveAs('recovered-chart.docx');
+  await toast('Saved “recovered-chart.docx”');
+  await closeAllWrite();
+  await newDoc();
+  await reopen('recovered-chart.docx');
+  await D().getByRole('button', { name: 'OK' }).click();
+  await W().locator('.wp-doc .wp-opaque', { hasText: 'Chart' }).waitFor();
+  await closeAllWrite();
+});
+
+await step('Letters as a PDF leave the letter on screen alone: it never shows the merged letters, and typing meanwhile stays', async () => {
+  await newDoc();
+  await page.keyboard.type('Dear ');
+  await tab('Mailings');
+  await rb('From a spreadsheet...').click();
+  await D().locator('.pick-row', { hasText: 'people' }).first().dblclick();
+  await W().locator('.wp-tip', { hasText: 'people.csv: 2 rows' }).waitFor();
+  await doc().focus();
+  await page.keyboard.press('Control+End');
+  await W().getByRole('button', { name: 'Insert a field: filled in from each row' }).click();
+  await page.locator('.menu').getByText('Name', { exact: true }).click();
+  await doc().locator('.wp-field').waitFor();
+  await doc().focus();
+  await page.keyboard.press('Control+End');
+  // Pressed and typed in one go: the typing lands while the PDF is being made.
+  await W().evaluate(win => {
+    const el = win.querySelector('.wp-doc');
+    window.__sawLetters = false;
+    new MutationObserver(() => {
+      if (el.textContent.includes('Bob Stone')) window.__sawLetters = true;
+    }).observe(el, { subtree: true, childList: true, characterData: true });
+    [...win.querySelectorAll('.ribbon .rb')].find(b => b.textContent === 'Letters as a PDF').click();
+    document.execCommand('insertText', false, ' typed meanwhile');
+  });
+  await toast('Made 2 letters');
+  await page.waitForTimeout(300);
+  eq(await page.evaluate(() => window.__sawLetters), false, 'the merged letters never showed in the letter being edited');
+  eq(await W().locator('.wp-doc').count(), 1, 'nothing left behind from making them');
+  ok((await doc().innerText()).includes('typed meanwhile'), 'the typing stays: ' + (await doc().innerText()));
+  eq(await doc().locator('.wp-field').count(), 1, 'the field is still a field');
+  // The PDF made out of sight is the real thing: a contents page, a table and a footnote in it, one page set per letter.
+  await tab('Insert');
+  await W().locator('.ribbon .rb', { hasText: 'Contents page' }).click();
+  await doc().focus();
+  await page.keyboard.press('Control+End');
+  await W().locator('.ribbon .rb', { hasText: 'Footnote' }).click();
+  await D().locator('input, textarea').first().fill('A note at the foot');
+  await D().getByRole('button', { name: 'Insert' }).click();
+  await doc().evaluate(el => {
+    const dt = new DataTransfer();
+    dt.setData('text/html', '<h1>A heading</h1><table><tr><td>A cell</td></tr></table><p>After it</p>');
+    el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+  });
+  await settle();
+  const sent = [];
+  const listen = r => {
+    const body = r.postDataBuffer();
+    if (body?.includes('%PDF-')) sent.push(body.toString('latin1'));
+  };
+  page.on('request', listen);
+  await tab('Mailings');
+  await rb('Letters as a PDF').click();
+  await page.locator('.toast', { hasText: 'Made 2 letters' }).last().waitFor();
+  await settle();
+  page.off('request', listen);
+  eq(sent.length, 1, 'one PDF written');
+  const pages = (sent[0].match(/\/Type \/Page /g) ?? []).length;
+  ok(pages >= 2, 'a page or more for each letter: ' + pages);
+  await closeAllWrite();
+});
+
+await step('in a long document the word count catches up after a short pause', async () => {
+  await newDoc();
+  await doc().evaluate(el => {
+    const dt = new DataTransfer();
+    dt.setData('text/html', Array.from({ length: 800 }, () => `<p>${'word '.repeat(40)}</p>`).join(''));
+    el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+  });
+  await W().locator('.wp-status', { hasText: '32,000 words' }).waitFor();
+  await doc().focus();
+  await page.keyboard.press('Control+End');
+  await page.keyboard.type(' more');
+  await W().locator('.wp-status', { hasText: '32,001 words' }).waitFor();
+  await closeAllWrite();
+});
+
+await step('pasting a picture: copied from a web page (with HTML beside it), a WebP and a BMP go in; words from Word stay words', async () => {
+  await newDoc();
+  const paste = spec => doc().evaluate(async (el, s) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 4;
+    canvas.getContext('2d').fillRect(0, 0, 4, 4);
+    const dt = new DataTransfer();
+    if (s.type === 'image/bmp') {
+      // A 1 x 1 picture, the smallest BMP: its header, then one pixel.
+      const b = new Uint8Array(58);
+      b.set([0x42, 0x4d, 58], 0);
+      b.set([54], 10);
+      b.set([40], 14);
+      b.set([1], 18);
+      b.set([1], 22);
+      b.set([1], 26);
+      b.set([24], 28);
+      dt.items.add(new File([b], 'a.bmp', { type: 'image/bmp' }));
+    } else {
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, s.type));
+      if (blob.type !== s.type) throw new Error('this browser did not make a ' + s.type);
+      dt.items.add(new File([blob], 'a', { type: s.type }));
+    }
+    if (s.html) dt.setData('text/html', s.html);
+    if (s.text) dt.setData('text/plain', s.text);
+    el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+  }, spec);
+  const pictures = async n => page.waitForFunction(([want]) => [...document.querySelectorAll('.wp-doc .wp-img')].length === want, [n], { timeout: 5000 });
+  await paste({ type: 'image/png', html: '<meta charset="utf-8"><img src="https://example.invalid/cat.png" alt="A cat">' });
+  await pictures(1);
+  await paste({ type: 'image/webp' });
+  await pictures(2);
+  await paste({ type: 'image/bmp' });
+  await pictures(3);
+  await paste({ type: 'image/png', html: '<p>Words from Word</p>', text: 'Words from Word' });
+  await doc().locator('p', { hasText: 'Words from Word' }).waitFor();
+  await page.waitForTimeout(300);
+  eq(await doc().locator('.wp-img').count(), 3, 'the picture of the words does not go in as well');
+  await closeAllWrite();
+});
+
 await step('no errors in the console', async () => {
   if (missing.length) console.log('       (404, expected for files not made yet: ' + [...new Set(missing)].join(', ') + ')');
   eq(problems.filter(p => !/status of 404/.test(p)), [], 'console');

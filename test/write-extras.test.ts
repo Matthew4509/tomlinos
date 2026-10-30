@@ -118,3 +118,26 @@ test('every template fits the editor, and the report’s contents page lists its
   const bytes = await writeDocx(TEMPLATES.cv.doc, page, 'CV');
   assert.equal((await readDocx(bytes)).doc.content![0].attrs?.style, 'title');
 });
+
+test('a spreadsheet cell with a line break (a two-line address) stays one person, not two letters', async () => {
+  const { Workbook } = await import('../src/apps/sheet/workbook.ts');
+  const wb = new Workbook();
+  wb.importText(0, 0, 0, 'Name,Address\nAnn,"12 High St\nLeeds"\nBob,"He said ""hi"""\n');
+  const list = tableList(wb.exportText(0, wb.usedRange(0), '\t'), 'People.csv');
+  assert.deepEqual(list.rows, [{ Name: 'Ann', Address: '12 High St\nLeeds' }, { Name: 'Bob', Address: 'He said "hi"' }]);
+  // Text that only looks quoted keeps its quotes, and one stray quote does not swallow the rows after it.
+  assert.deepEqual(tableList('A\tB\n"half\tx\ny\tz', 'x').rows, [{ A: '"half', B: 'x' }, { A: 'y', B: 'z' }]);
+  assert.deepEqual(tableList('A\n"said" twice', 'x').rows, [{ A: '"said" twice' }]);
+  // Windows line ends inside a quoted cell, a tab inside one.
+  assert.deepEqual(tableList('A\tB\r\n"1\r\n2"\t"x\ty"\r\n', 'x').rows, [{ A: '1\n2', B: 'x\ty' }]);
+});
+
+test('a value with a line break goes into the letter as a line break the editor and Word both keep', async () => {
+  const doc: NodeJSON = { type: 'doc', content: [p(t('To: '), { type: 'field', attrs: { name: 'Address' }, marks: [{ type: 'strong' }] }, t(' today'))] };
+  const filled = fillFields(doc, { Address: '12 High St\nLeeds' });
+  assert.deepEqual(filled.content?.[0].content, [
+    t('To: '), { type: 'text', text: '12 High St', marks: [{ type: 'strong' }] }, { type: 'hard_break', marks: [{ type: 'strong' }] }, { type: 'text', text: 'Leeds', marks: [{ type: 'strong' }] }, t(' today'),
+  ]);
+  (await schemaP).nodeFromJSON(filled).check();
+  assert.match((await files(await writeDocx(filled, page))).get('word/document.xml') ?? '', /12 High St<\/w:t><\/w:r><w:r>(<w:rPr>.*?<\/w:rPr>)?<w:br\/>/);
+});

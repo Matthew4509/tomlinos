@@ -13,7 +13,7 @@ import { readDocx, writeDocx } from '../src/apps/write/docx.ts';
 import { addPicture, picture } from '../src/apps/write/images.ts';
 import { findAll, replaceAll } from '../src/apps/write/find.ts';
 import { markdownLoses, readMarkdown, writeMarkdown } from '../src/apps/write/markdown.ts';
-import { defaultPage, plainText, type NodeJSON } from '../src/apps/write/model.ts';
+import { decodeText, defaultPage, plainText, type NodeJSON } from '../src/apps/write/model.ts';
 import { readOdt } from '../src/apps/write/odt.ts';
 import { readRtf, RtfProblem } from '../src/apps/write/rtf.ts';
 import { buildSchema } from '../src/apps/write/schema.ts';
@@ -348,4 +348,19 @@ test('find and replace: case, whole words, across formatting, never across parag
   const tHits = findAll(turkish, 'cat', { matchCase: false, wholeWord: false });
   assert.equal(tState.apply(replaceAll(tState, tHits, 'dog')).doc.textContent, 'İzmir dog and dog');
   assert.deepEqual(findAll(turkish, 'izmir', { matchCase: false, wholeWord: true }), [{ from: 1, to: 6 }]);
+});
+
+test('a text file not stored as UTF-8 (the usual way of storing letters today) keeps its accents', () => {
+  // An older Windows file: "café" with é as the one byte E9, which UTF-8 calls a mistake.
+  const old = decodeText(Uint8Array.from([0x63, 0x61, 0x66, 0xe9]));
+  assert.equal(old.text, 'café', 'read as Windows-1252, the older Windows way');
+  assert.equal(old.guessed, true, 'Write had to guess, so it can say so');
+  // Curly quotes and the euro sign are where Windows-1252 and plain Latin-1 differ.
+  assert.equal(decodeText(Uint8Array.from([0x93, 0x80, 0x35, 0x94])).text, '“€5”');
+  assert.deepEqual(decodeText(enc.encode('café 日本語 😀')), { text: 'café 日本語 😀', guessed: false }, 'UTF-8 stays as it is, with nothing guessed');
+  assert.deepEqual(decodeText(Uint8Array.from([0xef, 0xbb, 0xbf, 0x68, 0x69])), { text: 'hi', guessed: false }, 'the mark some programs put first in a UTF-8 file does not show');
+  // Notepad's "Unicode" (UTF-16): a mark at the start says which way round its bytes are.
+  assert.deepEqual(decodeText(Uint8Array.from([0xff, 0xfe, 0x63, 0x00, 0xe9, 0x00])), { text: 'cé', guessed: false });
+  assert.deepEqual(decodeText(Uint8Array.from([0xfe, 0xff, 0x00, 0x63, 0x00, 0xe9])), { text: 'cé', guessed: false });
+  assert.deepEqual(decodeText(new Uint8Array(0)), { text: '', guessed: false }, 'an empty file');
 });

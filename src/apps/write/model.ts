@@ -243,6 +243,31 @@ export function countWords(text: string): number {
   return text.split(/\s+/).filter(w => /[\p{L}\p{N}]/u.test(w)).length;
 }
 
+/** True when saving this document as plain text leaves out more than its words: a question is asked first. */
+export function textLoses(doc: NodeJSON): boolean {
+  const rich = (n: NodeJSON): boolean => {
+    if (n.type === 'text' ? !!n.marks?.length : n.type !== 'doc' && n.type !== 'paragraph' && n.type !== 'hard_break') return true;
+    if (n.type === 'paragraph' && Object.entries(n.attrs ?? {}).some(([k, v]) => (k === 'style' ? v !== 'normal' : v !== null && v !== undefined))) return true;
+    return (n.content ?? []).some(rich);
+  };
+  return rich(doc);
+}
+
+/**
+ * The words of a text file. UTF-8 (how text is stored today) and UTF-16 with its opening mark (Notepad's "Unicode") say
+ * what they are. Anything else is taken for Windows-1252 (how older Windows programs stored accents): that is a guess
+ * (`guessed`), as a file from another language's older Windows would show the wrong letters, so the person is told.
+ */
+export function decodeText(bytes: Uint8Array): { text: string; guessed: boolean } {
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) return { text: new TextDecoder('utf-16le').decode(bytes), guessed: false };
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) return { text: new TextDecoder('utf-16be').decode(bytes), guessed: false };
+  try {
+    return { text: new TextDecoder('utf-8', { fatal: true }).decode(bytes), guessed: false };
+  } catch {
+    return { text: new TextDecoder('windows-1252').decode(bytes), guessed: true };
+  }
+}
+
 /** A .txt file as a document: one paragraph a line (blank lines are empty paragraphs). */
 export function docFromText(text: string): NodeJSON {
   const lines = text.replace(/^﻿/, '').split(/\r\n|\r|\n/);

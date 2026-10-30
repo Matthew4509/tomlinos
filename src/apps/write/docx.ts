@@ -1130,6 +1130,8 @@ class Reader {
 const near = (a: number | undefined, b: number) => a === undefined || Math.abs(a - b) < 0.05;
 
 const LINKS = 'links to places inside the document, or of a kind Write does not open (the words stay; where they lead is not kept)';
+const FIELDS = 'fields that update themselves (dates, page numbers, cross-references, figure numbers, form boxes): they show and are saved as the words they last showed';
+const CONTROLS = 'content controls (fill-in boxes, tick boxes, drop-down lists): they show and are saved as plain words';
 
 /** The editor's marks for a run that looks like `look` in a paragraph of `style`: only what differs from the style. */
 function marksFor(look: RunLook, style: StyleId): MarkJSON[] {
@@ -1364,6 +1366,13 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
     // A field (a page number, a date, a contents list) shows as the text Word last put in it: its code is in
     // w:instrText, never in w:t, so only the shown result is read. A mail merge field becomes a field.
     let mergeSkip = false;
+    // A field's code so far (Word can split it over runs). Any field but a link or a mail merge field is said: only its
+    // shown words are kept, so it stops updating.
+    let fieldCode = '';
+    const noteField = () => {
+      if (fieldCode.trim() && !/^\s*(HYPERLINK|MERGEFIELD)\b/i.test(fieldCode)) rd.dropped.add(FIELDS);
+      fieldCode = '';
+    };
     const stack: Array<{ el: XmlEl; i: number; href?: string | null }> = [{ el: p, i: 0 }];
     while (stack.length) {
       const top = stack[stack.length - 1];
@@ -1380,6 +1389,7 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
           rd.noteRun(child(el, 'rPr'));
           for (const k of el.kids) {
             if (k.name === 'instrText') {
+              fieldCode += k.text;
               const hl = /^\s*HYPERLINK\s+"([^"]+)"/i.exec(k.text);
               if (hl && !/\\l\b/.test(k.text)) {
                 fieldHref = linkHref(hl[1]);
@@ -1392,7 +1402,10 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
                 cur().push(marks.length ? { type: 'field', attrs: { name: m[1].slice(0, 40) }, marks } : { type: 'field', attrs: { name: m[1].slice(0, 40) } });
                 mergeSkip = true;
               }
+            } else if (k.name === 'fldChar' && at(k, 'fldCharType') === 'separate') {
+              noteField();
             } else if (k.name === 'fldChar' && at(k, 'fldCharType') === 'end') {
+              noteField();
               mergeSkip = false;
               fieldHref = null;
             }
@@ -1455,7 +1468,12 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
           if (m) {
             const marks = marksFor(rd.runLook(child(child(el, 'r'), 'rPr'), styleRun), style);
             cur().push(marks.length ? { type: 'field', attrs: { name: m[1].slice(0, 40) }, marks } : { type: 'field', attrs: { name: m[1].slice(0, 40) } });
-          } else stack.push({ el, i: 0 });
+          } else {
+            const code = el.attrs['w:instr'] ?? el.attrs.instr ?? '';
+            if (/^\s*HYPERLINK\b/i.test(code)) rd.dropped.add(LINKS);
+            else if (code.trim()) rd.dropped.add(FIELDS);
+            stack.push({ el, i: 0 });
+          }
           break;
         }
         case 'hyperlink': case 'smartTag': case 'customXml': case 'ins': case 'moveTo': case 'sdtContent': case 'dir': case 'bdo':
@@ -1471,6 +1489,7 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
           stack.push({ el, i: 0 });
           break;
         case 'sdt':
+          rd.dropped.add(CONTROLS);
           stack.push({ el: child(el, 'sdtContent') ?? { name: 'x', attrs: {}, kids: [], text: '' }, i: 0 });
           break;
         case 'del': case 'moveFrom':
@@ -1522,8 +1541,10 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
       const el = queue.shift()!;
       const gallery = el.name === 'sdt' ? at(child(child(child(el, 'sdtPr'), 'docPartObj'), 'docPartGallery'), 'val') : undefined;
       if (gallery === 'Table of Contents') items.push(el);
-      else if (el.name === 'sdt') queue.unshift(...(child(el, 'sdtContent')?.kids ?? []));
-      else if (el.name === 'customXml' || el.name === 'ins') queue.unshift(...el.kids);
+      else if (el.name === 'sdt') {
+        rd.dropped.add(CONTROLS);
+        queue.unshift(...(child(el, 'sdtContent')?.kids ?? []));
+      } else if (el.name === 'customXml' || el.name === 'ins') queue.unshift(...el.kids);
       else items.push(el);
     }
     for (const el of items) {
@@ -1624,13 +1645,25 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
     const rows: NodeJSON[] = [];
     // For each grid column, the cell that started a run of merged rows there.
     const merging = new Map<number, NodeJSON>();
-    for (const tr of children(tbl, 'tr')) {
+    // A row can sit inside a content control (a repeating section).
+    const trs: XmlEl[] = [];
+    for (const k of tbl.kids) {
+      if (k.name === 'tr') trs.push(k);
+      else if (k.name === 'sdt') {
+        rd.dropped.add(CONTROLS);
+        trs.push(...children(child(k, 'sdtContent'), 'tr'));
+      }
+    }
+    for (const tr of trs) {
       const cells: NodeJSON[] = [];
       let col = num(at(child(child(tr, 'trPr'), 'gridBefore'), 'val')) ?? 0;
       const trCells: XmlEl[] = [];
       for (const k of tr.kids) {
         if (k.name === 'tc') trCells.push(k);
-        else if (k.name === 'sdt') trCells.push(...children(child(k, 'sdtContent'), 'tc'));
+        else if (k.name === 'sdt') {
+          rd.dropped.add(CONTROLS);
+          trCells.push(...children(child(k, 'sdtContent'), 'tc'));
+        }
       }
       for (const tc of trCells) {
         const tcPr = child(tc, 'tcPr');

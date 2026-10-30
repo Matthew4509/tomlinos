@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { zipDeflate } from '../src/core/zip.ts';
 import { readZip } from '../src/apps/archive/read.ts';
 import { readDocx, writeDocx } from '../src/apps/write/docx.ts';
-import { defaultPage, type NodeJSON } from '../src/apps/write/model.ts';
+import { defaultPage, plainText, textLoses, type NodeJSON } from '../src/apps/write/model.ts';
 
 const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
 
@@ -156,4 +156,61 @@ test('a new file (a recovery copy, mail-merge letters) leaves out kept parts tha
   assert.match(xml, /\[Part brought in from another file\]/);
   assert.match(xml, /Plain kept part/, 'a kept part that points at nothing stays');
   assert.deepEqual(leftOut, ['Chart', 'Part brought in from another file']);
+});
+
+const FIELDS = /fields that update themselves/;
+const CONTROLS = /content controls/;
+const complexField = (code: string, shown: string) => '<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+  + `<w:r><w:instrText xml:space="preserve">${code}</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>${shown}</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>`;
+
+test('a date, a cross-reference or a figure number becomes frozen words, and that is said; the words stay', async () => {
+  const read = await readDocx(await wordFile(complexField(' DATE \\@ "d MMMM yyyy" ', '29 October 2026')));
+  assert.match(read.dropped.join('\n'), FIELDS);
+  assert.equal(plainText(read.doc), '29 October 2026');
+  assert.match(await said('<w:p><w:fldSimple w:instr=" SEQ Figure \\* ARABIC "><w:r><w:t>3</w:t></w:r></w:fldSimple></w:p>'), FIELDS);
+  assert.match(await said('<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> RE</w:instrText></w:r><w:r><w:instrText>F _Ref1 </w:instrText></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>'), FIELDS, 'a code Word split over two runs');
+  assert.match(await said(complexField(' FORMCHECKBOX ', '')), FIELDS, 'an older form tick box');
+});
+
+test('the fields Write does keep are not said: a mail merge field and a link', async () => {
+  assert.doesNotMatch(await said(complexField(' MERGEFIELD Name ', '«Name»')), FIELDS);
+  assert.doesNotMatch(await said('<w:p><w:fldSimple w:instr=" MERGEFIELD Name "><w:r><w:t>«Name»</w:t></w:r></w:fldSimple></w:p>'), FIELDS);
+  assert.doesNotMatch(await said(complexField(' HYPERLINK "https://example.com/" ', 'our site')), FIELDS);
+});
+
+test('a content control (a tick box, a drop-down, a fill-in box) becomes plain words, and that is said; the words stay', async () => {
+  const inline = '<w:p><w:sdt><w:sdtPr><w:dropDownList/></w:sdtPr><w:sdtContent><w:r><w:t>Choice</w:t></w:r></w:sdtContent></w:sdt></w:p>';
+  const read = await readDocx(await wordFile(inline));
+  assert.match(read.dropped.join('\n'), CONTROLS);
+  assert.equal(plainText(read.doc), 'Choice');
+  const block = await readDocx(await wordFile(`<w:sdt><w:sdtPr><w:text/></w:sdtPr><w:sdtContent>${wp('Filled in')}</w:sdtContent></w:sdt>`));
+  assert.match(block.dropped.join('\n'), CONTROLS);
+  assert.equal(plainText(block.doc), 'Filled in');
+  const cell = `<w:tbl><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:sdt><w:sdtPr/><w:sdtContent><w:tc>${wp('In a cell')}</w:tc></w:sdtContent></w:sdt></w:tr></w:tbl>`;
+  assert.match(await said(cell), CONTROLS, 'one round a table cell');
+  const row = await readDocx(await wordFile(`<w:tbl><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:sdt><w:sdtPr/><w:sdtContent><w:tr><w:tc>${wp('In a row')}</w:tc></w:tr></w:sdtContent></w:sdt></w:tbl>`));
+  assert.match(row.dropped.join('\n'), CONTROLS, 'one round a whole table row');
+  assert.equal(plainText(row.doc), 'In a row', 'and the row is still there');
+  const toc = `<w:sdt><w:sdtPr><w:docPartObj><w:docPartGallery w:val="Table of Contents"/></w:docPartObj></w:sdtPr><w:sdtContent>${wp('Contents')}</w:sdtContent></w:sdt>`;
+  assert.equal(await said(toc), '', 'a contents page is kept as one, so it is not said');
+});
+
+test('Save as .txt asks when anything but the words would go: footnotes, merge fields, grey kept parts, a contents page', () => {
+  const para = (...content: NodeJSON[]): NodeJSON => ({ type: 'paragraph', attrs: { style: 'normal', align: null }, content });
+  const words: NodeJSON = { type: 'text', text: 'Words' };
+  const of = (...content: NodeJSON[]): NodeJSON => ({ type: 'doc', content });
+  assert.equal(textLoses(of(para(words), para())), false, 'plain words lose nothing');
+  assert.equal(textLoses(of(para(words, { type: 'hard_break' }, words))), false, 'a line break stays one in the text');
+  assert.equal(textLoses(of(para(words, { type: 'footnote', attrs: { text: 'A note', id: 0 } }))), true, 'a footnote');
+  assert.equal(textLoses(of(para({ type: 'field', attrs: { name: 'Name' } }))), true, 'a merge field');
+  assert.equal(textLoses(of(para({ type: 'opaque_inline', attrs: { xml: '<w:r/>', label: 'Chart' } }))), true, 'a grey kept part in the text');
+  assert.equal(textLoses(of({ type: 'opaque_block', attrs: { xml: '<w:p/>', label: 'Text box' } }, para(words))), true, 'a grey kept block');
+  assert.equal(textLoses(of({ type: 'toc', attrs: { title: 'Contents' } }, para(words))), true, 'a contents page');
+  assert.equal(textLoses(of(para(words), { type: 'page_break' }, para(words))), true, 'a page break');
+  // As before: formatting, tables, pictures, lists and styles.
+  assert.equal(textLoses(of(para({ type: 'text', text: 'Bold', marks: [{ type: 'strong' }] }))), true, 'bold');
+  assert.equal(textLoses(of({ type: 'paragraph', attrs: { style: 'h1' }, content: [words] })), true, 'a heading');
+  assert.equal(textLoses(of({ type: 'paragraph', attrs: { style: 'normal', align: 'center' }, content: [words] })), true, 'centred');
+  assert.equal(textLoses(of({ type: 'bullet_list', content: [{ type: 'list_item', content: [para(words)] }] })), true, 'a list');
+  assert.equal(textLoses(of(para({ type: 'image', attrs: { src: 'p1' } }))), true, 'a picture');
 });

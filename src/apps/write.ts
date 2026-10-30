@@ -27,12 +27,12 @@ import { headerFooterDialog, marginsDialog, paragraphDialog, pictureSizeDialog, 
 import { addPicture, picture } from './write/images.ts';
 import { drawFurniture, frameOf, GAP, measure, pageOfCursor, sameSpacers, spacerDecorations } from './write/measure.ts';
 import {
-  countWords, defaultPage, docFromText, EMPTY_DOC, LINE_CHOICES, linkHref, MARGIN_PRESETS, pageBox, PAPERS, plainText, STYLE_IDS, STYLES,
+  countWords, decodeText, defaultPage, docFromText, EMPTY_DOC, LINE_CHOICES, linkHref, MARGIN_PRESETS, pageBox, PAPERS, plainText, STYLE_IDS, STYLES, textLoses,
   type NodeJSON, type NumberKind, type NumberShape, type PageSetup, type Paper, type StyleId,
 } from './write/model.ts';
 import { openInNewTab } from './link.ts';
 import { pdfOf, printPreview, snapshot } from './write/print.ts';
-import { buildSchema, pastedHtml, type PM } from './write/schema.ts';
+import { buildSchema, htmlIsOnlyPicture, pastedHtml, type PM } from './write/schema.ts';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -41,6 +41,12 @@ const MAX_FILE_BYTES = 50 * 1024 * 1024;
 /** A picture bigger than this is refused when inserted (Word documents with many photos get large quickly). */
 const MAX_PICTURE_BYTES = 15 * 1024 * 1024;
 const ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2];
+/** Documents shorter than this (about 25 pages) have their words counted on every change. */
+const COUNT_AT_ONCE = 100_000;
+/** Pictures that can go in a document by pasting or dropping (WebP and BMP go in as a PNG). */
+const PICTURE_TYPES = /^image\/(png|jpeg|gif|webp|bmp)$/;
+/** Said when a text file's accents had to be guessed. */
+const GUESSED_TEXT = 'its letters: it is not stored as UTF-8 (the usual way today), so Write read it as Windows-1252 (the way older Windows programs stored accents). If some look wrong, the file was stored another way. Saving stores it as UTF-8';
 
 const PALETTE: Array<[string, string]> = [
   ['Black', '#000000'], ['Dark grey', '#404040'], ['Grey', '#7f7f7f'], ['Light grey', '#bfbfbf'], ['White', '#ffffff'],
@@ -179,7 +185,8 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
     appName: 'Write', one: 'document', many: 'documents',
     unsaved: () => !!viewRef && isDirty(),
     token: () => recoveryToken(),
-    snapshot: () => writeDocx(viewRef.state.doc.toJSON(), page, label),
+    // With the file's other parts, so a chart or a text box from a Word file comes back as itself.
+    snapshot: () => writeDocx(viewRef.state.doc.toJSON(), page, label, source, { headingPages }),
     note: () => ({ label, path }),
   });
   let recovered = false;
@@ -188,6 +195,9 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
       const read = await readDocx(await shell.fs.readFile(arg));
       startDoc = read.doc;
       page = read.page;
+      lost = read.dropped;
+      keptParts = read.kept;
+      source = read.source;
       const was = await recovery.adopt(arg);
       label = was.label;
       kind = /\.txt$/i.test(label) ? 'txt' : /\.(md|markdown)$/i.test(label) ? 'md' : 'docx';
@@ -240,11 +250,14 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
         readOnly = true;
       } else if (ext === '.md' || ext === '.markdown') {
         const changes = new Set<string>();
-        startDoc = readMarkdown(new TextDecoder('utf-8').decode(bytes), changes);
-        lost = [...changes];
+        const read = decodeText(bytes);
+        startDoc = readMarkdown(read.text, changes);
+        lost = read.guessed ? [GUESSED_TEXT, ...changes] : [...changes];
         kind = 'md';
       } else if (ext === '.txt' || ext === '.text' || ext === '') {
-        startDoc = docFromText(new TextDecoder('utf-8').decode(bytes));
+        const read = decodeText(bytes);
+        startDoc = docFromText(read.text);
+        if (read.guessed) lost = [GUESSED_TEXT];
         kind = 'txt';
       } else if (ext === '.doc') {
         throw new Problem('This is an older Word file (.doc), which Write cannot open. In Word, use File > Save As > Word Document (.docx), and open that file.');
@@ -479,15 +492,17 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
   class TocView {
     dom: HTMLElement;
     node: any;
-    constructor(node: any) {
+    sheet: Sheet | null;
+    constructor(node: any, sheet: Sheet | null = null) {
       this.node = node;
+      this.sheet = sheet;
       this.dom = h('div', { class: 'wp-toc', contenteditable: 'false' });
-      fillToc(this.dom, node);
+      fillToc(this.dom, node, sheet);
     }
     update(node: any): boolean {
       if (node.type !== this.node.type) return false;
       this.node = node;
-      fillToc(this.dom, node);
+      fillToc(this.dom, node, this.sheet);
       return true;
     }
     ignoreMutation(): boolean {
@@ -526,15 +541,16 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
   const box = () => pageBox(page);
   const bodyWidth = () => box().w - box().left - box().right;
 
+  const nodeViews = {
+    image: (node: any, v: any, getPos: () => number | undefined) => new PictureView(node, v, getPos),
+    footnote: (node: any, v: any, getPos: () => number | undefined) => new FootnoteView(node, v, getPos),
+    field: (node: any) => new FieldView(node),
+    toc: (node: any) => new TocView(node),
+  };
   const view = new pm.EditorView(mount, {
     state,
     attributes: () => ({ class: 'wp-doc', spellcheck: spell ? 'true' : 'false', role: 'textbox', 'aria-multiline': 'true', 'aria-label': 'Document' }),
-    nodeViews: {
-      image: (node: any, v: any, getPos: () => number | undefined) => new PictureView(node, v, getPos),
-      footnote: (node: any, v: any, getPos: () => number | undefined) => new FootnoteView(node, v, getPos),
-      field: (node: any) => new FieldView(node),
-      toc: (node: any) => new TocView(node),
-    },
+    nodeViews,
     // Ctrl+click on a link opens it in a new browser tab (a plain click puts the cursor there, as in Word).
     handleClick: (v: any, pos: number, event: MouseEvent) => {
       if (!(event.ctrlKey || event.metaKey)) return false;
@@ -547,13 +563,14 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
     // Pasted HTML is read from a copy that never runs or loads anything; style blocks and comments are dropped first.
     transformPastedHTML: pastedHtml,
     handlePaste: (_v: any, event: ClipboardEvent) => {
-      const files = [...(event.clipboardData?.files ?? [])].filter(f => /^image\/(png|jpeg|gif)$/.test(f.type));
-      if (!files.length || event.clipboardData?.getData('text/html')) return false;
+      const files = [...(event.clipboardData?.files ?? [])].filter(f => PICTURE_TYPES.test(f.type));
+      // Word and Excel give words as HTML with a picture of them too: those paste as the words.
+      if (!files.length || !htmlIsOnlyPicture(event.clipboardData?.getData('text/html') ?? '')) return false;
       void insertPictureFiles(files);
       return true;
     },
     handleDrop: (_v: any, event: DragEvent) => {
-      const files = [...(event.dataTransfer?.files ?? [])].filter(f => /^image\/(png|jpeg|gif)$/.test(f.type));
+      const files = [...(event.dataTransfer?.files ?? [])].filter(f => PICTURE_TYPES.test(f.type));
       if (!files.length) return false;
       event.preventDefault();
       const hit = view.posAtCoords({ left: event.clientX, top: event.clientY });
@@ -576,6 +593,20 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
 
   // ---- Pages ---------------------------------------------------------------------------------------------------------
 
+  /** An editor with its paper: the one on screen, or the letters' sheet out of sight while a PDF of them is made. */
+  interface Sheet {
+    view: any;
+    dom: HTMLElement;
+    paper: HTMLElement;
+    furniture: HTMLElement;
+    pageCount: number;
+    /** The page each heading is on, in order. */
+    headingPages: number[];
+    /** The document as data, for the contents page (asked for while its editor is being made, too). */
+    json(): NodeJSON;
+  }
+  const onScreen: Sheet = { view, dom, paper, furniture, pageCount: 1, headingPages: [], json: () => view.state.doc.toJSON() };
+
   let pageCount = 1;
   let layoutFrame = 0;
   function scheduleLayout(): void {
@@ -587,35 +618,44 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
   }
   function layout(round: number): boolean {
     if (app.signal.aborted || !paper.isConnected) return false;
-    const b = box();
     css(paper, { zoom: String(zoom) });
-    css(dom, { 'padding-top': `${b.top}px`, 'padding-left': `${b.left}px`, 'padding-right': `${b.right}px`, 'padding-bottom': `${b.bottom}px`, width: `${b.w}px` });
+    const moved = layOut(onScreen, () => {
+      pageCount = onScreen.pageCount;
+      headingPages = onScreen.headingPages;
+    });
+    // The spaces moved the lines below them: measure once more to be sure (it settles in one or two rounds).
+    if (moved && round < 4) requestAnimationFrame(() => layout(round + 1));
+    syncStatus();
+    return moved;
+  }
+  /** Measures one sheet and works out its pages. True when its spaces moved, so it should be measured again. */
+  function layOut(sheet: Sheet, measured?: () => void): boolean {
+    const b = box();
+    const v = sheet.view;
+    css(sheet.dom, { 'padding-top': `${b.top}px`, 'padding-left': `${b.left}px`, 'padding-right': `${b.right}px`, 'padding-bottom': `${b.bottom}px`, width: `${b.w}px` });
     // Footnotes: numbered in order, and measured as they will stand at the foot of a page.
-    const fns = [...dom.querySelectorAll<HTMLElement>('.wp-fn')];
+    const fns = [...sheet.dom.querySelectorAll<HTMLElement>('.wp-fn')];
     fns.forEach((el, i) => {
       el.textContent = String(i + 1);
     });
     const noteTexts: string[] = [];
-    view.state.doc.descendants((n: any) => {
+    v.state.doc.descendants((n: any) => {
       if (n.type === nodes.footnote) noteTexts.push(n.attrs.text);
       return true;
     });
-    const noteHeights = measureNotes(noteTexts, b);
-    const laid = measure(view, paper, b, noteHeights);
-    pageCount = laid.pages.count;
-    drawFurniture(furniture, paper, page, b, pageCount, { heights: noteHeights, on: laid.notesOn, text: i => noteTexts[i] ?? '' });
-    refreshToc();
-    css(dom, { 'min-height': `${pageCount * b.h + (pageCount - 1) * 24}px` });
-    const current = (pagesKey.getState(view.state).find() as any[]).map(d => ({ pos: d.from, height: d.spec.height ?? 0 }));
-    const decorations = spacerDecorations(pm, view.state.doc, laid.spacers);
+    const noteHeights = measureNotes(noteTexts, b, sheet.paper);
+    const laid = measure(v, sheet.paper, b, noteHeights);
+    sheet.pageCount = laid.pages.count;
+    drawFurniture(sheet.furniture, sheet.paper, page, b, sheet.pageCount, { heights: noteHeights, on: laid.notesOn, text: i => noteTexts[i] ?? '' });
+    refreshToc(sheet);
+    measured?.();
+    css(sheet.dom, { 'min-height': `${sheet.pageCount * b.h + (sheet.pageCount - 1) * 24}px` });
+    const current = (pagesKey.getState(v.state).find() as any[]).map(d => ({ pos: d.from, height: d.spec.height ?? 0 }));
+    const decorations = spacerDecorations(pm, v.state.doc, laid.spacers);
     if (!sameSpacers(laid.spacers, current) || !sameSpacers(laid.spacers, decorations.find().map((d: any) => ({ pos: d.from, height: d.spec.height ?? 0 })))) {
-      view.dispatch(view.state.tr.setMeta(pagesKey, decorations).setMeta('addToHistory', false));
-      // The spaces moved the lines below them: measure once more to be sure (it settles in one or two rounds).
-      if (round < 4) requestAnimationFrame(() => layout(round + 1));
-      syncStatus();
+      v.dispatch(v.state.tr.setMeta(pagesKey, decorations).setMeta('addToHistory', false));
       return true;
     }
-    syncStatus();
     return false;
   }
   /** Lays the pages out again and again until nothing moves (for printing straight after a change). */
@@ -627,47 +667,48 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
 
   // A hidden copy of the foot of a page, to measure each footnote's height there.
   const noteRuler = h('div', { class: 'wp-notes wp-notes-ruler', 'aria-hidden': 'true' });
-  function measureNotes(texts: string[], b: ReturnType<typeof box>): number[] {
+  function measureNotes(texts: string[], b: ReturnType<typeof box>, onPaper: HTMLElement): number[] {
     if (!texts.length) return [];
     css(noteRuler, { width: `${b.w - b.left - b.right}px` });
     noteRuler.replaceChildren(...texts.map((t, i) => h('p', { class: 'wp-note' }, h('sup', {}, String(i + 1)), ` ${t}`)));
-    paper.append(noteRuler);
-    const k = frameOf(paper, b.w).k;
+    onPaper.append(noteRuler);
+    const k = frameOf(onPaper, b.w).k;
     const out = [...noteRuler.children].map(el => el.getBoundingClientRect().height / k);
     noteRuler.remove();
     return out;
   }
 
-  function refreshToc(): void {
+  function refreshToc(sheet: Sheet): void {
     const b = box();
-    const f = frameOf(paper, b.w);
+    const f = frameOf(sheet.paper, b.w);
     const g = { pageH: b.h, top: b.top, body: b.body, gap: GAP };
-    headingPages = [...dom.querySelectorAll<HTMLElement>('p.wp-h1, p.wp-h2, p.wp-h3')]
+    sheet.headingPages = [...sheet.dom.querySelectorAll<HTMLElement>('p.wp-h1, p.wp-h2, p.wp-h3')]
       .filter(el => !el.closest('table') && el.textContent?.trim())
       .map(el => pageAt(g, (el.getBoundingClientRect().top - f.top) / f.k) + 1);
-    for (const el of dom.querySelectorAll<HTMLElement>('.wp-toc')) fillTocPages(el);
+    for (const el of sheet.dom.querySelectorAll<HTMLElement>('.wp-toc')) fillTocPages(el, sheet);
   }
-  function fillToc(el: HTMLElement, node: any): void {
-    const heads = headingsOf(viewRef ? viewRef.state.doc.toJSON() : { type: 'doc' });
+  function fillToc(el: HTMLElement, node: any, sheet: Sheet | null): void {
+    const heads = headingsOf(sheet ? sheet.json() : viewRef ? viewRef.state.doc.toJSON() : { type: 'doc' });
+    const known = sheet?.headingPages ?? headingPages;
     const rows = heads.map((head, i) => {
-      const row = h('div', { class: `wp-toc-row wp-toc-${head.level}` }, h('span', { class: 'wp-toc-text' }, head.text), h('span', { class: 'wp-toc-dots' }), h('span', { class: 'wp-toc-page' }, String(headingPages[i] ?? '')));
+      const row = h('div', { class: `wp-toc-row wp-toc-${head.level}` }, h('span', { class: 'wp-toc-text' }, head.text), h('span', { class: 'wp-toc-dots' }), h('span', { class: 'wp-toc-page' }, String(known[i] ?? '')));
       on(row, 'click', () => goToHeading(i), app.signal);
       return row;
     });
     el.replaceChildren(h('p', { class: 'wp-toc-title' }, node.attrs.title), ...(rows.length ? rows : [h('p', { class: 'wp-toc-empty' }, 'No headings yet: give some paragraphs the Heading 1, 2 or 3 style, and they are listed here with their pages.')]));
   }
-  function fillTocPages(el: HTMLElement): void {
-    const heads = headingsOf(view.state.doc.toJSON());
+  function fillTocPages(el: HTMLElement, sheet: Sheet): void {
+    const heads = headingsOf(sheet.json());
     const rows = el.querySelectorAll('.wp-toc-row');
     if (rows.length !== heads.length || heads.some((head, i) => rows[i].querySelector('.wp-toc-text')?.textContent !== head.text)) {
       // The headings changed: the whole list again (the layout measures once more after).
-      fillToc(el, { attrs: { title: el.querySelector('.wp-toc-title')?.textContent ?? 'Contents' } });
+      fillToc(el, { attrs: { title: el.querySelector('.wp-toc-title')?.textContent ?? 'Contents' } }, sheet);
       scheduleLayout();
       return;
     }
     rows.forEach((row, i) => {
       const pageEl = row.querySelector('.wp-toc-page');
-      if (pageEl) pageEl.textContent = String(headingPages[i] ?? '');
+      if (pageEl) pageEl.textContent = String(sheet.headingPages[i] ?? '');
     });
   }
   function goToHeading(i: number): void {
@@ -1083,8 +1124,8 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
         : writeDocx(view.state.doc.toJSON(), page, baseLabel(), source, { headingPages });
   /** Asks before a save to .txt or .md that leaves things out; false when the person says no. */
   const okToSaveAs = async (as: 'docx' | 'txt' | 'md', name: string): Promise<boolean> => {
-    if (as === 'txt' && textLosesSomething()) {
-      return shell.dialogs.confirm({ title: 'Save as plain text?', text: `“${name}” is plain text, which keeps only the words: the formatting, tables and pictures are left out. Save as a Word document (.docx) instead to keep them.`, ok: 'Save the words only', cancel: 'Cancel' });
+    if (as === 'txt' && textLoses(view.state.doc.toJSON())) {
+      return shell.dialogs.confirm({ title: 'Save as plain text?', text: `“${name}” is plain text, which keeps only the words: the formatting, tables, pictures, footnotes, merge fields, contents page and grey kept parts are left out. Save as a Word document (.docx) instead to keep them.`, ok: 'Save the words only', cancel: 'Cancel' });
     }
     if (as === 'md') {
       const loses = markdownLoses(view.state.doc.toJSON());
@@ -1100,27 +1141,14 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
     if (!dirty) recovery.drop();
   }
 
-  /** A document with tables, pictures or formatting saved as .txt keeps only its words: asked once each time. */
-  const textLosesSomething = (): boolean => {
-    let rich = false;
-    view.state.doc.descendants((n: any) => {
-      if (rich) return false;
-      if (n.isText && n.marks.length) rich = true;
-      else if (n.type === nodes.table || n.type === nodes.image || n.type === nodes.bullet_list || n.type === nodes.ordered_list) rich = true;
-      else if (n.type === nodes.paragraph && n.attrs.style !== 'normal') rich = true;
-      return !rich;
-    });
-    return rich;
-  };
-
   async function save(): Promise<boolean> {
     if (!path) return saveAs();
-    if (lost.length && (kind === 'docx' || kind === 'md')) {
+    if (lost.length) {
       const listed = `${lost.slice(0, 3).join('; ')}${lost.length > 3 ? '; and more' : ''}`;
       const answer = await shell.dialogs.ask<'copy' | 'over' | null>({
         title: `Save over “${label}”?`,
-        text: kind === 'md'
-          ? `When it was opened, Write showed some parts of this Markdown file differently (${listed}). Saving over the file writes them as Write shows them.`
+        text: kind !== 'docx'
+          ? `When it was opened, Write showed some parts of this ${kind === 'md' ? 'Markdown' : 'text'} file differently (${listed}). Saving over the file writes them as Write shows them.`
           : `When it was opened, Write could not show some parts of this Word file (${listed}). Saving over the file takes them out of it for good.`,
         buttons: [{ label: 'Save a copy', value: 'copy', primary: true }, { label: 'Save over it', value: 'over', danger: true }, { label: 'Cancel', value: null }],
         cancel: null,
@@ -1242,7 +1270,7 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
 
   const takeSnapshot = () => snapshot(dom, paper, page, box(), pageCount, [...furniture.querySelectorAll<HTMLElement>('.wp-notes')]);
   const print = () => {
-    layout(4);
+    settle();
     void printPreview(shell, takeSnapshot, page, baseLabel(), `${baseLabel()}.pdf`).then(() => view.focus());
   };
 
@@ -1336,7 +1364,7 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
       if (/\.xlsx$/i.test(chosen)) {
         const { openXlsx } = await import('./sheet/xlsx.ts');
         await openXlsx(wb, bytes);
-      } else if (/\.(csv|tsv)$/i.test(chosen)) wb.importText(0, 0, 0, new TextDecoder('utf-8').decode(bytes));
+      } else if (/\.(csv|tsv)$/i.test(chosen)) wb.importText(0, 0, 0, decodeText(bytes).text);
       else wb.load(JSON.parse(new TextDecoder('utf-8').decode(bytes)));
       const list = tableList(wb.exportText(0, wb.usedRange(0), '\t'), baseName(chosen));
       if (!list.rows.length) {
@@ -1375,6 +1403,33 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
     refreshFields();
     view.focus();
   }
+  /** What a PDF of these letters shows, read from a sheet made for them and gone again straight after. */
+  function lettersSnapshot(merged: NodeJSON) {
+    const mountOff = h('div', { class: 'wp-doc-host' });
+    const furnitureOff = h('div', { class: 'wp-furniture' });
+    const paperOff = h('div', { class: 'wp-paper' }, mountOff, furnitureOff);
+    const hold = h('div', { class: 'wp-out-of-sight', 'aria-hidden': 'true', inert: true }, paperOff);
+    css(paperOff, { width: `${box().w}px` });
+    app.root.append(hold);
+    const sheet: Sheet = { view: null, dom: mountOff, paper: paperOff, furniture: furnitureOff, pageCount: 1, headingPages: [], json: () => merged };
+    const off = new pm.EditorView(mountOff, {
+      state: pm.EditorState.create({ doc: schema.nodeFromJSON(merged), plugins: view.state.plugins }),
+      editable: () => false,
+      attributes: () => ({ class: 'wp-doc', spellcheck: 'false' }),
+      nodeViews: { ...nodeViews, toc: (node: any) => new TocView(node, sheet) },
+    });
+    try {
+      sheet.view = off;
+      sheet.dom = off.dom;
+      for (let i = 0; i < 6 && layOut(sheet); i++) {
+        // Each round measures what the last one changed.
+      }
+      return snapshot(sheet.dom, paperOff, page, box(), sheet.pageCount, [...furnitureOff.querySelectorAll<HTMLElement>('.wp-notes')]);
+    } finally {
+      off.destroy();
+      hold.remove();
+    }
+  }
   /** The letters: one per row, each on a new page; into a new document (saved in Documents) or one PDF. */
   async function makeLetters(asPdf: boolean): Promise<void> {
     if (!mergeList?.rows.length) {
@@ -1404,27 +1459,17 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
         await shell.openApp('write', joinPath('/Documents', entry.name));
         return;
       }
-      // The PDF: the letters are laid out in this window for a moment, read off the screen, then the letter comes back.
-      const keep = view.state;
-      const keepZoom = zoom;
+      // The PDF: the letters are laid out on a sheet of their own, out of sight, and read from there. The letter on screen
+      // stays as it is, so typing while the PDF is made goes into it.
+      const bytes = await pdfOf(lettersSnapshot(merged), name);
+      let taken: string[] = [];
       try {
-        view.updateState(pm.EditorState.create({ doc: schema.nodeFromJSON(merged), plugins: keep.plugins }));
-        settle();
-        const bytes = await pdfOf(takeSnapshot(), name);
-        let taken: string[] = [];
-        try {
-          taken = (await shell.fs.list('/Documents', true)).map(e => e.name);
-        } catch {
-          // Writing says so if Documents is not there.
-        }
-        const entry = await shell.fs.writeFile(joinPath('/Documents', uniqueName(`${name}.pdf`, taken)), bytes, { mustBeNew: true });
-        shell.toast(`Made ${mergeList.rows.length} letters in “${entry.name}” (Documents).`, { label: 'Open', run: () => void shell.openPath(joinPath('/Documents', entry.name)) });
-      } finally {
-        view.updateState(keep);
-        zoom = keepZoom;
-        refresh();
-        scheduleLayout();
+        taken = (await shell.fs.list('/Documents', true)).map(e => e.name);
+      } catch {
+        // Writing says so if Documents is not there.
       }
+      const entry = await shell.fs.writeFile(joinPath('/Documents', uniqueName(`${name}.pdf`, taken)), bytes, { mustBeNew: true });
+      shell.toast(`Made ${mergeList.rows.length} letters in “${entry.name}” (Documents).`, { label: 'Open', run: () => void shell.openPath(joinPath('/Documents', entry.name)) });
     } catch (error) {
       await shell.report('Could not make the letters', error);
     }
@@ -1867,12 +1912,20 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
     view.focus();
   }
   let wordsFor: any = null;
+  let wordsTimer = 0;
+  function countNow(): void {
+    wordsTimer = 0;
+    const n = countWords(view.state.doc.textBetween(0, view.state.doc.content.size, '\n', ' '));
+    wordsLabel.textContent = `${n.toLocaleString()} ${n === 1 ? 'word' : 'words'}`;
+  }
   function syncStatus(): void {
     pageLabel.textContent = `Page ${Math.min(pageCount, pageOfCursor(view, paper, box()))} of ${pageCount}`;
     if (wordsFor !== view.state.doc) {
       wordsFor = view.state.doc;
-      const n = countWords(view.state.doc.textBetween(0, view.state.doc.content.size, '\n', ' '));
-      wordsLabel.textContent = `${n.toLocaleString()} ${n === 1 ? 'word' : 'words'}`;
+      if (wordsTimer) clearTimeout(wordsTimer);
+      // Counting a long document takes long enough to feel in the typing: it waits for a short pause.
+      if (view.state.doc.content.size < COUNT_AT_ONCE) countNow();
+      else wordsTimer = window.setTimeout(countNow, 300);
     }
   }
 
@@ -1973,6 +2026,7 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
   }, app.signal);
   app.signal.addEventListener('abort', () => {
     if (layoutFrame) cancelAnimationFrame(layoutFrame);
+    if (wordsTimer) clearTimeout(wordsTimer);
     view.destroy();
   });
 
@@ -1985,10 +2039,12 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
       parts.push(h('p', { class: 'dialog-text' }, 'Write keeps these as they are, shown as grey labels in the text; saving puts them back unchanged:'), h('ul', { class: 'xlsx-list' }, ...keptParts.map(d => h('li', {}, d))));
     }
     if (lost.length) {
-      parts.push(h('p', { class: 'dialog-text' }, kind === 'md' ? 'These show differently from the file:' : 'These are left out (Write cannot show them yet):'), h('ul', { class: 'xlsx-list' }, ...lost.map(d => h('li', {}, d))));
+      parts.push(h('p', { class: 'dialog-text' }, kind !== 'docx' ? 'These show differently from the file:' : 'These are left out (Write cannot show them yet):'), h('ul', { class: 'xlsx-list' }, ...lost.map(d => h('li', {}, d))));
     }
-    const detail = kind === 'md'
+    const detail = kind !== 'docx' && !recovered
       ? 'The file itself has not been changed. Saving over it would write these as Write shows them, so Save asks first.'
+      : recovered
+      ? 'This is a recovery copy: the file it came from has not been changed, and Save asks where to keep this one.'
       : source
       ? (lost.length ? 'The file itself has not been changed. Saving over it would leave out what is listed as left out, so Save asks first.' : 'The file itself has not been changed.')
       : 'The file itself has not been changed. Save makes a Word document (.docx) beside it.';

@@ -210,7 +210,8 @@ export function spacerDecorations(pm: PM, doc: any, spacers: Array<{ pos: number
     const el = h('div', { class: 'wp-spacer', contenteditable: 'false', 'aria-hidden': 'true' });
     css(el, { height: `${s.height}px` });
     return el;
-  }, { side: -1, key: `sp${Math.round(s.height * 100)}`, ignoreSelection: true })));
+    // (Its height is kept here too: the layout compares it with what it measures, to see whether anything moved.)
+  }, { side: -1, key: `sp${Math.round(s.height * 100)}`, ignoreSelection: true, height: s.height })));
 }
 
 export const sameSpacers = (a: Array<{ pos: number; height: number }>, b: Array<{ pos: number; height: number }>): boolean =>
