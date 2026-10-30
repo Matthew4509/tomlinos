@@ -733,6 +733,8 @@ await step('Settings › AI: the owner saves a model to this TOMLIN OS in pieces
   const source = ai.locator('p.hint', { hasText: /^(Not saved|Saved) on this TOMLIN OS/ });
   ok((await source.innerText()).startsWith('Not saved on this TOMLIN OS: this browser fetches it from Hugging Face'), await source.innerText());
   await ai.getByRole('button', { name: 'Save to this TOMLIN OS' }).click();
+  await page.locator('.dialog').getByLabel('Your password').fill(PASS);
+  await page.locator('.dialog').getByRole('button', { name: 'Save', exact: true }).click();
   // The save line: "Starting the save...", "Saving ... of ...", then how it ended.
   const said = ai.locator('p.hint[role=status]').first();
   await said.filter({ hasText: /^(?!Starting|Saving)\S/ }).waitFor({ timeout: 60000 });
@@ -747,6 +749,7 @@ await step('Settings › AI: the owner saves a model to this TOMLIN OS in pieces
   }));
   eq(served, { index: ['Qwen3.5-0.8B-q4f32_1-MLC'], shard: SHARD_BYTES });
   await ai.getByRole('button', { name: 'Remove from this TOMLIN OS' }).click();
+  await page.locator('.dialog').getByLabel('Your password').fill(PASS);
   await page.locator('.dialog').getByRole('button', { name: 'Remove', exact: true }).click();
   await source.filter({ hasText: /^Not saved on this TOMLIN OS/ }).waitFor({ timeout: 10000 });
   eq(await page.evaluate(async () => (await fetch('/models/Qwen3.5-0.8B-q4f32_1-MLC/resolve/main/params_shard_0.bin')).status), 404, 'the files are gone');

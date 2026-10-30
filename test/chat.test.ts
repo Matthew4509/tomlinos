@@ -214,7 +214,7 @@ test('chat: keys, the General key handed on, Direct and General messages, unread
 
   // Only the owner resets General; afterwards nobody holds a key until someone starts the new one.
   assert.equal((await call('sam', 'reset', {})).status, 403);
-  const reset = await call('owner', 'reset', {});
+  const reset = await call('owner', 'reset', { password: 'chat-test-passphrase-1' });
   assert.equal(reset.data.epoch, epoch + 1);
   st = (await call('owner', 'state')).data;
   assert.equal(st.general.started, false);
@@ -283,9 +283,25 @@ test('chat: the owner chooses when messages vanish; older ones leave the server 
   const c = JSON.parse(readFileSync(file, 'utf8'));
   c.messages.unshift({ id: 0, from: people.sam.id, at: Math.floor(Date.now() / 1000) - 10 * 86400, iv: b64(new Uint8Array(12)), ct: 'T0xE' });
   writeFileSync(file, JSON.stringify(c));
-  assert.equal((await call('owner', 'settings', { vanishDays: 7 })).status, 200);
+  assert.equal((await call('owner', 'settings', { vanishDays: 7, password: 'chat-test-passphrase-1' })).status, 200);
   assert.ok(!readFileSync(file, 'utf8').includes('T0xE'), 'the old message left the disk when the setting was saved');
   assert.equal((await call('sam', 'state')).data.vanishDays, 7, 'every screen is told');
   assert.equal((await call('sam', 'settings')).data.vanishDays, 7);
-  assert.equal((await call('owner', 'settings', { vanishDays: 0 })).status, 200);
+  assert.equal((await call('owner', 'settings', { vanishDays: 0, password: 'chat-test-passphrase-1' })).status, 200);
+});
+
+test('someone at the owner\'s unlocked desktop cannot delete old messages or start General again without the password (a re-check, F31)', async () => {
+  const before = (await call('owner', 'state')).data.general.epoch;
+  for (const body of [{ vanishDays: 7 }, { vanishDays: 7, password: 'not-the-password-at-all' }]) {
+    assert.equal((await call('owner', 'settings', body)).status, 403, 'keeping messages for less time needs the password');
+  }
+  assert.equal((await call('owner', 'settings')).data.vanishDays, 0, 'and nothing changed');
+  for (const body of [{}, { password: 'not-the-password-at-all' }]) {
+    assert.equal((await call('owner', 'reset', body)).status, 403, 'a new General key needs the password');
+  }
+  assert.equal((await call('owner', 'state')).data.general.epoch, before, 'and nothing changed');
+  const OWNER_PW = 'chat-test-passphrase-1';
+  assert.equal((await call('sam', 'settings', { vanishDays: 7, password: 'chat-test-passphrase-2' })).status, 403, 'still the owner\'s alone');
+  assert.equal((await call('owner', 'settings', { vanishDays: 7, password: OWNER_PW })).status, 200);
+  assert.equal((await call('owner', 'settings', { vanishDays: 0, password: OWNER_PW })).status, 200);
 });

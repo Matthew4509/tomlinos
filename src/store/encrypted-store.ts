@@ -19,6 +19,12 @@ export class EncryptedStore implements Store {
   fileKey: CryptoKey | null = null;
   state: VaultState = 'off';
   /**
+   * After migrate() while turning off: the records that start with the seal marker but do not open with the file key
+   * (record key => SHA-256 of their bytes). They are plain files that happen to start so, and the server, which holds no
+   * key, cannot tell: "off" goes to it with this list.
+   */
+  plainLookalikes: Record<string, string> = {};
+  /**
    * Asks the server for the account's encryption now (and opens the key this browser kept). Called before a record that
    * does not fit this page's idea of it is refused: encryption may have been switched in another tab or on another device.
    */
@@ -81,6 +87,7 @@ export class EncryptedStore implements Store {
   async migrate(progress: (done: number, total: number) => void, signal?: AbortSignal): Promise<void> {
     const keys = await this.inner.keys();
     const want = this.sealing;
+    this.plainLookalikes = {};
     let done = 0;
     let batch: Array<{ key: string; version: string; data: Uint8Array }> = [];
     let bytes = 0;
@@ -121,16 +128,19 @@ export class EncryptedStore implements Store {
   /**
    * Is this record already the kind wanted? While turning on, a record that starts with the seal marker but does not
    * open with the file key is a plain file that happens to start so (nothing else has sealed anything yet): it still
-   * needs sealing, or it would be "encrypted" without ever opening again.
+   * needs sealing, or it would be "encrypted" without ever opening again. While turning off, such a record has nothing
+   * to undo: it stays as it is, and is noted for the server (plainLookalikes).
    */
   private async converted(key: string, data: Uint8Array, want: boolean): Promise<boolean> {
-    if (isSealed(data) !== want) return false;
-    if (!want) return true;
+    if (!isSealed(data)) return !want;
+    const fileKey = this.needKey();
     try {
-      await unseal(this.needKey(), key, data);
-      return true;
+      await unseal(fileKey, key, data);
+      return want;
     } catch {
-      return false;
+      if (want) return false;
+      this.plainLookalikes[key] = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', data as BufferSource)), b => b.toString(16).padStart(2, '0')).join('');
+      return true;
     }
   }
 

@@ -555,9 +555,11 @@ try {
             // against the new state (store.php). Finishing is refused while any file is still the old kind (one saved by
             // another page during the change), and the key is kept until then.
             $id = $user['id'];
-            [$wrong, $user] = store_locked(auth_user_store($dataDir, $id), static function () use ($dataDir, $id, $to, $vault, $rkey): array {
+            // Files the person's page found are plain though they start with the seal marker (store_count_unconverted).
+            $plain = $to === 'off' && is_array($body['plainLookalikes'] ?? null) ? array_filter($body['plainLookalikes'], 'is_string') : [];
+            [$wrong, $user] = store_locked(auth_user_store($dataDir, $id), static function () use ($dataDir, $id, $to, $vault, $rkey, $plain): array {
                 if ($to === 'on' || $to === 'off') {
-                    $wrong = store_count_unconverted(auth_user_store($dataDir, $id), $to === 'on');
+                    $wrong = store_count_unconverted(auth_user_store($dataDir, $id), $to === 'on', $plain);
                     if ($wrong > 0) {
                         return [$wrong, null];
                     }

@@ -6,6 +6,7 @@
 //   "Disconnect when idle" (assistant/prefs.ts).
 //   Claude: the person's own Anthropic key, model and monthly limit (claude.ts).
 //   OpenRouter: the person's own OpenRouter key, for hundreds of models from many makers (openrouter.ts).
+import { askIdentity } from '../../auth/identity.ts';
 import { h, on } from '../../core/dom.ts';
 import { formatSize } from '../../core/format.ts';
 import { ServiceApi } from '../../net/service.ts';
@@ -77,10 +78,10 @@ export function aiSettings(shell: Shell, signal: AbortSignal): HTMLElement {
     retiredBox.replaceChildren(...(list.owner ? list.retired : []).map(r => {
       const b = h('button', { type: 'button', class: 'btn danger' }, `Remove ${r.name}`);
       on(b, 'click', async () => {
-        const ok = await shell.dialogs.confirm({ title: `Remove ${r.name} from this TOMLIN OS?`, text: `It is no longer one of the built-in models. Its files (${formatSize(r.bytes)}) are deleted from the server.`, ok: 'Remove', danger: true });
-        if (!ok || !modelsApi) return;
+        const who = await askIdentity(shell, { title: `Remove ${r.name} from this TOMLIN OS?`, text: `It is no longer one of the built-in models. Its files (${formatSize(r.bytes)}) are deleted from the server.`, ok: 'Remove', danger: true, signal });
+        if (!who || !modelsApi) return;
         try {
-          await removeModel(modelsApi, r.id);
+          await removeModel(modelsApi, r.id, who);
           saveText.textContent = `${r.name} was removed from this TOMLIN OS.`;
         } catch (error) {
           saveText.textContent = error instanceof Error ? error.message : 'It could not be removed.';
@@ -125,6 +126,9 @@ export function aiSettings(shell: Shell, signal: AbortSignal): HTMLElement {
   on(saveBtn, 'click', async () => {
     const m = chosen();
     if (!m || !modelsApi || savingId) return;
+    // Starting a save asks for the owner's password; carrying on a stopped one was asked for when it started.
+    const who = m.saving ? null : await askIdentity(shell, { title: `Save ${m.name} to this TOMLIN OS?`, text: `Its files (${formatSize(m.bytes)}) are fetched onto the server, and browsers then get it from here.`, ok: 'Save', signal });
+    if ((!m.saving && !who) || savingId) return;
     savingId = m.id;
     paint();
     saveBar.hidden = false;
@@ -133,7 +137,7 @@ export function aiSettings(shell: Shell, signal: AbortSignal): HTMLElement {
       const done = await saveModel(modelsApi, m.id, (have, total) => {
         saveBar.value = total ? have / total : 0;
         saveText.textContent = `Saving ${m.name} to this TOMLIN OS: ${formatSize(have)} of ${formatSize(total)}. You can keep using TOMLIN OS; closing Settings pauses it.`;
-      }, () => savingId !== m.id || signal.aborted);
+      }, () => savingId !== m.id || signal.aborted, who);
       saveText.textContent = done ? `${m.name} is saved on this TOMLIN OS. Browsers now get it from here.` : 'Saving paused. "Carry on saving" picks it up where it stopped.';
     } catch (error) {
       saveText.textContent = error instanceof Error ? error.message : 'The save stopped.';
@@ -150,10 +154,10 @@ export function aiSettings(shell: Shell, signal: AbortSignal): HTMLElement {
   on(removeBtn, 'click', async () => {
     const m = chosen();
     if (!m || !modelsApi) return;
-    const ok = await shell.dialogs.confirm({ title: `Remove ${m.name} from this TOMLIN OS?`, text: `Its files (${formatSize(m.bytes)}) are deleted from the server. Browsers then fetch it from Hugging Face when it starts. It can be saved here again after a day.`, ok: 'Remove', danger: true });
-    if (!ok) return;
+    const who = await askIdentity(shell, { title: `Remove ${m.name} from this TOMLIN OS?`, text: `Its files (${formatSize(m.bytes)}) are deleted from the server. Browsers then fetch it from Hugging Face when it starts. It can be saved here again after a day.`, ok: 'Remove', danger: true, signal });
+    if (!who) return;
     try {
-      await removeModel(modelsApi, m.id);
+      await removeModel(modelsApi, m.id, who);
       saveText.textContent = `${m.name} was removed from this TOMLIN OS.`;
     } catch (error) {
       saveText.textContent = error instanceof Error ? error.message : 'It could not be removed.';

@@ -137,8 +137,13 @@ function store_sealing(string $state): bool
 /**
  * How many records are not yet the kind wanted (sealed, or plain). Run under the store lock before encryption is said to
  * be on or off, so a file saved by another page during the change cannot be left behind in the wrong kind.
+ *
+ * The marker is all this server can see: it holds no key, so a person's plain file that happens to start with the marker
+ * looks sealed. $plain (record key => SHA-256 of its bytes) is what the person's page, which holds the key and found that
+ * the key does not open it, says about such files while turning off. It counts only for those exact bytes, so a file
+ * sealed or changed since is still counted.
  */
-function store_count_unconverted(string $dataDir, bool $sealed): int
+function store_count_unconverted(string $dataDir, bool $sealed, array $plain = []): int
 {
     $wrong = 0;
     foreach (glob($dataDir . '/objects/*/*') ?: [] as $file) {
@@ -150,8 +155,15 @@ function store_count_unconverted(string $dataDir, bool $sealed): int
             throw new RuntimeException('a record could not be read while checking the encryption');
         }
         $head = (string) fread($fh, STORE_VERSION_LEN + STORE_SEAL_MIN);
+        $wrongKind = store_is_sealed(substr($head, STORE_VERSION_LEN)) !== $sealed;
+        if ($wrongKind && !$sealed && isset($plain[$n === 'root' ? '/' : $n])) {
+            fseek($fh, STORE_VERSION_LEN);
+            $hash = hash_init('sha256');
+            hash_update_stream($hash, $fh);
+            $wrongKind = !hash_equals((string) $plain[$n === 'root' ? '/' : $n], hash_final($hash));
+        }
         fclose($fh);
-        if (store_is_sealed(substr($head, STORE_VERSION_LEN)) !== $sealed) {
+        if ($wrongKind) {
             $wrong++;
         }
     }

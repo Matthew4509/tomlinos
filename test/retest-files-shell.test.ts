@@ -333,3 +333,21 @@ test('a zip from an older Windows tool names its files in the old code page (CP4
   const [entry] = readZip(z);
   assert.equal(entry.parts[0], 'Köln.txt');
 });
+
+test('a file made before names were checked ("nul.txt") can still be saved in place, but no new file can take that name', async () => {
+  const store = new MemoryStore();
+  const fs = new FileSystem(store);
+  await fs.writeText('/Documents/old.txt', 'first');
+  // As it was left by an earlier version: the name is already in the folder's own list.
+  const folder = (await fs.stat('/Documents'))!;
+  const record = (await store.get(folder.id))!;
+  const list = JSON.parse(new TextDecoder().decode(record.data));
+  list.entries[0].name = 'nul.txt';
+  await store.commit([{ op: 'put', key: folder.id, expect: record.version, data: new TextEncoder().encode(JSON.stringify(list)) }]);
+  const fresh = new FileSystem(store);
+  assert.equal(await fresh.readText('/Documents/nul.txt'), 'first');
+  await fresh.writeText('/Documents/nul.txt', 'second');
+  assert.equal(await fresh.readText('/Documents/nul.txt'), 'second');
+  await assert.rejects(fresh.writeText('/Documents/con.txt', 'x'), 'a new file cannot have a name Windows refuses');
+  await assert.rejects(fresh.writeText('/Pictures/nul.txt', 'x'), 'nor can that name be used in another folder');
+});

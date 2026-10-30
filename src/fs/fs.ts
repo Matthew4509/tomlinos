@@ -378,11 +378,12 @@ export class FileSystem {
    */
   async writeFile(path: string, data: Uint8Array, options: { hidden?: boolean; mustBeNew?: boolean; replacing?: string } = {}): Promise<Entry> {
     const name = baseName(path);
-    checkName(name);
     return this.change(async c => {
       const parentKey = await c.folderKey(parentPath(path));
       const folder = await c.folder(parentKey);
       const old = findEntry(folder, name);
+      // Only a new name is checked: a file made before a name was refused ("nul.txt") must still save in place.
+      if (!old) checkName(name);
       if (old && (old.kind === 'folder' || options.mustBeNew)) {
         throw new FsError(`There is already ${old.kind === 'folder' ? 'a folder' : 'a file'} called "${old.name}" here.`);
       }

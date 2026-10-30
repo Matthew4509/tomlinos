@@ -15,8 +15,10 @@
 //                                    all of mine there; the owner may also delete anyone's in General, or {conv:'general',
 //                                    all:true} every message in it
 //   GET  op=settings                 how many days messages are kept (0: until deleted)
-//   POST op=settings                 owner only: {vanishDays} 0, 3, 7 or 30; older messages are deleted from the server
-//   POST op=reset                    owner only: a new General key; messages under the old one can no longer be opened
+//   POST op=settings                 owner only: {vanishDays, password, code} 0, 3, 7 or 30; older messages are deleted
+//                                    from the server
+//   POST op=reset                    owner only: {password, code} a new General key; messages under the old one can no
+//                                    longer be opened
 // Nobody signed in: 401. Screen locked: 423.
 declare(strict_types=1);
 
@@ -497,6 +499,9 @@ try {
         if (!is_int($days) || !in_array($days, CHAT_VANISH_CHOICES, true)) {
             api_fail(400, 'Messages can vanish after 3, 7 or 30 days, or be kept until deleted (0).');
         }
+        // Everyone's messages: the owner's own password (and code) first, so someone at the owner's unlocked, unattended
+        // desktop cannot delete them.
+        confirm_identity($root, $me, $body);
         chat_locked($root, static function (string $dir) use ($days): void {
             auth_write_json("$dir/settings.json", ['vanishDays' => $days]);
             // Older messages go from every conversation now, not only when each is next opened.
@@ -507,6 +512,8 @@ try {
 
     if ($op === 'reset') {
         require_admin($me);
+        // Everyone loses General's old messages: the owner's own password (and code) first, as above.
+        confirm_identity($root, $me, $body);
         $epoch = chat_locked($root, static function (string $dir): int {
             $general = auth_read_json("$dir/general.json", ['epoch' => 1, 'wraps' => []]);
             $general = ['epoch' => (int) $general['epoch'] + 1, 'wraps' => []];

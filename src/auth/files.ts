@@ -171,7 +171,7 @@ export class FilesVault {
     for (let pass = 1; ; pass++) {
       await this.store.migrate(progress, signal);
       try {
-        r = await this.api.vault(target);
+        r = await this.api.vault(target, target === 'off' ? { plainLookalikes: this.store.plainLookalikes } : {});
         break;
       } catch (error) {
         if (!(error instanceof AuthFailure && error.data.redo) || pass >= 3) throw error;
