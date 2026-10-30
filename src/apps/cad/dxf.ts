@@ -537,7 +537,9 @@ export function decodeText(s: string): string {
 
 /** The words in a paragraph text (MTEXT) with its formatting codes taken out; \P is a new line. */
 export function decodeMtext(s: string): string {
-  let t = s.replace(/\\[ACcFfHhpQqTtWw][^;\\]*;/g, '');
+  // A drawing keeps 10,000 letters of a text (longer is cut and said); the codes around them are cut at ten times that
+  // first, so a crafted text of megabytes of codes cannot keep the patterns below busy for seconds.
+  let t = s.slice(0, MAX_TEXT_LENGTH * 10).replace(/\\[ACcFfHhpQqTtWw][^;\\]*;/g, '');
   t = t.replace(/\\S([^;^#/]*)[\^#/]([^;]*);/g, '$1/$2');
   t = t.replace(/\\[LlOoKk]/g, '');
   t = t.replace(/\\P/g, '\n').replace(/\\~/g, ' ').replace(/\\N/g, '\n');

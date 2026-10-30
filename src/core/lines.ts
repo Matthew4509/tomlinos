@@ -15,12 +15,18 @@ export const isQuotedPrintable = (line: string): boolean => /^[^:]*QUOTED-PRINTA
 /** Joins folded lines and splits the text into content lines. Lines that do not parse are skipped, never fatal. */
 export function readLines(text: string): ContentLine[] {
   const raw: string[] = [];
+  // Whether each line is quoted-printable, worked out once when the line starts (looking again at a line that grows
+  // with every piece joined on made a crafted file take minutes).
+  const qp: boolean[] = [];
   for (const line of text.replace(/\r\n?/g, '\n').split('\n')) {
     const last = raw.length - 1;
     // A quoted-printable value goes on after an "=" at the line's end; any other folded line starts with a space.
-    if (last >= 0 && raw[last].endsWith('=') && isQuotedPrintable(raw[last])) raw[last] = raw[last].slice(0, -1) + line;
+    if (last >= 0 && qp[last] && raw[last].endsWith('=')) raw[last] = raw[last].slice(0, -1) + line;
     else if (last >= 0 && (line.startsWith(' ') || line.startsWith('\t'))) raw[last] += line.slice(1);
-    else raw.push(line);
+    else {
+      raw.push(line);
+      qp.push(isQuotedPrintable(line));
+    }
   }
   const out: ContentLine[] = [];
   for (const line of raw) {

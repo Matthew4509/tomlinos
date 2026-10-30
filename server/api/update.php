@@ -18,7 +18,7 @@ $config = api_config();
 $root = rtrim((string) $config['data_dir'], '/\\');
 [, , $user] = require_full($root);
 $owner = !empty($user['admin']);
-$op = (string) ($_GET['op'] ?? '');
+$op = query_str('op');
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 // The web root: the site's document root (public_html on the host, out/ on the local test server, whose script is the
 // router in server/, so the folder above the script would be the source folder itself).

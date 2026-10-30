@@ -142,7 +142,7 @@ npm test           # unit and server tests (set PHP_BIN to your php if it is not
 npm run check      # type check
 ```
 
-To run it locally: `php -S 127.0.0.1:3042 -t out server/dev-router.php` from this folder, then open
+To run it locally: `php -d display_errors=0 -S 127.0.0.1:3042 -t out server/dev-router.php` from this folder, then open
 http://127.0.0.1:3042. Data goes to `../desktop-data` unless `DESKTOP_DATA_DIR` says otherwise.
 
 ## Licence

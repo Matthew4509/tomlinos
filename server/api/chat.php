@@ -44,7 +44,7 @@ $root = rtrim((string) $config['data_dir'], '/\\');
 [, , $me] = require_full($root);
 $uid = (string) $me['id'];
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
-$op = (string) ($_GET['op'] ?? '');
+$op = query_str('op');
 
 function chat_dir(string $root): string
 {
@@ -298,7 +298,7 @@ try {
     }
 
     if ($method === 'GET' && $op === 'messages') {
-        $conv = chat_conv((string) ($_GET['conv'] ?? ''), $uid, $users);
+        $conv = chat_conv(query_str('conv'), $uid, $users);
         $after = max(0, (int) ($_GET['after'] ?? 0));
         $out = chat_locked($root, static function (string $dir) use ($conv, $after): array {
             $c = chat_read_conv($dir, $conv);

@@ -90,11 +90,11 @@ export function parseVcf(text: string): Contact[] {
       if (field) (keep.raw[field] ??= []).push(line.raw);
       if (line.name === 'UID') keep.uid = value.slice(0, 200);
       else if (line.name === 'VERSION') keep.version = value.trim().slice(0, 10);
-      else if (line.name === 'FN') cur.name = v.slice(0, 300);
+      else if (line.name === 'FN') cur.name = v.slice(0, 500);
       else if (line.name === 'N') {
         const [family, given, middle] = splitParts(value);
         nameFromN = [given, middle, family].filter(Boolean).join(' ');
-      } else if (line.name === 'ORG') cur.org = splitParts(value).filter(Boolean).join(', ').slice(0, 300);
+      } else if (line.name === 'ORG') cur.org = splitParts(value).filter(Boolean).join(', ').slice(0, 500);
       else if (line.name === 'TEL' && v.trim() && cur.phones.length < 20) cur.phones.push(v.trim().slice(0, 60));
       else if (line.name === 'EMAIL' && v.trim() && cur.emails.length < 20) cur.emails.push(v.trim().slice(0, 200));
       else if (line.name === 'ADR' && !cur.address) cur.address = splitParts(value).filter(Boolean).join(', ').slice(0, 500);

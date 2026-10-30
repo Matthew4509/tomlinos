@@ -21,7 +21,7 @@ $root = rtrim((string) $config['data_dir'], '/\\');
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'GET') {
     api_fail(405, 'Only reading is possible here.');
 }
-$path = (string) ($_GET['path'] ?? '');
+$path = query_str('path');
 if (preg_match('#^book/[1-9][0-9]{0,6}$#', $path)) {
     $wait = rate_take($root, (string) $user['id'], 'books', 60, 3600);
     if ($wait > 0) {

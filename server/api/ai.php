@@ -21,7 +21,7 @@ $config = api_config();
 $root = rtrim((string) $config['data_dir'], '/\\');
 [, , $user] = require_full($root);
 $uid = (string) $user['id'];
-$op = (string) ($_GET['op'] ?? '');
+$op = query_str('op');
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 $dollars = static fn (int $micro): float => round($micro / 1e6, 4);
 // Letters where mbstring is on; bytes otherwise (never fewer, so limits and estimates stay on the safe side).

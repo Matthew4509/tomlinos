@@ -99,19 +99,21 @@ export const contactsApp: AppDef = {
     function editCard(existing: Contact | null): void {
       const signal = fresh();
       const c = existing ? { ...existing } : emptyContact();
-      const field = (label: string, value: string, multi = false) => {
-        if (!multi) return h('input', { type: 'text', class: 'field', value, 'aria-label': label });
-        const area = h('textarea', { class: 'field', rows: 2, 'aria-label': label });
+      // The longest each field may be: what the file reader keeps (src/core/vcard.ts), so nothing typed here is cut
+      // quietly the next time the file is read.
+      const field = (label: string, value: string, multi = false, max?: number) => {
+        if (!multi) return h('input', { type: 'text', class: 'field', value, maxlength: max, 'aria-label': label });
+        const area = h('textarea', { class: 'field', rows: 2, maxlength: max, 'aria-label': label });
         area.value = value;
         return area;
       };
-      const nameIn = field('Name', c.name);
-      const orgIn = field('Company', c.org);
+      const nameIn = field('Name', c.name, false, 500);
+      const orgIn = field('Company', c.org, false, 500);
       const phoneIn = field('Phone numbers (one per line)', c.phones.join('\n'), true);
       const emailIn = field('Email addresses (one per line)', c.emails.join('\n'), true);
-      const addrIn = field('Address', c.address, true);
+      const addrIn = field('Address', c.address, true, 500);
       const bdayIn = h('input', { type: 'date', class: 'field', value: c.birthday, 'aria-label': 'Birthday' });
-      const notesIn = field('Notes', c.notes, true);
+      const notesIn = field('Notes', c.notes, true, 20000);
       const problem = h('p', { class: 'dialog-problem', role: 'alert' });
       const saveBtn = h('button', { type: 'button', class: 'btn primary' }, 'Save');
       const cancel = h('button', { type: 'button', class: 'btn' }, 'Cancel');
@@ -133,7 +135,13 @@ export const contactsApp: AppDef = {
         const name = nameIn.value.trim();
         if (!name) return void (problem.textContent = 'Give the contact a name.');
         if (bdayIn.value && !isDate(bdayIn.value)) return void (problem.textContent = 'That birthday is not a real date.');
-        const saved: Contact = { ...c, name, org: orgIn.value.trim(), phones: lines(phoneIn.value), emails: lines(emailIn.value), address: addrIn.value.trim().replace(/\s*\n\s*/g, ', '), birthday: bdayIn.value, notes: notesIn.value.trim() };
+        // The most the file keeps of each (src/core/vcard.ts): said here rather than cut the next time it is read.
+        const phones = lines(phoneIn.value);
+        const emails = lines(emailIn.value);
+        if (phones.length > 20 || emails.length > 20) return void (problem.textContent = 'A contact keeps up to 20 phone numbers and 20 email addresses.');
+        if (phones.some(p => p.length > 60)) return void (problem.textContent = 'A phone number can be up to 60 characters.');
+        if (emails.some(e => e.length > 200)) return void (problem.textContent = 'An email address can be up to 200 characters.');
+        const saved: Contact = { ...c, name, org: orgIn.value.trim(), phones, emails, address: addrIn.value.trim().replace(/\s*\n\s*/g, ', '), birthday: bdayIn.value, notes: notesIn.value.trim() };
         if (await save(list => [...list.filter(x => x.uid !== saved.uid), saved], [saveBtn, del])) pick(saved.uid, true);
       }, { signal });
       cancel.addEventListener('click', () => {

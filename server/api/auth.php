@@ -20,7 +20,7 @@ api_guard();
 
 $config = api_config();
 $dataDir = rtrim((string) $config['data_dir'], '/\\');
-$op = (string) ($_GET['op'] ?? '');
+$op = query_str('op');
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 $reads = ['status', 'sessions', 'history', 'users', 'captcha'];
 if (in_array($op, $reads, true) ? $method !== 'GET' : $method !== 'POST') {

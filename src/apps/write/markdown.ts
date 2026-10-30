@@ -10,6 +10,16 @@ const CODE_FACE = 'Consolas';
 /** While a file is being read: what opening it changes (said to the person, so Save asks before writing over it). */
 let changing: Set<string> | undefined;
 
+/** Where `token` next is in `s` from `from`, not counting one written with a backslash before it (\* is a star). */
+function unescapedAt(s: string, token: string, from: number): number {
+  for (let at = s.indexOf(token, from); at >= 0; at = s.indexOf(token, at + 1)) {
+    let slashes = 0;
+    while (s[at - 1 - slashes] === '\\') slashes++;
+    if (slashes % 2 === 0) return at;
+  }
+  return -1;
+}
+
 /** Inline Markdown as text runs: **bold**, *italic* / _italic_, ~~struck~~, `code`, [words](address), \escapes. */
 export function inlineMd(text: string, base: MarkJSON[] = []): NodeJSON[] {
   const out: NodeJSON[] = [];
@@ -79,7 +89,7 @@ export function inlineMd(text: string, base: MarkJSON[] = []): NodeJSON[] {
       }
       const pair = s.startsWith('**', i) || s.startsWith('__', i) ? s.slice(i, i + 2) : s.startsWith('~~', i) ? '~~' : null;
       if (pair) {
-        const end = s.indexOf(pair, i + 2);
+        const end = unescapedAt(s, pair, i + 2);
         if (end > i + 2) {
           flush();
           const type = pair === '~~' ? 'strike' : 'strong';
@@ -91,8 +101,8 @@ export function inlineMd(text: string, base: MarkJSON[] = []): NodeJSON[] {
       if ((ch === '*' || ch === '_') && s[i + 1] !== ' ' && s[i + 1] !== ch) {
         // An underscore inside a word (snake_case) is just an underscore.
         const wordBefore = ch === '_' && i > 0 && /\w/.test(s[i - 1]);
-        let end = s.indexOf(ch, i + 1);
-        while (end > 0 && s[end + 1] === ch) end = s.indexOf(ch, end + 2);
+        let end = unescapedAt(s, ch, i + 1);
+        while (end > 0 && s[end + 1] === ch) end = unescapedAt(s, ch, end + 2);
         if (!wordBefore && end > i + 1 && s[end - 1] !== ' ' && !(ch === '_' && /\w/.test(s[end + 1] ?? ''))) {
           flush();
           walk(s.slice(i + 1, end), has(marks, 'em') ? marks : [...marks, { type: 'em' }]);
@@ -129,6 +139,8 @@ const para = (text: string, attrs: Record<string, unknown> = {}, base: MarkJSON[
 };
 
 const LIST = /^( *)([-*+]|\d{1,9}[.)])\s+(.*)$/;
+const MAX_MD_COLUMNS = 64;
+const MAX_MD_CELLS = 20_000;
 
 /** A .md file as a document. What reading it changes (pictures shown as words, quotes as italics...) is added to
  *  `changes`, if given. */
@@ -184,10 +196,37 @@ function readBlocks(source: string): NodeJSON {
     }
     if (/^\s*\|/.test(line) && i + 1 < lines.length && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1])) {
       const rows: string[][] = [];
-      const cells = (l: string) => l.trim().replace(/^\||\|$/g, '').split(/(?<!\\)\|/).map(c => c.trim().replace(/\\\|/g, '|'));
+      // A table this size is far past any page; a crafted one (thousands by thousands) would fill the memory. Cells
+      // past the 64th go into the 64th, and rows past 20,000 cells in all stay as their lines of text.
+      const cells = (l: string) => {
+        const row = l.trim().replace(/^\||\|$/g, '');
+        // Where the last kept cell starts (after the 63rd "|" not written as "\|"), found without splitting the rest.
+        let bars = 0;
+        let cut = -1;
+        for (let k = 0; k < row.length && cut < 0; k++) if (row[k] === '|' && row[k - 1] !== '\\' && ++bars === MAX_MD_COLUMNS - 1) cut = k + 1;
+        const split = (s: string) => s.split(/(?<!\\)\|/).map(c => c.trim().replace(/\\\|/g, '|'));
+        if (cut < 0 || !/(?<!\\)\|/.test(row.slice(cut))) return split(row);
+        changing?.add(`tables wider than ${MAX_MD_COLUMNS} columns (the rest of each row is in its last cell)`);
+        return [...split(row.slice(0, cut - 1)), row.slice(cut).trim()];
+      };
       rows.push(cells(line));
       i += 2;
-      while (i < lines.length && /^\s*\|/.test(lines[i])) rows.push(cells(lines[i++]));
+      let count = rows[0].length;
+      const rest: string[] = [];
+      while (i < lines.length && /^\s*\|/.test(lines[i])) {
+        if (rest.length) rest.push(lines[i++]);
+        else {
+          const row = cells(lines[i]);
+          if (count + row.length > MAX_MD_CELLS) {
+            changing?.add('the end of a very large table (shown as its lines of text)');
+            rest.push(lines[i++]);
+            continue;
+          }
+          count += row.length;
+          rows.push(row);
+          i++;
+        }
+      }
       const width = Math.max(...rows.map(r => r.length));
       blocks.push({
         type: 'table',
@@ -197,6 +236,8 @@ function readBlocks(source: string): NodeJSON {
           content: Array.from({ length: width }, (_, c) => ({ type: 'table_cell', attrs: { colspan: 1, rowspan: 1, colwidth: null, background: null }, content: [para(r[c] ?? '')] })),
         })),
       });
+      // The rows past the limit, each as its line of text exactly as written.
+      for (const l of rest) blocks.push({ type: 'paragraph', attrs: { style: 'normal' }, content: [{ type: 'text', text: l.trim() }] });
       continue;
     }
     if (/^\s*>/.test(line)) {
@@ -215,7 +256,8 @@ function readBlocks(source: string): NodeJSON {
           items.push({ indent: m[1].length, ordered: /\d/.test(m[2]), start: Number.parseInt(m[2], 10) || 1, text: m[3] });
           i++;
         } else if (lines[i].trim() && /^\s{2,}/.test(lines[i]) && items.length) {
-          items[items.length - 1].text += `\n${lines[i].trim()}`;
+          // Only the indent comes off: two spaces at the end are a line break, kept for the paragraph to read.
+          items[items.length - 1].text += `\n${lines[i].trimStart()}`;
           i++;
         } else break;
       }
@@ -248,6 +290,9 @@ function readBlocks(source: string): NodeJSON {
     // A paragraph: lines until a blank line or something else starts.
     const text: string[] = [];
     while (i < lines.length && lines[i].trim() && !/^(#{1,6}\s|\s*```|\s*~~~|\s*>|\s*\|)/.test(lines[i]) && !(text.length && LIST.test(lines[i]))) text.push(lines[i++]);
+    // A line that looks like the start of something else but is not one ("| a | b" with no "---" row under it): its
+    // words, so reading always moves on (it once added empty paragraphs for ever, and the window froze).
+    if (!text.length) text.push(lines[i++]);
     // "[1]: https://..." gives the address for [words][1] elsewhere; both stay as words here.
     if (text.some(l => /^ {0,3}\[[^\]]+\]:\s*\S/.test(l))) changing?.add('reference-style links (shown as their words)');
     blocks.push(para(text.join('\n').trim()));
@@ -256,7 +301,9 @@ function readBlocks(source: string): NodeJSON {
 }
 
 /** Text with Markdown's own signs escaped where they would mean something. */
-const escapeMd = (s: string): string => s.replace(/([\\`*_[\]~|])/g, '\\$1').replace(/^(#{1,6}\s|>|\d+[.)]\s|[-+*]\s)/, '\\$1');
+// A number that would start a list ("1. ") has its dot escaped ("1\. "): a backslash before a digit is not an escape
+// Markdown reads, so "\1. " came back with its backslash.
+const escapeMd = (s: string): string => s.replace(/([\\`*_[\]~|])/g, '\\$1').replace(/^(#{1,6}\s|>|[-+*]\s)/, '\\$1').replace(/^(\d+)([.)]\s)/, '$1\\$2');
 
 /** Inline code: in single backticks, or in a longer run (with a space inside each end) when it holds backticks. */
 function codeSpan(text: string): string {
@@ -269,29 +316,58 @@ function codeSpan(text: string): string {
 const isCodeLine = (b: NodeJSON): boolean => b.type === 'paragraph' && (b.attrs?.style ?? 'normal') === 'normal' && b.attrs?.after === 0
   && (b.content ?? []).every(n => n.type === 'text' && n.marks?.length === 1 && n.marks[0].type === 'font' && n.marks[0].attrs?.face === CODE_FACE);
 
+/** One run of text as Markdown; bold is written ** and italic *, or __ and _ where stars would run together. */
+function runToMd(n: NodeJSON, bold: '**' | '__', italic: '*' | '_' = '*'): string {
+  const types = new Set((n.marks ?? []).map(m => m.type));
+  const code = (n.marks ?? []).some(m => m.type === 'font' && /consolas|courier|mono/i.test(String(m.attrs?.face)));
+  let t = code ? codeSpan(n.text ?? '') : escapeMd(n.text ?? '');
+  // Only spaces: as they are (taken as both leading and trailing spaces, they doubled at every save).
+  if (!code && !t.trim()) return t;
+  // Markers go inside the text's own spaces ("**bold** next", not "**bold **next").
+  const lead = /^\s*/.exec(t)![0];
+  const trail = /\s*$/.exec(t)![0];
+  t = t.trim();
+  if (t) {
+    if (types.has('strike')) t = `~~${t}~~`;
+    if (types.has('em')) t = `${italic}${t}${italic}`;
+    if (types.has('strong')) t = `${bold}${t}${bold}`;
+    const href = n.marks?.find(m => m.type === 'link')?.attrs?.href;
+    if (typeof href === 'string' && linkHref(href)) t = `[${t}](${href.replace(/[()\s]/g, c => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`)})`;
+  }
+  return lead + t + trail;
+}
+
 function inlineToMd(nodes: NodeJSON[] | undefined): string {
-  let out = '';
-  for (const n of nodes ?? []) {
-    if (n.type === 'hard_break') out += '  \n';
-    else if (n.type === 'text') {
-      const types = new Set((n.marks ?? []).map(m => m.type));
-      const code = (n.marks ?? []).some(m => m.type === 'font' && /consolas|courier|mono/i.test(String(m.attrs?.face)));
-      let t = code ? codeSpan(n.text ?? '') : escapeMd(n.text ?? '');
-      // Markers go inside the text's own spaces ("**bold** next", not "**bold **next").
-      const lead = /^\s*/.exec(t)![0];
-      const trail = /\s*$/.exec(t)![0];
-      t = t.trim();
-      if (t) {
-        if (types.has('strike')) t = `~~${t}~~`;
-        if (types.has('em')) t = `*${t}*`;
-        if (types.has('strong')) t = `**${t}**`;
-        const href = n.marks?.find(m => m.type === 'link')?.attrs?.href;
-        if (typeof href === 'string' && linkHref(href)) t = `[${t}](${href.replace(/[()\s]/g, c => encodeURIComponent(c))})`;
-      }
-      out += lead + t + trail;
+  const runs = (nodes ?? []).filter(n => n.type === 'hard_break' || n.type === 'text');
+  const strong = (n: NodeJSON) => n.type === 'text' && !!n.marks?.some(m => m.type === 'strong');
+  // Bold and italic together is __*words*__ (***words*** reads back wrong); so is bold whose stars would touch the
+  // stars of the run beside it (*a***b** for italic a, bold b), which then read as one run of stars.
+  const bold = runs.map(n => (strong(n) && n.marks!.some(m => m.type === 'em') ? '__' : '**') as '**' | '__');
+  const italic = runs.map(() => '*' as '*' | '_');
+  const em = (n: NodeJSON) => n.type === 'text' && !!n.marks?.some(m => m.type === 'em');
+  const render = (k: number) => (runs[k].type === 'hard_break' ? '  \n' : runToMd(runs[k], bold[k], italic[k]));
+  const pieces = runs.map((_, k) => render(k));
+  const word = (c: string | undefined) => !!c && /\w/.test(c);
+  for (let k = 1; k < pieces.length; k++) {
+    if (!pieces[k - 1].endsWith('*') || !pieces[k].startsWith('*')) continue;
+    // A bold run beside it takes __. Otherwise an italic one takes _, where no letter touches its _ from outside (an _
+    // inside a word, as in snake_case, is just an underscore).
+    const which = strong(runs[k]) ? k : strong(runs[k - 1]) ? k - 1 : -1;
+    if (which >= 0) {
+      bold[which] = '__';
+      pieces[which] = render(which);
+      continue;
+    }
+    for (const j of [k, k - 1]) {
+      const before = j > 0 ? pieces[j - 1].slice(-1) : '';
+      const after = j + 1 < pieces.length ? pieces[j + 1][0] : '';
+      if (!em(runs[j]) || word(before) || word(after)) continue;
+      italic[j] = '_';
+      pieces[j] = render(j);
+      break;
     }
   }
-  return out;
+  return pieces.join('');
 }
 
 /** What saving as Markdown leaves out of this document (in words), so the window can ask first; empty: nothing. */
@@ -304,6 +380,9 @@ export function markdownLoses(doc: NodeJSON): string[] {
     if (n.type === 'footnote') lost.add('footnotes');
     if (n.type === 'field') lost.add('merge fields');
     if (n.type === 'toc') lost.add('the contents page');
+    if (n.type === 'paragraph' && n.attrs?.style === 'title') lost.add('the Title style (saved as Heading 1)');
+    if (n.type === 'paragraph' && (n.content?.[0]?.type === 'hard_break' || n.content?.at(-1)?.type === 'hard_break')) lost.add('line breaks at the start or end of a paragraph');
+    if ((n.type === 'table_cell' || n.type === 'table_header' || (n.type === 'paragraph' && /^(title|h[1-6])$/.test(String(n.attrs?.style)))) && JSON.stringify(n).includes('"hard_break"')) lost.add('line breaks inside headings and table cells');
     if (n.type === 'paragraph' && (n.attrs?.align || n.attrs?.before !== undefined && n.attrs?.before !== null)) lost.add('alignment and spacing');
     for (const m of n.marks ?? []) {
       if (m.type === 'color' || m.type === 'highlight' || m.type === 'size' || m.type === 'underline' || m.type === 'vert') lost.add('colours, sizes, underlining and raised or lowered text');
@@ -345,8 +424,9 @@ export function writeMarkdown(doc: NodeJSON): string {
         for (const item of b.content ?? []) {
           const marker = b.type === 'ordered_list' ? `${n++}. ` : '- ';
           const [first, ...rest] = item.content ?? [];
-          out.push(`${indent}${marker}${first?.type === 'paragraph' ? inlineToMd(first.content) : ''}`);
           const inner = indent + ' '.repeat(marker.length);
+          // The lines after a line break sit under the item's words, or they would start a paragraph of their own.
+          out.push(`${indent}${marker}${first?.type === 'paragraph' ? inlineToMd(first.content).replace(/\n/g, `\n${inner}`) : ''}`);
           for (const r of rest) {
             blocks([r], inner);
             // Lists inside lists sit tight under their item.
@@ -355,7 +435,8 @@ export function writeMarkdown(doc: NodeJSON): string {
         }
         out.push('');
       } else if (b.type === 'table') {
-        const rows = (b.content ?? []).map(r => (r.content ?? []).map(c => (c.content ?? []).map(p => inlineToMd(p.content)).join(' ').replace(/\n/g, ' ')));
+        // A line break in a cell becomes one space (a row is one line); with the spaces around it, they grew each save.
+        const rows = (b.content ?? []).map(r => (r.content ?? []).map(c => (c.content ?? []).map(p => inlineToMd(p.content)).join(' ').replace(/ *\n */g, ' ')));
         if (!rows.length) continue;
         const width = Math.max(...rows.map(r => r.length));
         const line = (r: string[]) => `${indent}| ${Array.from({ length: width }, (_, i) => r[i] ?? '').join(' | ')} |`;

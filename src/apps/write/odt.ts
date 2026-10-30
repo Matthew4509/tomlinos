@@ -77,8 +77,17 @@ export async function readOdt(bytes: Uint8Array): Promise<OdtRead> {
     if (!e) return null;
     unpacked += e.size;
     if (unpacked > MAX_UNPACKED) throw new OdtProblem('This document unpacks to more than 200 MB, which is more than Write opens.');
-    return e.read();
+    try {
+      return await e.read();
+    } catch (error) {
+      if (error instanceof ArchiveError) throw new OdtProblem(`Part of this file (${path}) is damaged: ${error.message}`);
+      throw error;
+    }
   };
+  // Lists inside lists and spans inside spans: a damaged or crafted file can nest thousands deep, and reading each level
+  // inside the last would run out of room (a raw "call stack" error). Past this many levels it is refused in words.
+  const MAX_NESTING = 200;
+  let spanDepth = 0;
   const sources = new Map<XmlEl, string>();
   const readXml = async (path: string): Promise<XmlEl | null> => {
     const data = await readBytes(path);
@@ -252,6 +261,14 @@ export async function readOdt(bytes: Uint8Array): Promise<OdtRead> {
   };
 
   const inline = async (el: XmlEl, look: TextLook, style: StyleId, into: NodeJSON[]): Promise<void> => {
+    if (++spanDepth > MAX_NESTING) throw new OdtProblem(`This document's text is nested more than ${MAX_NESTING} levels deep, which Write does not open. The file may be damaged.`);
+    try {
+      await inlineParts(el, look, style, into);
+    } finally {
+      spanDepth--;
+    }
+  };
+  const inlineParts = async (el: XmlEl, look: TextLook, style: StyleId, into: NodeJSON[]): Promise<void> => {
     const push = (text: string) => {
       if (!text) return;
       const marks = marksFor(look, style);
@@ -324,6 +341,7 @@ export async function readOdt(bytes: Uint8Array): Promise<OdtRead> {
   };
 
   const list = async (el: XmlEl, styleName: string | undefined, level: number): Promise<NodeJSON> => {
+    if (level > MAX_NESTING) throw new OdtProblem(`This document has lists inside lists more than ${MAX_NESTING} levels deep, which Write does not open. The file may be damaged.`);
     const name = attr(el, 'text:style-name') ?? styleName;
     const bullet = listStyles.get(name ?? '')?.get(level) ?? true;
     const items: NodeJSON[] = [];

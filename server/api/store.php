@@ -24,7 +24,7 @@ try {
         api_json(['keys' => store_reading($dataDir, static fn (): array => store_list_keys($dataDir))]);
     }
     if ($method === 'GET') {
-        $key = (string) ($_GET['key'] ?? '');
+        $key = query_str('key');
         if (!store_valid_key($key)) {
             api_fail(400, 'That is not a file-store key.');
         }

@@ -40,6 +40,16 @@ function api_fail(int $status, string $message, array $extra = []): never
     exit;
 }
 
+/**
+ * A query parameter as text, or '' when it is missing or is not text (?op[]=x makes it a list, which turned into the
+ * word "Array" with a warning in the error log).
+ */
+function query_str(string $name): string
+{
+    $value = $_GET[$name] ?? '';
+    return is_string($value) ? $value : '';
+}
+
 // A string that is not valid UTF-8 (one old-style Latin-1 byte in a mail header, say) used to make json_encode give up
 // on the whole answer, so the page received nothing. Such a byte becomes U+FFFD (the "unknown character" mark) instead.
 function api_json(array $body): never

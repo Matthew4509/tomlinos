@@ -23,7 +23,7 @@ $config = api_config();
 $root = rtrim((string) $config['data_dir'], '/\\');
 [, , $user] = require_full($root);
 $dir = models_dir($config);
-$op = (string) ($_GET['op'] ?? '');
+$op = query_str('op');
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 
 /**

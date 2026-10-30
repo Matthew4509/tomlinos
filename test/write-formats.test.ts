@@ -306,6 +306,14 @@ test('Markdown: what opening a .md changes is said, a code block saves back as o
   for (const what of ['footnotes', 'merge fields', 'the contents page']) assert.ok(loses.includes(what), `${what}: ${loses.join('; ')}`);
 });
 
+test('Markdown: a line starting with | that is not a table is read as words, and the reader moves on', () => {
+  for (const md of ['| c1 | c', '| a | b |\n\n|---|---|\n', 'Intro\n| a | b\nmore']) {
+    const doc = readMarkdown(md);
+    assert.ok(plainText(doc).includes('a') || plainText(doc).includes('c1'), md);
+    assert.ok(doc.content!.length <= 4, `${JSON.stringify(md)}: ${doc.content!.length} blocks`);
+  }
+});
+
 test('a hostile Markdown file (very long lines of spaces, dashes and stars) opens quickly', () => {
   const started = Date.now();
   const doc = readMarkdown(`# ${' '.repeat(80000)}x\n${'- '.repeat(40000)}x\n${'*a '.repeat(40000)}\nline${' '.repeat(80000)}y\n## Head ##\n`);

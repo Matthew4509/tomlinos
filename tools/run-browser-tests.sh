@@ -14,8 +14,10 @@ export PHP_BIN="$PHP"
 # switched on in its shared php.ini, and has no CA list of its own; pass both here rather than editing that php.ini.
 PHPDIR="$(dirname "$PHP")"
 # opcache off: with it on, PHP's own test server on Windows can crash part-way through a run (0xC0000409).
-PHP_FLAGS="-d opcache.enable=0"
-[ -f "$PHPDIR/ext/php_openssl.dll" ] && PHP_FLAGS="-d opcache.enable=0 -d extension_dir=$PHPDIR/ext -d extension=openssl -d extension=mbstring -d extension=curl -d openssl.cafile=$PHPDIR/extras/cacert.pem"
+# display_errors off, as the live .htaccess and .user.ini set it: a warning PHP gives before any script runs (more than
+# 1,000 query values, say) would otherwise be printed into a JSON answer.
+PHP_FLAGS="-d opcache.enable=0 -d display_errors=0"
+[ -f "$PHPDIR/ext/php_openssl.dll" ] && PHP_FLAGS="-d opcache.enable=0 -d display_errors=0 -d extension_dir=$PHPDIR/ext -d extension=openssl -d extension=mbstring -d extension=curl -d openssl.cafile=$PHPDIR/extras/cacert.pem"
 LOGS="$PARENT/tomlinos-browser-logs-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$LOGS"
 PORT=3043

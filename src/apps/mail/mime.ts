@@ -88,6 +88,9 @@ export function decodeBase64(bin: string): string {
  * words that touch and share a character set are decoded as one: a letter's bytes may be split across two words.
  */
 export function decodeWords(value: string): string {
+  // A header line is at most 998 letters by the standard; a crafted one of megabytes is cut, so the patterns below
+  // cannot run away on it.
+  if (value.length > 64 * 1024) value = value.slice(0, 64 * 1024);
   const word = /=\?([^?\s]+)\?([BbQq])\?([^?\s]*)\?=/g;
   const joined = value.replace(/(=\?[^?\s]+\?[BbQq]\?[^?\s]*\?=)\s+(?==\?)/g, '$1');
   let out = '';
@@ -120,7 +123,10 @@ export function parseHeaders(bin: string): Map<string, string[]> {
     const m = /^([!-9;-~]+):\s*(.*)$/.exec(line);
     if (!m) continue;
     const name = m[1].toLowerCase();
-    out.set(name, [...(out.get(name) ?? []), m[2].trim()]);
+    // Added to the list in place: copying it for every line made a message with thousands of one header crawl.
+    const list = out.get(name);
+    if (list) list.push(m[2].trim());
+    else out.set(name, [m[2].trim()]);
   }
   return out;
 }

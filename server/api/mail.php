@@ -28,7 +28,7 @@ $uid = (string) $user['id'];
 if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
     api_fail(405, 'Mail requests are sent as POST.');
 }
-$op = (string) ($_GET['op'] ?? '');
+$op = query_str('op');
 // 18 MB of attachments is about 24 MB once base64-encoded in the request; more would not fit a 25 MB mail limit
 // and would risk the host's 128 MB PHP memory limit while the message is built.
 $max = $op === 'send' ? 26 * 1048576 : 65536;

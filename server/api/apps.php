@@ -19,7 +19,7 @@ $config = api_config();
 $root = rtrim((string) $config['data_dir'], '/\\');
 [, , $user] = require_full($root);
 $owner = !empty($user['admin']);
-$op = (string) ($_GET['op'] ?? '');
+$op = query_str('op');
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 // The web root: public_html live, the built page (out/) on the dev server.
 $webRoot = rtrim((string) ($_SERVER['DOCUMENT_ROOT'] ?? ''), '/\\');
