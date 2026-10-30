@@ -71,26 +71,21 @@ function auth_link_reset(string $dataDir, array $user): void
     }
 }
 
-/** Checks the password (and the two-step code, when it is on) before a change to the account. */
-function confirm_identity(string $dataDir, array $user, array $body): void
+// confirm_identity (the password, and the two-step or a recovery code, before a change) lives in lib/auth.php: the app
+// store and System update ask for the owner's password with the same code.
+
+/**
+ * After the owner (or the server tool) reset this person's password, the wrapped file key still answers to the OLD
+ * password. Until the person has re-opened their files with the recovery key (vault-rewrap), nothing that holds only
+ * the new password may touch the encryption: not decrypt the files, not swap the wrapped key, not replace the
+ * recovery key. Otherwise the owner, signing in as the person with the password they set, could have the files
+ * decrypted, which is the one thing encryption promises they cannot do.
+ */
+function refuse_while_stale(array $user): void
 {
-    // The same brake as signing in: someone at an unlocked, unattended desktop cannot try passwords at full speed.
-    $ip = (string) ($_SERVER['REMOTE_ADDR'] ?? '');
-    $wait = auth_throttle_take($dataDir, $ip, $user['name']);
-    if ($wait > 0) {
-        api_fail(429, sprintf('Too many wrong tries. Wait %s, then try again.', $wait >= 90 ? ceil($wait / 60) . ' minutes' : $wait . ' seconds'), ['wait' => $wait]);
+    if (!empty($user['vault']['stale']) && ($user['vault']['state'] ?? 'off') !== 'off') {
+        api_fail(409, 'Your password was reset, so your files are waiting for your recovery key. Open them with it first (My account > Encryption); then your new password works for this too.', ['stale' => true]);
     }
-    if (!password_verify(body_str($body, 'password'), $user['hash'])) {
-        api_fail(403, 'That password is not right, so nothing was changed. Type your current password.');
-    }
-    if (!empty($user['totp']['enabled'])) {
-        $step = auth_totp_check($user['totp']['secret'], body_str($body, 'code'), (int) ($user['totp']['last'] ?? 0));
-        if ($step === null || !auth_totp_use($dataDir, $user['id'], $step)) {
-            api_fail(403, 'That two-step code is not right (or was already used), so nothing was changed. Type the code your authenticator shows now.');
-        }
-    }
-    auth_throttle_clear($dataDir, $user['name']);
-    auth_throttle_refund($dataDir, $ip);
 }
 
 /** Changes one person's record under the lock. $fn gets the record and returns it changed. */
@@ -214,6 +209,12 @@ try {
             $user = auth_find_user(auth_users($dataDir), $name);
             // The same slow check runs for a name that does not exist, so the time taken does not tell which half was wrong.
             $ok = $user ? password_verify($password, $user['hash']) : (auth_hash_password($password) === '');
+            // A switched-off account answers the same whether the password was right or not (after the same slow check), so
+            // the refusal cannot be used to try passwords against it. The try stays charged either way.
+            if ($user && !empty($user['disabled'])) {
+                auth_history_add($dataDir, $user['id'], 'Sign-in refused (account switched off)');
+                api_fail(403, 'This account is switched off. Ask the owner of this desktop to switch it back on.');
+            }
             if (!$user || !$ok) {
                 if ($linked) {
                     // Not charged above: counted now.
@@ -223,9 +224,6 @@ try {
                     auth_history_add($dataDir, $user['id'], $linked ? 'Wrong password (unlock link)' : 'Wrong password');
                 }
                 api_fail(401, 'That user name and password do not match. Check both and try again.');
-            }
-            if (!empty($user['disabled'])) {
-                api_fail(403, 'This account is switched off. Ask the owner of this desktop to switch it back on.');
             }
             $two = !empty($user['totp']['enabled']);
             // Only a try that was charged is given back: a sign-in by unlock link was never charged, and refunding it
@@ -388,6 +386,7 @@ try {
         case 'password': {
             $body = api_body();
             [$token, , $user] = require_full($dataDir);
+            refuse_while_stale($user);
             confirm_identity($dataDir, $user, $body);
             $next = body_str($body, 'next');
             if ($problem = auth_password_problem($next, $user['name'])) {
@@ -443,7 +442,7 @@ try {
 
         case 'totp-enable': {
             $body = api_body();
-            [, , $user] = require_full($dataDir);
+            [$token, , $user] = require_full($dataDir);
             if (empty($user['totp']['secret']) || !empty($user['totp']['enabled'])) {
                 api_fail(409, 'Start again from "Turn on two-step sign-in"; the setup was not waiting for a code.');
             }
@@ -459,8 +458,11 @@ try {
 
                 return $u;
             });
-            auth_history_add($dataDir, $user['id'], 'Two-step sign-in turned on');
-            api_json(['ok' => true, 'recovery' => $plain, 'user' => auth_public_user($user)]);
+            // Two-step is turned on because the password alone is no longer trusted: every other device, signed in with
+            // the password alone, is signed out and asked for the code too. This device stays.
+            $ended = auth_sessions_end_all($dataDir, $user['id'], hash('sha256', $token));
+            auth_history_add($dataDir, $user['id'], 'Two-step sign-in turned on' . ($ended ? " (signed out of $ended other " . ($ended === 1 ? 'device)' : 'devices)') : ''));
+            api_json(['ok' => true, 'recovery' => $plain, 'user' => auth_public_user($user), 'endedOthers' => $ended]);
         }
 
         case 'totp-disable': {
@@ -501,6 +503,7 @@ try {
             // A new recovery key (the old one stops working). With encryption on, the browser also re-wraps the file key with it.
             $body = api_body();
             [, , $user] = require_full($dataDir);
+            refuse_while_stale($user);
             confirm_identity($dataDir, $user, $body);
             $hash = auth_rkey_hash($dataDir, body_str($body, 'rkAuth'));
             $wrapRk = auth_vault_for_owner($user) ? auth_wrap_rk($body) : null;
@@ -531,6 +534,14 @@ try {
             if (!in_array($to, $allowed[$from], true)) {
                 api_fail(409, "Encryption is \"$from\" here, so it cannot go to \"$to\". Reload My account and try again.");
             }
+            // A new file key (wrapped for the password and a recovery key) only comes with turning encryption on from
+            // "off". Sent from any other state it is a page that still showed "off" (another tab or device) pressing
+            // Encrypt during a turn-off: that page has already switched to its new key and would seal files with a key
+            // this server never stored, so it is refused, and the page takes the server's word instead.
+            if ($from !== 'off' && (isset($body['wrapPw']) || isset($body['wrapRk']) || isset($body['rkAuth']) || isset($body['salt']) || isset($body['iter']))) {
+                api_fail(409, "Encryption is \"$from\" here, not off, so a new key cannot be taken. Reload My account and try again.");
+            }
+            refuse_while_stale($user);
             if ($to === 'migrating-on' || $to === 'migrating-off') {
                 confirm_identity($dataDir, $user, $body);
             }
@@ -659,14 +670,15 @@ try {
                     $ok = $usedCode !== null;
                 }
             }
+            // As at sign-in: a switched-off account answers the same whether the key was right or not.
+            if ($user && !empty($user['disabled'])) {
+                api_fail(403, 'This account is switched off. Ask the owner of this desktop to switch it back on.');
+            }
             if (!$ok) {
                 if ($user) {
                     auth_history_add($dataDir, $user['id'], 'Wrong recovery key or code at "Forgot your password?"');
                 }
                 api_fail(401, 'Those do not match. Check the user name and the recovery key (and, if you use two-step sign-in, the code). If you have lost the recovery key, ask the owner of this desktop to set you a new password.');
-            }
-            if (!empty($user['disabled'])) {
-                api_fail(403, 'This account is switched off. Ask the owner of this desktop to switch it back on.');
             }
             auth_throttle_clear($dataDir, $name);
             update_user($dataDir, $user['id'], static function (array $u) use ($step, $usedCode): array {

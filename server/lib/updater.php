@@ -56,7 +56,7 @@ function update_missing(string $webRoot): array
     return $missing;
 }
 
-/** Reads and checks the signed release note. Throws RuntimeException with words for the owner. */
+/** Fetches, checks and reads the signed release note. Throws RuntimeException with words for the owner. */
 function update_fetch_release(array $config): array
 {
     $source = (string) ($config['update_source'] ?? UPDATE_DEFAULT_SOURCE);
@@ -64,9 +64,21 @@ function update_fetch_release(array $config): array
     if (isset($signed['_status'])) {
         throw new RuntimeException('The update address has no update note yet (it answered ' . (int) $signed['_status'] . '). Nothing was changed.');
     }
+
+    return update_read_release($signed, trim((string) @file_get_contents(__DIR__ . '/release-key.txt')));
+}
+
+/**
+ * Checks a signed release note against the release key ($keyB64: its public half, base64) and reads it.
+ * A note dated before the newest one this server has already believed is refused: whoever sits between this server and
+ * GitHub (or a stale cache) could keep answering with an old signed note, so the owner is told "Up to date" while a
+ * newer release waits. The newest believed note is remembered in update/release-seen.json.
+ */
+function update_read_release(array $signed, string $keyB64, ?string $priv = null): array
+{
     $payload = base64_decode((string) ($signed['release'] ?? ''), true);
     $sig = base64_decode((string) ($signed['sig'] ?? ''), true);
-    $key = base64_decode(trim((string) @file_get_contents(__DIR__ . '/release-key.txt')), true);
+    $key = base64_decode($keyB64, true);
     if (!extension_loaded('sodium')) {
         throw new RuntimeException('This server\'s PHP has no sodium extension, so the update\'s signature cannot be checked. Switch it on in the host\'s PHP settings, or update by unzipping in cPanel.');
     }
@@ -80,8 +92,29 @@ function update_fetch_release(array $config): array
         throw new RuntimeException('The update note could not be read.');
     }
 
-    return ['version' => (string) $r['version'], 'date' => (string) ($r['date'] ?? ''), 'notes' => (string) ($r['notes'] ?? ''),
+    $release = ['version' => (string) $r['version'], 'date' => (string) ($r['date'] ?? ''), 'notes' => (string) ($r['notes'] ?? ''),
         'zip' => (string) $r['zip'], 'sha256' => (string) $r['sha256'], 'bytes' => (int) ($r['bytes'] ?? 0)];
+    $dated = static fn (string $d): bool => (bool) preg_match('/^\d{4}-\d{2}-\d{2}/', $d);
+    $seen = update_release_seen($priv);
+    if ($dated($release['date'])) {
+        if ($seen !== null && strcmp($release['date'], $seen['date']) < 0) {
+            throw new RuntimeException(sprintf('The update note offered (%s, dated %s) is older than one this server has already seen (%s, dated %s), so it was ignored: it may be a replayed copy. Nothing was changed.',
+                $release['version'], substr($release['date'], 0, 10), $seen['version'], substr($seen['date'], 0, 10)));
+        }
+        if ($seen === null || strcmp($release['date'], $seen['date']) > 0) {
+            update_write_file(update_dir($priv) . '/release-seen.json', (string) json_encode(['version' => $release['version'], 'date' => $release['date']]));
+        }
+    }
+
+    return $release;
+}
+
+/** The newest release note this server has believed (version and date), or null before the first. */
+function update_release_seen(?string $priv = null): ?array
+{
+    $s = json_decode((string) @file_get_contents(update_dir($priv) . '/release-seen.json'), true);
+
+    return is_array($s) && preg_match('/^\d{4}-\d{2}-\d{2}/', (string) ($s['date'] ?? '')) ? ['version' => (string) ($s['version'] ?? ''), 'date' => (string) $s['date']] : null;
 }
 
 function update_newer(string $a, string $b): bool
@@ -359,9 +392,16 @@ function update_apply_zip(string $zipPath, string $webRoot, string $dir, ?string
         if (!in_array($priv . '/VERSION', array_column($plan, 'target'), true)) {
             throw new RuntimeException('The update is missing its version file. Nothing was changed.');
         }
+        // Files the new release no longer ships, in the folders that are the release's own (the API doors, the PHP code,
+        // its libraries and tools): removed at the end, or an old API door would stay live after the update. Each goes
+        // into the backup first, so Go back puts it back. People's folders (data, models, apps, config.php) are never these.
+        $stale = update_stale_files($plan, $webRoot, $priv);
         $replacing = 0;
         foreach ($plan as $p) {
             $replacing += is_file($p['target']) ? (int) @filesize($p['target']) : 0;
+        }
+        foreach ($stale as $file) {
+            $replacing += (int) @filesize($file);
         }
         $free = @disk_free_space($dir);
         if ($free !== false && $free < $total + $replacing + 16 * 1024 * 1024) {
@@ -389,6 +429,15 @@ function update_apply_zip(string $zipPath, string $webRoot, string $dir, ?string
         $zip->close();
         $zip = null;
         $next = trim((string) file_get_contents($stage . '/f' . array_search($priv . '/VERSION', array_column($plan, 'target'), true)));
+        // The host keeps settings of its own in two of the web root's files (cPanel writes the chosen PHP version into
+        // public_html/.htaccess, and PHP settings into .user.ini): carried over into the new copies, or the site could
+        // fall back to the host's default PHP after an update.
+        foreach ($plan as $k => $p) {
+            $kept = update_host_settings($p['target'], $webRoot, (string) @file_get_contents("$stage/f$k"));
+            if ($kept !== null && !update_write_file("$stage/f$k", $kept)) {
+                throw new RuntimeException("PHP may not write to $dir. Nothing was changed.");
+            }
+        }
 
         // The new backup, beside the last one (kept until this install has finished).
         $backup = $dir . '/backup.next';
@@ -405,6 +454,13 @@ function update_apply_zip(string $zipPath, string $webRoot, string $dir, ?string
             }
             $manifest['files'][] = ['path' => $p['target'], 'saved' => $saved];
         }
+        foreach ($stale as $k => $file) {
+            if (!update_place($file, "$backup/r$k")) {
+                update_rmdir($backup);
+                throw new RuntimeException('A backup copy could not be made (is the disk full?). Nothing was changed.');
+            }
+            $manifest['files'][] = ['path' => $file, 'saved' => "r$k"];
+        }
         if (!update_write_file($backup . '/manifest.json', (string) json_encode($manifest, JSON_UNESCAPED_SLASHES))) {
             update_rmdir($backup);
             throw new RuntimeException('The backup\'s list of files could not be written (is the disk full?). Nothing was changed.');
@@ -416,6 +472,14 @@ function update_apply_zip(string $zipPath, string $webRoot, string $dir, ?string
         foreach ($plan as $k => $p) {
             if (!update_place("$stage/f$k", $p['target'])) {
                 $failed = $p['target'];
+                break;
+            }
+        }
+        foreach ($failed === null ? $stale : [] as $file) {
+            @unlink($file);
+            clearstatcache(true, $file);
+            if (is_file($file)) {
+                $failed = $file;
                 break;
             }
         }
@@ -439,6 +503,96 @@ function update_apply_zip(string $zipPath, string $webRoot, string $dir, ?string
         update_rmdir($stage);
         update_reset_cache();
     }
+}
+
+/** The folders a release owns outright: every file in them comes from the release, so one it no longer ships is stale. */
+const UPDATE_OWNED = ['public_html/api', 'tomlinos/api', 'tomlinos/lib', 'tomlinos/tools', 'tomlinos/vendor'];
+
+/** Files now on disk in the release's own folders that the release being installed ($plan) does not carry. */
+function update_stale_files(array $plan, string $webRoot, string $priv): array
+{
+    $targets = array_fill_keys(array_column($plan, 'target'), true);
+    $stale = [];
+    foreach (UPDATE_OWNED as $owned) {
+        $folder = dirname((string) update_target("$owned/x", $webRoot, $priv));
+        foreach (update_files_under($folder) as $file) {
+            // A copy left between written and renamed (update_place) is tidied by a recovery, not an install; a file whose
+            // name starts with a dot is a setting (.htaccess), never the release's code.
+            if (!isset($targets[$file]) && !str_ends_with($file, '.new') && !str_starts_with(basename($file), '.')) {
+                $stale[] = $file;
+            }
+        }
+    }
+
+    return $stale;
+}
+
+/** Every file under $dir, at any depth (folders whose name starts with a dot left out). */
+function update_files_under(string $dir): array
+{
+    $out = [];
+    if (!is_dir($dir)) {
+        return $out;
+    }
+    foreach (scandir($dir) ?: [] as $n) {
+        if ($n === '.' || $n === '..') {
+            continue;
+        }
+        $p = $dir . '/' . $n;
+        if (is_dir($p)) {
+            if (!str_starts_with($n, '.')) {
+                array_push($out, ...update_files_under($p));
+            }
+        } else {
+            $out[] = $p;
+        }
+    }
+
+    return $out;
+}
+
+/**
+ * For public_html/.htaccess and .user.ini: the new file's text with the host's own lines from the copy now on disk
+ * carried over; null for any other file, or when there is nothing to carry.
+ */
+function update_host_settings(string $target, string $webRoot, string $new): ?string
+{
+    $name = basename($target);
+    if (!in_array($name, ['.htaccess', '.user.ini'], true) || $target !== $webRoot . '/' . $name || !is_file($target)) {
+        return null;
+    }
+    $old = (string) @file_get_contents($target);
+    if ($name === '.htaccess') {
+        // cPanel's own blocks: "# php -- BEGIN cPanel-generated handler, do not edit" ... "# php -- END cPanel-generated
+        // handler, do not edit" (the PHP version), and its "php ini directives" block of the same shape.
+        preg_match_all('/^#[^\n]*BEGIN cPanel-generated[^\n]*\n.*?^#[^\n]*END cPanel-generated[^\n]*\n?/ms', $old, $m);
+        $blocks = array_filter(array_map('trim', $m[0]), static fn (string $b): bool => !str_contains($new, $b));
+        if (!$blocks) {
+            return null;
+        }
+
+        return rtrim($new, "\n") . "\n\n" . implode("\n", $blocks) . "\n";
+    }
+    // .user.ini: every setting the host (or the owner) put there that the new file does not set itself.
+    $setting = static fn (string $line): ?string => preg_match('/^\s*([A-Za-z0-9_.]+)\s*=/', $line, $k) ? strtolower($k[1]) : null;
+    $set = [];
+    foreach (preg_split('/\R/', $new) ?: [] as $line) {
+        if (($k = $setting($line)) !== null) {
+            $set[$k] = true;
+        }
+    }
+    $kept = [];
+    foreach (preg_split('/\R/', $old) ?: [] as $line) {
+        if (($k = $setting($line)) !== null && !isset($set[$k])) {
+            $kept[] = trim($line);
+            $set[$k] = true;
+        }
+    }
+    if (!$kept) {
+        return null;
+    }
+
+    return rtrim($new, "\n") . "\n\n; Kept from this server's own settings (cPanel's MultiPHP INI Editor writes here):\n" . implode("\n", $kept) . "\n";
 }
 
 /**

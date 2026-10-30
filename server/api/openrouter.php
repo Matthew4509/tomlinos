@@ -38,7 +38,7 @@ switch ("$method $op") {
         $model = $s['model'] !== '' ? or_model($root, $s['model']) : null;
         api_json([
             'hasKey' => $s['key'] !== null, 'hint' => $s['hint'], 'model' => $s['model'], 'modelName' => $model['name'] ?? $s['model'],
-            'cap' => $s['cap'] / 100, 'spent' => $dollars($l['spent']), 'month' => ai_month(), 'maxOutput' => OR_MAX_OUTPUT,
+            'cap' => $s['cap'] / 100, 'spent' => $dollars(ai_ledger_total($l)), 'month' => ai_month(), 'maxOutput' => OR_MAX_OUTPUT,
         ]);
     }
 
@@ -106,7 +106,7 @@ switch ("$method $op") {
             'in' => (int) ($r['in'] ?? 0), 'out' => (int) ($r['out'] ?? 0), 'cost' => $dollars((int) ($r['cost'] ?? 0)),
             'note' => (string) ($r['note'] ?? ''),
         ], array_reverse(array_slice($l['log'], -300)));
-        api_json(['month' => ai_month(), 'spent' => $dollars($l['spent']), 'cap' => or_settings($root, $uid)['cap'] / 100, 'rows' => $rows]);
+        api_json(['month' => ai_month(), 'spent' => $dollars(ai_ledger_total($l)), 'cap' => or_settings($root, $uid)['cap'] / 100, 'rows' => $rows]);
     }
 
     case 'POST chat':
@@ -163,7 +163,7 @@ if ($wait > 0) {
 $worst = or_worst_micro($model, $bytes);
 $reserve = ai_reserve($root, $uid, $s['cap'], $worst, null, OR_BOOK);
 if ($reserve === null) {
-    $spent = ai_ledger_read($root, $uid, ai_month(), OR_BOOK)['spent'];
+    $spent = ai_ledger_total(ai_ledger_read($root, $uid, ai_month(), OR_BOOK));
     api_fail(402, sprintf('This could pass your monthly OpenRouter limit of $%.2f (spent $%.2f so far this month; one answer from %s can cost up to $%.2f). Raise the limit in Settings > AI, choose a cheaper model, or wait until next month.', $s['cap'] / 100, $spent / 1e6, $model['name'], $worst / 1e6), ['cap' => true]);
 }
 
@@ -245,6 +245,6 @@ if ($r['cost'] === null && $r['in'] === 0 && $r['out'] === 0 && !$r['aborted'] &
 ai_book($root, $uid, $reserve, ['model' => $model['name'], 'in' => $r['in'], 'out' => $r['out'], 'cost' => $cost, 'note' => $note ?: ($r['stop'] === 'length' ? 'cut at the length limit' : '')], null, OR_BOOK);
 $emit([
     'done' => true, 'model' => $model['name'], 'in' => $r['in'], 'out' => $r['out'], 'cost' => $dollars($cost),
-    'stop' => $r['stop'] === 'length' ? 'max_tokens' : $r['stop'], 'spent' => $dollars(ai_ledger_read($root, $uid, ai_month(), OR_BOOK)['spent']), 'cap' => $s['cap'] / 100,
+    'stop' => $r['stop'] === 'length' ? 'max_tokens' : $r['stop'], 'spent' => $dollars(ai_ledger_total(ai_ledger_read($root, $uid, ai_month(), OR_BOOK))), 'cap' => $s['cap'] / 100,
 ]);
 exit;

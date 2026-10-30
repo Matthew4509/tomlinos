@@ -41,7 +41,7 @@ switch ("$method $op") {
         }
         api_json([
             'hasKey' => $s['key'] !== null, 'hint' => $s['hint'], 'model' => $s['model'], 'models' => $models,
-            'cap' => $s['cap'] / 100, 'spent' => $dollars($l['spent']), 'month' => ai_month(), 'maxOutput' => AI_MAX_OUTPUT,
+            'cap' => $s['cap'] / 100, 'spent' => $dollars(ai_ledger_total($l)), 'month' => ai_month(), 'maxOutput' => AI_MAX_OUTPUT,
         ]);
     }
 
@@ -98,7 +98,7 @@ switch ("$method $op") {
             'in' => (int) ($r['in'] ?? 0), 'out' => (int) ($r['out'] ?? 0), 'cost' => $dollars((int) ($r['cost'] ?? 0)),
             'note' => (string) ($r['note'] ?? ''),
         ], array_reverse(array_slice($l['log'], -300)));
-        api_json(['month' => ai_month(), 'spent' => $dollars($l['spent']), 'cap' => ai_settings($root, $uid)['cap'] / 100, 'rows' => $rows]);
+        api_json(['month' => ai_month(), 'spent' => $dollars(ai_ledger_total($l)), 'cap' => ai_settings($root, $uid)['cap'] / 100, 'rows' => $rows]);
     }
 
     case 'POST chat':
@@ -152,7 +152,7 @@ $model = $s['model'];
 $worst = ai_worst_micro($model, $bytes);
 $reserve = ai_reserve($root, $uid, $s['cap'], $worst);
 if ($reserve === null) {
-    $spent = ai_ledger_read($root, $uid, ai_month())['spent'];
+    $spent = ai_ledger_total(ai_ledger_read($root, $uid, ai_month()));
     api_fail(402, sprintf('This could pass your monthly limit of $%.2f (spent $%.2f so far this month; one answer from %s can cost up to $%.2f). Raise the limit in the Claude settings, choose a cheaper model, or wait until next month.', $s['cap'] / 100, $spent / 1e6, AI_MODELS[$model]['name'], $worst / 1e6), ['cap' => true]);
 }
 
@@ -229,6 +229,6 @@ $cost = ai_cost_micro($model, $in, $out, $cacheWrite, $cacheRead);
 ai_book($root, $uid, $reserve, ['model' => $model, 'in' => $in + $cacheWrite + $cacheRead, 'out' => $out, 'cost' => $cost, 'note' => $note ?: ($stop === 'max_tokens' ? 'cut at the length limit' : ($stop === 'refusal' ? 'declined' : ''))]);
 $emit([
     'done' => true, 'model' => AI_MODELS[$model]['name'], 'in' => $in + $cacheWrite + $cacheRead, 'out' => $out, 'cost' => $dollars($cost),
-    'stop' => $stop, 'spent' => $dollars(ai_ledger_read($root, $uid, ai_month())['spent']), 'cap' => $s['cap'] / 100,
+    'stop' => $stop, 'spent' => $dollars(ai_ledger_total(ai_ledger_read($root, $uid, ai_month()))), 'cap' => $s['cap'] / 100,
 ]);
 exit;

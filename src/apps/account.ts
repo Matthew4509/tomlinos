@@ -150,12 +150,15 @@ class AccountView {
     form.querySelector<HTMLInputElement>('input')?.focus();
   }
 
-  /** Password (and the two-step code when it is on): what the server asks for before changing the account. */
+  /**
+   * Password (and the two-step code when it is on): what the server asks for before changing the account. A recovery
+   * code does in place of the authenticator's, so a lost phone does not lock anyone out of these settings.
+   */
   private identity(user: PublicUser): { nodes: Node[]; password: () => string; code: () => string } {
     const pass = passwordField({ label: 'Your current password', autocomplete: 'current-password', signal: this.app.signal });
-    const code = h('input', { type: 'text', class: 'field', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: 6 });
+    const code = h('input', { type: 'text', class: 'field', autocomplete: 'one-time-code', autocapitalize: 'off', spellcheck: 'false', maxlength: 14 });
     const nodes: Node[] = [pass.row];
-    if (user.totp) nodes.push(h('label', { class: 'gate-row' }, h('span', { class: 'gate-label' }, 'Two-step code from your authenticator'), code));
+    if (user.totp) nodes.push(h('label', { class: 'gate-row' }, h('span', { class: 'gate-label' }, 'Two-step code from your authenticator, or a recovery code'), code));
     return { nodes, password: () => pass.input.value, code: () => code.value.trim() };
   }
 
@@ -292,6 +295,16 @@ class AccountView {
       box.append(this.button(state === 'migrating-on' ? 'Finish encrypting' : 'Finish decrypting', () => {
         void files.move().then(() => this.draw(), error => void this.app.shell.report('Converting your files stopped', error));
       }, 'btn primary'));
+      if (state === 'migrating-off') {
+        // Decrypting may have been started by someone else (after a password reset, say): the person can keep encryption.
+        box.append(this.button('Keep my files encrypted...', () => {
+          const id = this.identity(user);
+          this.inlineForm(box, [...id.nodes, h('p', { class: 'hint' }, 'Decrypting stops, and the files already decrypted are encrypted again with the same key.')], 'Keep them encrypted', async () => {
+            await files.keepEncrypted(id.password(), id.code());
+            void files.move().then(() => this.app.shell.toast('All your files are encrypted.'), error => void this.app.shell.report('Encrypting stopped', error));
+          });
+        }));
+      }
     }
     return box;
   }

@@ -104,7 +104,10 @@ echo json_encode(['a' => $a !== null, 'b' => $b !== null, 'c' => $c, 'd' => $d2 
   assert.ok(r.a && r.b, 'two requests fit under the cap together');
   assert.equal(r.c, null, 'a third that could pass the cap is refused before anything is sent');
   assert.ok(r.d, 'booking the real cost frees the rest of what was set aside');
-  assert.ok(r.e, 'set-asides of requests that died are released after 15 minutes');
+  // Changed with the fix for F7 (October 2026 retest): a set-aside whose request died is no longer released after 15
+  // minutes but stays counted against the cap (the host may have killed the script after Anthropic charged for it), so
+  // with b and d2 unbooked ($0.42 held) and $0.001 spent, a fifth $0.21 request no longer fits under $0.50.
+  assert.ok(!r.e, 'set-asides of requests that died stay counted against the cap, so this one is refused');
   assert.equal(r.spent, 1000);
   assert.deepEqual(Object.keys(r.log[0]).sort(), ['at', 'cost', 'in', 'model', 'out'], 'the log keeps numbers, never words');
   assert.equal(r.zero_cap, null, 'a $0 cap stops everything');

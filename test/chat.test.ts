@@ -59,6 +59,21 @@ test('General: the key wrapped for one person opens for that person only, and a 
   assert.equal(await openMessage(opened, 'general', 'aaaaaaaaaaaaaaaa', 2, m.iv, m.ct), null);
 });
 
+test('General: a wrap is opened only when its "from" key is the sender\'s current key as the server lists it', async () => {
+  // The wrap names the key it was made with (fromPub). The page checks that against the sender's key in the people
+  // list before trusting it: a wrap carrying some other key (put there by whoever can write the server's files) is not
+  // opened, so the General key cannot be swapped under one person without the people list showing it.
+  const a = (await newKeys()).keys;
+  const b = (await newKeys()).keys;
+  const other = (await newKeys()).keys;
+  const key = await newGeneralKey();
+  const wrap = await wrapGeneral(a, 'bbbbbbbbbbbbbbbb', b.pub, key, 3);
+  assert.equal(wrap.toPub, b.pub, 'the wrap also names the key it was made for (the server refuses one made for a replaced key)');
+  assert.equal(await generalCode(await unwrapGeneral(b, 'bbbbbbbbbbbbbbbb', wrap, 3, a.pub)), await generalCode(key));
+  await assert.rejects(unwrapGeneral(b, 'bbbbbbbbbbbbbbbb', wrap, 3, other.pub), /not .*current key|changed/i);
+  await assert.rejects(unwrapGeneral(b, 'bbbbbbbbbbbbbbbb', wrap, 3, null), /not .*current key|changed/i, 'a sender with no key on the server did not make this');
+});
+
 test('the safety code matches on both screens, and differs when a key was swapped', async () => {
   const a = (await newKeys()).keys;
   const b = (await newKeys()).keys;

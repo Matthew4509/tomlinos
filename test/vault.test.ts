@@ -290,6 +290,44 @@ test('the server tool resets a password and marks encrypted files for the recove
   assert.equal((await again.call('status')).json.vaultKeys.stale, true);
 });
 
+test('after an owner reset, the new password alone cannot start decryption, change the wrap or replace the recovery key', async () => {
+  // Kim encrypts; the owner resets Kim's password. Whoever now holds that new password (the owner, or someone who
+  // took it from them) must not be able to have Kim's files decrypted, swap the wrapped key, or replace the recovery
+  // key: a stale account leaves "stale" only through the recovery key.
+  const kim = new Client();
+  assert.equal((await owner.call('user-create', { name: 'kim', next: 'copper-meadow-33', password: pw })).status, 200);
+  assert.equal((await kim.call('login', { name: 'kim', password: 'copper-meadow-33' })).status, 200);
+  const kimKey = await newFileKey();
+  const kimRecovery = await recoveryParts(newRecoveryKey());
+  const on = await kim.call('vault', { state: 'migrating-on', password: 'copper-meadow-33', ...(await wrapWithPassword(kimKey, 'copper-meadow-33', ROUNDS)), wrapRk: await wrapWithRecovery(kimKey, kimRecovery.kek), rkAuth: kimRecovery.auth });
+  assert.equal(on.status, 200, JSON.stringify(on.json));
+  assert.equal(await kim.put('/', await seal(kimKey, '/', new TextEncoder().encode('[]'))), 200);
+  assert.equal((await kim.call('vault', { state: 'on' })).status, 200);
+  const kimId = (await kim.call('status')).json.user.id;
+  assert.equal((await owner.call('user-password', { id: kimId, next: 'owner-chose-this-9', password: pw })).status, 200);
+
+  const taken = new Client();
+  assert.equal((await taken.call('login', { name: 'kim', password: 'owner-chose-this-9' })).status, 200);
+  const stale = (await taken.call('status')).json.vaultKeys;
+  assert.equal(stale.stale, true);
+  const off = await taken.call('vault', { state: 'migrating-off', password: 'owner-chose-this-9' });
+  assert.equal(off.status, 409, `decryption started with the reset password alone: ${off.status} ${JSON.stringify(off.json)}`);
+  const otherKey = await newFileKey();
+  const swap = await taken.call('password', { password: 'owner-chose-this-9', next: 'and-then-this-one-10', ...(await wrapWithPassword(otherKey, 'and-then-this-one-10', ROUNDS)) });
+  assert.equal(swap.status, 409, `the wrapped key was replaced with the reset password alone: ${swap.status} ${JSON.stringify(swap.json)}`);
+  assert.equal((await taken.call('status')).json.vaultKeys.wrapPw, stale.wrapPw, 'the wrap is as it was');
+  const rk = await taken.call('recovery-key', { password: 'owner-chose-this-9', rkAuth: (await recoveryParts(newRecoveryKey())).auth, wrapRk: await wrapWithRecovery(otherKey, (await recoveryParts(newRecoveryKey())).kek) });
+  assert.equal(rk.status, 409, `the recovery key was replaced with the reset password alone: ${rk.status} ${JSON.stringify(rk.json)}`);
+
+  // Kim, with the recovery key, re-opens the files; after that the new password works everywhere, decryption included.
+  const opened = await unwrapWithRecovery(stale.wrapRk, kimRecovery.kek, true);
+  const re = await taken.call('vault-rewrap', { rkAuth: kimRecovery.auth, ...(await wrapWithPassword(opened, 'owner-chose-this-9', ROUNDS)) });
+  assert.equal(re.status, 200, JSON.stringify(re.json));
+  assert.equal(re.json.vaultKeys.stale, false);
+  const now = await taken.call('vault', { state: 'migrating-off', password: 'owner-chose-this-9' });
+  assert.equal(now.status, 200, JSON.stringify(now.json));
+});
+
 // ---- Switching encryption while another page saves ---------------------------------
 
 const sam = new Client();

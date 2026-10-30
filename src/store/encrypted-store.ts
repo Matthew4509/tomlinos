@@ -44,6 +44,9 @@ export class EncryptedStore implements Store {
     if (isSealed(record.data)) {
       // Sealed, and this page has no key: encryption may have been turned on elsewhere. Catch up once before refusing.
       if (!this.fileKey && this.recheck) await this.recheck();
+      // Encryption is off (and the server, asked just now, agrees): a plain file that happens to start with the seal
+      // marker is just that, a plain file.
+      if (this.state === 'off') return record;
       try {
         return { version: record.version, data: await unseal(this.needKey(), key, record.data) };
       } catch (error) {
@@ -103,7 +106,7 @@ export class EncryptedStore implements Store {
     for (const key of keys) {
       if (signal?.aborted) throw new StoreError('Stopped. Your files are safe: some are encrypted and some not yet, and both open. Carry on from My account.');
       const r = await this.inner.get(key);
-      if (!r || isSealed(r.data) === want) {
+      if (!r || (await this.converted(key, r.data, want))) {
         done++;
         continue;
       }
@@ -115,10 +118,26 @@ export class EncryptedStore implements Store {
     progress(keys.length, keys.length);
   }
 
+  /**
+   * Is this record already the kind wanted? While turning on, a record that starts with the seal marker but does not
+   * open with the file key is a plain file that happens to start so (nothing else has sealed anything yet): it still
+   * needs sealing, or it would be "encrypted" without ever opening again.
+   */
+  private async converted(key: string, data: Uint8Array, want: boolean): Promise<boolean> {
+    if (isSealed(data) !== want) return false;
+    if (!want) return true;
+    try {
+      await unseal(this.needKey(), key, data);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   private async one(key: string, want: boolean, convert: (key: string, data: Uint8Array) => Promise<Uint8Array>): Promise<void> {
     for (let attempt = 0; attempt < 5; attempt++) {
       const r = await this.inner.get(key);
-      if (!r || isSealed(r.data) === want) return;
+      if (!r || (await this.converted(key, r.data, want))) return;
       try {
         await this.inner.commit([{ op: 'put', key, expect: r.version, data: await convert(key, r.data) }], want);
         return;

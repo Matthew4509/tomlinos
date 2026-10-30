@@ -45,6 +45,9 @@ if ($method !== 'POST' || !in_array($op, ['download', 'delete'], true)) {
 }
 $body = api_body();
 require_admin($user);
+// Putting code on this server or taking an app away from everyone reaches beyond the owner's own account: the owner's
+// own password (and code) first, as adding a person does, so someone at the owner's unlocked, unattended desktop cannot.
+confirm_identity($root, $user, $body);
 $id = (string) ($body['id'] ?? '');
 if (!appstore_valid_id($id)) {
     api_fail(400, 'That is not an app\'s name.');

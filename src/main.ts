@@ -123,7 +123,11 @@ async function boot(root: HTMLElement): Promise<void> {
       firstRunNote = `Your files could not be set up just now (${error instanceof Error ? error.message : 'unknown error'}), so they are not encrypted yet. Open My account > Your files to encrypt them, and Sign-in options for a recovery key.`;
     }
   }
+  // Opened with the recovery key after a reset by the owner: anything started under the password that was set for
+  // this person (decrypting their files, say) is theirs to confirm first, not to carry on quietly.
+  let reopened = false;
   if (!(await files.openQuietly(status.password))) {
+    const wasStale = !!files.keys?.stale;
     const how = await openFilesScreen(root, files, user, status.password);
     if (how === 'signout') {
       await api.logout().catch(() => undefined);
@@ -131,6 +135,7 @@ async function boot(root: HTMLElement): Promise<void> {
       location.reload();
       return;
     }
+    reopened = how === 'open' && wasStale && !files.keys?.stale;
   }
   delete status.password;
 
@@ -197,6 +202,20 @@ async function boot(root: HTMLElement): Promise<void> {
   // Encryption being turned on or off was interrupted (or has just been chosen at set-up): carry on in the background.
   if (files.moving) {
     const s = shell;
+    if (reopened && files.keys?.state === 'migrating-off') {
+      // Decrypting was started while the password was the one the owner set: perhaps by this person, perhaps not.
+      const carryOn = await s.dialogs.confirm({
+        title: 'Carry on decrypting your files?',
+        text: 'Turning encryption off was started after your password was reset, so it may not have been you. Carry on, and your files are stored readable on the server; keep them encrypted, and you can decide later in My account > Encryption.',
+        ok: 'Carry on decrypting',
+        cancel: 'Keep them encrypted for now',
+        danger: true,
+      });
+      if (!carryOn) {
+        s.toast('Decrypting is paused. My account > Encryption lets you keep your files encrypted, or finish.');
+        return;
+      }
+    }
     s.toast(files.keys?.state === 'migrating-on' ? 'Encrypting your files in the background. You can keep working.' : 'Decrypting your files in the background.');
     files.move().then(
       () => s.toast(files.encrypted ? 'All your files are encrypted.' : 'Your files are no longer encrypted.'),

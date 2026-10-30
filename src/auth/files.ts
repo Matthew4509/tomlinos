@@ -120,6 +120,9 @@ export class FilesVault {
 
   /** Turns encryption on: a new file key and a new recovery key (returned, to show once). finish() then converts the files. */
   async turnOn(password: string, code: string): Promise<string> {
+    // Only from "off". A page still showing "off" while another tab or device turned encryption on (or is turning it off)
+    // must not make a second file key: the server keeps the first, and files sealed with the second would never open.
+    if (this.keys) throw new Error('Your files are already encrypted, or being encrypted or decrypted, from another window or device. Reload My account to see where things stand.');
     const recovery = newRecoveryKey();
     const parts = await recoveryParts(recovery);
     const fileKey = await newFileKey();
@@ -144,6 +147,15 @@ export class FilesVault {
   async turnOff(password: string, code: string): Promise<void> {
     if (!this.open) throw new Error('Open your files first (sign in again with your password).');
     const r = await this.api.vault('migrating-off', { password, code });
+    this.setUser(r.user);
+    this.apply(r.vaultKeys);
+  }
+
+  /** Part-way through turning encryption off, the person decides to keep it: back to encrypting, with the same key. */
+  async keepEncrypted(password: string, code: string): Promise<void> {
+    if (this.keys?.state !== 'migrating-off') return;
+    if (!this.open) throw new Error('Open your files first (sign in again with your password).');
+    const r = await this.api.vault('migrating-on', { password, code });
     this.setUser(r.user);
     this.apply(r.vaultKeys);
   }

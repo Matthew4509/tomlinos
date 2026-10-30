@@ -482,8 +482,12 @@ export function openFilesScreen(host: HTMLElement, vault: FilesVault, user: Publ
       resolve(how);
     };
     const stale = !!vault.keys?.stale;
-    const draw = (lost: boolean) => {
-      const problem = h('p', { class: 'gate-problem', role: 'alert' });
+    // The recovery key's box is shown after a reset by the owner (the server says the wrap is stale), and also as soon
+    // as the password fails to open the files: a reset the server does not know of (an older copy of the account put
+    // back from a backup, say) looks the same to the person, and they must not be stuck without the way out.
+    let withKey = stale;
+    const draw = (lost: boolean, said = '') => {
+      const problem = h('p', { class: 'gate-problem', role: 'alert' }, said);
       const form = h('form', { class: 'gate-form', novalidate: true });
       const signOut = h('button', { type: 'button', class: 'btn' }, 'Sign out');
       on(signOut, 'click', () => finish('signout'), signal);
@@ -492,7 +496,7 @@ export function openFilesScreen(host: HTMLElement, vault: FilesVault, user: Publ
         // The password you sign in with now (not the lost one): so nobody at an unattended screen can do this.
         const pass = passwordField({ label: 'Your password (the one you signed in with)', autocomplete: 'current-password', signal });
         if (password) pass.input.value = password;
-        const code = h('input', { type: 'text', class: 'field gate-input', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: 6 });
+        const code = h('input', { type: 'text', class: 'field gate-input', autocomplete: 'one-time-code', autocapitalize: 'off', spellcheck: 'false', maxlength: 14 });
         const go = h('button', { type: 'submit', class: 'btn danger gate-go' }, 'Start again with empty files');
         const back = h('button', { type: 'button', class: 'btn' }, 'Back');
         on(back, 'click', () => draw(false), signal);
@@ -501,7 +505,7 @@ export function openFilesScreen(host: HTMLElement, vault: FilesVault, user: Publ
           h('p', {}, 'Starting again gives you empty files and turns encryption off. Your locked files are NOT deleted: they are set aside on the server, so if the recovery key turns up, the owner can bring them back.'),
           h('label', { class: 'gate-row' }, h('span', { class: 'gate-label' }, 'Type "start again" to confirm'), confirm),
           pass.row,
-          ...(user.totp ? [h('label', { class: 'gate-row' }, h('span', { class: 'gate-label' }, 'Two-step code'), code)] : []),
+          ...(user.totp ? [h('label', { class: 'gate-row' }, h('span', { class: 'gate-label' }, 'Two-step code (or a recovery code)'), code)] : []),
           problem, h('div', { class: 'gate-buttons' }, back, go));
         on(form, 'submit', (event: SubmitEvent) => {
           event.preventDefault();
@@ -520,17 +524,24 @@ export function openFilesScreen(host: HTMLElement, vault: FilesVault, user: Publ
         const pass = passwordField({ label: stale ? 'Your password (the new one)' : 'Your password', autocomplete: 'current-password', signal });
         if (password) pass.input.value = password;
         const go = h('button', { type: 'submit', class: 'btn primary gate-go' }, 'Open my files');
-        const lostBtn = h('button', { type: 'button', class: 'gate-link' }, stale ? 'I have lost my recovery key' : 'I cannot open them');
+        const lostBtn = h('button', { type: 'button', class: 'gate-link' }, withKey ? 'I have lost my recovery key' : 'I cannot open them');
         on(lostBtn, 'click', () => draw(true), signal);
-        if (stale) form.append(h('label', { class: 'gate-row' }, h('span', { class: 'gate-label' }, 'Recovery key'), key));
+        if (withKey) form.append(h('label', { class: 'gate-row' }, h('span', { class: 'gate-label' }, stale ? 'Recovery key' : 'Recovery key (if your password was reset)'), key));
         form.append(pass.row, problem, h('div', { class: 'gate-buttons' }, lostBtn, signOut, go));
         on(form, 'submit', (event: SubmitEvent) => {
           event.preventDefault();
           go.disabled = true;
-          const opening = stale ? vault.openWithRecovery(key.value, pass.input.value) : vault.openWithPassword(pass.input.value);
+          const opening = withKey && key.value.trim() !== '' ? vault.openWithRecovery(key.value, pass.input.value) : vault.openWithPassword(pass.input.value);
           opening.then(() => finish('open'), error => {
             go.disabled = false;
-            problem.textContent = error instanceof Error ? error.message : String(error);
+            const words = error instanceof Error ? error.message : String(error);
+            if (!withKey) {
+              // The password did not open them: offer the recovery key as well from now on.
+              withKey = true;
+              draw(false, words);
+              return;
+            }
+            problem.textContent = words;
           });
         }, signal);
       }
@@ -539,7 +550,9 @@ export function openFilesScreen(host: HTMLElement, vault: FilesVault, user: Publ
         h('h1', { id: 'gate-title' }, lost ? 'Start again?' : 'Open your files'),
         ...(lost ? [] : [h('p', { class: 'gate-intro' }, stale
           ? `${user.display}, your files are encrypted and your password was reset, so the new password cannot open them yet. Type your recovery key once; after that, your new password opens them everywhere.`
-          : `${user.display}, your files are encrypted. Type your password to open them in this browser.`)]),
+          : withKey
+            ? `${user.display}, that password did not open your files. If your password was reset, type your recovery key as well; after that, the password you have now opens them everywhere.`
+            : `${user.display}, your files are encrypted. Type your password to open them in this browser.`)]),
         form,
       );
       form.querySelector<HTMLInputElement>('input')?.focus();

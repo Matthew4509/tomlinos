@@ -27,7 +27,12 @@ const AI_MAX_OUTPUT = 8000;
 const AI_MAX_INPUT_CHARS = 400000;
 const AI_DEFAULT_CAP_CENTS = 500;
 const AI_MAX_CAP_CENTS = 100000;
-/** A set-aside older than this belongs to a request that died without booking; it is released. */
+/**
+ * A set-aside older than this belongs to a request that died without booking (the host killed the script mid-answer,
+ * after the AI had charged for it). It is NOT released: it stays counted against the cap as "unbooked", at the most the
+ * request could have cost, since nobody knows what it did cost. Released, a host that kills long answers would let the
+ * cap be passed again and again.
+ */
 const AI_RESERVE_TTL = 900;
 
 /** The folder for the people's AI settings and cost logs. */
@@ -150,26 +155,60 @@ function ai_month(?int $now = null): string
 
 /**
  * One service's cost book for a month (`$book`: "cost" for Claude, "or-cost" for OpenRouter; each has its own cap).
- * @return array{spent: int, reserved: array<string, array{m: int, at: int}>, log: list<array>}
+ * 'unbooked' is the sum of the set-asides whose requests died without booking: counted against the cap with 'spent'.
+ * @return array{spent: int, unbooked: int, reserved: array<string, array{m: int, at: int, unbooked?: bool}>, log: list<array>}
  */
 function ai_ledger_read(string $dataDir, string $userId, string $month, string $book = 'cost'): array
 {
     $l = auth_read_json(ai_user_file($dataDir, $userId, $book . '-' . $month), []);
+    $reserved = is_array($l['reserved'] ?? null) ? array_filter($l['reserved'], 'is_array') : [];
+    $unbooked = array_sum(array_map(static fn (array $r): int => !empty($r['unbooked']) ? (int) ($r['m'] ?? 0) : 0, $reserved));
 
-    return ['spent' => (int) ($l['spent'] ?? 0), 'reserved' => is_array($l['reserved'] ?? null) ? $l['reserved'] : [], 'log' => is_array($l['log'] ?? null) ? $l['log'] : []];
+    return ['spent' => (int) ($l['spent'] ?? 0), 'unbooked' => $unbooked, 'reserved' => $reserved, 'log' => is_array($l['log'] ?? null) ? $l['log'] : []];
+}
+
+/** What a month has cost so far, for the person to see: what was booked, and what died unbooked (counted at the most it could have cost). */
+function ai_ledger_total(array $ledger): int
+{
+    return (int) $ledger['spent'] + (int) $ledger['unbooked'];
+}
+
+/** The month before the one $now falls in ("2026-10" for a moment in November 2026). */
+function ai_month_before(int $now): string
+{
+    return gmdate('Y-m', gmmktime(0, 0, 0, (int) gmdate('n', $now), 0, (int) gmdate('Y', $now)));
 }
 
 /** Sets aside the most this request could cost. Returns the set-aside id, or null when that would pass the cap. */
 function ai_reserve(string $dataDir, string $userId, int $capCents, int $worstMicro, ?int $now = null, string $book = 'cost'): ?string
 {
     $now ??= time();
+    // A cap of $0 "stops it altogether", even for a model priced at $0 today (its price could change mid-month).
+    if ($capCents <= 0) {
+        return null;
+    }
 
     return auth_locked($dataDir, static function () use ($dataDir, $userId, $capCents, $worstMicro, $now, $book): ?string {
         $month = ai_month($now);
         $l = ai_ledger_read($dataDir, $userId, $month, $book);
-        $l['reserved'] = array_filter($l['reserved'], static fn ($r) => is_array($r) && $now - (int) ($r['at'] ?? 0) < AI_RESERVE_TTL);
-        $held = array_sum(array_map(static fn ($r) => (int) $r['m'], $l['reserved']));
+        // A set-aside past its time was never booked: its request died. It stays counted (see AI_RESERVE_TTL).
+        foreach ($l['reserved'] as $id => $r) {
+            if ($now - (int) ($r['at'] ?? 0) >= AI_RESERVE_TTL) {
+                $l['reserved'][$id]['unbooked'] = true;
+            }
+        }
+        $held = array_sum(array_map(static fn (array $r): int => (int) ($r['m'] ?? 0), $l['reserved']));
+        // A request set aside in the last minutes of last month is booked into THIS month when it ends: counted here
+        // too, or two requests straddling midnight on the last day could both land in the new month over its cap.
+        foreach (ai_ledger_read($dataDir, $userId, ai_month_before($now), $book)['reserved'] as $r) {
+            if (empty($r['unbooked']) && $now - (int) ($r['at'] ?? 0) < AI_RESERVE_TTL) {
+                $held += (int) ($r['m'] ?? 0);
+            }
+        }
+        unset($l['unbooked']); // worked out on reading, never stored
         if ($l['spent'] + $held + $worstMicro > $capCents * 10000) {
+            auth_write_json(ai_user_file($dataDir, $userId, $book . '-' . $month), $l);
+
             return null;
         }
         $id = bin2hex(random_bytes(8));
@@ -180,14 +219,28 @@ function ai_reserve(string $dataDir, string $userId, int $capCents, int $worstMi
     });
 }
 
-/** Replaces a set-aside with what the request did cost, and logs it (no words, only numbers). */
+/**
+ * Replaces a set-aside with what the request did cost, and logs it (no words, only numbers). The cost is booked into
+ * the month the request ended in; the set-aside is taken out of whichever month it was made in (the month before, for a
+ * request that ran over midnight on the last day).
+ */
 function ai_book(string $dataDir, string $userId, string $reserveId, array $entry, ?int $now = null, string $book = 'cost'): void
 {
     $now ??= time();
     auth_locked($dataDir, static function () use ($dataDir, $userId, $reserveId, $entry, $now, $book): void {
         $month = ai_month($now);
         $l = ai_ledger_read($dataDir, $userId, $month, $book);
-        unset($l['reserved'][$reserveId]);
+        if (isset($l['reserved'][$reserveId])) {
+            unset($l['reserved'][$reserveId]);
+        } else {
+            $before = ai_month_before($now);
+            $earlier = ai_ledger_read($dataDir, $userId, $before, $book);
+            if (isset($earlier['reserved'][$reserveId])) {
+                unset($earlier['reserved'][$reserveId], $earlier['unbooked']);
+                auth_write_json(ai_user_file($dataDir, $userId, $book . '-' . $before), $earlier);
+            }
+        }
+        unset($l['unbooked']); // worked out on reading, never stored
         $l['spent'] += (int) $entry['cost'];
         $l['log'][] = ['at' => $now] + $entry;
         if (count($l['log']) > 3000) {

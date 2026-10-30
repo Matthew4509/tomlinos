@@ -186,6 +186,14 @@ function appstore_allowed_name(string $name): bool
     if (!preg_match('#^[A-Za-z0-9_-][A-Za-z0-9._-]*(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$#', $name) || str_contains($name, '..')) {
         return false;
     }
+    // Apache on some hosts (cPanel's EA4) runs "game.php8.js" as PHP: its handler matches ".php8" anywhere in the name,
+    // not only at the end. So no part of a file's name after the first dot may be a script type (the zips are pinned by
+    // their fingerprint, so this is a second line of defence).
+    foreach (array_slice(explode('.', basename($name)), 1) as $part) {
+        if (preg_match('/^(php\d*|phtml|phar|cgi|pl|py|sh|shtml|htaccess|htpasswd)$/i', $part)) {
+            return false;
+        }
+    }
 
     return in_array(strtolower(pathinfo($name, PATHINFO_EXTENSION)), APPSTORE_TYPES, true);
 }

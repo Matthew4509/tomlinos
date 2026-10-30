@@ -136,6 +136,25 @@ test('two installs, or an install and a Go back, at the same moment: one runs, t
   }
 });
 
+test('a replayed older release note cannot freeze "Up to date": a note dated before one already seen is refused', { skip: noPhp }, async () => {
+  // Whoever sits between this server and GitHub (or a stale cache) could keep answering with an OLD signed note, so
+  // the owner is told "Up to date" while a newer release waits. The server remembers the newest note it has believed,
+  // and a note dated before it is a replay.
+  const s = site();
+  const r = await php(['updater.php'], `
+$kp = sodium_crypto_sign_keypair(); $pk = base64_encode(sodium_crypto_sign_publickey($kp));
+$note = fn (string $v, string $date) => ['release' => base64_encode(json_encode(['version' => $v, 'date' => $date, 'notes' => '', 'zip' => 'https://x.test/r.zip', 'sha256' => str_repeat('a', 64), 'bytes' => 1])),
+  'sig' => base64_encode(sodium_crypto_sign_detached(json_encode(['version' => $v, 'date' => $date, 'notes' => '', 'zip' => 'https://x.test/r.zip', 'sha256' => str_repeat('a', 64), 'bytes' => 1]), sodium_crypto_sign_secretkey($kp)))];
+$try = function (array $n) use ($pk) { try { return update_read_release($n, $pk, getenv('PRIV'))['version']; } catch (RuntimeException $e) { return 'ERR ' . $e->getMessage(); } };
+echo json_encode(['first' => $try($note('2.1.0', '2026-11-02')), 'again' => $try($note('2.1.0', '2026-11-02')), 'replay' => $try($note('2.0.0', '2026-10-01')), 'newer' => $try($note('2.2.0', '2026-12-01'))]);`, { PRIV: s.priv }).done;
+  assert.equal(r.code, 0, r.out);
+  const out = JSON.parse(r.out);
+  assert.equal(out.first, '2.1.0', 'a signed note is believed');
+  assert.equal(out.again, '2.1.0', 'the same note again is fine (that is "Up to date")');
+  assert.match(out.replay, /^ERR /, `a note dated before the one already seen must be refused, got ${out.replay}`);
+  assert.equal(out.newer, '2.2.0', 'a newer note is believed');
+});
+
 // ---- The app store --------------------------------------------------------------------------------------------------
 
 function appZip(dir: string, id: string, n = 200): Record<string, unknown> {

@@ -33,6 +33,8 @@ const CHAT_ONLINE = 30;         // seconds since the last look that still counts
 const CHAT_MAX_CT = 16384;      // base64 characters of one scrambled message (about 4,000 words)
 const CHAT_VANISH_CHOICES = [0, 3, 7, 30]; // days messages are kept (Settings, the owner's choice); 0 = until deleted
 const CHAT_GONE_KEPT = 1000;    // numbers of deleted messages remembered per conversation, so open screens drop them
+                                 // (one delete is always remembered whole, even over that)
+const CHAT_SWEEP = 60;          // seconds between sweeps of every conversation for messages past "vanish after"
 
 api_headers();
 api_guard();
@@ -83,10 +85,70 @@ function chat_b64(string $value, int $bytes = 0, int $max = 0): bool
     return $raw !== false && strlen($raw) === $bytes;
 }
 
-/** A P-256 public key as the browser exports it ("raw": 65 bytes, starting 0x04). */
+/**
+ * A P-256 public key as the browser exports it ("raw": 65 bytes, starting 0x04), and a real point on the curve. A key
+ * that is not (all zeros, say) is refused here: every browser handing out the General key would otherwise fail on it,
+ * and from then on deletes would stop applying and new people would never get the key.
+ */
 function chat_pub_ok(string $pub): bool
 {
-    return chat_b64($pub, 65) && base64_decode($pub, true)[0] === "\x04";
+    if (!chat_b64($pub, 65)) {
+        return false;
+    }
+    $raw = base64_decode($pub, true);
+
+    return $raw[0] === "\x04" && chat_on_curve(substr($raw, 1, 32), substr($raw, 33, 32));
+}
+
+/**
+ * Is (x, y) on P-256: y² = x³ − 3x + b (mod p)? Worked out with whichever big-number support this PHP has (gmp, else
+ * bcmath, else openssl's own check); with none of them the shape check above is all the server can do.
+ */
+function chat_on_curve(string $x, string $y): bool
+{
+    $p = '115792089210356248762697446949407573530086143415290314195533631308867097853951';
+    $b = '41058363725152142129326129780047268409114441015993725554835256314039467401291';
+    if (function_exists('gmp_init')) {
+        $gx = gmp_import($x);
+        $gy = gmp_import($y);
+        $gp = gmp_init($p);
+        if (gmp_cmp($gx, $gp) >= 0 || gmp_cmp($gy, $gp) >= 0) {
+            return false;
+        }
+        $right = gmp_mod(gmp_add(gmp_sub(gmp_powm($gx, 3, $gp), gmp_mul($gx, 3)), gmp_init($b)), $gp);
+
+        return gmp_cmp(gmp_powm($gy, 2, $gp), $right) === 0;
+    }
+    if (function_exists('bcpowmod')) {
+        $dec = static function (string $bytes): string {
+            $n = '0';
+            foreach (str_split($bytes) as $c) {
+                $n = bcadd(bcmul($n, '256', 0), (string) ord($c), 0);
+            }
+
+            return $n;
+        };
+        $dx = $dec($x);
+        $dy = $dec($y);
+        if (bccomp($dx, $p, 0) >= 0 || bccomp($dy, $p, 0) >= 0) {
+            return false;
+        }
+        $right = bcmod(bcadd(bcsub(bcpowmod($dx, '3', $p, 0), bcmul($dx, '3', 0), 0), $b, 0), $p, 0);
+        // bcmod of a negative number keeps the sign: brought back into 0..p-1.
+        if (bccomp($right, '0', 0) < 0) {
+            $right = bcadd($right, $p, 0);
+        }
+
+        return bccomp(bcpowmod($dy, '2', $p, 0), $right, 0) === 0;
+    }
+    if (function_exists('openssl_pkey_get_public')) {
+        // OpenSSL refuses to load a public key whose point is not on its curve.
+        $der = hex2bin('3059301306072a8648ce3d020106082a8648ce3d030107034200') . "\x04" . $x . $y;
+
+        return openssl_pkey_get_public("-----BEGIN PUBLIC KEY-----\n" . chunk_split(base64_encode($der), 64, "\n") . "-----END PUBLIC KEY-----\n") !== false;
+    }
+
+    return true;
 }
 
 /** The conversations one person belongs to: General, and one Direct conversation with each other person. */
@@ -153,11 +215,42 @@ function chat_write_conv(string $dir, string $conv, array $c): void
     auth_write_json("$dir/conv-$conv.json", $c);
 }
 
+/**
+ * Drops the messages older than the owner's "vanish after" setting from EVERY conversation (run holding the lock), not
+ * only the ones someone is looking at: a Direct conversation between two people who never open Chat again would
+ * otherwise keep its messages on the server for ever. Every visit to Chat calls this, so it runs at most once a minute
+ * (the marker file's time) to keep from reading every conversation on every poll.
+ */
+function chat_sweep_vanished(string $dir, bool $always = false): void
+{
+    if (chat_vanish_days($dir) === 0) {
+        return;
+    }
+    $marker = "$dir/.swept";
+    clearstatcache(true, $marker);
+    if (!$always && is_file($marker) && time() - (int) filemtime($marker) < CHAT_SWEEP) {
+        return;
+    }
+    foreach (glob("$dir/conv-*.json") ?: [] as $file) {
+        $conv = substr(basename($file, '.json'), 5);
+        $c = chat_read_conv($dir, $conv);
+        if ($c['pruned']) {
+            chat_write_conv($dir, $conv, $c);
+        }
+    }
+    // A sweep forced by a settings change leaves the marker alone: the polls keep their own once-a-minute rhythm.
+    if (!$always) {
+        @touch($marker);
+    }
+}
+
 try {
     $users = auth_users($root);
+    chat_dir($root); // made on the first visit, whatever the request (a refused one included)
 
     if ($method === 'GET' && $op === 'state') {
         $out = chat_locked($root, static function (string $dir) use ($uid, $users): array {
+            chat_sweep_vanished($dir);
             $now = time();
             $presence = auth_read_json("$dir/presence.json", []);
             if ($now - (int) ($presence[$uid] ?? 0) >= 10) {
@@ -257,8 +350,8 @@ try {
 
     if ($op === 'wrap') {
         $for = body_str($body, 'user');
-        $wrap = ['from' => $uid, 'fromPub' => body_str($body, 'fromPub'), 'iv' => body_str($body, 'iv'), 'ct' => body_str($body, 'ct')];
-        if (!isset($users[$for]) || !chat_pub_ok($wrap['fromPub']) || !chat_b64($wrap['iv'], 12) || !chat_b64($wrap['ct'], 48)) {
+        $wrap = ['from' => $uid, 'fromPub' => body_str($body, 'fromPub'), 'toPub' => body_str($body, 'toPub'), 'iv' => body_str($body, 'iv'), 'ct' => body_str($body, 'ct')];
+        if (!isset($users[$for]) || !chat_pub_ok($wrap['fromPub']) || !chat_pub_ok($wrap['toPub']) || !chat_b64($wrap['iv'], 12) || !chat_b64($wrap['ct'], 48)) {
             api_fail(400, 'That is not a General key for someone here.');
         }
         $epoch = (int) ($body['epoch'] ?? 0);
@@ -285,6 +378,11 @@ try {
                 if (!isset($keys[$for]) || isset($general['wraps'][$for])) {
                     api_fail(409, 'That person does not need the General key from you.', ['stale' => true]);
                 }
+            }
+            // The wrap names the key it was made for. Made for a key that person has since replaced, it can never be
+            // opened, yet it would mark them as holding the General key, and nobody would wrap it for them again.
+            if (($keys[$for]['pub'] ?? null) !== $wrap['toPub']) {
+                api_fail(409, 'That person\'s chat key changed a moment ago. Chat will hand the General key to the new one.', ['stale' => true]);
             }
             $general['wraps'][$for] = $wrap;
             auth_write_json("$dir/general.json", $general);
@@ -382,7 +480,9 @@ try {
                 return 0;
             }
             $c['messages'] = array_values(array_filter($c['messages'], static fn (array $m): bool => !in_array((int) $m['id'], $drop, true)));
-            $c['gone'] = array_slice(array_merge($c['gone'], $drop), -CHAT_GONE_KEPT);
+            // One delete is always remembered whole, however many messages it took (Clear General over a thousand): an
+            // open screen told of only the last thousand would keep showing the rest until it reloaded.
+            $c['gone'] = array_slice(array_merge($c['gone'], $drop), -max(CHAT_GONE_KEPT, count($drop)));
             $c['deletes'] += count($drop);
             chat_write_conv($dir, $conv, $c);
 
@@ -400,13 +500,7 @@ try {
         chat_locked($root, static function (string $dir) use ($days): void {
             auth_write_json("$dir/settings.json", ['vanishDays' => $days]);
             // Older messages go from every conversation now, not only when each is next opened.
-            foreach (glob("$dir/conv-*.json") ?: [] as $file) {
-                $conv = substr(basename($file, '.json'), 5);
-                $c = chat_read_conv($dir, $conv);
-                if ($c['pruned']) {
-                    chat_write_conv($dir, $conv, $c);
-                }
-            }
+            chat_sweep_vanished($dir, true);
         });
         api_json(['ok' => true, 'vanishDays' => $days]);
     }
