@@ -66,6 +66,18 @@ export function bindDesktopKeys(shell: Shell, signal: AbortSignal, notices: () =
     if (go && target) shell.windows.focus(target);
   };
 
+  // Ctrl+Alt+arrow moves the front window. It is heard on the way down, before any app, and goes no further: the app
+  // inside would otherwise act on it too (PDF turned a page on its Alt+arrow, Spreadsheet opened a cell's list).
+  const snaps: Record<string, 'left' | 'right' | 'max' | 'restore'> = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'max', ArrowDown: 'restore' };
+  on(document, 'keydown', (event: KeyboardEvent) => {
+    if (shell.lock.isShowing || !event.ctrlKey || !event.altKey || event.shiftKey || event.metaKey || !snaps[event.key]) return;
+    const front = shell.windows.front();
+    if (!front) return;
+    event.preventDefault();
+    event.stopPropagation();
+    shell.windows.snap(front, snaps[event.key]);
+  }, signal, { capture: true });
+
   on(document, 'keydown', (event: KeyboardEvent) => {
     if (shell.lock.isShowing) return;
     if (event.altKey && !event.ctrlKey && event.code === 'Backquote') {
@@ -101,14 +113,8 @@ export function bindDesktopKeys(shell: Shell, signal: AbortSignal, notices: () =
     if (!(event.ctrlKey && event.altKey) || event.shiftKey || event.metaKey) return;
     // AltGr arrives as Ctrl+Alt on Windows: on many keyboards it types €, @, { and more. Never take those.
     if (event.getModifierState('AltGraph') && event.key.length === 1) return;
-    const front = shell.windows.front();
-    const snaps: Record<string, 'left' | 'right' | 'max' | 'restore'> = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'max', ArrowDown: 'restore' };
     const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
-    if (snaps[key]) {
-      if (!front) return;
-      event.preventDefault();
-      shell.windows.snap(front, snaps[key]);
-    } else if (key === 'd') {
+    if (key === 'd') {
       event.preventDefault();
       shell.windows.showDesktop();
     } else if (key === 'e') {

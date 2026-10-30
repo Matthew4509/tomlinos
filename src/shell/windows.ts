@@ -206,7 +206,11 @@ export class WindowManager {
       x = win.fixed ? (area.width - w) / 2 : 56 + same * 28;
       y = win.fixed ? (area.height - tall) / 3 : 36 + same * 28;
     }
-    win.rect = { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(tall) };
+    // A window opens wholly on screen, its Close button in reach: a big one, or one remembered from a wider screen, is
+    // pulled back. Only opening does this: a window can still be dragged partly past an edge (applyRect).
+    x = clamp(x, 0, Math.max(0, area.width - w));
+    y = clamp(y, 0, Math.max(0, area.height - tall));
+    win.rect ={ x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(tall) };
     this.applyRect(win);
   }
 

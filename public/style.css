@@ -248,7 +248,7 @@ body.is-dragging .win-body { pointer-events: none; }
 .edge-sw { bottom: -3px; left: -3px; width: 12px; height: 12px; cursor: nesw-resize; }
 
 /* ---- App furniture ---------------------------------------------------------------------------------------------- */
-.toolbar { display: flex; align-items: center; gap: 4px; padding: 4px; flex: none; background: linear-gradient(to bottom, var(--face-hi), var(--face)); border-bottom: 1px solid var(--line); }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 4px; flex: none; background: linear-gradient(to bottom, var(--face-hi), var(--face)); border-bottom: 1px solid var(--line); }
 /* Fields and buttons are light, so they carry the desktop's dark ink themselves: inheriting it let a dark app's pale
    text vanish in them (Planetziods' set-up and New game, Mail's set-up in the Panel). */
 .tool { min-width: 30px; height: 28px; border: 1px solid var(--line); border-radius: 4px; background: linear-gradient(to bottom, #fff, #e4e1d0); color: var(--ink); cursor: pointer; font-size: 15px; }
@@ -321,7 +321,7 @@ body.is-dragging .win-body { pointer-events: none; }
 .backdrop { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 12px; background: rgba(10, 20, 40, .35); }
 .dialog { width: min(420px, 100%); max-height: 100%; overflow: auto; background: var(--face); border: 3px solid #0b4fd6; border-radius: 8px; box-shadow: 4px 6px 22px rgba(0, 0, 0, .5); outline: none; }
 /* A dialog that holds a wide form (the spreadsheet's chart, print, page setup, validation and rule screens) is as wide as it. */
-.dialog:has(.chart-dialog, .pp-dialog, .ps-dialog, .dv-dialog, .cf-manage-wrap, .xlsx-report, .fn-dialog, .name-manager, .wide-dialog) { width: auto; max-width: 100%; }
+.dialog:has(.chart-dialog, .pp-dialog, .ps-dialog, .dv-dialog, .cf-manage-wrap, .xlsx-report, .fn-dialog, .name-manager, .wide-dialog, .pick) { width: auto; max-width: 100%; }
 .dialog-title { padding: 6px 10px; color: #fff; font-weight: 700; text-shadow: 1px 1px 1px rgba(0, 0, 0, .5); background: linear-gradient(to bottom, #6db2ff, #0a5be0 50%, #0a45b0); }
 .dialog-body { padding: 12px; }
 .dialog-text { margin: 0; white-space: pre-line; overflow-wrap: anywhere; }
@@ -422,11 +422,15 @@ body.is-dragging .win-body { pointer-events: none; }
 /* Spreadsheet. Layout and feel follow a familiar spreadsheet: tabs, a Home toolbar in labelled groups, a formula bar,
    the grid, sheet tabs and a status bar. Colours are our own (a green accent, light greys). */
 .sheet { display: flex; flex-direction: column; height: 100%; background: #f3f3f3; }
-.ribbon-tabs { display: flex; align-items: flex-end; gap: 2px; padding: 4px 6px 0; background: #e9e9e9; border-bottom: 1px solid #c8c8c8; }
+/* The row of tabs scrolls by itself in a narrow window (a phone), as the ribbon below it does, and never pushes the window
+   wider. Its bottom line is a shadow, not a border: a scrolling row cuts off whatever hangs over its edge, so the chosen tab
+   could no longer sit over a border to join the ribbon. */
+.ribbon-tabs { display: flex; align-items: flex-end; gap: 2px; padding: 4px 6px 0; background: #e9e9e9; box-shadow: inset 0 -1px 0 #c8c8c8; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+.ribbon-tabs > * { flex: none; white-space: nowrap; }
 .file-tab { border: 0; padding: 4px 16px; background: #1e7a45; color: #fff; font-weight: 600; cursor: pointer; border-radius: 3px 3px 0 0; }
 .file-tab:hover { background: #196a3c; }
-.home-tab { padding: 4px 14px; background: #f3f3f3; border: 1px solid #c8c8c8; border-bottom-color: #f3f3f3; margin-bottom: -1px; border-radius: 3px 3px 0 0; }
-.ribbon-tab { border: 1px solid transparent; border-bottom: 0; padding: 4px 14px; margin-bottom: -1px; background: none; color: #222; cursor: pointer; border-radius: 3px 3px 0 0; font-size: 13px; }
+.home-tab { padding: 4px 14px; background: #f3f3f3; border: 1px solid #c8c8c8; border-bottom-color: #f3f3f3; border-radius: 3px 3px 0 0; }
+.ribbon-tab { border: 1px solid transparent; border-bottom: 0; padding: 4px 14px; background: none; color: #222; cursor: pointer; border-radius: 3px 3px 0 0; font-size: 13px; }
 .ribbon-tab:hover { background: #dcdcdc; }
 .ribbon-tab[aria-selected="true"] { background: #f3f3f3; border-color: #c8c8c8; border-bottom: 1px solid #f3f3f3; color: #1e7a45; font-weight: 600; }
 /* One row of groups that scrolls sideways in a narrow window; each group's buttons wrap into rows at its own width. */
@@ -480,7 +484,7 @@ body.is-dragging .win-body { pointer-events: none; }
 .menubar-item { padding: 2px 8px; border: 1px solid transparent; border-radius: 3px; background: none; color: #222; font-size: 13px; cursor: default; }
 .menubar-item:hover, .menubar-item[aria-expanded="true"] { background: #e3efe7; border-color: #b7d3c1; }
 .menubar-item[hidden] { display: none; }
-.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 1px; padding: 1px 4px; border-top: 1px solid #e2e2e2; }
+.classic-bar .toolbar { gap: 1px; padding: 1px 4px; border-top: 1px solid #e2e2e2; }
 .toolbar .rb.tb { position: relative; min-width: 24px; height: 24px; padding: 0 3px; gap: 1px; }
 .toolbar .rb.tb .rb-swatch { left: 4px; right: auto; width: 14px; bottom: 2px; }
 .tb-icon { display: block; flex: none; }
@@ -1063,6 +1067,33 @@ textarea.field { resize: vertical; font: inherit; }
 :root[data-theme="dark"] .calc-cell { border-right-color: var(--line); }
 :root[data-theme="dark"] .calc-cell.blank { background: var(--face); }
 :root[data-theme="dark"] .calc-cell.sum { background: #2a3140; }
+/* The ribbon Write and Spreadsheet share, their status bars and sheet tabs. Their colours are written in for the light
+   themes: dark words on the dark bar (1.13 : 1), pale words in a white box (1.22 : 1), a "+" that could not be seen. */
+:root[data-theme="dark"] .sheet, :root[data-theme="dark"] .write { background: var(--face); }
+:root[data-theme="dark"] .ribbon-tabs { background: var(--paper); box-shadow: inset 0 -1px 0 var(--line); }
+:root[data-theme="dark"] .ribbon, :root[data-theme="dark"] .classic-bar { background: var(--face); border-color: var(--line); }
+:root[data-theme="dark"] .rgroup { border-color: var(--line); }
+:root[data-theme="dark"] .rgroup-name, :root[data-theme="dark"] .wp-tip { color: var(--ink-soft); }
+:root[data-theme="dark"] .ribbon-tab, :root[data-theme="dark"] .wp-help, :root[data-theme="dark"] .rb, :root[data-theme="dark"] .menubar-item, :root[data-theme="dark"] .sheet-add { color: var(--ink); }
+:root[data-theme="dark"] .ribbon-tab:hover { background: var(--face-hi); }
+:root[data-theme="dark"] .ribbon-tab[aria-selected="true"], :root[data-theme="dark"] .home-tab { background: var(--face); border-color: var(--line); border-bottom-color: var(--face); color: #7fd6a4; }
+:root[data-theme="dark"] .ribbon-tab.context-tab { color: #7fd6a4; }
+:root[data-theme="dark"] .write .ribbon-tab[aria-selected="true"], :root[data-theme="dark"] .write .ribbon-tab.context-tab { color: #9dbcf0; }
+:root[data-theme="dark"] .rb:hover:not(:disabled), :root[data-theme="dark"] .menubar-item:hover, :root[data-theme="dark"] .menubar-item[aria-expanded="true"] { background: #3a4150; border-color: #5a6275; }
+:root[data-theme="dark"] .rb[aria-pressed="true"] { background: #2f4a78; border-color: var(--accent); }
+:root[data-theme="dark"] .rb-select, :root[data-theme="dark"] .rb-size, :root[data-theme="dark"] .rb-name { background: #15181e; color: var(--ink); border-color: #5a6275; }
+/* Write's style tiles show a style as it looks on the paper, so they stay paper-coloured. */
+:root[data-theme="dark"] .wp-style-rb[aria-pressed="true"], :root[data-theme="dark"] .wp-style-rb:hover:not(:disabled) { background: #c7d9f1; border-color: var(--accent); }
+:root[data-theme="dark"] .formula-bar { background: var(--face); border-color: var(--line); }
+:root[data-theme="dark"] .name-box, :root[data-theme="dark"] .formula-input { background: #15181e; color: var(--ink); border-color: #5a6275; }
+:root[data-theme="dark"] .fx { color: var(--ink-soft); border-color: var(--line); }
+:root[data-theme="dark"] .tb-sep { background: var(--line); }
+:root[data-theme="dark"] .classic-bar .toolbar { border-top-color: var(--line); }
+:root[data-theme="dark"] .tabs-bar { background: var(--paper); border-color: var(--line); }
+:root[data-theme="dark"] .sheet-tab { background: var(--face-hi); border-color: var(--line); color: var(--ink); }
+:root[data-theme="dark"] .sheet-tab.active { background: var(--face); color: #7fd6a4; border-bottom-color: #7fd6a4; }
+/* The list in the Open and Save windows was white too, with the same pale words. */
+:root[data-theme="dark"] .pick-list { background: #15181e; }
 
 /* ---- Xfce (Greybird, the look Debian's Xfce desktop ships): flat light-grey title bars and panel, blue selection -- */
 .theme-swatch[data-theme-sample="xfce"] .swatch-chip { background: linear-gradient(#f2f2f1, #cfcfcd); box-shadow: inset 0 -4px 0 #398ee7; }

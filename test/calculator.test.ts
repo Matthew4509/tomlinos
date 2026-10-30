@@ -18,6 +18,15 @@ function press(keys: string): Calculator {
   return c;
 }
 
+test('the operator key is lit only while it waits for a number: ± settles it, as a digit does', () => {
+  assert.equal(press('5 +').lit, '+');
+  assert.equal(press('5 + ±').lit, null);
+  assert.equal(press('5 + 3').lit, null);
+  assert.equal(press('5 + ±').display, '-5', 'the sign key still works');
+  assert.equal(press('5 + 3 ×').lit, '×');
+  assert.equal(press('5 + 3 =').lit, null);
+});
+
 test('× and ÷ come before + and −', () => {
   assert.equal(press('2 + 3 × 4 =').display, '14');
   assert.equal(press('10 − 6 ÷ 2 + 1 =').display, '8');
