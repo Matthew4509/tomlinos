@@ -5,7 +5,7 @@
 // The file is a freedesktop Desktop Entry, so it reads sensibly anywhere, but TOMLIN OS only ever takes the app's id from
 // it (X-TomlinOS-App) and opens that app if it is installed. It never runs a command (Exec is written for other systems
 // to read and is ignored here), so a .desktop file that arrives in an email or a zip can do no more than open an app.
-import { joinPath, splitExtension } from '../fs/names.ts';
+import { cleanName, joinPath, splitExtension } from '../fs/names.ts';
 import type { IconName } from './icons.ts';
 import type { AppMeta, Shell } from './types.ts';
 
@@ -16,6 +16,9 @@ export const isAppShortcut = (name: string): boolean => splitExtension(name)[1].
 
 /** The name shown under the icon: the file's name without ".desktop" (as Windows hides ".lnk"). */
 export const shortcutLabel = (name: string): string => (isAppShortcut(name) ? splitExtension(name)[0] : name);
+
+/** The shortcut file's name for an app: its title, made usable as a file name (a store app's title may hold ":" or "?"). */
+export const shortcutFileName = (title: string): string => cleanName(`${title}${SHORTCUT_EXTENSION}`);
 
 export function shortcutText(app: Pick<AppMeta, 'id' | 'title'>): string {
   return ['[Desktop Entry]', 'Type=Application', `Name=${app.title}`, `X-TomlinOS-App=${app.id}`, ''].join('\r\n');
@@ -39,7 +42,7 @@ export function shortcutApp(text: string): string | null {
  */
 export function shortcutIcon(name: string, apps: Array<Pick<AppMeta, 'title' | 'icon'>>): IconName {
   const title = shortcutLabel(name).replace(/ \(\d+\)$/, '').toLowerCase();
-  return apps.find(a => a.title.toLowerCase() === title)?.icon ?? 'app';
+  return apps.find(a => shortcutLabel(shortcutFileName(a.title)).toLowerCase() === title)?.icon ?? 'app';
 }
 
 /** Apps the desktop always shows an icon for (shell.ts), whatever is in the Desktop folder. */
@@ -53,7 +56,7 @@ export async function addToDesktop(shell: Shell, appId: string): Promise<void> {
     shell.toast(`${app.title} is already on the desktop.`);
     return;
   }
-  const path = joinPath(DESKTOP_FOLDER, `${app.title}${SHORTCUT_EXTENSION}`);
+  const path = joinPath(DESKTOP_FOLDER, shortcutFileName(app.title));
   try {
     if (await shell.fs.exists(path)) {
       shell.toast(`${app.title} is already on the desktop.`);

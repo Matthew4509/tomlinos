@@ -62,8 +62,12 @@ const RECENT_MAX = 8;
 /** Recovery copies of unsaved drawings: kept while a window works, removed once it is saved or closed. */
 const RECOVERY = '/System/cad-recovery';
 const AUTOSAVE_MS = 2 * 60 * 1000;
+/** A copy's note written more recently than this belongs to a window still open somewhere (as shell/recovery.ts has it). */
+const RECOVERY_IN_USE_MS = 5 * 60 * 1000;
 /** The recovery copies windows open now are keeping (in this page), which are not offered as left behind. */
 const liveRecovery = new Set<string>();
+/** The note beside a copy ("<id>.note.json" for "<id>.tcad"), refreshed while the copy is in use. */
+const recoveryNoteOf = (p: string) => p.replace(/\.tcad$/i, '') + '.note.json';
 /** The photo made ready for paper: its JPEG (for a PDF) and an address for it (for the preview and printing). */
 interface PaperPhoto {
   jpeg: string;
@@ -192,6 +196,8 @@ export const cadApp: AppDef = {
           recoveryPath = arg;
           liveRecovery.add(arg);
           recovered = true;
+          // Said to be in use from now on, so another window offered the same copy a moment later does not open it too.
+          void shell.fs.writeText(recoveryNoteOf(arg), JSON.stringify({ label, path: typeof from.path === 'string' ? from.path : null }), { hidden: true }).catch(() => {});
         } else {
         const read = readTcad(new TextDecoder().decode(raw));
         drawing = read.drawing;
@@ -1475,21 +1481,37 @@ export const cadApp: AppDef = {
       await shell.openApp('cad', p);
       if (untouched) app.close();
     }
+    /** When this window last wrote its copy's note (below). */
+    let recoveryNoted = 0;
+    /**
+     * The note beside a copy, written every two minutes while the window is open, as shell/recovery.ts writes it: a fresh
+     * one tells another window (a second tab, another device) the copy is still in use, so it is not offered as left behind.
+     */
+    async function writeRecoveryNote(p: string): Promise<void> {
+      await shell.fs.writeText(recoveryNoteOf(p), JSON.stringify({ label, path }), { hidden: true });
+      recoveryNoted = Date.now();
+    }
     /** Keeps a copy of a drawing with unsaved changes, so a flat battery or a closed page loses two minutes at most. */
     async function autosave(): Promise<void> {
-      if (!settings.autosave || version === savedVersion || version === autosavedVersion || tooBigToSave(drawing)) return;
+      if (!settings.autosave || version === savedVersion || tooBigToSave(drawing)) return;
       const v = version;
       try {
+        if (version === autosavedVersion) {
+          // Nothing new to keep: the note is written again instead (not more than every minute), to say the copy is in use.
+          if (recoveryPath && Date.now() - recoveryNoted >= AUTOSAVE_MS / 2) await writeRecoveryNote(recoveryPath);
+          return;
+        }
         await shell.fs.ensureFolder(RECOVERY, { hidden: true });
         recoveryPath ??= `${RECOVERY}/${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}.tcad`;
         const p = recoveryPath;
         liveRecovery.add(p);
+        await writeRecoveryNote(p);
         await shell.fs.writeText(p, writeTcad(drawing, { recovery: { label, path } }), { hidden: true });
         // Saved (or closed) while the copy was being written: the copy is not needed after all.
         if (recoveryPath !== p || version === savedVersion) {
           liveRecovery.delete(p);
           if (recoveryPath === p) recoveryPath = null;
-          await shell.fs.remove([p]).catch(() => {});
+          await shell.fs.remove([p, recoveryNoteOf(p)]).catch(() => {});
           return;
         }
         autosavedVersion = v;
@@ -1504,20 +1526,32 @@ export const cadApp: AppDef = {
       autosavedVersion = -1;
       if (!p) return;
       liveRecovery.delete(p);
-      void shell.fs.remove([p]).catch(() => {
+      void shell.fs.remove([p, recoveryNoteOf(p)]).catch(() => {
         // Left behind: it is offered the next time CAD Draft opens, and can be deleted there.
       });
     }
     /** Copies kept by windows that stopped before their drawing was saved: offered to open (or delete). */
     async function offerRecovery(asked: boolean): Promise<void> {
       let left: Entry[] = [];
+      let elsewhere = 0;
       try {
-        left = (await shell.fs.list(RECOVERY, true)).filter(e => e.kind === 'file' && /\.tcad$/i.test(e.name) && !liveRecovery.has(`${RECOVERY}/${e.name}`));
+        const entries = await shell.fs.list(RECOVERY, true);
+        // A copy whose note was written lately is being kept by a window open elsewhere: not left behind, so not offered
+        // (opening it would make two windows write over each other; Delete would destroy it).
+        const noteWritten = new Map(entries.filter(e => e.name.endsWith('.note.json')).map(e => [e.name, e.modified]));
+        const inUse = (e: Entry) => Date.now() - (noteWritten.get(recoveryNoteOf(e.name)) ?? 0) < RECOVERY_IN_USE_MS;
+        const copies = entries.filter(e => e.kind === 'file' && /\.tcad$/i.test(e.name) && !liveRecovery.has(`${RECOVERY}/${e.name}`));
+        left = copies.filter(e => !inUse(e));
+        elsewhere = copies.length - left.length;
       } catch {
         // No recovery folder yet: nothing was left behind.
       }
       if (!left.length) {
-        if (asked) await shell.dialogs.alert('Nothing to recover', 'Every drawing was saved or closed on purpose: there is no unsaved copy left behind.');
+        if (asked && elsewhere) {
+          await shell.dialogs.alert('Open in another window', `${elsewhere === 1 ? 'A drawing with unsaved changes is' : `${elsewhere} drawings with unsaved changes are`} open in another window or tab (or on another device). Save there, or close that window, and the copy goes.`);
+        } else if (asked) {
+          await shell.dialogs.alert('Nothing to recover', 'Every drawing was saved or closed on purpose: there is no unsaved copy left behind.');
+        }
         return;
       }
       left.sort((a, b) => b.modified - a.modified);
@@ -1547,7 +1581,7 @@ export const cadApp: AppDef = {
         for (const e of left) await shell.openApp('cad', `${RECOVERY}/${e.name}`);
         if (untouched) app.close();
       } else if (answer === 'delete') {
-        await shell.fs.remove(left.map(e => `${RECOVERY}/${e.name}`)).catch(error => shell.report('Could not delete them', error));
+        await shell.fs.remove(left.flatMap(e => [`${RECOVERY}/${e.name}`, recoveryNoteOf(`${RECOVERY}/${e.name}`)])).catch(error => shell.report('Could not delete them', error));
       }
     }
     function setAutosave(on1: boolean): void {

@@ -275,7 +275,7 @@ export function createFolderView(o: ViewOptions): FolderView {
       else el.setAttribute('data-drop-path', drop);
     }
     const name = el.querySelector<HTMLElement>('.item-name');
-    if (name && name.textContent !== item.name) name.textContent = item.name;
+    if (name && name.textContent !== labelOf(item)) name.textContent = labelOf(item);
     if (listMode()) {
       const cols = el.querySelectorAll<HTMLElement>('.item-col');
       columnTexts(item).forEach((text, i) => {
@@ -299,10 +299,15 @@ export function createFolderView(o: ViewOptions): FolderView {
         title: item.name,
       },
       h('span', { class: 'item-icon' }, icon(iconName, listMode() ? 20 : 40)),
-      h('span', { class: 'item-name' }, item.kind === 'file' ? shortcutLabel(item.name) : item.name),
+      h('span', { class: 'item-name' }, labelOf(item)),
     );
     if (listMode()) el.append(...columnTexts(item).map(text => h('span', { class: 'item-col' }, text)));
     return el;
+  }
+
+  /** The name shown under the icon: an app shortcut's without ".desktop", whether the item is new or brought up to date. */
+  function labelOf(item: Item): string {
+    return item.kind === 'file' ? shortcutLabel(item.name) : item.name;
   }
 
   function paintSelection(): void {

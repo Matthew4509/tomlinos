@@ -3,7 +3,7 @@
 // small list (/System/trash.json) remembers where each one came from. If that list is lost, the slots are still
 // there and are shown as "original location unknown"; nothing is lost with it.
 import { FileChanged, FsError, type Entry, type FileSystem } from '../fs/fs.ts';
-import { baseName, joinPath, nameKey, parentPath, uniqueName } from '../fs/names.ts';
+import { baseName, joinPath, parentPath, splitPath } from '../fs/names.ts';
 import { newKey } from '../store/store.ts';
 
 export const TRASH_DIR = '/System/Trash';
@@ -42,11 +42,23 @@ export class RecycleBin {
     return (await this.readMetaWithId()).meta;
   }
 
-  /** The list and the id of the copy it came from ('' when there is none). */
-  private async readMetaWithId(): Promise<{ meta: Meta; id: string }> {
-    const entry = await this.fs.stat(META_PATH).catch(() => null);
+  /**
+   * The list and the id of the copy it came from ('' when there is none). Missing or damaged, it reads as empty: the
+   * slots themselves are the source of truth. `strict` (before changing it): a list that is there but could not be read
+   * (the server out of reach, say) throws instead, so the change is not written over it and every other item's
+   * "deleted from" with it. For showing, it reads as empty for now.
+   */
+  private async readMetaWithId(strict = false): Promise<{ meta: Meta; id: string }> {
+    let entry: Entry | null = null;
+    let text: string | null = null;
     try {
-      const raw = JSON.parse(await this.fs.readText(META_PATH));
+      entry = await this.fs.stat(META_PATH);
+      if (entry) text = await this.fs.readText(META_PATH);
+    } catch (error) {
+      if (strict && !(error instanceof FsError)) throw error;
+    }
+    try {
+      const raw = text === null ? null : JSON.parse(text);
       if (raw && raw.v === 1 && Array.isArray(raw.items)) {
         return {
           id: entry?.id ?? '',
@@ -59,7 +71,7 @@ export class RecycleBin {
         };
       }
     } catch {
-      // Missing or unreadable: the slots themselves are the source of truth.
+      // Damaged: a change may replace it.
     }
     return { meta: { v: 1, items: [] }, id: entry?.id ?? '' };
   }
@@ -70,7 +82,7 @@ export class RecycleBin {
    */
   private async changeMeta(apply: (meta: Meta) => void): Promise<void> {
     for (let attempt = 1; ; attempt++) {
-      const { meta, id } = await this.readMetaWithId();
+      const { meta, id } = await this.readMetaWithId(true);
       apply(meta);
       try {
         await this.fs.writeText(META_PATH, JSON.stringify(meta), id ? { hidden: true, replacing: id } : { hidden: true, mustBeNew: true });
@@ -104,7 +116,11 @@ export class RecycleBin {
     const items: BinItem[] = [];
     for (const slot of slots) {
       const inside = (await this.fs.list(`${TRASH_DIR}/${slot.name}`, true))[0];
-      if (!inside) continue;
+      if (!inside) {
+        // An empty slot (a restore that moved its item out but could not tidy up) is removed when seen, so the count is right.
+        await this.fs.remove([`${TRASH_DIR}/${slot.name}`]).catch(() => {});
+        continue;
+      }
       const info = meta.items.find(i => i.slot === slot.name);
       items.push({
         slot: slot.name,
@@ -153,21 +169,25 @@ export class RecycleBin {
 
   /**
    * Puts items back where they came from. If the old folder is gone they go to Documents, and a name already taken
-   * there gets " (2)" added. Returns where each ended up.
+   * there gets " (2)" added. Returns where each ended up. Folders go back before what was inside them, so a file and
+   * its folder restored together end up together again.
    */
   async restore(slots: string[]): Promise<{ restored: Array<{ name: string; to: string; fallback: boolean }>; failures: Failure[] }> {
-    const meta = await this.readMeta();
+    // Read strictly: a list that could not be read would send everything to Documents as "location unknown".
+    const { meta } = await this.readMetaWithId(true);
     const restored: Array<{ name: string; to: string; fallback: boolean }> = [];
     const failures: Failure[] = [];
     const done: string[] = [];
-    for (const slot of slots) {
+    const fromOf = (slot: string) => meta.items.find(i => i.slot === slot)?.from ?? '';
+    const depth = (slot: string) => splitPath(fromOf(slot)).length;
+    for (const slot of [...slots].sort((a, b) => depth(a) - depth(b))) {
       const slotPath = `${TRASH_DIR}/${slot}`;
       let name = slot;
       try {
         const inside = (await this.fs.list(slotPath, true))[0];
         if (!inside) throw new FsError('This item is not in the Recycle Bin any more.');
         name = inside.name;
-        const from = meta.items.find(i => i.slot === slot)?.from ?? '';
+        const from = fromOf(slot);
         let dest = from ? parentPath(from) : FALLBACK_FOLDER;
         let fallback = !from;
         const destEntry = dest === '/' ? { kind: 'folder' } : await this.fs.stat(dest);
@@ -175,13 +195,13 @@ export class RecycleBin {
           dest = FALLBACK_FOLDER;
           fallback = true;
         }
-        const taken = (await this.fs.list(dest, true)).map(e => e.name);
-        const finalName = uniqueName(inside.name, taken);
-        if (nameKey(finalName) !== nameKey(inside.name)) await this.fs.rename(`${slotPath}/${inside.name}`, finalName);
-        await this.fs.move([`${slotPath}/${finalName}`], dest);
-        await this.fs.remove([slotPath]);
+        // Moved with " (2)" added if its name is taken, in one change: nothing is renamed and then left in the bin.
+        const [moved] = await this.fs.move([`${slotPath}/${inside.name}`], dest, { keepBoth: true });
+        await this.fs.remove([slotPath]).catch(() => {
+          // The item is back; the empty slot goes when the bin is next listed.
+        });
         done.push(slot);
-        restored.push({ name: finalName, to: dest, fallback });
+        restored.push({ name: moved?.name ?? inside.name, to: dest, fallback });
       } catch (error) {
         failures.push({ name, reason: error instanceof Error ? error.message : String(error) });
       }

@@ -2,13 +2,17 @@
 // goes to the background, a window with changes not saved keeps a copy in the app's hidden folder, so a flat battery,
 // a crash or a closed page loses two minutes at most. The copy goes once the work is saved or the window is closed on
 // purpose; one left behind is offered by the app's next window. Each copy is two files: the work in a form the app
-// opens again (`<id><ext>`), and a note of its name and where it came from (`<id>.note.json`).
+// opens again (`<id><ext>`), and a note of its name and where it came from (`<id>.note.json`). The note is written
+// again every two minutes while the window is open, even when the work has not changed, so a window in another tab or
+// on another device can tell a copy still in use (a fresh note) from one left behind, and offers only the latter.
 // The Windows program (shell.native) has no hidden folders yet, so it keeps no copies.
 import { h, on } from '../core/dom.ts';
 import type { Entry } from '../fs/fs.ts';
 import type { Shell } from './types.ts';
 
 export const RECOVERY_MS = 2 * 60 * 1000;
+/** A note written more recently than this belongs to a window still open somewhere (two keeps, and a slow background tab). */
+export const IN_USE_MS = 5 * 60 * 1000;
 
 /** The copies windows open now are keeping (in this page), which are not offered as left behind. */
 const live = new Set<string>();
@@ -61,6 +65,8 @@ export function createRecovery(shell: Shell, signal: AbortSignal, o: RecoveryOpt
   let mine: string | null = null;
   let keptToken: unknown = Symbol('none');
   let keeping: Promise<void> | null = null;
+  /** When this window last wrote its copy's note. */
+  let noted = 0;
 
   function drop(): void {
     const p = mine;
@@ -73,6 +79,11 @@ export function createRecovery(shell: Shell, signal: AbortSignal, o: RecoveryOpt
     });
   }
 
+  async function writeNote(p: string): Promise<void> {
+    await shell.fs.writeText(noteOf(p, o.ext), JSON.stringify({ label: o.note().label, path: o.note().path }), { hidden: true });
+    noted = Date.now();
+  }
+
   async function keepNow(): Promise<void> {
     if (off) return;
     try {
@@ -82,13 +93,18 @@ export function createRecovery(shell: Shell, signal: AbortSignal, o: RecoveryOpt
         return;
       }
       const token = o.token();
-      if (Object.is(token, keptToken)) return;
+      if (Object.is(token, keptToken)) {
+        // Nothing new to keep: the note is written again instead (not on every call, so a keep straight after a keep
+        // writes nothing), which tells other windows the copy is still in use.
+        if (mine && Date.now() - noted >= RECOVERY_MS / 2) await writeNote(mine);
+        return;
+      }
       await shell.fs.ensureFolder(o.folder, { hidden: true });
       mine ??= `${o.folder}/${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}${o.ext}`;
       const p = mine;
       live.add(p);
       const data = await o.snapshot();
-      await shell.fs.writeText(noteOf(p, o.ext), JSON.stringify({ label: o.note().label, path: o.note().path }), { hidden: true });
+      await writeNote(p);
       if (typeof data === 'string') await shell.fs.writeText(p, data, { hidden: true });
       else await shell.fs.writeFile(p, data, { hidden: true });
       // Saved, replaced or closed while the copy was being written: it is not needed after all.
@@ -116,12 +132,16 @@ export function createRecovery(shell: Shell, signal: AbortSignal, o: RecoveryOpt
   async function adopt(path: string): Promise<RecoveryNote> {
     mine = path;
     live.add(path);
+    let note: RecoveryNote = { label: 'Untitled', path: null };
     try {
       const n = JSON.parse(await shell.fs.readText(noteOf(path, o.ext))) as { label?: unknown; path?: unknown };
-      return { label: typeof n.label === 'string' && n.label ? n.label : 'Untitled', path: typeof n.path === 'string' && n.path ? n.path : null };
+      note = { label: typeof n.label === 'string' && n.label ? n.label : 'Untitled', path: typeof n.path === 'string' && n.path ? n.path : null };
     } catch {
-      return { label: 'Untitled', path: null };
+      // Opened as "Untitled".
     }
+    // Written again as read, so it is fresh: a window offered the same copy a moment later does not open it too.
+    void shell.fs.writeText(noteOf(path, o.ext), JSON.stringify(note), { hidden: true }).then(() => (noted = Date.now()), () => {});
+    return note;
   }
 
   async function offer(asked: boolean, after?: { untouched: () => boolean; close: () => void }): Promise<void> {
@@ -130,13 +150,25 @@ export function createRecovery(shell: Shell, signal: AbortSignal, o: RecoveryOpt
       return;
     }
     let left: Entry[] = [];
+    let elsewhere = 0;
     try {
-      left = (await shell.fs.list(o.folder, true)).filter(e => e.kind === 'file' && e.name.endsWith(o.ext) && !live.has(`${o.folder}/${e.name}`));
+      const entries = await shell.fs.list(o.folder, true);
+      // A copy whose note was written lately is being kept by a window open in another tab or on another device: not
+      // left behind, so not offered (opening it would make two windows write over each other; Delete would destroy it).
+      const noteWritten = new Map(entries.filter(e => e.name.endsWith('.note.json')).map(e => [e.name, e.modified]));
+      const inUse = (e: Entry) => Date.now() - (noteWritten.get(noteOf(e.name, o.ext)) ?? 0) < IN_USE_MS;
+      const copies = entries.filter(e => e.kind === 'file' && e.name.endsWith(o.ext) && !live.has(`${o.folder}/${e.name}`));
+      left = copies.filter(e => !inUse(e));
+      elsewhere = copies.length - left.length;
     } catch {
       // No folder yet: nothing was left behind.
     }
     if (!left.length) {
-      if (asked) await shell.dialogs.alert('Nothing to recover', `Every ${o.one} was saved or closed on purpose: there is no unsaved copy left behind.`);
+      if (asked && elsewhere) {
+        await shell.dialogs.alert('Open in another window', `${elsewhere === 1 ? `A ${o.one} with unsaved changes is` : `${elsewhere} ${o.many} with unsaved changes are`} open in another window or tab (or on another device). Save there, or close that window, and the copy goes.`);
+      } else if (asked) {
+        await shell.dialogs.alert('Nothing to recover', `Every ${o.one} was saved or closed on purpose: there is no unsaved copy left behind.`);
+      }
       return;
     }
     left.sort((a, b) => b.modified - a.modified);

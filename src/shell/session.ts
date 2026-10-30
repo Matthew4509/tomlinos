@@ -242,9 +242,18 @@ export class Session {
     this.loaded = true;
   }
 
-  /** Each setting as text, to tell which ones this page has changed since it read or wrote them. */
+  /**
+   * Each setting as text, to tell which ones this page has changed since it read or wrote them. A setting that is a group
+   * (the lock settings, the bin's, each icon's place, each folder's view, each app's window) is listed field by field, as
+   * "lock.idle", so two tabs changing different fields of one group keep both changes instead of the last undoing the first.
+   */
   private static parts(data: SessionData): Record<string, string> {
-    return Object.fromEntries(Object.entries(data).map(([k, v]) => [k, JSON.stringify(v)]));
+    const parts: Record<string, string> = {};
+    for (const [k, v] of Object.entries(data)) {
+      if (isObject(v)) for (const [field, value] of Object.entries(v)) parts[`${k}.${field}`] = JSON.stringify(value);
+      else parts[k] = JSON.stringify(v);
+    }
+    return parts;
   }
 
   /** The settings as this page last read or wrote them. */
@@ -288,7 +297,8 @@ export class Session {
     await this.fs.ensureFolder('/System', { hidden: true });
     for (let attempt = 1; ; attempt++) {
       const now = Session.parts(this.data);
-      const mine = Object.keys(now).filter(k => now[k] !== this.base[k]);
+      // Changed here, or (a field of a group) taken away here: an icon's place forgotten, a folder's view dropped.
+      const mine = [...new Set([...Object.keys(now), ...Object.keys(this.base)])].filter(k => now[k] !== this.base[k]);
       if (!mine.length) return;
       const entry = await this.fs.stat(SESSION_PATH);
       let theirs: SessionData = defaultSession();
@@ -300,7 +310,18 @@ export class Session {
         }
       }
       const merged: Record<string, unknown> = { ...theirs };
-      for (const k of mine) merged[k] = JSON.parse(now[k]);
+      for (const k of mine) {
+        const dot = k.indexOf('.');
+        if (dot < 0) {
+          merged[k] = JSON.parse(now[k]);
+          continue;
+        }
+        const [group, field] = [k.slice(0, dot), k.slice(dot + 1)];
+        const fields: Record<string, unknown> = { ...(merged[group] as Record<string, unknown>) };
+        if (k in now) fields[field] = JSON.parse(now[k]);
+        else delete fields[field];
+        merged[group] = fields;
+      }
       try {
         await this.fs.writeText(SESSION_PATH, JSON.stringify(merged), entry ? { hidden: true, replacing: entry.id } : { hidden: true, mustBeNew: true });
       } catch (error) {
@@ -308,7 +329,10 @@ export class Session {
         if (raced && attempt < 5) continue;
         throw error;
       }
-      for (const k of mine) this.base[k] = now[k];
+      for (const k of mine) {
+        if (k in now) this.base[k] = now[k];
+        else delete this.base[k];
+      }
       return;
     }
   }
