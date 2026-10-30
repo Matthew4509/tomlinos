@@ -3,7 +3,7 @@
 // the shape a tool would make, the snap mark with its name, and the selection box.
 import { P, angleOf, at, type Box, type Piece, type Pt } from './geom.ts';
 import { directionMarks } from './modify.ts';
-import { outlineOf, type Ent, type Layer, type LineType, type Shape, type Units } from './model.ts';
+import { outlineOf, shapeBox, type Ent, type Layer, type LineType, type Shape, type Units } from './model.ts';
 import { photoOnPage, pixelMatrix, type Photo } from './photo.ts';
 import { SNAP_NAMES, type Snap } from './snap.ts';
 
@@ -148,10 +148,17 @@ export function render(c: CanvasRenderingContext2D, w: number, h: number, v: Vie
     c.stroke();
   }
 
+  // Items off the area are passed over (a little beyond its edge: a point's cross and a thick line have width).
+  const edge = 8 / v.scale;
+  const offArea = (e: Ent) => {
+    const b = shapeBox(e);
+    return !!b && (b.x1 < tl.x - edge || b.x0 > br.x + edge || b.y1 < br.y - edge || b.y0 > tl.y + edge);
+  };
+
   // Items, layer by layer colour; chosen ones dashed and brighter.
   for (const e of s.ents) {
     const layer = s.layers.get(e.layer);
-    if (!layer || !layer.on) continue;
+    if (!layer || !layer.on || offArea(e)) continue;
     const chosen = s.selected.has(e.id);
     const hovered = s.hover === e.id;
     c.strokeStyle = chosen ? (s.white ? '#d06000' : '#ffd040') : inkFor(layer.colour, s.white);
@@ -164,7 +171,7 @@ export function render(c: CanvasRenderingContext2D, w: number, h: number, v: Vie
   if (s.arrows) {
     for (const e of s.ents) {
       const layer = s.layers.get(e.layer);
-      if (!layer || !layer.on || (e.type !== 'poly' && e.type !== 'line')) continue;
+      if (!layer || !layer.on || (e.type !== 'poly' && e.type !== 'line') || offArea(e)) continue;
       c.strokeStyle = s.white ? '#c05000' : '#ffb040';
       c.fillStyle = c.strokeStyle;
       c.lineWidth = 1.5;

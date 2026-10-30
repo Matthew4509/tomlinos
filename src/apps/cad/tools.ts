@@ -105,6 +105,8 @@ export interface Tool {
   word?(w: string): boolean;
   /** Enter (or a right-click): true when the tool carries on. */
   enter(): boolean;
+  /** The tool is being left part-way (another tool, Escape): what has been drawn so far is made, if it is a shape yet. */
+  keep?(): void;
   preview(cursor: Pt): Shape[];
   /** Set when the tool has finished. */
   done: boolean;
@@ -199,6 +201,11 @@ function polylineTool(ctx: ToolCtx): Tool {
     enter() {
       finish(false);
       return false;
+    },
+    keep() {
+      if (pts.length < 2) return;
+      finish(false);
+      ctx.say('Polyline: kept as drawn so far (Undo takes it back).');
     },
     preview: c => (pts.length ? [{ type: 'poly', pts: [...pts, c], bulges: [...pts, c].map(() => 0), closed: false }] : []),
   };
@@ -644,6 +651,11 @@ function splineTool(ctx: ToolCtx): Tool {
       if (pts.length >= 2) ctx.add([{ type: 'spline', fit: [...pts], closed: false }]);
       else ctx.problem('A curve needs two points or more.');
       return false;
+    },
+    keep() {
+      if (pts.length < 2) return;
+      ctx.add([{ type: 'spline', fit: [...pts], closed: false }]);
+      ctx.say('Curve: kept as drawn so far (Undo takes it back).');
     },
     preview: c => (pts.length ? [{ type: 'spline', fit: [...pts, c], closed: false }] : []),
   };

@@ -110,6 +110,18 @@ export function scaleShape<S extends Shape>(s: S, c: Pt, k: number): S {
 // ---- Finding items -------------------------------------------------------------------------------------------------
 
 /** How far q is from the item. */
+/**
+ * The items within reach of q. The box kept for each item rules out most of them at once; text is always measured, as
+ * it is judged by its rectangle, which can be wider than its strokes.
+ */
+export function itemsNear<E extends Shape>(ents: E[], q: Pt, reach: number): E[] {
+  return ents.filter(e => {
+    const b = e.type === 'text' ? null : shapeBox(e);
+    if (b && (q.x < b.x0 - reach || q.x > b.x1 + reach || q.y < b.y0 - reach || q.y > b.y1 + reach)) return false;
+    return distToShape(e, q) <= reach;
+  });
+}
+
 export function distToShape(s: Shape, q: Pt): number {
   if (s.type === 'point') return dist(s.p, q);
   if (s.type === 'text') return distToText(s, q);

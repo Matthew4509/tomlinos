@@ -141,16 +141,16 @@ export function piecesOf(s: Shape): Piece[] {
   }
 }
 
-/** A text's or dimension's strokes, worked out once per item (items are replaced, never changed, when edited). */
-const noteOutlines = new WeakMap<Shape, Piece[]>();
+/** An item's outline and box, worked out once per item (items are replaced, never changed, when edited). */
+const outlines = new WeakMap<Shape, Piece[]>();
+const boxes = new WeakMap<Shape, Box | null>();
 
 /** What an item is drawn with: its pieces, or a text's or dimension's lines and letters. */
 export function outlineOf(s: Shape): Piece[] {
-  if (!isNote(s)) return piecesOf(s);
-  let out = noteOutlines.get(s);
+  let out = outlines.get(s);
   if (!out) {
-    out = notePieces(s);
-    noteOutlines.set(s, out);
+    out = isNote(s) ? notePieces(s) : piecesOf(s);
+    outlines.set(s, out);
   }
   return out;
 }
@@ -216,9 +216,12 @@ export function snapPoints(s: Shape): Array<{ p: Pt; kind: SnapKind }> {
 
 /** The box around an item (null for a construction line, which has no end). */
 export function shapeBox(s: Shape): Box | null {
-  if (s.type === 'point') return boxOf([s.p]);
-  let box: Box | null = null;
-  for (const p of outlineOf(s)) box = joinBoxes(box, pieceBox(p));
+  let box = boxes.get(s);
+  if (box !== undefined) return box;
+  box = null;
+  if (s.type === 'point') box = boxOf([s.p]);
+  else for (const p of outlineOf(s)) box = joinBoxes(box, pieceBox(p));
+  boxes.set(s, box);
   return box;
 }
 

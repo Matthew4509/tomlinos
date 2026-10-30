@@ -998,6 +998,143 @@ await step('audit fixes: Undo after a save, then a new line, shows unsaved; Undo
   eq(await count('Geometry'), 2, 'the line and the polyline');
 });
 
+await step('a polyline or curve being drawn is kept when you change tool, type a command, press Escape or insert a part (one Undo takes it back)', async () => {
+  await closeAll();
+  await openCad();
+  // Another tool's button.
+  await cmd('polyline', '0,0', '100,0', '100,100');
+  await W().getByRole('button', { name: 'Circle: centre and radius' }).click();
+  eq(await count('Geometry'), 1, 'the polyline survives switching to Circle');
+  ok((await W().locator('.cad-prompt').innerText()).startsWith('Circle'), 'Circle is the tool now');
+  // Undo takes back that one shape.
+  await page.keyboard.press('Escape');
+  await canvas().focus();
+  await page.keyboard.press('Control+z');
+  eq(await count('Geometry'), 0, 'one Undo takes the polyline back');
+  // A typed command.
+  await cmd('curve', '0,0', '50,50', '100,0');
+  await cmd('circle');
+  eq(await count('Geometry'), 1, 'the curve survives a typed command');
+  ok((await W().locator('.cad-prompt').innerText()).startsWith('Circle'), 'the typed command started Circle');
+  await page.keyboard.press('Escape');
+  // Escape, in the boxes and with the keyboard in the drawing.
+  await cmd('polyline', '0,0', '100,0', '100,100');
+  await page.keyboard.press('Escape');
+  eq(await count('Geometry'), 2, 'the polyline survives Escape');
+  ok((await W().locator('.cad-prompt').innerText()).startsWith('Command'), 'Escape still stops the tool');
+  // Pressing the tool's own button again.
+  await W().getByRole('button', { name: 'Polyline', exact: true }).click();
+  await cmd('0,0', '100,100');
+  await W().getByRole('button', { name: 'Polyline', exact: true }).click();
+  eq(await count('Geometry'), 3, 'the polyline survives pressing its own button');
+  // Insert a part; Cancel in that box leaves the polyline being drawn.
+  const insert = async () => {
+    await W().getByRole('menuitem', { name: 'Geometry' }).click();
+    await page.locator('.menu').getByText('Parts', { exact: true }).click();
+    await page.locator('.menu').getByText('Insert a part...', { exact: true }).click();
+  };
+  await cmd('polyline', '0,0', '100,0');
+  await insert();
+  await D().getByRole('button', { name: 'Cancel' }).click();
+  ok((await W().locator('.cad-prompt').innerText()).startsWith('Polyline'), 'Cancel: still drawing the polyline');
+  eq(await count('Geometry'), 3, 'Cancel: nothing added yet');
+  await insert();
+  await D().getByRole('button', { name: 'OK' }).click();
+  eq(await count('Geometry'), 4, 'the polyline survives Insert a part');
+  await page.keyboard.press('Escape');
+  // One point is not a shape: it goes quietly, with no complaint.
+  await cmd('polyline', '0,0');
+  await page.keyboard.press('Escape');
+  eq(await count('Geometry'), 4, 'one point makes nothing');
+  ok(!(await said(2)).includes('Cannot'), 'and no complaint: ' + (await said(2)));
+});
+
+await step('changing text and dimension sizes is its own Undo step: Undo takes the sizes back and leaves the line', async () => {
+  await closeAll();
+  await openCad();
+  const sizes = async () => {
+    await W().getByRole('menuitem', { name: 'Utils' }).click();
+    await page.locator('.menu').getByText('Dimensions', { exact: true }).click();
+    await page.locator('.menu').getByText('Sizes for text and dimensions...', { exact: true }).click();
+  };
+  await cmd('line', '0,0', '100,0', '');
+  await sizes();
+  const textH = () => D().locator('input[aria-label^="Text height"]');
+  const was = await textH().inputValue();
+  await textH().fill('9');
+  await D().getByRole('button', { name: 'OK' }).click();
+  await canvas().focus();
+  await page.keyboard.press('Control+z');
+  eq(await count('Geometry'), 1, 'the line is still there');
+  await sizes();
+  eq(await textH().inputValue(), was, 'the size is back');
+  // OK with nothing changed is not a step of Undo.
+  await D().getByRole('button', { name: 'OK' }).click();
+  await canvas().focus();
+  await page.keyboard.press('Control+y');
+  await sizes();
+  eq(await textH().inputValue(), '9', 'Redo brings the size again');
+  await D().getByRole('button', { name: 'Cancel' }).click();
+});
+
+await step('phone width (375 x 812): the drawing area gets the room, one toolbar row scrolls sideways, the status line stays on screen, and the desktop keeps its own settings', async () => {
+  await closeAll();
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.waitForTimeout(300);
+  const cdp = await context.newCDPSession(page);
+  try {
+    await openCad();
+    const size = await canvas().boundingBox();
+    ok(size.width >= 0.6 * 375, `the drawing area is at least 60% of the window: ${size.width}`);
+    ok(size.height >= 200, `and has height: ${size.height}`);
+    ok(!(await W().locator('.cad-panel').isVisible()), 'Layers starts closed');
+    const y = await W().locator('.cad-xy').last().boundingBox();
+    ok(y.x + y.width <= 375, `the Y readout is on screen: its right edge is at ${y.x + y.width}`);
+    const tops = await W().locator('.cad-tb').evaluateAll(rows => rows.map(r => Math.round(r.getBoundingClientRect().top)));
+    eq(new Set(tops).size, 1, `one toolbar row (tops ${tops})`);
+    const strip = await W().locator('.cad-tbs').evaluate(el => ({ sw: el.scrollWidth, cw: el.clientWidth, h: el.clientHeight, overflow: getComputedStyle(el).overflowX }));
+    ok(strip.sw > strip.cw && strip.overflow === 'auto', `it scrolls sideways: ${JSON.stringify(strip)}`);
+    ok(strip.h <= 40, `one row high: ${strip.h}`);
+    const body = await W().locator('.cad').evaluate(el => ({ sw: el.scrollWidth, cw: el.clientWidth, sh: el.scrollHeight, ch: el.clientHeight }));
+    ok(body.sw <= body.cw + 1, `the window does not scroll sideways: ${JSON.stringify(body)}`);
+    // The boxes for a typed point stay on screen too, and the prompt can be read.
+    await cmd('polyline');
+    for (const el of ['.cad-coord >> nth=0', '.cad-coord >> nth=1', '.cad-prompt']) {
+      const b = await W().locator(el).boundingBox();
+      ok(b.x >= 0 && b.x + b.width <= 375, `${el} is on screen: ${JSON.stringify(b)}`);
+    }
+    await page.keyboard.press('Escape');
+    // Layers, opened, covers part of the drawing instead of squeezing it.
+    const openLayers = async () => {
+      await W().getByRole('menuitem', { name: 'View' }).click();
+      await page.locator('.menu').getByText('Layers panel', { exact: true }).click();
+    };
+    await openLayers();
+    ok(await W().locator('.cad-panel').isVisible(), 'View > Layers panel opens it');
+    const wide = await canvas().boundingBox();
+    eq(wide.width, size.width, 'the drawing area keeps its width with Layers open');
+    await W().locator('.cad-x').click();
+    await page.waitForTimeout(600);
+    // On a touch screen the buttons are the large ones.
+    await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+    await closeAll();
+    await openCad();
+    eq(await W().locator('.cad-btn').first().evaluate(b => b.getBoundingClientRect().width), 32, 'large buttons on a touch screen');
+    await closeAll();
+  } finally {
+    await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: false }).catch(() => {});
+    await cdp.detach().catch(() => {});
+    await page.setViewportSize({ width: 1400, height: 900 });
+    await page.waitForTimeout(300);
+  }
+  // The phone's window did not change what the desktop keeps.
+  await page.waitForTimeout(600);
+  await openCad();
+  ok(await W().locator('.cad-panel').isVisible(), 'on the desktop Layers is open as before');
+  eq(await W().locator('.cad-btn').first().evaluate(b => b.getBoundingClientRect().width), 24, 'and the buttons are the usual size');
+  ok((await canvas().boundingBox()).width > 800, 'and the drawing area is wide');
+});
+
 await step('a DXF with items at a height and a dashed line of its own says so; outputting over that DXF asks first', async () => {
   await closeAll();
   const dir = mkdtempSync(join(tmpdir(), 'cad-walk-'));

@@ -8,9 +8,10 @@ import {
 } from '../src/apps/cad/geom.ts';
 import { parseNumber, parsePoint, parseSize } from '../src/apps/cad/input.ts';
 import { CadProblem, ellipse, newDrawing, piecesOf, polygon, readTcad, rectangle, slot, snapPoints, writeTcad, type Ent, type Shape } from '../src/apps/cad/model.ts';
-import { chainFrom, distToShape, inWindow, mirrorShape, rotateShape, scaleShape, touchesBox } from '../src/apps/cad/edit.ts';
-import { findSnaps } from '../src/apps/cad/snap.ts';
+import { chainFrom, distToShape, inWindow, itemsNear, mirrorShape, rotateShape, scaleShape, touchesBox } from '../src/apps/cad/edit.ts';
+import { findSnaps, type SnapMode } from '../src/apps/cad/snap.ts';
 import { TOOLS, type PolarAnswer, type ToolCtx } from '../src/apps/cad/tools.ts';
+import { render } from '../src/apps/cad/view.ts';
 import { defaultStyle, dimLabel, type DimShape, type TextShape } from '../src/apps/cad/notes.ts';
 import type { Photo } from '../src/apps/cad/photo.ts';
 
@@ -558,4 +559,69 @@ test('text and dimension tools through their steps (session 7)', async () => {
   // Trim and extend cannot pick text or dimensions.
   assert.equal(TOOLS.trim.make(ctx).pickFilter!(words), false);
   assert.equal(TOOLS.extend.make(ctx).pickFilter!(target), false);
+});
+
+test('big drawings: snaps and the item under the pointer on 20,000 lines, polylines, curves and dimensions take under 10 ms (the box round each item is kept, not worked out afresh)', () => {
+  const ents: Ent[] = Array.from({ length: 20000 }, (_, i) => {
+    const o = P(i % 200 * 10, Math.floor(i / 200) * 10);
+    const pts = Array.from({ length: 12 }, (_, k) => P(o.x + k * 0.7, o.y + (k % 2) * 3));
+    const base = { id: i + 1, layer: '0' };
+    if (i % 4 === 0) return { ...base, type: 'line', a: o, b: P(o.x + 8, o.y + 8) };
+    if (i % 4 === 1) return { ...base, type: 'poly', pts, bulges: pts.map(() => 0), closed: false };
+    if (i % 4 === 2) return { ...base, type: 'spline', fit: pts, closed: false };
+    return { ...base, type: 'dim', kind: 'linear', pts: [o, P(o.x + 8, o.y), P(o.x + 4, o.y + 3)], dir: 0, h: 2, arrow: 2, dp: 2, text: '' };
+  });
+  const modes = new Set<SnapMode>(['end', 'mid', 'centre', 'intersection', 'quadrant']);
+  // About 10 pixels to a drawing unit: the reach is 14 pixels, the pull on an item 40.
+  const at = P(1000.5, 500.5);
+  const timed = (work: () => void) => {
+    const runs: number[] = [];
+    for (let i = 0; i < 25; i++) {
+      const t0 = performance.now();
+      work();
+      runs.push(performance.now() - t0);
+    }
+    return runs.sort((a, b) => a - b)[12];
+  };
+  let found = 0;
+  const snapMs = timed(() => {
+    found = findSnaps(ents, { at, reach: 1.4, modes, from: null, grid: 0, magnet: 4, onItem: 0.8 }).length;
+  });
+  assert.ok(found > 0, 'it found the snaps near the pointer');
+  assert.ok(snapMs < 10, `snaps took ${snapMs.toFixed(1)} ms (typical of 25 runs)`);
+  let hits = 0;
+  const hitMs = timed(() => {
+    hits = itemsNear(ents, at, 3).length;
+  });
+  assert.ok(hits >= 1, 'what is under the pointer is found');
+  assert.ok(hitMs < 10, `the item under the pointer took ${hitMs.toFixed(1)} ms (typical of 25 runs)`);
+});
+
+test('the shortcut for finding what is under the pointer never misses: text is judged by its own rectangle, a construction line has no box', () => {
+  const text: Ent = { id: 1, layer: '0', type: 'text', p: P(0, 0), text: 'I I', h: 10, angle: 0, align: 'left' };
+  const xline: Ent = { id: 2, layer: '0', type: 'xline', p: P(0, 0), d: P(1, 0) };
+  const far: Ent = { id: 3, layer: '0', type: 'line', a: P(900, 900), b: P(910, 900) };
+  const ents = [text, xline, far];
+  assert.deepEqual(itemsNear(ents, P(5000, 0), 1).map(e => e.id), [2], 'the endless line is always looked at');
+  assert.ok(itemsNear(ents, P(1, 11), 2).some(e => e.id === 1), 'text is always looked at');
+  assert.ok(!itemsNear(ents, P(0, 300), 2).some(e => e.id === 3), 'an item far from the pointer is passed over');
+});
+
+test('items off the drawing area are not drawn; one at its edge is', () => {
+  const traced: Pt[] = [];
+  const c = new Proxy({}, {
+    get: (_, k) => (k === 'moveTo' || k === 'lineTo' ? (x: number, y: number) => void traced.push(P(x, y)) : k === 'measureText' ? () => ({ width: 10 }) : () => {}),
+    set: () => true,
+  }) as unknown as CanvasRenderingContext2D;
+  const drawn = (ents: Ent[]) => {
+    traced.length = 0;
+    render(c, 400, 300, { cx: 0, cy: 0, scale: 1 }, { ents, layers: new Map([['0', { name: '0', colour: '#ffffff', on: true, locked: false, lineType: 'continuous' }]]), selected: new Set(), hover: null, preview: [], snap: null, box: null, grid: 10, gridOn: false, white: false, units: 'mm', arrows: false, photo: null });
+    return traced.length;
+  };
+  const line = (id: number, x: number): Ent => ({ id, layer: '0', type: 'line', a: P(x, 0), b: P(x + 50, 0) });
+  const none = drawn([]);
+  assert.equal(drawn([line(1, 5000)]), none, 'far off the area: nothing traced');
+  assert.equal(drawn([line(2, 0)]), none + 2, 'on the area: traced');
+  assert.equal(drawn([line(3, 190)]), none + 2, 'running off the edge: traced');
+  assert.equal(drawn([{ id: 4, layer: '0', type: 'xline', p: P(5000, 0), d: P(0, 1) }, { id: 5, layer: '0', type: 'xline', p: P(0, 0), d: P(1, 0) }]), none + 4, 'a construction line has no box: always traced');
 });

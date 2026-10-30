@@ -13,7 +13,7 @@ import { saveOver } from '../shell/savefile.ts';
 import type { AppDef } from '../shell/types.ts';
 import { APPS } from './catalog.ts';
 import { menuBar } from './sheet/classic-ui.ts';
-import { boxOfShapes, chainFrom, distToShape, inWindow, moveShape, scaleShape, touchesBox } from './cad/edit.ts';
+import { boxOfShapes, chainFrom, distToShape, inWindow, itemsNear, moveShape, scaleShape, touchesBox } from './cad/edit.ts';
 import { P, add, dist, mul, normAngle, sub, unit, type Pt } from './cad/geom.ts';
 import { cadIcon, type CadIcon } from './cad/icons.ts';
 import { parseNumber, parsePoint, parseSize } from './cad/input.ts';
@@ -244,6 +244,9 @@ export const cadApp: AppDef = {
     const selected = new Set<number>();
 
     // ---- What is showing -------------------------------------------------------------------------------------------
+    /** As wide as a phone when the window opened, and a screen worked by finger (as style.css has them). */
+    const onPhone = window.matchMedia('(max-width: 720px)').matches;
+    const onTouch = window.matchMedia('(pointer: coarse)').matches;
     let view: View = { cx: 150, cy: 100, scale: 2 };
     let viewBefore: View[] = [];
     let fitted = false;
@@ -445,7 +448,11 @@ export const cadApp: AppDef = {
 
     // ---- Tools -----------------------------------------------------------------------------------------------------
     function startTool(id: ToolId): void {
-      if (tool) say(`${tool.title}: stopped.`);
+      if (tool) {
+        // A polyline or curve part-way through is kept as it is, not thrown away.
+        tool.keep?.();
+        say(`${tool.title}: stopped.`);
+      }
       panMode = false;
       tool = TOOLS[id].make(ctx);
       toolId = id;
@@ -457,7 +464,10 @@ export const cadApp: AppDef = {
       keyboardBack();
     }
     function endTool(quiet = false): void {
-      if (tool && !quiet && !tool.done) say(`${tool.title}: ended.`);
+      if (tool && !quiet && !tool.done) {
+        tool.keep?.();
+        say(`${tool.title}: ended.`);
+      }
       tool = null;
       toolId = null;
       snaps = [];
@@ -555,6 +565,7 @@ export const cadApp: AppDef = {
         startTool(COMMAND_WORDS[lw]);
         return;
       }
+      if (lw === 'part' || lw === 'insert') return void insertPart();
       problem(`“${t}” does not answer “${tool.prompt()}”.`);
     }
 
@@ -564,8 +575,7 @@ export const cadApp: AppDef = {
       const reach = (lastTouch ? 14 : 6) / view.scale;
       let best: Ent | null = null;
       let bestD = Infinity;
-      for (const e of live()) {
-        if (filter && !filter(e)) continue;
+      for (const e of itemsNear(filter ? live().filter(filter) : live(), q, reach)) {
         const d = distToShape(e, q);
         if (d <= reach && d < bestD) {
           bestD = d;
@@ -922,9 +932,12 @@ export const cadApp: AppDef = {
         return { textH: v[0]!, dimH: v[1]!, arrow: v[2]!, dp: places };
       });
       if (!out) return;
-      drawing.style = out;
-      touched();
-      say('New text and dimensions take these sizes.');
+      // OK with the numbers as they were shown changes nothing (and is no step of Undo).
+      if (out.textH === Number(f(st.textH)) && out.dimH === Number(f(st.dimH)) && out.arrow === Number(f(st.arrow)) && out.dp === st.dp) return;
+      commit(() => {
+        drawing.style = out;
+      });
+      say('New text and dimensions take these sizes (Undo takes them back).');
     }
     async function outputDxf(): Promise<void> {
       const asLines = h('input', { type: 'checkbox', checked: settings.dxfTextAsLines });
@@ -972,7 +985,7 @@ export const cadApp: AppDef = {
         }
         if (lossyDxf && target.toLowerCase() === lossyDxf.toLowerCase() && !(await shell.dialogs.confirm({
           title: 'Write over the DXF this came from?',
-          text: `“${baseName(target)}” is the DXF this drawing was opened from. What CAD Draft did not keep when it opened (listed then: heights, thicknesses, colours or line types of items’ own, or items left out) would be gone from it for good.`,
+          text: `“${baseName(target)}” is the DXF this drawing was opened from. What CAD Draft did not keep when it opened (listed then: heights, thicknesses, colours or line types of items’ own, blocks, true dimensions, splines, or items left out) would be gone from it for good.`,
           ok: 'Write over it',
           danger: true,
           cancel: 'Cancel',
@@ -1140,7 +1153,10 @@ export const cadApp: AppDef = {
         return parts[i] ? i : 'Choose a part from the list.';
       });
       if (chosen === null) return;
-      if (tool) say(`${tool.title}: stopped.`);
+      if (tool) {
+        tool.keep?.();
+        say(`${tool.title}: stopped.`);
+      }
       panMode = false;
       tool = partPlaceTool(ctx, parts[chosen]);
       toolId = null;
@@ -2221,9 +2237,12 @@ export const cadApp: AppDef = {
     on(panelClose, 'click', () => setPanel(false), signal);
     on(newLayerBtn, 'click', () => void newLayer(), signal);
     function setPanel(show: boolean): void {
-      settings.layersPanel = show;
       panel.hidden = !show;
-      keepSettings();
+      // The settings are shared with the person's other devices: what a phone needs does not go back to the desktop.
+      if (!onPhone) {
+        settings.layersPanel = show;
+        keepSettings();
+      }
       paint();
     }
     async function newLayer(): Promise<void> {
@@ -2392,9 +2411,11 @@ export const cadApp: AppDef = {
       updatePointer();
     }
     function setLarge(on: boolean): void {
-      settings.large = on;
       app.root.classList.toggle('cad-large', on);
-      keepSettings();
+      if (!onTouch) {
+        settings.large = on;
+        keepSettings();
+      }
       paint();
     }
     function setArrows(on: boolean): void {
@@ -2495,8 +2516,8 @@ export const cadApp: AppDef = {
       { label: 'Ortho', hint: 'F8', checked: settings.ortho, action: toggleOrtho },
       { separator: true },
       { label: 'White background', checked: settings.white, action: () => setWhite(!settings.white) },
-      { label: 'Large icons', checked: settings.large, action: () => setLarge(!settings.large) },
-      { label: 'Layers panel', checked: settings.layersPanel, action: () => setPanel(!settings.layersPanel) },
+      { label: 'Large icons', checked: app.root.classList.contains('cad-large'), action: () => setLarge(!app.root.classList.contains('cad-large')) },
+      { label: 'Layers panel', checked: !panel.hidden, action: () => setPanel(!!panel.hidden) },
       { label: 'Show direction', checked: settings.arrows, action: () => setArrows(!settings.arrows) },
       { separator: true },
       sub_('Photo to trace', photoMenu()),
@@ -2556,9 +2577,10 @@ export const cadApp: AppDef = {
     ], { before: () => true, returnFocus: () => canvas });
 
     const body = h('div', { class: 'cad-body' }, leftCol, panel, canvasWrap, rightCol);
-    app.root.append(h('div', { class: 'cad-menubar' }, bar.el), row1, row2, row3, body, commandRow, status);
-    panel.hidden = !settings.layersPanel;
-    app.root.classList.toggle('cad-large', settings.large);
+    app.root.append(h('div', { class: 'cad-menubar' }, bar.el), h('div', { class: 'cad-tbs' }, row1, row2, row3), body, commandRow, status);
+    // On a phone the drawing gets the room (View > Layers panel opens the panel over it); a finger gets the large buttons.
+    panel.hidden = !settings.layersPanel || onPhone;
+    app.root.classList.toggle('cad-large', settings.large || onTouch);
 
     // ---- Keys ------------------------------------------------------------------------------------------------------
     /** Escape in a box: rubs out what is typed, or (nothing typed) stops the tool. */

@@ -47,3 +47,32 @@ test('a plain DXF, and one CAD Draft wrote itself, say none of them', () => {
   assert.equal(again.changed, 0);
   assert.equal(again.leftOut, 0);
 });
+
+test('3D polyline Z, blocks and splines make the read lossy (so writing over that DXF asks first)', () => {
+  const vertex = (x: string, z: string) => ['0', 'VERTEX', '8', 'A', '10', x, '20', '0', '30', z, '70', '32'];
+  const poly3d = (z: string) => ['0', 'POLYLINE', '8', 'A', '66', '1', '70', '8', ...vertex('0', z), ...vertex('50', z), '0', 'SEQEND'];
+  const flat = readDxf(entities(poly3d('0')));
+  assert.equal(flat.changed, 0, 'a 3D polyline with every height at 0 loses nothing');
+  const deep = readDxf(entities(poly3d('-6')));
+  assert.equal(deep.drawing.ents.length, 1);
+  assert.equal(deep.changed, 1, 'heights on a 3D polyline’s points');
+  assert.match(deep.report.join('\n'), /1 item sits at a height \(Z\)/);
+
+  const withBlock = (items: string[]) => enc([
+    '0', 'SECTION', '2', 'BLOCKS', '0', 'BLOCK', '8', '0', '2', 'B1', '70', '0', '10', '0', '20', '0', ...lineAt('0'), '0', 'ENDBLK', '0', 'ENDSEC',
+    '0', 'SECTION', '2', 'ENTITIES', ...items, '0', 'ENDSEC', '0', 'EOF',
+  ]);
+  const insert = readDxf(withBlock(['0', 'INSERT', '8', 'A', '2', 'B1', '10', '0', '20', '0']));
+  assert.equal(insert.drawing.ents.length, 1);
+  assert.equal(insert.changed, 1, 'a block taken apart is not a block in the DXF written');
+  const dimension = readDxf(withBlock(['0', 'DIMENSION', '8', 'A', '2', 'B1', '70', '0']));
+  assert.equal(dimension.changed, 1, 'a true dimension comes back as plain lines and text');
+
+  const controls = ['0', 'SPLINE', '8', 'A', '70', '8', '71', '3', '72', '8', '73', '4', ...['0', '0', '0', '0', '1', '1', '1', '1'].flatMap(k => ['40', k]), ...[[0, 0], [10, 20], [30, 20], [40, 0]].flatMap(([x, y]) => ['10', String(x), '20', String(y), '30', '0'])];
+  const spline = readDxf(entities(controls));
+  assert.equal(spline.drawing.ents.length, 1);
+  assert.equal(spline.changed, 1, 'a spline becomes a polyline of arcs');
+  const fit = readDxf(entities(['0', 'SPLINE', '8', 'A', '70', '8', '71', '3', '74', '3', '11', '0', '21', '0', '11', '10', '21', '10', '11', '20', '21', '0']));
+  assert.equal(fit.drawing.ents.length, 1);
+  assert.equal(fit.changed, 1, 'a spline with only fit points may differ slightly');
+});
