@@ -21,7 +21,7 @@ export function contactsList(vcf: string): MergeList {
   const rows = parseVcf(vcf).map(c => {
     const words = c.name.trim().split(/\s+/);
     return {
-      Name: c.name, 'First name': words[0] ?? '', 'Last name': words.slice(1).join(' '), Organisation: c.org, Email: c.emails[0] ?? '',
+      Name: c.name, 'First name': c.given ?? words[0] ?? '', 'Last name': c.family ?? words.slice(1).join(' '), Organisation: c.org, Email: c.emails[0] ?? '',
       Phone: c.phones[0] ?? '', Address: c.address, Birthday: c.birthday, Notes: c.notes,
     };
   });

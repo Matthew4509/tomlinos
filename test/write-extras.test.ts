@@ -96,6 +96,10 @@ test('merge fields both ways, and letters from Contacts and from a spreadsheet',
   const people = contactsList(vcf);
   assert.equal(people.rows.length, 2);
   assert.equal(people.rows[0]['First name'], 'Ann');
+  // A card that says which name is which is believed, rather than guessed from the spaces.
+  const named = contactsList('BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Mary Ann van der Berg\r\nN:van der Berg;Mary Ann;;;\r\nEND:VCARD\r\n').rows[0];
+  assert.equal(named['First name'], 'Mary Ann');
+  assert.equal(named['Last name'], 'van der Berg');
   const one = fillFields(back.doc, people.rows[0]);
   assert.equal(plainText(one), 'Dear Ann,\nWe will call 0400 111 222');
   // A field in bold stays bold once filled; a field with no value in the row is left out.

@@ -491,3 +491,39 @@ test('turning off: a plain file that starts with the seal marker does not block 
     restore();
   }
 });
+
+test('turning off: only a file this page itself opened counts as plain, so a page with the wrong key, or a damaged file, stops the change and the real key is kept (F28)', async () => {
+  const restore = asSam();
+  try {
+    const p = page();
+    const key = await newFileKey();
+    const parts = await recoveryParts(newRecoveryKey());
+    assert.equal((await sam.call('vault', { state: 'migrating-on', password: SAM_PW, ...(await wrapWithPassword(key, SAM_PW, ROUNDS)), wrapRk: await wrapWithRecovery(key, parts.kek), rkAuth: parts.auth })).status, 200);
+    p.store.state = 'migrating-on';
+    p.store.fileKey = key;
+    await p.store.migrate(() => undefined);
+    assert.equal((await sam.call('vault', { state: 'on' })).status, 200);
+    p.store.state = 'on';
+    await p.fs.writeFile('/Documents/kept.txt', new TextEncoder().encode('words worth keeping'));
+    assert.equal((await sam.call('vault', { state: 'migrating-off', password: SAM_PW })).status, 200);
+
+    // A tab still holding an old key: not one file opens, so none may be called plain.
+    const stale = page();
+    stale.store.state = 'migrating-off';
+    stale.store.fileKey = await newFileKey();
+    await assert.rejects(stale.store.migrate(() => undefined), /could not be opened with your key/);
+    assert.deepEqual(stale.store.plainLookalikes, {});
+    assert.equal((await sam.call('vault', { state: 'off', plainLookalikes: stale.store.plainLookalikes })).status, 409, 'the key is kept');
+
+    // The right key still finishes, and the damaged file below is what stops it, not something waved through.
+    p.store.state = 'migrating-off';
+    const damaged = await seal(key, PLANTED, new TextEncoder().encode('a sealed file'));
+    damaged[damaged.length - 1] ^= 1;
+    plant(PLANTED, damaged);
+    await assert.rejects(p.store.migrate(() => undefined), /could not be opened with your key/);
+    assert.equal((await sam.call('vault', { state: 'off', plainLookalikes: p.store.plainLookalikes })).status, 409, 'a damaged sealed file is not called plain');
+  } finally {
+    restore();
+  }
+});
+

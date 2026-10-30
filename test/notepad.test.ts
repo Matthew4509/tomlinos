@@ -2,7 +2,7 @@
 // Run: npm test
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { detectEol, findNext, lineCol, lineStart, replaceAll, toBox, toFile } from '../src/apps/notepad/text.ts';
+import { detectEol, fileBytes, findNext, hasBom, lineCol, lineStart, replaceAll, toBox, toFile } from '../src/apps/notepad/text.ts';
 
 test('a Windows file keeps its CRLF endings through the text box', () => {
   const file = 'one\r\ntwo\r\nthree';
@@ -37,4 +37,12 @@ test('find goes forward and back, skips the current match, and wraps round', () 
 test('replace all treats the search as plain text and counts', () => {
   assert.deepEqual(replaceAll('a.b a.b axb', 'a.b', '$1', true), { text: '$1 $1 axb', count: 2 });
   assert.deepEqual(replaceAll('Cat cat', 'cat', 'dog', false), { text: 'dog dog', count: 2 });
+});
+
+test('the invisible mark (a BOM) at the start of a UTF-8 file is noticed and put back on saving, and never added', () => {
+  const marked = Uint8Array.from([0xef, 0xbb, 0xbf, 0x68, 0x69]);
+  assert.equal(hasBom(marked), true);
+  assert.equal(hasBom(Uint8Array.from([0x68, 0x69])), false);
+  assert.deepEqual(fileBytes('hi', '\n', true), marked);
+  assert.deepEqual(fileBytes('a\nb', '\r\n', false), new TextEncoder().encode('a\r\nb'));
 });

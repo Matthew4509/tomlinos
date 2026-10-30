@@ -2011,7 +2011,9 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
       event.preventDefault();
       print();
     } else if (ctrl && event.altKey && k === 'f') {
+      // Also the desktop's "Search your files", which listens further up: in Write this key is the footnote.
       event.preventDefault();
+      event.stopPropagation();
       void insertFootnote();
     } else if (ctrl && !event.shiftKey && !event.altKey && (k === 'f' || k === 'h')) {
       event.preventDefault();

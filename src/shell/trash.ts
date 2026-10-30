@@ -82,7 +82,15 @@ export class RecycleBin {
    */
   private async changeMeta(apply: (meta: Meta) => void): Promise<void> {
     for (let attempt = 1; ; attempt++) {
-      const { meta, id } = await this.readMetaWithId(true);
+      let read: { meta: Meta; id: string };
+      try {
+        read = await this.readMetaWithId(true);
+      } catch (error) {
+        // A read that failed tells nothing about the list, so it is read again rather than written over.
+        if (attempt >= 5) throw error;
+        continue;
+      }
+      const { meta, id } = read;
       apply(meta);
       try {
         await this.fs.writeText(META_PATH, JSON.stringify(meta), id ? { hidden: true, replacing: id } : { hidden: true, mustBeNew: true });

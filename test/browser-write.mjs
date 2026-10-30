@@ -826,8 +826,11 @@ await step('Letters as a PDF leave the letter on screen alone: it never shows th
   await W().locator('.ribbon .rb', { hasText: 'Contents page' }).click();
   await doc().focus();
   await page.keyboard.press('Control+End');
-  await W().locator('.ribbon .rb', { hasText: 'Footnote' }).click();
+  // Ctrl+Alt+F is also the desktop's "Search your files": in Write it is the footnote, and the desktop stays out of it.
+  const searches = await page.locator('input.search').count();
+  await page.keyboard.press('Control+Alt+f');
   await D().locator('input, textarea').first().fill('A note at the foot');
+  eq(await page.locator('input.search').count(), searches, 'Ctrl+Alt+F in Write opens no file search');
   await D().getByRole('button', { name: 'Insert' }).click();
   await doc().evaluate(el => {
     const dt = new DataTransfer();

@@ -12,6 +12,11 @@ import { StoreConflict, StoreError, type Store, type StoreOp, type StoreRecord }
 const BATCH_BYTES = 8 * 1024 * 1024;
 const BATCH_RECORDS = 50;
 
+/** SHA-256 of some bytes, in hex: how a page names exact bytes to the server. */
+async function fingerprint(data: Uint8Array): Promise<string> {
+  return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', data as BufferSource)), b => b.toString(16).padStart(2, '0')).join('');
+}
+
 export class EncryptedStore implements Store {
   readonly label: string;
   readonly inner: ServerStore;
@@ -19,11 +24,14 @@ export class EncryptedStore implements Store {
   fileKey: CryptoKey | null = null;
   state: VaultState = 'off';
   /**
-   * After migrate() while turning off: the records that start with the seal marker but do not open with the file key
-   * (record key => SHA-256 of their bytes). They are plain files that happen to start so, and the server, which holds no
-   * key, cannot tell: "off" goes to it with this list.
+   * After migrate() while turning off: the records that start with the seal marker though this page has just decrypted
+   * them (record key => SHA-256 of their bytes). They are plain files whose own words start so, and the server, which
+   * holds no key, cannot tell: "off" goes to it with this list. Only a file this page itself opened gets on it: a file
+   * that merely fails to open may be sealed with a key this page does not have, and the real key must outlive it.
    */
   plainLookalikes: Record<string, string> = {};
+  /** The same, kept between runs of migrate(), so a later run knows the file for what it is. */
+  private readonly decrypted = new Map<string, string>();
   /**
    * Asks the server for the account's encryption now (and opens the key this browser kept). Called before a record that
    * does not fit this page's idea of it is refused: encryption may have been switched in another tab or on another device.
@@ -92,7 +100,15 @@ export class EncryptedStore implements Store {
     let batch: Array<{ key: string; version: string; data: Uint8Array }> = [];
     let bytes = 0;
 
-    const convert = async (key: string, data: Uint8Array): Promise<Uint8Array> => (want ? seal(this.needKey(), key, data) : unseal(this.needKey(), key, data));
+    const convert = async (key: string, data: Uint8Array): Promise<Uint8Array> => {
+      if (want) return seal(this.needKey(), key, data);
+      const plain = await unseal(this.needKey(), key, data);
+      if (isSealed(plain)) {
+        this.plainLookalikes[key] = await fingerprint(plain);
+        this.decrypted.set(key, this.plainLookalikes[key]);
+      }
+      return plain;
+    };
     const flush = async () => {
       if (!batch.length) return;
       const ops: StoreOp[] = [];
@@ -128,8 +144,9 @@ export class EncryptedStore implements Store {
   /**
    * Is this record already the kind wanted? While turning on, a record that starts with the seal marker but does not
    * open with the file key is a plain file that happens to start so (nothing else has sealed anything yet): it still
-   * needs sealing, or it would be "encrypted" without ever opening again. While turning off, such a record has nothing
-   * to undo: it stays as it is, and is noted for the server (plainLookalikes).
+   * needs sealing, or it would be "encrypted" without ever opening again. While turning off, such a record is plain only
+   * if this page decrypted those very bytes; anything else stops the change, with the key kept (it may be the wrong key,
+   * or a damaged file, and turning off destroys the key).
    */
   private async converted(key: string, data: Uint8Array, want: boolean): Promise<boolean> {
     if (!isSealed(data)) return !want;
@@ -139,7 +156,9 @@ export class EncryptedStore implements Store {
       return want;
     } catch {
       if (want) return false;
-      this.plainLookalikes[key] = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', data as BufferSource)), b => b.toString(16).padStart(2, '0')).join('');
+      const print = await fingerprint(data);
+      if (this.decrypted.get(key) !== print) throw new StoreError('A file could not be opened with your key, so turning encryption off has stopped and the key is kept. Your files are safe: some are encrypted and some not yet. Sign out and sign in again, then carry on from My account. If this comes back, tell the owner of this desktop.');
+      this.plainLookalikes[key] = print;
       return true;
     }
   }

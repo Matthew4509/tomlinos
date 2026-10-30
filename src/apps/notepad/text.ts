@@ -22,6 +22,18 @@ export const toBox = (text: string) => text.replace(/\r\n?/g, '\n');
 /** Text as the file is saved. */
 export const toFile = (text: string, eol: Eol) => (eol === '\n' ? text : text.replace(/\n/g, eol));
 
+/** Does the file start with the invisible mark (a BOM) some programs put at the start of UTF-8? */
+export const hasBom = (bytes: Uint8Array) => bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf;
+/** Text as the file's bytes, with that mark back if the file had it. */
+export function fileBytes(text: string, eol: Eol, bom: boolean): Uint8Array {
+  const body = new TextEncoder().encode(toFile(text, eol));
+  if (!bom) return body;
+  const bytes = new Uint8Array(body.length + 3);
+  bytes.set([0xef, 0xbb, 0xbf]);
+  bytes.set(body, 3);
+  return bytes;
+}
+
 /** 1-based line and column of an offset. */
 export function lineCol(text: string, offset: number): { line: number; col: number } {
   const before = text.slice(0, offset);

@@ -8,7 +8,7 @@ import { formatSize, plural } from '../core/format.ts';
 import { baseName, parentPath } from '../fs/names.ts';
 import { pickFile, pickFolder, pickSave } from '../shell/filepicker.ts';
 import type { AppDef, AppHandle } from '../shell/types.ts';
-import { detectEol, EOL_NAMES, toBox, toFile, type Eol } from './notepad/text.ts';
+import { detectEol, EOL_NAMES, fileBytes, hasBom, toBox, type Eol } from './notepad/text.ts';
 import { findInFolder, makePattern, type FileHits, type FindOptions } from './notepadpro/findfiles.ts';
 import { langById, langFor, LANGS, type Bundle } from './notepadpro/languages.ts';
 import { renderMarkdown, toDom, type MarkdownParser } from './notepadpro/markdown.ts';
@@ -35,6 +35,8 @@ interface Doc {
   saved: any;
   eol: Eol;
   savedEol: Eol;
+  /** The file started with the invisible UTF-8 mark (a BOM): it goes back on saving. */
+  bom: boolean;
   /** The id of the copy opened or last saved (every save makes a new one), so a save replaces only that copy. */
   fileId: string;
   lang: string;
@@ -288,11 +290,11 @@ async function run(app: AppHandle, cm: Bundle, arg: string | undefined): Promise
     view.focus();
   }
 
-  function addDoc(text: string, path: string | null, name: string, fileId = ''): Doc {
+  function addDoc(text: string, path: string | null, name: string, fileId = '', bom = false): Doc {
     const eol = detectEol(text, '\n');
     const lang = langFor(name).id;
     const state = cm.EditorState.create({ doc: toBox(text), extensions: extensions(lang) });
-    const d: Doc = { id: nextId++, path, name, state, saved: state.doc, eol, savedEol: eol, fileId, lang, tab: null as unknown as HTMLElement };
+    const d: Doc = { id: nextId++, path, name, state, saved: state.doc, eol, savedEol: eol, bom, fileId, lang, tab: null as unknown as HTMLElement };
     d.tab = makeTab(d);
     docs.push(d);
     tabs.append(d.tab);
@@ -314,10 +316,11 @@ async function run(app: AppHandle, cm: Bundle, arg: string | undefined): Promise
         await shell.dialogs.alert('Too big to open', `“${entry.name}” is ${formatSize(entry.size)}. Notepad Pro opens files up to ${formatSize(MAX_BYTES)}. It is safe where it is.`);
         return;
       }
-      const text = new TextDecoder('utf-8', { fatal: true }).decode(await shell.fs.readFile(path));
+      const bytes = await shell.fs.readFile(path);
+      const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
       // An untouched empty "new" tab is replaced, as in Notepad++.
       const spare = docs.length === 1 && !docs[0].path && !isDirty(docs[0]) && view.state.doc.length === 0 ? docs[0] : null;
-      addDoc(text, path, entry.name, entry.id);
+      addDoc(text, path, entry.name, entry.id, hasBom(bytes));
       if (spare) removeDoc(spare);
     } catch (error) {
       await shell.dialogs.alert('Could not open that', error instanceof TypeError
@@ -375,7 +378,7 @@ async function run(app: AppHandle, cm: Bundle, arg: string | undefined): Promise
   // Taken when a save starts, from the tab being saved: typing (or switching tabs) while it is on its way does not count as saved.
   const snapshot = (d: Doc) => {
     const doc = d === active ? view.state.doc : d.state.doc;
-    return { doc, eol: d.eol, bytes: new TextEncoder().encode(toFile(doc.toString(), d.eol)) };
+    return { doc, eol: d.eol, bytes: fileBytes(doc.toString(), d.eol, d.bom) };
   };
   type Snapshot = ReturnType<typeof snapshot>;
 

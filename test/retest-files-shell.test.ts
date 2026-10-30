@@ -145,6 +145,20 @@ test('one failed read of the bin\'s list does not wipe where every other item ca
   assert.equal(a?.from, '/Documents/a.txt', 'a.txt still knows where it was deleted from');
 });
 
+test('one failed read of the list of deleted items is tried again, so the delete still finishes and is remembered', async () => {
+  const store = new Flaky();
+  const fs = new FileSystem(store);
+  const bin = new RecycleBin(fs);
+  await fs.writeText('/Documents/a.txt', '1');
+  await fs.writeText('/Documents/b.txt', '2');
+  await bin.put(['/Documents/a.txt']);
+  store.failOnce = (await fs.stat('/System/trash.json'))!.id;
+  await bin.put(['/Documents/b.txt']);
+  const found = await bin.list();
+  assert.equal(found.find(i => i.name === 'a.txt')?.from, '/Documents/a.txt');
+  assert.equal(found.find(i => i.name === 'b.txt')?.from, '/Documents/b.txt', 'the second delete knows where it came from');
+});
+
 test('restoring a file and the folder it was in together puts the file back inside the folder', async () => {
   const fs = new FileSystem(new MemoryStore());
   const bin = new RecycleBin(fs);
