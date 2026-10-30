@@ -127,3 +127,49 @@ export function idFromText(text: string, seen: Map<string, number>): string {
   seen.set(base, n + 1);
   return n ? `${base}-${n}` : base;
 }
+
+/**
+ * Which copy of an id a record is, when a file uses one id on several records (it should not, but merged files do):
+ * `of` is the id they share and `nth` the order they come in.
+ */
+export interface Copy {
+  of: string;
+  nth: number;
+}
+
+/**
+ * Gives each record read from a file an id of its own: the first with an id keeps it, the next gets id-1, id-2. An
+ * edit or delete then finds just the record it meant; the file's own id is written back as it was.
+ */
+export function uniqueIds(): (id: string) => { id: string; copy: Copy } {
+  const used = new Set<string>();
+  const copies = new Map<string, number>();
+  return of => {
+    let nth = copies.get(of) ?? 0;
+    let id = nth ? `${of}-${nth}` : of;
+    while (used.has(id)) id = `${of}-${++nth}`;
+    used.add(id);
+    copies.set(of, nth + 1);
+    return { id, copy: { of, nth } };
+  };
+}
+
+/**
+ * The list to write, with records sharing an id back in the order they were read (the rest stay where they are), so
+ * reading the file again gives each the same id even after the list was sorted or an edited one moved to its end.
+ */
+export function copiesInOrder<T extends { keep?: { copy?: Copy } }>(list: T[]): T[] {
+  const groups = new Map<string, T[]>();
+  for (const record of list) {
+    const copy = record.keep?.copy;
+    if (!copy) continue;
+    const group = groups.get(copy.of);
+    if (group) group.push(record);
+    else groups.set(copy.of, [record]);
+  }
+  for (const group of groups.values()) group.sort((a, b) => a.keep!.copy!.nth - b.keep!.copy!.nth);
+  return list.map(record => {
+    const copy = record.keep?.copy;
+    return copy ? groups.get(copy.of)!.shift()! : record;
+  });
+}

@@ -987,6 +987,8 @@ textarea.field { resize: vertical; font: inherit; }
   .cal-side { border-left: 0; border-top: 1px solid var(--line); max-height: 45%; }
   .cal-chip, .cal-more { display: none; }
   .cal-cell { min-height: 40px; }
+  /* No room for event names on a phone: a dot says the day has something on. */
+  .cal-cell.busy::after { content: ''; width: 6px; height: 6px; margin: auto auto 2px; border-radius: 50%; background: var(--sel); }
   .contacts-main { grid-template-columns: 1fr; grid-template-rows: 40% 1fr; }
   .person { border-left: 0; border-top: 1px solid var(--line); }
 }

@@ -319,6 +319,84 @@ await step('Calendar: "Every day" is offered; a run-for event shows "Ends: for 3
   await close(C());
 });
 
+await step('Calendar: changing a later showing of a repeat says it is the first day and every showing; saving stays on that day', async () => {
+  await calendarDay(TODAY);
+  await C().getByRole('button', { name: 'New event' }).click();
+  await C().getByLabel('What').fill('Weekly check');
+  await C().getByLabel('Repeats').selectOption('weekly');
+  await C().getByRole('button', { name: 'Save' }).click();
+  await C().locator('.cal-side .cal-event', { hasText: 'Weekly check' }).waitFor();
+  const later = plus(14);
+  ok((await calendarDay(later)).some(t => t.includes('Weekly check')), 'shows two weeks on');
+  await C().locator('.cal-side .cal-event', { hasText: 'Weekly check' }).click();
+  eq(await C().getByLabel('First day').inputValue(), TODAY, 'the date box is named for what it holds');
+  ok((await C().locator('.cal-series').innerText()).includes('every showing'), 'says it changes every showing');
+  await C().getByLabel('What').fill('Weekly check-up');
+  await C().getByRole('button', { name: 'Save' }).click();
+  await C().locator('.cal-side .cal-event', { hasText: 'Weekly check-up' }).waitFor();
+  eq(await C().locator('.cal-cell.chosen').getAttribute('data-day'), later, 'still on the showing that was opened');
+  // A one-off event has a plain Date, and no such words.
+  await C().getByRole('button', { name: 'New event' }).click();
+  ok(await C().getByLabel('Date', { exact: true }).count(), 'a new event says Date');
+  eq(await C().locator('.cal-series').count(), 0, 'nothing about showings');
+  await C().getByRole('button', { name: 'Cancel' }).click();
+});
+
+await step('Calendar: an event can run past midnight and over several days, and shows on each day', async () => {
+  await calendarDay(TODAY);
+  await C().getByRole('button', { name: 'New event' }).click();
+  await C().getByLabel('What').fill('Night shift');
+  await C().locator('.cal-side input[type="checkbox"]').uncheck();
+  await C().getByLabel('Starts').fill('22:00');
+  await C().getByLabel('Ends', { exact: true }).fill('01:00');
+  await C().getByRole('button', { name: 'Save' }).click();
+  ok((await C().locator('.dialog-problem').innerText()).includes('later end day'), 'says what to do about it');
+  await C().getByLabel('Ends on').fill(TOMORROW);
+  await C().getByRole('button', { name: 'Save' }).click();
+  await C().locator('.cal-side .cal-event', { hasText: 'Night shift' }).waitFor();
+  ok((await calendarDay(TOMORROW)).some(t => t.includes('Night shift')), 'on its second day too');
+  ok(!(await calendarDay(plus(2))).some(t => t.includes('Night shift')), 'not on the third');
+  await close(C());
+});
+
+await step('Calendar: after Next month twice a day can still be reached with the Tab key', async () => {
+  await openApp('calendar');
+  await C().locator('.cal-month-grid .cal-cell').first().waitFor();
+  const next = C().getByRole('button', { name: 'Next month' });
+  await next.click();
+  await next.click();
+  eq(await C().locator('.cal-cell[tabindex="0"]').count(), 1, 'one day in the Tab order');
+  eq(await C().locator('.cal-cell[tabindex="0"].other').count(), 0, 'it is in the month shown');
+  const day = await C().locator('.cal-cell[tabindex="0"]').getAttribute('data-day');
+  const [y, m, d] = day.split('-').map(Number);
+  const label = new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  eq(await C().locator('.cal-side h3').innerText(), label, 'the side list shows that day');
+  await next.focus();
+  for (let i = 0; i < 3; i++) await page.keyboard.press('Tab');
+  eq(await page.evaluate(() => document.activeElement?.getAttribute('data-day')), day, 'Tab lands on it');
+  // A half-filled form is not thrown away by looking at another month.
+  await C().getByRole('button', { name: 'New event' }).click();
+  await C().getByLabel('What').fill('Half done');
+  await next.click();
+  eq(await C().getByLabel('What').inputValue(), 'Half done', 'the form is still there');
+  await close(C());
+});
+
+await step('Calendar on a phone-sized screen: a busy day has a dot, an empty one has none', async () => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForTimeout(400);
+  await openApp('calendar');
+  await C().locator('.cal-month-grid .cal-cell').first().waitFor();
+  const dot = sel => C().locator(sel).first().evaluate(el => {
+    const s = getComputedStyle(el, '::after');
+    return s.content !== 'none' && s.display !== 'none' && parseFloat(s.width) > 0;
+  });
+  ok(await dot('.cal-cell.busy'), 'a dot on a busy day');
+  ok(!(await dot('.cal-cell:not(.busy)')), 'none on an empty day');
+  await close(C());
+  await page.setViewportSize({ width: 1400, height: 900 });
+});
+
 await step('on a phone-sized screen the list, the page and the booking window fit without sideways scrolling', async () => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(400);
