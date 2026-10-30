@@ -303,8 +303,8 @@ export class TerminalShell {
         if (!plain.length) throw new Fail('wc: which file?');
         return Promise.all(plain.map(async a => {
           const t = await this.readText(this.resolve(a), a);
-          // An empty file has no lines (split gives one empty piece).
-          const lines = t === '' ? 0 : t.split('\n').length - (t.endsWith('\n') ? 1 : 0);
+          // Lines are counted by their line ends, as every wc does: "one\ntwo" is 1, and an empty file is 0.
+          const lines = t.split('\n').length - 1;
           return { text: `${String(lines).padStart(7)} ${String(t.split(/\s+/).filter(Boolean).length).padStart(7)} ${String(new TextEncoder().encode(t).length).padStart(7)} ${a}` };
         }));
       }

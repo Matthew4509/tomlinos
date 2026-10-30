@@ -80,9 +80,13 @@ export class Calculator {
   get value(): number {
     return Number(this.entry);
   }
-  /** The operator waiting for its next number, lit on the keypad. */
+  /** The operator waiting for its next number. */
   get op(): Op | null {
     return this.ops.length === this.values.length && this.ops.length > 0 ? this.ops[this.ops.length - 1] : null;
+  }
+  /** The operator lit on the keypad: only until something else is pressed ("5 + ±" has a number for it now). */
+  get lit(): Op | null {
+    return this.fresh && !this.touched ? this.op : null;
   }
   /** What was pressed, shown small above the number: "12 + 3 ×". */
   get history(): string {

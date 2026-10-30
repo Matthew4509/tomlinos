@@ -210,3 +210,13 @@ test("one failed read of the AI's memory file does not replace it with the defau
   assert.ok(!files.has(PROFILE_PATH) || files.get(PROFILE_PATH) !== undefined, 'profile may be created afresh; that is fine');
   void STORY_PATH;
 });
+
+test('wc counts the line ends in a file, like every wc: a last line with no line end does not add one', async () => {
+  const { fs, run } = await desktop();
+  await fs.writeText('/Documents/a.txt', 'one\ntwo');
+  await fs.writeText('/Documents/b.txt', 'one\ntwo\n');
+  await fs.writeText('/Documents/c.txt', 'one');
+  assert.match((await run('wc Documents/a.txt'))[0], /^\s*1\s/);
+  assert.match((await run('wc Documents/b.txt'))[0], /^\s*2\s/);
+  assert.match((await run('wc Documents/c.txt'))[0], /^\s*0\s/);
+});

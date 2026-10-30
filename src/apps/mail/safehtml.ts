@@ -33,7 +33,10 @@ export interface SafeResult {
 export function preStrip(html: string): string {
   return html
     .replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, '')
-    .replace(/\s(?:style|on[a-z]+)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '');
+    .replace(/\s(?:style|on[a-z]+)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+    // A slash counts as a space inside a tag (<img/onerror=...), but only right after the tag's name or a closing quote:
+    // anywhere else it is part of an address (href="https://example.com/online=1").
+    .replace(/(?<=<[a-z][^\s/>]*|["'])\/(?:style|on[a-z]+)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, ' ');
 }
 
 /** `inline` maps a cid (without <>) to an address of that picture's bytes (a blob: URL the caller made). */

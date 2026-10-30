@@ -70,7 +70,7 @@ export const calculatorApp: AppDef = {
       display.textContent = building ? describe(building.sum, data.rows, building.op) || 'Click a cell' : calc.display;
       history.textContent = building ? `Making ${cellName(building.target, data.rows)}:  = saves, Esc stops` : calc.history;
       display.classList.toggle('building', !!building);
-      for (const b of keys.querySelectorAll<HTMLElement>('.calc-key.op')) b.classList.toggle('on', !building && calc.op === b.dataset.key && calc.fresh);
+      for (const b of keys.querySelectorAll<HTMLElement>('.calc-key.op')) b.classList.toggle('on', !building && calc.lit === b.dataset.key);
       toCellBtn.hidden = !open;
       // Show which key comes next: = after choosing an "=" cell; + − × ÷ after clicking a cell for a sum.
       const wantsEquals = !building && open && selected !== null && isSumCell(selected);

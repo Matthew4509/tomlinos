@@ -127,6 +127,14 @@ test('what the HTML cleaner hands to the parser has no style= and no on...= hand
   assert.match(handed, /<p\s*>Hi <b data-x="onclick=">there<\/b><\/p><img src="x"\s*>/, 'the text, tags and harmless attributes stay');
 });
 
+test('the HTML cleaner also takes out a handler written after a slash, which browsers read as a space', () => {
+  assert.doesNotMatch(preStrip('<img/onerror=alert(1) src="x">'), /onerror/);
+  assert.doesNotMatch(preStrip('<svg/onload="alert(1)">'), /onload/);
+  assert.doesNotMatch(preStrip('<img src="x"/onerror="a"/onload="b">'), /on(error|load)/);
+  const link = '<a href="https://example.com/online=1">see /onward=2</a>';
+  assert.equal(preStrip(link), link, 'an address or plain words with the same letters stay');
+});
+
 test('reply subjects never pile up', () => {
   assert.equal(replySubject('Re: RE: Fwd: Hello'), 'Re: Hello');
   assert.equal(replySubject('Hello', true), 'Fwd: Hello');
