@@ -18,7 +18,10 @@ export type PM = Record<string, any>;
  */
 export const LINE_CSS = 1.15;
 
-/** Pasted HTML with every tag's style attribute renamed data-wp-style (read by the rules below, never applied). */
+/**
+ * Pasted HTML with every tag's style attribute renamed data-wp-style (read by the rules below, never applied), and its
+ * event handlers (onclick=, onerror=...) renamed data-wp-on... so even the never-shown copy it is read from holds none.
+ */
 export function pastedHtml(html: string): string {
   // One pass over the text (patterns over thousands of unclosed tags could take minutes on a crafted clipboard).
   const lower = html.toLowerCase();
@@ -47,7 +50,8 @@ export function pastedHtml(html: string): string {
       break;
     }
     const tag = html.slice(lt, gt + 1);
-    out += /^<[a-zA-Z]/.test(tag) ? tag.replace(/(\s)style(\s*=)/gi, '$1data-wp-style$2') : tag;
+    // ("/" counts as a space between a tag's name and its attributes: <img/onerror=...>.)
+    out += /^<[a-zA-Z]/.test(tag) ? tag.replace(/([\s/])style(\s*=)/gi, '$1data-wp-style$2').replace(/([\s/])(on[a-z]+)(\s*=)/gi, '$1data-wp-$2$3') : tag;
     i = gt + 1;
   }
   return out;

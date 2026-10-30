@@ -106,4 +106,8 @@ test('pasted HTML: style blocks and comments go, style attributes are renamed (n
   pastedHtml('<style'.repeat(50000) + '<a '.repeat(100000) + '<!--'.repeat(50000));
   assert.ok(Date.now() - started < 1000, 'a crafted clipboard is cleaned quickly');
   assert.equal(pastedHtml(html), '<p class=MsoNormal data-wp-style="color:red" data-style="keep">a style=b <span data-wp-style = \'font-size:9pt\'>c</span></p>');
+  // Event handlers are renamed too, so even the never-shown copy the paste is read from holds none (a browser may
+  // report one there as a blocked script); "/" stands for a space between a tag's name and its attributes.
+  assert.equal(pastedHtml('<img src=x onerror="go()"><img/ONLOAD=go()><p onclick = \'x\' data-on="keep">only=text</p>'),
+    '<img src=x data-wp-onerror="go()"><img/data-wp-ONLOAD=go()><p data-wp-onclick = \'x\' data-on="keep">only=text</p>');
 });
