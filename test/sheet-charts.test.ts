@@ -259,3 +259,26 @@ test('a PDF written here opens in a PDF reader, its index points at every object
   assert.ok(content.includes('(Page 1) Tj'));
   assert.ok(/re f/.test(content) && /\d+ \d+ m .* l/.test(content), 'shapes and lines drawn');
 });
+
+test('moving a chart with the arrow keys: a whole run of nudges is one Undo, so it cannot push real edits out of the 100 steps', () => {
+  const wb = book({ A1: 'n', A2: '1', A3: '2' });
+  wb.addChart(0, { ...chartFromRange(wb, 0, R('A1:A3'), 'column'), at: { col: 2, row: 0, dx: 0, dy: 0 }, w: 200, h: 100 });
+  const ch = wb.sheets[0].charts[0];
+  const place = () => wb.sheets[0].charts[0].at.col;
+  for (let i = 1; i <= 150; i++) wb.setChart(0, ch.id, { ...ch, at: { ...ch.at, col: i } }, 'run 1');
+  assert.equal(place(), 150);
+  wb.undo();
+  assert.equal(place(), ch.at.col, 'one Undo: back where the run started');
+  assert.equal(wb.display(0, 0, 0), 'n', 'the typing is still there');
+  wb.redo();
+  assert.equal(place(), 150, 'one Redo: where it ended');
+  // A new run, or anything done in between, starts a new step.
+  wb.setChart(0, ch.id, { ...ch, at: { ...ch.at, col: 200 } }, 'run 2');
+  wb.undo();
+  assert.equal(place(), 150);
+  wb.setChart(0, ch.id, { ...ch, at: { ...ch.at, col: 201 } }, 'run 3');
+  wb.setInput(0, 5, 5, 'typed');
+  wb.setChart(0, ch.id, { ...ch, at: { ...ch.at, col: 202 } }, 'run 3');
+  wb.undo();
+  assert.equal(place(), 201, 'the nudge after the typing is a step of its own');
+});

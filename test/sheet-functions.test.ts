@@ -337,3 +337,39 @@ test('corners found by the deliberate-break audit: weekend codes 1-7, OFFSET kee
   assert.equal(calc('ROWS(OFFSET(A1:B3,0,1))'), 3);
   assert.equal(calc('LET(x,1,x)+x'), '#NAME?', 'x is not known outside its LET');
 });
+
+test('AND and OR skip text in cells and ranges, as Excel does; with nothing to go on they say #VALUE!', () => {
+  const wb = book({ A1: 'TRUE', A2: 'x', B1: 'FALSE', B2: 'x', D1: 'x', D2: 'y' });
+  wb.setInput(0, 0, 0, '=TRUE');
+  wb.setInput(0, 1, 0, '=FALSE');
+  wb.setInput(0, 2, 0, '=AND(A1:A2)');
+  wb.setInput(0, 2, 1, '=OR(B1:B2)');
+  wb.setInput(0, 2, 2, '=AND(TRUE,A2)');
+  wb.setInput(0, 2, 3, '=AND(D1:D2)');
+  wb.setInput(0, 2, 4, '=OR(D1:D2)');
+  wb.setInput(0, 2, 5, '=AND("x")');
+  assert.equal(v(wb, 'C1'), true);
+  assert.equal(v(wb, 'C2'), false);
+  assert.equal(v(wb, 'C3'), true);
+  assert.equal(wb.display(0, 2, 3), '#VALUE!');
+  assert.equal(wb.display(0, 2, 4), '#VALUE!');
+  assert.equal(wb.display(0, 2, 5), '#VALUE!', 'text typed in the formula itself is still a mistake');
+});
+
+test('COUNTIF, SUMIF and the other -IF(S) functions read ~ as "the next character is itself"', () => {
+  const wb = book({ A1: '*', A2: 'a', A3: '?', A4: '~', B1: '1', B2: '2', B3: '4', B4: '8', C1: 'what?', C2: 'whats' });
+  wb.setInput(0, 3, 0, '=COUNTIF(A1:A4,"~*")');
+  wb.setInput(0, 3, 1, '=SUMIF(A1:A4,"~?",B1:B4)');
+  wb.setInput(0, 3, 2, '=COUNTIF(A1:A4,"~~")');
+  wb.setInput(0, 3, 3, '=SUMIFS(B1:B4,A1:A4,"~*")');
+  wb.setInput(0, 3, 4, '=COUNTIF(C1:C2,"what~?")');
+  wb.setInput(0, 3, 5, '=COUNTIF(C1:C2,"what?")');
+  wb.setInput(0, 3, 6, '=COUNTIF(A1:A4,"*")');
+  assert.equal(v(wb, 'D1'), 1);
+  assert.equal(v(wb, 'D2'), 4);
+  assert.equal(v(wb, 'D3'), 1);
+  assert.equal(v(wb, 'D4'), 1);
+  assert.equal(v(wb, 'D5'), 1);
+  assert.equal(v(wb, 'D6'), 2, 'a plain ? is still any one character');
+  assert.equal(v(wb, 'D7'), 4, 'a plain * is still anything');
+});

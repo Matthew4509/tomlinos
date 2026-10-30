@@ -221,3 +221,69 @@ test('a long chain of dependent cells is worked out in order without overflowing
   for (let r = 1; r < 1000; r++) wb.setInput(0, 0, r, `=A${r}+1`);
   assert.equal(wb.display(0, 0, 999), '1000');
 });
+
+test('Undo of an earlier structural change (inserting a row) keeps later column widths, freeze panes and gridlines: each is its own Undo step, and Redo brings it back', () => {
+  const wb = book({ A1: 'x' });
+  wb.shiftAxis(0, 'row', 0, 1);
+  wb.setSize(0, 'col', 2, 150);
+  wb.setFreeze(0, 2, 1);
+  wb.setGridlines(0, false);
+  const sh = () => wb.sheets[0];
+  const look = () => [sh().colW.get(2), sh().freeze.rows, !!sh().noGrid, at(wb, 'A2')];
+  assert.deepEqual(look(), [150, 2, true, 'x']);
+  wb.undo();
+  assert.deepEqual(look(), [150, 2, false, 'x'], 'gridlines back on, the rest stays');
+  wb.undo();
+  assert.deepEqual(look(), [150, 0, false, 'x'], 'freeze taken off');
+  wb.undo();
+  assert.deepEqual(look(), [undefined, 0, false, 'x'], 'width back to standard');
+  wb.undo();
+  assert.equal(at(wb, 'A1'), 'x', 'the inserted row goes last');
+  wb.redo();
+  wb.redo();
+  wb.redo();
+  wb.redo();
+  assert.deepEqual(look(), [150, 2, true, 'x'], 'Redo brings all of it back');
+});
+
+test('column widths: a drag of the edge is one Undo step, a whole selection sized together is one too; a width that does not change adds none', () => {
+  const wb = book({ A1: 'x' });
+  const steps = () => {
+    let n = 0;
+    while (wb.canUndo) {
+      wb.undo();
+      n++;
+    }
+    return n;
+  };
+  wb.setSize(0, 'col', 1, 100);
+  wb.setSize(0, 'col', 1, 110, true);
+  wb.setSize(0, 'col', 1, 120, true);
+  assert.equal(wb.sheets[0].colW.get(1), 120);
+  wb.undo();
+  assert.equal(wb.sheets[0].colW.has(1), false, 'the whole drag is taken back');
+  wb.redo();
+  assert.equal(wb.sheets[0].colW.get(1), 120);
+  wb.undo();
+  wb.asOneStep(() => {
+    for (let c = 3; c <= 6; c++) wb.setSize(0, 'col', c, 90);
+  });
+  assert.equal(wb.sheets[0].colW.size, 4);
+  wb.undo();
+  assert.equal(wb.sheets[0].colW.size, 0, 'all four go back together');
+  wb.setSize(0, 'col', 1, 70);
+  const v = wb.version;
+  wb.setSize(0, 'col', 1, 70);
+  assert.equal(wb.version, v, 'no change, no new version');
+  assert.equal(steps(), 2, 'that width and the typing');
+});
+
+test('a height set by hand: Undo also puts back that the row was fitting its text', () => {
+  const wb = book({ A1: 'x' });
+  wb.fitRow(0, 0, 40);
+  wb.setSize(0, 'row', 0, 80);
+  assert.equal(wb.sheets[0].rowFit.has(0), false);
+  wb.undo();
+  assert.equal(wb.sheets[0].rowH.get(0), 40);
+  assert.equal(wb.sheets[0].rowFit.has(0), true);
+});

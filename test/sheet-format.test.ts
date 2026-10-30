@@ -6,7 +6,7 @@ import { readZip } from '../src/apps/archive/read.ts';
 import { drawPage, planPages } from '../src/apps/sheet/print.ts';
 import { RecordPainter } from '../src/apps/sheet/paint.ts';
 import { PdfDocument } from '../src/apps/sheet/pdf.ts';
-import { parseCellRef } from '../src/apps/sheet/refs.ts';
+import { MAX_COLS, MAX_ROWS, parseCellRef } from '../src/apps/sheet/refs.ts';
 import { keyOf, Workbook } from '../src/apps/sheet/workbook.ts';
 import { openXlsx, saveXlsx } from '../src/apps/sheet/xlsx.ts';
 import { FUNCTION_NAMES } from '../src/apps/sheet/formula.ts';
@@ -212,4 +212,66 @@ test('notes: kept on cells through typing, clearing, copying, sorting and insert
   const back = new Workbook();
   await openXlsx(back, bytes);
   assert.deepEqual(back.notesOf(0).map(n => [n.col, n.row, n.text]), [[1, 0, 'First note'], [0, 2, 'First note'], [3, 4, 'On an empty cell']]);
+});
+
+test('Select All (or several whole columns) then Bold, Fill or a number format: formats the part of the sheet in use, not "too many cells"', () => {
+  const wb = new Workbook();
+  put(wb, { A1: 'a', C4: '5' });
+  const all = { c0: 0, r0: 0, c1: MAX_COLS - 1, r1: MAX_ROWS - 1 };
+  wb.setStyle(0, all, s => ({ ...s, b: true }));
+  assert.equal(styleAt(wb, 'A1').b, true);
+  assert.equal(styleAt(wb, 'C4').b, true);
+  assert.equal(styleAt(wb, 'B2').b, true, 'a blank cell inside the area in use');
+  assert.equal(wb.sheets[0].cells.size, 12, 'nothing outside A1:C4 was made');
+  wb.undo();
+  assert.equal(styleAt(wb, 'A1').b, undefined, 'one Undo takes it back');
+  // On an empty sheet the first cell of the selection is still formatted.
+  const empty = new Workbook();
+  empty.setStyle(0, all, s => ({ ...s, fill: '#ffff00' }));
+  assert.equal(empty.sheets[0].cells.size, 1);
+  // A selection small enough goes all the way, past the last cell in use, as before.
+  const small = new Workbook();
+  put(small, { A1: 'a' });
+  small.setStyle(0, R('A1:A10'), s => ({ ...s, b: true }));
+  assert.equal(small.sheets[0].cells.size, 10);
+});
+
+test('Bold on a 1,000 by 11 block in a workbook with 3,000 different looks takes well under the 15 seconds it did', () => {
+  const wb = new Workbook();
+  for (let i = 0; i < 3000; i++) wb.internStyle({ fs: 8 + (i % 60), ind: i % 10, dec: i % 25, ff: 'F' + i });
+  const started = Date.now();
+  wb.setStyle(0, R('A1:K1000'), s => ({ ...s, b: true }));
+  const took = Date.now() - started;
+  assert.equal(styleAt(wb, 'K1000').b, true);
+  assert.ok(took < 2000, 'took ' + took + ' ms');
+  // Looks already in the list are found again, and a look replaced by opening a file does not linger.
+  const id = wb.internStyle({ fs: 8, ind: 0, dec: 0, ff: 'F0' });
+  assert.equal(id, 1);
+  wb.load({ format: 'tomlinos-sheet', styles: [{}, { b: true }], sheets: [{ name: 'S', cells: [] }] });
+  assert.equal(wb.internStyle({ b: true }), 1);
+  assert.equal(wb.internStyle({ i: true }), 2);
+});
+
+test('a run of structural steps does not save the same workbook twice over: each step reuses the copy the last one made', () => {
+  const wb = new Workbook();
+  put(wb, { A1: '1' });
+  let copies = 0;
+  const raw = wb as unknown as { dump: (prune: boolean) => string };
+  const dump = raw.dump;
+  raw.dump = (prune: boolean) => {
+    copies++;
+    return dump.call(wb, prune);
+  };
+  for (let i = 0; i < 3; i++) wb.shiftAxis(0, 'row', 0, 1);
+  assert.equal(copies, 4, 'one to start from, then one for each step');
+  wb.undo();
+  wb.undo();
+  wb.undo();
+  assert.equal(wb.display(0, 0, 0), '1', 'and Undo still walks back through them');
+  // A change that is not a structural step, or a move to another sheet, is not missed.
+  wb.shiftAxis(0, 'row', 0, 1);
+  wb.setInput(0, 3, 3, 'later');
+  wb.shiftAxis(0, 'row', 0, 1);
+  wb.undo();
+  assert.equal(wb.display(0, 3, 3), 'later');
 });

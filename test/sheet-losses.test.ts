@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { zipStore } from '../src/core/zip.ts';
-import { cutInWords, decodeText, splitDelimited, Workbook } from '../src/apps/sheet/workbook.ts';
+import { cutInWords, decodeText, keyOf, MAX_STYLES, splitDelimited, Workbook } from '../src/apps/sheet/workbook.ts';
 import { MAX_COLS, MAX_ROWS } from '../src/apps/sheet/refs.ts';
 import { openXlsx, saveOverLosses, saveXlsx } from '../src/apps/sheet/xlsx.ts';
 
@@ -125,4 +125,66 @@ test('"Save over?" is asked only when saving would take something out; a differe
   assert.equal(saveOverLosses({ ...none, asValues: { count: 2, examples: ['C4'], names: ['CUBEVALUE'] } }), '2 formulas kept as the answer Excel last saved');
   const said = saveOverLosses({ ...none, dropped: ['sheet protection'], differ: { count: 1, examples: ['A1'] } });
   assert.equal(said, 'sheet protection', 'no word about formulas kept as their last answer when that was not found');
+});
+
+/** A workbook with `n` cells, each with a look of its own: the number format of cell i has i decimal-like differences. */
+function manyLooks(n: number): Workbook {
+  const wb = new Workbook();
+  for (let i = 0; i < n; i++) {
+    const row = i % 5000;
+    const col = Math.floor(i / 5000);
+    wb.setInput(0, col, row, String(i));
+    wb.setStyle(0, { c0: col, r0: row, c1: col, r1: row }, s => ({ ...s, fmt: 'custom', code: '0."' + i + '"' }));
+  }
+  return wb;
+}
+
+test('more than 5,000 cell looks (styles): all kept when saved and reopened, and on Undo of a structural change', () => {
+  const wb = manyLooks(5101);
+  const last = wb.sheets[0].cells.get(keyOf(1, 100));
+  assert.ok(last, 'the last cell');
+  const look = (w: Workbook, i: number) => w.styleOf(w.sheets[0].cells.get(keyOf(Math.floor(i / 5000), i % 5000)))?.code;
+  assert.equal(look(wb, 5100), '0."5100"');
+  const again = new Workbook();
+  again.load(JSON.parse(wb.serialize()));
+  assert.equal(look(again, 5100), '0."5100"', 'reopened');
+  wb.setHidden(0, 'col', 200, 200, true);
+  wb.undo();
+  assert.equal(look(wb, 5100), '0."5100"', 'after Undo of a structural change');
+});
+
+test('looks no cell uses any more are left out of the saved file, and the cells keep theirs', () => {
+  const wb = new Workbook();
+  wb.setInput(0, 0, 0, 'a');
+  wb.setInput(0, 0, 1, 'b');
+  wb.setStyle(0, { c0: 0, r0: 0, c1: 0, r1: 0 }, s => ({ ...s, b: true }));
+  wb.setStyle(0, { c0: 0, r0: 0, c1: 0, r1: 0 }, s => ({ ...s, i: true }));
+  wb.setStyle(0, { c0: 0, r0: 1, c1: 0, r1: 1 }, s => ({ ...s, fill: '#ff0000' }));
+  assert.equal(wb.styles.length, 4, 'none, bold, bold italic, fill');
+  const saved = JSON.parse(wb.serialize());
+  assert.equal(saved.styles.length, 3, 'plain bold is in no cell now');
+  const again = new Workbook();
+  again.load(saved);
+  assert.deepEqual(again.styleOf(again.sheets[0].cells.get(0)), { b: true, i: true });
+  assert.deepEqual(again.styleOf(again.sheets[0].cells.get(MAX_COLS)), { fill: '#ff0000' });
+  // The workbook being worked on keeps them all: an Undo may still want one.
+  assert.equal(wb.styles.length, 4);
+  wb.undo();
+  wb.undo();
+  assert.deepEqual(wb.styleOf(wb.sheets[0].cells.get(0)), { b: true });
+});
+
+test('one limit on looks everywhere: past it a new look is refused in words, and what is there stays', () => {
+  const wb = new Workbook();
+  wb.setInput(0, 0, 0, 'a');
+  wb.styles.length = 0;
+  for (let i = 0; i < MAX_STYLES; i++) wb.styles.push(i ? { fs: 8, ff: 'F' + i } : {});
+  assert.throws(() => wb.setStyle(0, { c0: 0, r0: 0, c1: 0, r1: 0 }, s => ({ ...s, b: true })), /different cell looks/);
+  assert.equal(wb.internStyle({ fs: 8, ff: 'F7' }), 7, 'one already there can still be used');
+  const raw = JSON.parse(wb.serialize());
+  raw.styles = wb.styles;
+  raw.sheets[0].cells = [[0, 0, 'a', null, MAX_STYLES - 1]];
+  const again = new Workbook();
+  again.load(raw);
+  assert.equal(again.styleOf(again.sheets[0].cells.get(0))?.ff, 'F' + (MAX_STYLES - 1), 'the last look a file may hold is read');
 });
