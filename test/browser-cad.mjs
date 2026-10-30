@@ -1135,6 +1135,58 @@ await step('phone width (375 x 812): the drawing area gets the room, one toolbar
   ok((await canvas().boundingBox()).width > 800, 'and the drawing area is wide');
 });
 
+await step('the question being asked is told to a screen reader with the boxes; items moved onto a hidden layer stop being chosen; words holding "null" show in the preview', async () => {
+  await closeAll();
+  await openCad();
+  // The boxes' description is the current question (a screen reader otherwise hears only "X, edit text").
+  const described = sel => W().locator(sel).first().evaluate(el => document.getElementById(el.getAttribute('aria-describedby') ?? '')?.textContent ?? '');
+  ok((await described('.cad-input')).startsWith('Command'), 'the command line says the question');
+  await cmd('line');
+  ok((await described('.cad-coord')).includes('First point') || (await described('.cad-coord')).includes('Line'), 'the X box says the question: ' + (await described('.cad-coord')));
+  ok((await described('.cad-coord:last-of-type')).length > 0, 'and so does the Y box');
+  await page.keyboard.press('Escape');
+  // Moved onto a hidden layer: gone from view, so not chosen (Delete would act on what cannot be seen).
+  await W().locator('.cad-tick[aria-label="Show Text"]').click();
+  await cmd('line', '0,0', '100,0', '');
+  await canvas().focus();
+  await page.keyboard.press('Control+a');
+  eq(await chosen(), '1 chosen', 'the line is chosen');
+  await W().getByRole('menuitem', { name: 'Edit' }).click();
+  await page.locator('.menu').getByText('Move to a layer...', { exact: true }).click();
+  await D().locator('select').selectOption('Text');
+  await D().getByRole('button', { name: 'Move them' }).click();
+  eq(await count('Text'), 1, 'moved onto the hidden layer');
+  ok((await chosen()) !== '1 chosen', 'no longer chosen: ' + (await chosen()));
+  await W().locator('.cad-tick[aria-label="Show Text"]').click();
+  // A text with "null" in its words still shows while it is being moved.
+  await closeAll();
+  await openCad();
+  await W().locator('.cad-tb .cad-btn[aria-label="Text"]').click();
+  await cmd('0,0');
+  await D().locator('textarea').fill('annulled');
+  await D().getByRole('button', { name: 'OK' }).click();
+  await canvas().focus();
+  await page.keyboard.press('Control+a');
+  await cmd('move');
+  await page.keyboard.press('F3');
+  const box = await canvas().boundingBox();
+  await page.mouse.move(box.x + 300, box.y + 300);
+  await page.mouse.click(box.x + 300, box.y + 300);
+  await page.mouse.move(box.x + 500, box.y + 150);
+  await page.waitForTimeout(150);
+  // The preview's pale yellow on the drawing area.
+  const pale = await canvas().evaluate(cv => {
+    const g = cv.getContext('2d');
+    const d = g.getImageData(0, 0, cv.width, cv.height).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) if (d[i] > 200 && d[i + 1] > 200 && d[i + 2] > 100 && d[i + 2] < 200) n++;
+    return n;
+  });
+  ok(pale > 20, 'the moved words show in the preview: ' + pale + ' pale yellow pixels');
+  await page.keyboard.press('F3');
+  await page.keyboard.press('Escape');
+});
+
 await step('a DXF with items at a height and a dashed line of its own says so; outputting over that DXF asks first', async () => {
   await closeAll();
   const dir = mkdtempSync(join(tmpdir(), 'cad-walk-'));

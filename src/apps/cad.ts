@@ -78,6 +78,8 @@ const releaseRecovery = (p: string) => {
 };
 /** The note beside a copy ("<id>.note.json" for "<id>.tcad"), refreshed while the copy is in use. */
 const recoveryNoteOf = (p: string) => p.replace(/\.tcad$/i, '') + '.note.json';
+/** Each window's question has its own id, so its boxes can say they are answering it. */
+let promptIds = 0;
 /** The photo made ready for paper: its JPEG (for a PDF) and an address for it (for the preview and printing). */
 interface PaperPhoto {
   jpeg: string;
@@ -714,6 +716,12 @@ export const cadApp: AppDef = {
       if (layerOf(name)?.locked) return problem(`${name} is locked: unlock it first (its padlock in the Layers panel).`);
       ctx.change(sel.map(e => ({ id: e.id, shape: e })), []);
       commitLayerOf(sel.map(e => e.id), name);
+      // Out of sight, they stop being chosen (Delete would otherwise act on what cannot be seen).
+      if (!layerOf(name)?.on) {
+        for (const e of sel) selected.delete(e.id);
+        refreshStatus();
+        paint();
+      }
       say(`${sel.length} item${sel.length === 1 ? '' : 's'} moved to ${name}.`);
     }
     /** Puts items on a layer (the shape change above was the undo step; this changes only which layer). */
@@ -1862,7 +1870,7 @@ export const cadApp: AppDef = {
         if (tool && pointerIn) {
           try {
             // A shape with a missing or impossible number is not drawn (JSON writes those as null).
-            preview = tool.preview(effectivePoint()).filter(s => !JSON.stringify(s).includes('null'));
+            preview = tool.preview(effectivePoint()).filter(allFinite);
           } catch {
             preview = [];
           }
@@ -2300,11 +2308,12 @@ export const cadApp: AppDef = {
     }
 
     // The command line and the status bar.
-    const promptEl = h('span', { class: 'cad-prompt' });
-    const input = h('input', { type: 'text', class: 'cad-input', 'aria-label': 'Command line', autocomplete: 'off', spellcheck: 'false' });
+    const promptId = `cad-prompt-${++promptIds}`;
+    const promptEl = h('span', { class: 'cad-prompt', id: promptId });
+    const input = h('input', { type: 'text', class: 'cad-input', 'aria-label': 'Command line', 'aria-describedby': promptId, autocomplete: 'off', spellcheck: 'false' });
     // A point is typed as X, Enter, Y, Enter (an empty box counts as 0); a size as width and height.
-    const xIn = h('input', { type: 'text', class: 'cad-coord', 'aria-label': 'X', inputmode: 'decimal', autocomplete: 'off', spellcheck: 'false' });
-    const yIn = h('input', { type: 'text', class: 'cad-coord', 'aria-label': 'Y', inputmode: 'decimal', autocomplete: 'off', spellcheck: 'false' });
+    const xIn = h('input', { type: 'text', class: 'cad-coord', 'aria-label': 'X', 'aria-describedby': promptId, inputmode: 'decimal', autocomplete: 'off', spellcheck: 'false' });
+    const yIn = h('input', { type: 'text', class: 'cad-coord', 'aria-label': 'Y', 'aria-describedby': promptId, inputmode: 'decimal', autocomplete: 'off', spellcheck: 'false' });
     const xName = h('span', { class: 'cad-axis', 'aria-hidden': 'true' }, 'X');
     const yName = h('span', { class: 'cad-axis', 'aria-hidden': 'true' }, 'Y');
     const xyGroup = h('span', { class: 'cad-xyin', hidden: true }, xName, xIn, yName, yIn);
