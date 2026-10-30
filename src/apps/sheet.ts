@@ -243,11 +243,12 @@ export const sheetApp: AppDef = {
       await shell.dialogs.ask<true>({ title: `Opened “${name}”`, body: h('div', { class: 'xlsx-report' }, ...items), buttons: [{ label: 'OK', value: true, primary: true }], cancel: true });
       grid.focus();
     }
+    // A value still being typed counts as unsaved: closing the window asks, rather than dropping it without a word.
+    const unsaved = () => wb.version !== savedVersion || grid.editPending();
     const refresh = () => {
-      const dirty = wb.version !== savedVersion;
-      app.setDirty(dirty);
+      app.setDirty(unsaved());
       app.setTitle(label);
-      if (!dirty) recovery.drop();
+      if (wb.version === savedVersion) recovery.drop();
     };
 
     // ---- Small helpers ---------------------------------------------------------------------------------------------
@@ -2195,6 +2196,7 @@ export const sheetApp: AppDef = {
     grid.onSelect = syncToolbar;
     grid.onEdit = editing => {
       mode.textContent = editing ? 'Edit' : 'Ready';
+      app.setDirty(unsaved());
     };
 
     app.root.append(tabsRow, ribbon, classicBar, formulaBar, main, tabsBar, status);
@@ -2277,7 +2279,7 @@ export const sheetApp: AppDef = {
     // A program of its own asks as a desktop spreadsheet does when its window closes with unsaved changes.
     if (shell.native) {
       app.onClose(async () => {
-        if (wb.version === savedVersion) return true;
+        if (!unsaved()) return true;
         const answer = await shell.dialogs.ask<'save' | 'drop' | null>({
           title: shell.native!.product,
           text: `Do you want to save the changes you made to “${label}”?`,

@@ -546,7 +546,7 @@ body.is-dragging .win-body { pointer-events: none; }
 .grid-canvas { position: absolute; left: 0; top: 0; pointer-events: none; }
 .grid-scroll { position: absolute; inset: 0; overflow: auto; outline: none; cursor: cell; }
 .grid-spacer { pointer-events: none; }
-.grid-editor { position: absolute; z-index: 5; box-sizing: border-box; border: 2px solid #1e7a45; padding: 0 3px; font: 13px "Segoe UI", Arial, sans-serif; line-height: 17px; background: #fff; outline: none; resize: none; overflow: hidden; white-space: pre; }
+.grid-editor { position: absolute; z-index: 5; box-sizing: border-box; border: 2px solid #1e7a45; padding: 0 3px; font: 13px "Segoe UI", Arial, sans-serif; line-height: 17px; background: #fff; color: #222; color-scheme: light; outline: none; resize: none; overflow: hidden; white-space: pre; }
 .tabs-bar { display: flex; align-items: center; background: #e9e9e9; border-top: 1px solid #c8c8c8; padding: 0 6px; overflow-x: auto; }
 .sheet-tabs { display: flex; align-items: flex-end; gap: 1px; }
 .sheet-tab { border: 1px solid #c8c8c8; border-top: 0; padding: 3px 14px; background: #dcdcdc; cursor: pointer; font-size: 13px; }

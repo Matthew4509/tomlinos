@@ -1660,6 +1660,69 @@ await step('Spreadsheet: View > Classic swaps the ribbon for a menu bar and two 
   await sw().getByRole('button', { name: 'Close' }).click();
 });
 
+await step('Spreadsheet: closing the window with a value still being typed asks first; Keep it open keeps the typing, and an edit that changed nothing does not ask', async () => {
+  await closeAll();
+  await page.locator('.start-btn').click();
+  await page.locator('.start-filter').fill('spreadsheet');
+  await page.locator('.start-item', { hasText: 'Spreadsheet' }).click();
+  await page.locator('.sheet .grid-scroll').waitFor();
+  await goTo('B4');
+  // Typed, Enter not pressed: the taskbar marks it unsaved, and Close asks instead of dropping it.
+  await page.keyboard.type('1250');
+  await page.locator('.task', { hasText: '*' }).waitFor();
+  await sheetWin().getByRole('button', { name: 'Close' }).click();
+  const ask = page.locator('.dialog');
+  await ask.waitFor();
+  await ask.getByRole('button', { name: 'Keep it open' }).click();
+  eq(await page.locator('.sheet .grid-editor').inputValue(), '1250', 'the typing is still there');
+  // The same when it was typed in the formula bar.
+  await page.locator('.sheet .grid-editor').press('Escape');
+  await page.locator('.task', { hasText: '*' }).waitFor({ state: 'detached' });
+  await page.locator('.sheet .formula-input').click();
+  await page.keyboard.type('77');
+  await page.locator('.task', { hasText: '*' }).waitFor();
+  await page.locator('.sheet .formula-input').press('Escape');
+  // F2 (edit the cell) with nothing changed is not unsaved work: Close goes straight through.
+  await page.locator('.sheet .grid-scroll').focus();
+  await page.keyboard.press('F2');
+  await page.locator('.sheet .grid-editor').waitFor();
+  await sheetWin().getByRole('button', { name: 'Close' }).click();
+  await page.locator('.sheet').waitFor({ state: 'detached' });
+  eq(await page.locator('.dialog').count(), 0, 'no question');
+});
+
+await step('Spreadsheet: in the Dark theme, what is typed into a cell can be read', async () => {
+  await closeAll();
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
+  try {
+    await page.locator('.start-btn').click();
+    await page.locator('.start-filter').fill('spreadsheet');
+    await page.locator('.start-item', { hasText: 'Spreadsheet' }).click();
+    await page.locator('.sheet .grid-scroll').waitFor();
+    await goTo('B2');
+    await page.keyboard.type('hello');
+    // Contrast is how far apart the text and background colours are; 4.5 to 1 is the usual minimum for reading.
+    const contrast = sel => page.locator(sel).evaluate(el => {
+      const rgb = c => c.match(/[\d.]+/g).slice(0, 3).map(Number);
+      const lum = c => {
+        const [r, g, b] = rgb(c).map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; });
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      };
+      const st = getComputedStyle(el);
+      const [a, b] = [lum(st.color), lum(st.backgroundColor)].sort((x, y) => y - x);
+      return (a + 0.05) / (b + 0.05);
+    });
+    const inCell = await contrast('.sheet .grid-editor');
+    ok(inCell >= 4.5, 'the cell editor: text and background differ by only ' + inCell.toFixed(2) + ' to 1');
+    const inBar = await contrast('.sheet .formula-input');
+    ok(inBar >= 4.5, 'the formula bar: text and background differ by only ' + inBar.toFixed(2) + ' to 1');
+    await page.locator('.sheet .grid-editor').press('Escape');
+    await sheetWin().getByRole('button', { name: 'Close' }).click();
+  } finally {
+    await page.evaluate(() => { document.documentElement.dataset.theme = 'xfce'; });
+  }
+});
+
 await step('phone size: windows fill the screen, taskbar is bigger, nothing scrolls sideways', async () => {
   await closeAll();
   await page.setViewportSize({ width: 390, height: 800 });
