@@ -169,7 +169,7 @@ function readBlocks(source: string): NodeJSON {
       const code: string[] = [];
       // The block ends at a line of the same fence character at least as long as the one that opened it (so a longer
       // fence can hold a literal ``` line), and at nothing else.
-      const closes = new RegExp(`^\s*${fence[1][0] === '`' ? '`' : '~'}{${fence[1].length},}\s*$`);
+      const closes = new RegExp(`^\\s*${fence[1][0] === '`' ? '`' : '~'}{${fence[1].length},}\\s*$`);
       while (i < lines.length && !closes.test(lines[i])) code.push(lines[i++]);
       i++;
       for (const c of code) blocks.push(c ? { type: 'paragraph', attrs: { style: 'normal', after: 0 }, content: [{ type: 'text', text: c, marks: [{ type: 'font', attrs: { face: CODE_FACE } }] }] } : { type: 'paragraph', attrs: { style: 'normal', after: 0 } });

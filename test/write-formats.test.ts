@@ -412,3 +412,13 @@ test('mail merge: columns named alike each keep their own data, and a column cal
   assert.equal(JSON.stringify(fillFields(field('__proto__'), odd.rows[0])).includes('"x"'), true);
   assert.equal(JSON.stringify(fillFields(field('constructor'), odd.rows[0])).includes('"y"'), true);
 });
+
+test('Markdown: a code block closes at its own fence, not at the letter s', () => {
+  const doc = readMarkdown('```\nlet s = 1\ncost\n```  \nafter the block');
+  const text = JSON.stringify(doc);
+  assert.ok(text.includes('let s = 1') && text.includes('cost') && text.includes('after the block'));
+  const paras = (doc.content ?? []).length;
+  assert.equal(paras, 3);
+  const longer = JSON.stringify(readMarkdown('````\n```\nstill code\n````\ntail'));
+  assert.ok(longer.includes('still code') && longer.includes('tail'));
+});
