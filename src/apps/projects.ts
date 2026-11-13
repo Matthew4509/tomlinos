@@ -52,7 +52,7 @@ export const projectsApp: AppDef = {
 
     /** The projects must load; a calendar that cannot be read is said once and the list still opens. */
     async function loadAll(): Promise<void> {
-      [projects, settings] = await Promise.all([file.load(), readSettings(shell.fs)]);
+      [projects, settings] = await Promise.all([file.load(), readSettings(shell.fs, true)]);
       try {
         events = await calendar.load();
       } catch (error) {

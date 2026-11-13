@@ -40,3 +40,24 @@ test('saving writes a text file in Documents/Scratch pad; a new name renames it;
 test('no folder yet: no pads, and no error', async () => {
   assert.deepEqual(await listPads(new FileSystem(new MemoryStore())), []);
 });
+
+test('two new pads saved at the same moment under one name both survive (F02)', async () => {
+  const fs = new FileSystem(new MemoryStore());
+  const [a, b] = await Promise.all([savePad(fs, 'same', 'one', null, day), savePad(fs, 'same', 'two', null, day)]);
+  assert.notEqual(a, b);
+  const texts = [await fs.readText(`${PAD_FOLDER}/${a}`), await fs.readText(`${PAD_FOLDER}/${b}`)].sort();
+  assert.deepEqual(texts, ['one', 'two']);
+});
+
+test('a rename whose save fails leaves the old pad as it was (F03)', async () => {
+  const fs = new FileSystem(new MemoryStore());
+  const first = await savePad(fs, 'old', 'original', null, day);
+  const write = fs.writeText.bind(fs);
+  fs.writeText = async () => {
+    throw new Error('disk full');
+  };
+  await assert.rejects(savePad(fs, 'renamed', 'edited', first, day), /disk full/);
+  fs.writeText = write;
+  assert.deepEqual((await listPads(fs)).map(p => p.name), ['old.txt']);
+  assert.equal(await fs.readText(`${PAD_FOLDER}/old.txt`), 'original');
+});

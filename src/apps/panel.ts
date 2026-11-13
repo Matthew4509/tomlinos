@@ -316,10 +316,14 @@ export const panelApp: AppDef = {
       }
     }
     async function savePadNow(): Promise<void> {
+      // What is sent is what is marked saved: text typed while the save waits stays "not saved".
+      const sentName = padName.value;
+      const sentText = padText.value;
       try {
-        padFile = await savePad(shell.fs, padName.value, padText.value, padFile, new Date());
-        padName.value = padLabel(padFile);
-        padSaved = { name: padName.value, text: padText.value };
+        padFile = await savePad(shell.fs, sentName, sentText, padFile, new Date());
+        const label = padLabel(padFile);
+        if (padName.value === sentName) padName.value = label;
+        padSaved = { name: label, text: sentText };
         setPadDirty();
         await paintPads();
       } catch (error) {

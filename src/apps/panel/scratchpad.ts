@@ -4,7 +4,7 @@
 // Each pad is a plain text file in Documents/Scratch pad, named by the person or, when they give no name, by the day
 // (day-month-year, such as "27-09-2026"). Plain files: Files, Notepad and the Terminal all see them, and a backup copies them.
 import { cleanName, joinPath, uniqueName } from '../../fs/names.ts';
-import type { FileSystem } from '../../fs/fs.ts';
+import { FsError, type FileSystem } from '../../fs/fs.ts';
 
 export const PAD_FOLDER = '/Documents/Scratch pad';
 export const PAD_EXTENSION = '.txt';
@@ -48,10 +48,32 @@ export async function listPads(fs: FileSystem): Promise<Pad[]> {
  */
 export async function savePad(fs: FileSystem, name: string, text: string, was: string | null, now: Date): Promise<string> {
   await fs.ensureFolder(PAD_FOLDER);
-  let target = padFileName(name, now);
+  const wanted = padFileName(name, now);
   const taken = (await listPads(fs)).map(p => p.name).filter(n => n !== was);
-  if (taken.some(n => n.toLowerCase() === target.toLowerCase())) target = uniqueName(target, taken);
-  if (was && was !== target && (await fs.exists(joinPath(PAD_FOLDER, was)))) await fs.rename(joinPath(PAD_FOLDER, was), target);
-  await fs.writeText(joinPath(PAD_FOLDER, target), text);
+  // Saving over the pad's own file (same name): a plain replace.
+  if (was && wanted.toLowerCase() === was.toLowerCase() && (await fs.exists(joinPath(PAD_FOLDER, was)))) {
+    if (wanted === was) {
+      await fs.writeText(joinPath(PAD_FOLDER, was), text);
+      return was;
+    }
+    await fs.rename(joinPath(PAD_FOLDER, was), wanted);
+    await fs.writeText(joinPath(PAD_FOLDER, wanted), text);
+    return wanted;
+  }
+  // A new name: written only if nothing has it (create-only), trying " (2)", " (3)"... when another window or pad took it
+  // first, so two saves never overwrite each other. The old file goes only after the new one is safely written, so a
+  // failed write loses nothing.
+  let target = uniqueName(wanted, taken);
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await fs.writeText(joinPath(PAD_FOLDER, target), text, { mustBeNew: true });
+      break;
+    } catch (error) {
+      if (!(error instanceof FsError) || attempt >= 20 || !(await fs.exists(joinPath(PAD_FOLDER, target)))) throw error;
+      taken.push(target);
+      target = uniqueName(wanted, taken);
+    }
+  }
+  if (was && was !== target && (await fs.exists(joinPath(PAD_FOLDER, was)))) await fs.remove([joinPath(PAD_FOLDER, was)]);
   return target;
 }

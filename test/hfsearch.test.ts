@@ -102,3 +102,10 @@ test('each family is asked its own way: Qwen thinking off, Gemma with the instru
   assert.deepEqual(turns, [{ role: 'user', content: 'Be kind.\n\nHi' }, { role: 'assistant', content: 'Hello' }, { role: 'user', content: 'More' }]);
   assert.equal(turnsFor([{ role: 'system', content: 'S' }, { role: 'user', content: 'U' }], chatStyle('Qwen3.5-0.8B-q4f32_1-MLC')).length, 2, 'Qwen keeps its system turn');
 });
+
+test('a saved-models list that could not be read is not mistaken for an empty one before a save (F08)', async () => {
+  const { readMyModels } = await import('../src/apps/assistant/hfsearch.ts');
+  const unreachable = { readText: async () => { throw new TypeError('network down'); } } as never;
+  assert.deepEqual(await readMyModels(unreachable), [], 'showing: reads as empty');
+  await assert.rejects(readMyModels(unreachable, true), /network down/);
+});

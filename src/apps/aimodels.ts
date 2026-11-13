@@ -24,7 +24,14 @@ export const aiModelsApp: AppDef = {
   async launch(app) {
     const { shell, signal } = app;
     app.root.classList.add('aim');
-    let mine: MyModel[] = await readMyModels(shell.fs);
+    let mine: MyModel[];
+    try {
+      mine = await readMyModels(shell.fs, true);
+    } catch (error) {
+      await shell.report('Could not read your saved models', error);
+      app.close();
+      return;
+    }
 
     const query = h('input', { type: 'search', class: 'field aim-query', placeholder: 'Model name, e.g. gemma, qwen, llama, uncensored', 'aria-label': 'Search Hugging Face', spellcheck: false, autocomplete: 'off' });
     const select = <T extends { id: string; label: string }>(label: string, options: readonly T[]) =>

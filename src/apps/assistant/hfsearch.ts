@@ -7,7 +7,7 @@
 //
 // Everything here talks to huggingface.co from the browser (the page's security policy allows it); the text helpers
 // are plain functions, tested in Node with a stand-in for fetch.
-import type { FileSystem } from '../../fs/fs.ts';
+import { FsError, type FileSystem } from '../../fs/fs.ts';
 import { MODEL_LIBS, type ModelLib } from './modellibs.ts';
 import { BUILT_IN_MODELS, nameAddedModels, type InstalledModel } from './engine.ts';
 
@@ -211,11 +211,14 @@ export function cleanMyModels(raw: unknown): MyModel[] {
   }).slice(0, 50);
 }
 
-export async function readMyModels(fs: FileSystem): Promise<MyModel[]> {
+export async function readMyModels(fs: FileSystem, strict = false): Promise<MyModel[]> {
   let list: MyModel[] = [];
   try {
     list = cleanMyModels(JSON.parse(await fs.readText(MY_MODELS_PATH)));
-  } catch {
+  } catch (error) {
+    // strict (before a save): a list that is there but could not be read (the server out of reach, say) throws, so the
+    // save that follows is not written over it. A missing or damaged list still reads as empty.
+    if (strict && !(error instanceof FsError) && !(error instanceof SyntaxError)) throw error;
     list = [];
   }
   nameAddedModels(list.map(m => ({ id: m.id, name: m.name, maker: `${m.uploader} on Hugging Face` })));
