@@ -1515,6 +1515,14 @@ function leaderTool(ctx: ToolCtx): Tool {
       const st = ctx.style();
       return [{ type: 'dim', kind: 'leader', pts: [...pts, c], dir: 0, h: st.dimH, arrow: st.arrow, dp: st.dp, text: '' }];
     },
+    keep() {
+      // Left part-way (another tool, the window closing): the path is kept as a leader with no words yet, not thrown away.
+      if (waiting || pts.length < 2) return;
+      const st = ctx.style();
+      ctx.add([{ type: 'dim', kind: 'leader', pts: [...pts], dir: 0, h: st.dimH, arrow: st.arrow, dp: st.dp, text: '' }], ctx.noteLayer('dim'));
+      ctx.say('Leader note: kept as drawn so far, with no words (Undo takes it back; Change text adds the words).');
+      t.done = true;
+    },
   };
   return t;
 }

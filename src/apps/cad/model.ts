@@ -443,7 +443,7 @@ export function readTcad(text: string): { drawing: Drawing; skipped: number; dam
     const name = typeof r.name === 'string' ? r.name.trim().slice(0, 64) : '';
     if (!name || layers.some(x => x.name === name)) continue;
     const colour = typeof r.colour === 'string' && /^#[0-9a-f]{6}$/i.test(r.colour) ? r.colour.toLowerCase() : '#ffffff';
-    const lineType = typeof r.lineType === 'string' && r.lineType in LINE_TYPES ? (r.lineType as LineType) : 'continuous';
+    const lineType = typeof r.lineType === 'string' && Object.hasOwn(LINE_TYPES, r.lineType) ? (r.lineType as LineType) : 'continuous';
     layers.push({ name, colour, on: r.on !== false, locked: r.locked === true, lineType });
   }
   if (!layers.length) layers.push(...newDrawing().layers);

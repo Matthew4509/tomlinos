@@ -821,8 +821,10 @@ export function areaOf(s: Shape): number | null {
   if (s.type === 'ellipse') return isFull(s.t0, s.t1) ? Math.PI * len(s.m) * len(s.m) * s.ratio : null;
   if (s.type !== 'poly' || !s.closed) return null;
   let a = 0;
+  // Measured from the first point, so a shape far from (0, 0) does not lose its digits to the big numbers.
+  const o = s.pts[0];
   for (const sp of spansOf(s.pts, s.bulges, true)) {
-    a += cross(sp.a, sp.b) / 2;
+    a += cross(sub(sp.a, o), sub(sp.b, o)) / 2;
     if (sp.arc) {
       const th = 4 * Math.atan(Math.abs(sp.bulge));
       // A bulge above 0 swings to the right of the way travelled: outside an anticlockwise shape, so it adds.
@@ -835,8 +837,9 @@ export function areaOf(s: Shape): number | null {
 /** Which way a closed polyline runs: 1 anticlockwise, -1 clockwise. */
 export function turnOf(s: Extract<Shape, { type: 'poly' }>): number {
   let a = 0;
+  const o = s.pts[0];
   for (const sp of spansOf(s.pts, s.bulges, s.closed)) {
-    a += cross(sp.a, sp.b);
+    a += cross(sub(sp.a, o), sub(sp.b, o));
     if (sp.arc) {
       const th = 4 * Math.atan(Math.abs(sp.bulge));
       a += Math.sign(sp.bulge) * (sp.arc.r * sp.arc.r) * (th - Math.sin(th));

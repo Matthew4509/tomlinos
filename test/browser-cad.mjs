@@ -1049,6 +1049,43 @@ await step('a polyline or curve being drawn is kept when you change tool, type a
   ok(!(await said(2)).includes('Cannot'), 'and no complaint: ' + (await said(2)));
 });
 
+await step('14 Nov walk: a leader being drawn is kept on a tool change; closing mid-polyline asks first; Undo keeps the chosen grid spacing', async () => {
+  await closeAll();
+  await openCad();
+  // O14: a leader path survives switching to Circle (and is one Undo).
+  await cmd('leader', '0,0', '50,50');
+  await W().getByRole('button', { name: 'Circle: centre and radius' }).click();
+  eq(await count('Dimensions'), 1, 'the leader path survives switching to Circle');
+  await page.keyboard.press('Escape');
+  // O15: the grid spacing chosen stays after Undo.
+  const gridValue = async () => {
+    await W().getByRole('menuitem', { name: 'View' }).click();
+    await page.locator('.menu').getByText('Grid spacing...', { exact: true }).click();
+    const v = await D().locator('input').first().inputValue();
+    await D().getByRole('button', { name: 'Cancel' }).click();
+    return v;
+  };
+  await W().getByRole('menuitem', { name: 'View' }).click();
+  await page.locator('.menu').getByText('Grid spacing...', { exact: true }).click();
+  await D().locator('input').first().fill('25');
+  await D().getByRole('button', { name: 'OK' }).click();
+  await cmd('line', '0,0', '100,0', '');
+  await canvas().focus();
+  await page.keyboard.press('Control+z');
+  eq(await gridValue(), '25', 'Undo keeps the grid spacing');
+  // O03: closing with a polyline part-way asks, rather than dropping it.
+  await cmd('polyline', '0,0', '100,0', '100,100');
+  await W().getByRole('button', { name: 'Close', exact: true }).first().click();
+  const ask = page.locator('.dialog').getByRole('button', { name: 'Keep it open' });
+  ok(await ask.waitFor({ timeout: 3000 }).then(() => true, () => false), 'closing mid-polyline asks before dropping it');
+  await ask.click();
+  ok(await W().locator('.cad').count(), 'Keep it open leaves the drawing there');
+  eq(await count('Geometry'), 1, 'the polyline was kept (the line was taken back by Undo)');
+  // Grid spacing... turned the grid on and keeps it so; put it back for the steps after.
+  await canvas().focus();
+  await page.keyboard.press('F7');
+});
+
 await step('changing text and dimension sizes is its own Undo step: Undo takes the sizes back and leaves the line', async () => {
   await closeAll();
   await openCad();

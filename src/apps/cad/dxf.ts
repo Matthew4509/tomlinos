@@ -218,6 +218,17 @@ function cp1252(s: string): Uint8Array {
   return new Uint8Array(out);
 }
 
+/** The letters in s that a cp1252 file cannot hold (each becomes ?), without repeats. */
+export function lettersLost(s: string): string[] {
+  const lost = new Set<string>();
+  for (const ch of s) {
+    const c = ch.codePointAt(0)!;
+    if (c < 0x80 || (c >= 0xa0 && c <= 0xff)) continue;
+    if (!'€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ'.includes(ch)) lost.add(ch);
+  }
+  return [...lost];
+}
+
 export interface DxfWritten {
   text: string;
   bytes: Uint8Array;
@@ -499,6 +510,8 @@ export function writeDxf(d: Drawing, o: DxfOptions): DxfWritten {
   if (d.layers.some(l => /[a-z]/.test(l.name))) notes.push('Layer names are written in capitals (R12 has no small letters).');
   if (renamed.length) notes.push(`Layer names R12 cannot hold were changed: ${renamed.join(', ')}.`);
   const textOut = out.join('\r\n') + '\r\n';
+  const lost = lettersLost(textOut);
+  if (lost.length) notes.push(`${lost.length} letter${lost.length === 1 ? '' : 's'} R12 cannot hold (${lost.slice(0, 8).join(' ')}${lost.length > 8 ? ' ...' : ''}) could not be written and became ? in the file.`);
   return { text: textOut, bytes: cp1252(textOut), notes, count };
 }
 
@@ -691,9 +704,15 @@ export function readDxf(bytes: Uint8Array): DxfRead {
   // Layers.
   const layers: Layer[] = [];
   const tables = sections.get('TABLES') ?? [];
+  const joinedLayers: string[] = [];
+  const fullNameOf = new Map<string, string>();
   for (const r of tables) {
     if (r.type !== 'LAYER') continue;
-    const name = (get(r, 2) ?? '').trim().slice(0, 64);
+    const full = (get(r, 2) ?? '').trim();
+    const name = full.slice(0, 64);
+    // Two names that differ only after the 64th letter end up as one layer: said below.
+    if (name && fullNameOf.has(name) && fullNameOf.get(name) !== full) joinedLayers.push(name);
+    if (name && !fullNameOf.has(name)) fullNameOf.set(name, full);
     if (!name || layers.some(l => l.name === name)) continue;
     const colour = num(r, 62, 7);
     const flags = num(r, 70, 0);
@@ -899,7 +918,8 @@ export function readDxf(bytes: Uint8Array): DxfRead {
         case 'LEADER': {
           const ly = r.tags.filter(x => x[0] === 20);
           const pts = r.tags.filter(t => t[0] === 10).map((t, j) => P(Number(t[1]), Number(ly[j]?.[1] ?? 0)));
-          if (pts.length >= 2) put({ type: 'dim', kind: 'leader', pts, dir: 0, h: defaultStyle(units === 'inch').dimH, arrow: defaultStyle(units === 'inch').arrow, dp: 2, text: '' });
+          // Sizes are in the drawing's units but are scaled by k with everything else below: start at 1/k of the usual size.
+          if (pts.length >= 2) put({ type: 'dim', kind: 'leader', pts, dir: 0, h: defaultStyle(units === 'inch').dimH / k, arrow: defaultStyle(units === 'inch').arrow / k, dp: 2, text: '' });
           break;
         }
         case 'INSERT':
@@ -1072,6 +1092,8 @@ export function readDxf(bytes: Uint8Array): DxfRead {
   if (thick) report.push(`${thick} item${thick === 1 ? ' has' : 's have'} a thickness (raised walls in 3D): drawn flat, and not kept.`);
   const left = [...leftOut].reduce((t, [, c]) => t + c, 0);
   if (left) report.push(`Left out (CAD Draft does not draw these): ${[...leftOut].map(([kName, c]) => `${c} ${kName}${c === 1 ? '' : 's'}`).join(', ')}.`);
+  const joined = [...new Set(joinedLayers)];
+  if (joined.length) report.push(`${joined.length} layer name${joined.length === 1 ? ' is' : 's are'} longer than 64 letters and the same up to there, so ${joined.length === 1 ? 'those layers were' : 'each pair was'} joined into one layer (shortened to 64 letters): ${joined.map(n => n.slice(0, 40) + '...').join(', ')}.`);
   if (!d.ents.length) report.push('Nothing in the file could be drawn.');
   // Text longer than a drawing keeps is cut to that length, and said, so the drawing opens again once saved.
   let longText = 0;
@@ -1080,7 +1102,7 @@ export function readDxf(bytes: Uint8Array): DxfRead {
     longText++;
   }
   if (longText) report.push(`${longText} text item${longText === 1 ? ' was' : 's were'} longer than ${MAX_TEXT_LENGTH.toLocaleString('en-GB')} letters: cut to that length.`);
-  return { drawing: d, report, leftOut: left, changed: ownColours + ownLineTypes + raised + thick + longText + exploded + curves + fitCurves };
+  return { drawing: d, report, leftOut: left, changed: ownColours + ownLineTypes + raised + thick + longText + exploded + curves + fitCurves + joined.length };
 }
 
 /** Every number in a shape is a real number (not Infinity or NaN). */

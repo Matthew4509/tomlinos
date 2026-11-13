@@ -587,14 +587,15 @@ export function dedupe(pts: Pt[], tol = 1e-7): Pt[] {
 
 /** The circle through three points; null when they are in a straight line. */
 export function circumcircle(a: Pt, b: Pt, c: Pt): { c: Pt; r: number } | null {
-  const d = 2 * (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y));
+  // Worked out with a as the origin, so three points far from (0, 0) lose no digits to the big numbers.
+  const bx = b.x - a.x, by = b.y - a.y, cx = c.x - a.x, cy = c.y - a.y;
+  const d = 2 * (bx * cy - by * cx);
   const scale = Math.max(dist(a, b), dist(b, c), dist(a, c));
   if (Math.abs(d) <= 1e-12 * scale * scale) return null;
-  const a2 = a.x * a.x + a.y * a.y;
-  const b2 = b.x * b.x + b.y * b.y;
-  const c2 = c.x * c.x + c.y * c.y;
-  const centre = P((a2 * (b.y - c.y) + b2 * (c.y - a.y) + c2 * (a.y - b.y)) / d, (a2 * (c.x - b.x) + b2 * (a.x - c.x) + c2 * (b.x - a.x)) / d);
-  return { c: centre, r: dist(centre, a) };
+  const b2 = bx * bx + by * by;
+  const c2 = cx * cx + cy * cy;
+  const centre = P(a.x + (cy * b2 - by * c2) / d, a.y + (bx * c2 - cx * b2) / d);
+  return { c: centre, r: Math.hypot(centre.x - a.x, centre.y - a.y) };
 }
 
 /** An anticlockwise arc around c from angle `from` to angle `to` (going the anticlockwise way round). */

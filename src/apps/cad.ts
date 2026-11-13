@@ -306,9 +306,10 @@ export const cadApp: AppDef = {
       drawing.layers = s.layers.map(l => ({ ...l, on: now.get(l.name)?.on ?? l.on, locked: now.get(l.name)?.locked ?? l.locked }));
       drawing.current = drawing.layers.some(l => l.name === drawing.current) ? drawing.current : s.current;
       drawing.photo = s.photo && photoNow ? { ...s.photo, on: photoNow.on, opacity: photoNow.opacity } : s.photo;
+      // The grid spacing the user chose stays, unless Undo changes the units (then the usual one for them).
+      if (drawing.units !== s.units) gridSpacing = s.units === 'mm' ? 10 : 0.5;
       drawing.units = s.units;
       drawing.style = s.style;
-      gridSpacing = drawing.units === 'mm' ? 10 : 0.5;
       // Back to the saved shapes with a different look kept is still a change from the file.
       version = lookOf(drawing.layers, drawing.current, drawing.photo) === lookOf(s.layers, s.current, s.photo) ? s.version : ++stamp;
       for (const id of [...selected]) if (!drawing.ents.some(e => e.id === id)) selected.delete(id);
@@ -2754,6 +2755,8 @@ export const cadApp: AppDef = {
       if (document.visibilityState === 'hidden') void autosave();
     }, signal);
     app.onClose(async () => {
+      // A polyline, curve or leader part-way is made first, so closing never drops it without the question below.
+      if (tool && !tool.done) tool.keep?.();
       if (version === savedVersion) {
         dropRecovery();
         return true;
