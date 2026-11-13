@@ -194,6 +194,7 @@ export function parseFormula(text: string): Node {
             else args.push(comparison(d + 1));
             const n = toks[p++];
             if (n?.type === 'rp') break;
+            if (n?.type === 'colon' && toks[p - 2]?.type === 'num') fail('Whole rows such as 1:1 are not supported. Write the cells, for example A1:Z1.');
             if (n?.type !== 'comma') fail('A comma or closing bracket is missing.');
           }
         }
@@ -939,12 +940,10 @@ function allOrAny(ev: Ev, args: Node[], depth: number, all: boolean): Value {
   const got = collect(ev, args, depth);
   if (got instanceof CellError) return got;
   let r = all;
-  let skipped = false;
   let seen = false;
   for (const { v, fromRange } of got) {
     if (v === null || v === '') continue;
     if (fromRange && typeof v === 'string') {
-      skipped = true;
       continue;
     }
     const b = toBool(v);
@@ -952,7 +951,7 @@ function allOrAny(ev: Ev, args: Node[], depth: number, all: boolean): Value {
     seen = true;
     r = all ? r && b : r || b;
   }
-  return skipped && !seen ? E.VALUE : r;
+  return !seen ? E.VALUE : r;
 }
 
 /** A SUMIF-style condition: 5, ">5", "<>x", "=abc", "a*" (with * and ? wildcards, and ~ before either meaning the character itself). */
@@ -991,16 +990,20 @@ function conditional(ev: Ev, args: Node[], depth: number, kind: 'sum' | 'count' 
   if (target instanceof CellError) return target;
   let total = 0;
   let count = 0;
+  let failed: CellError | undefined;
   range.forEach((row, r) => row.forEach((v, c) => {
     if (!match(v)) return;
     const t = target[r]?.[c] ?? null;
     if (kind === 'count') count++;
+    else if (t instanceof CellError) failed ??= t;
     else if (typeof t === 'number') {
       total += t;
       count++;
     }
   }));
   if (kind === 'count') return count;
+  // A matching row whose cell to add up is an error gives that error, as SUM does.
+  if (failed) return failed;
   if (kind === 'avg') return count ? clean(total / count) : E.DIV0;
   return clean(total);
 }

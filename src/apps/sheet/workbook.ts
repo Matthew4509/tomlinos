@@ -1551,13 +1551,26 @@ export class Workbook {
     const changes: Change[] = [];
     const moved = new Set<number>();
     let created = 0;
+    // A cut moves the cells themselves: a moved formula keeps pointing where it did, and a formula anywhere that points at
+    // a moved cell (or at a range lying wholly inside the cut cells) follows it. (Only within one sheet.)
+    const follow = opts.cut && !opts.transpose && from === s;
+    const offC = dest.col - src.c0;
+    const offR = dest.row - src.r0;
+    const inside = (r: Ref): boolean => r.col >= src.c0 && r.col <= src.c1 && r.row >= src.r0 && r.row <= src.r1;
+    const follows = (f: string, home: number): string => mapRefs(f, (a, b, refSheet) => {
+      const at = refSheet === undefined ? home : this.sheets.findIndex(x => x.name.toLowerCase() === refSheet.toLowerCase());
+      if (at !== from) return [a, b];
+      const go = (r: Ref): Ref => ({ ...r, col: r.col + offC, row: r.row + offR });
+      if (!b) return inside(a) ? [go(a), null] : [a, null];
+      return inside(a) && inside(b) ? [go(a), go(b)] : [a, b];
+    });
     for (const g of grabbed) {
       const key = keyOf(dest.col + g.dc, dest.row + g.dr);
       moved.add(key);
       const old = this.sheets[s].cells.get(key);
       const srcCol = src.c0 + (opts.transpose ? g.dr : g.dc);
       const srcRow = src.r0 + (opts.transpose ? g.dc : g.dr);
-      const shifted = (c: Cell): Cell => (c.f !== undefined ? { ...c, f: shiftFormula(c.f, dest.col + g.dc - srcCol, dest.row + g.dr - srcRow) } : { ...c });
+      const shifted = (c: Cell): Cell => (c.f === undefined ? { ...c } : opts.cut ? { ...c, f: follow ? follows(c.f, s) : c.f } : { ...c, f: shiftFormula(c.f, dest.col + g.dc - srcCol, dest.row + g.dr - srcRow) });
       let after: Cell | undefined;
       if (what === 'all') after = g.cell ? shifted(g.cell) : undefined;
       else {
@@ -1583,6 +1596,19 @@ export class Workbook {
         const key = keyOf(src.c0 + g.dc, src.r0 + g.dr);
         if (from === s && moved.has(key)) continue;
         changes.push({ sheet: from, key, after: undefined });
+      }
+    }
+    if (follow) {
+      // Every other formula that read a moved cell now reads it where it went.
+      for (let si = 0; si < this.sheets.length; si++) {
+        for (const [key, cell] of this.sheets[si].cells) {
+          if (cell.f === undefined) continue;
+          const col = colOfKey(key);
+          const row = rowOfKey(key);
+          if (si === s && ((col >= src.c0 && col <= src.c1 && row >= src.r0 && row <= src.r1) || moved.has(key))) continue;
+          const f = follows(cell.f, si);
+          if (f !== cell.f) changes.push({ sheet: si, key, after: { ...cell, f } });
+        }
       }
     }
     this.assertRoom(created);
@@ -2133,6 +2159,8 @@ export class Workbook {
       if (axis === 'row' && fit) sheet.rowFit.add(index);
       else if (axis === 'row') sheet.rowFit.delete(index);
     };
+    // Past the sheet's own edge there is nothing to size (and the file would not keep it).
+    if (index < 0 || index >= (axis === 'row' ? MAX_ROWS : MAX_COLS)) return;
     const sheet = this.sheets[s];
     const next = size === null ? undefined : Math.max(axis === 'row' ? 12 : 16, Math.min(axis === 'row' ? 400 : 800, Math.round(size)));
     const was = (axis === 'row' ? sheet.rowH : sheet.colW).get(index);

@@ -1479,7 +1479,16 @@ export const sheetApp: AppDef = {
       return saveXlsx(wb);
     };
 
-    async function save(): Promise<boolean> {
+    // One save at a time: a second Ctrl+S waits for the first to finish, so it sees the file as the first left it
+    // instead of taking it for a change made somewhere else.
+    let saveQueue: Promise<unknown> = Promise.resolve();
+    function save(): Promise<boolean> {
+      const run = saveQueue.then(saveNow, saveNow);
+      saveQueue = run.catch(() => false);
+      return run;
+    }
+
+    async function saveNow(): Promise<boolean> {
       if (!grid.commit()) return false;
       if (!path) return saveAs();
       // Saving over an Excel file would take out of it what this spreadsheet left out when opening it: asked first.
