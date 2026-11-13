@@ -36,6 +36,8 @@ export interface CalEvent {
   remind: number;
   /** What the file held for this event beyond the fields above (absent for an event made here). */
   keep?: EventKeep;
+  /** On a showing moved to this computer's clock for a day (a repeat written in another zone): the event it is a showing of. */
+  of?: CalEvent;
 }
 
 interface EventKeep {
@@ -57,6 +59,9 @@ interface EventKeep {
   skip?: string[];
   /** Which copy this is, when the file gives several events the same UID. */
   copy?: Copy;
+  /** A repeating event's start as the file wrote it, in its own zone (UTC counts as one): each showing is placed from
+   *  this, so a daylight-saving change there or here moves the time shown on the days after it. */
+  zone?: { name: string; date: string; time: string };
 }
 
 const WEEKDAYS = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
@@ -149,16 +154,18 @@ function zoneToUtc(y: number, mo: number, d: number, h: number, mi: number, zone
   }
 }
 
-function parseStamp(line: ContentLine): { date: string; time: string } | null {
+function parseStamp(line: ContentLine): { date: string; time: string; zone?: { name: string; date: string; time: string } } | null {
   const m = /^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})\d{2}(Z?))?$/.exec(line.value.trim());
   if (!m) return null;
   let [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
   let time = '';
+  let zone: { name: string; date: string; time: string } | undefined;
   if (m[4] !== undefined) {
     let [h, mi] = [Number(m[4]), Number(m[5])];
     // UTC ("Z", as Google and Outlook write) or a named zone: shown as the local time it is here.
     const at = m[6] === 'Z' ? Date.UTC(y, mo - 1, d, h, mi) : line.params.TZID ? zoneToUtc(y, mo, d, h, mi, line.params.TZID) : null;
     if (at !== null && Number.isFinite(at)) {
+      zone = { name: m[6] === 'Z' ? 'UTC' : line.params.TZID, date: `${m[1]}-${m[2]}-${m[3]}`, time: `${m[4]}:${m[5]}` };
       const t = new Date(at);
       [y, mo, d, h, mi] = [t.getFullYear(), t.getMonth() + 1, t.getDate(), t.getHours(), t.getMinutes()];
     }
@@ -166,7 +173,7 @@ function parseStamp(line: ContentLine): { date: string; time: string } | null {
     if (!isTime(time)) return null;
   }
   const date = `${String(y).padStart(4, '0')}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-  return isDate(date) ? { date, time } : null;
+  return isDate(date) ? (zone ? { date, time, zone } : { date, time }) : null;
 }
 
 const stamp = (date: string, time: string) => date.replace(/-/g, '') + (time ? `T${time.replace(':', '')}00` : '');
@@ -285,6 +292,8 @@ function readIcs(text: string): { events: CalEvent[]; calendar: string[]; unread
           if (cur.count) e.count = cur.count;
           if (cur.until) e.until = cur.until;
         }
+        // Only a repeat is placed again day by day; a single showing keeps the time it was converted to.
+        if (e.repeat === 'none' || !e.start) delete keep.zone;
         if (cur.where) e.where = cur.where;
         if (cur.project) e.project = cur.project;
         if (cur.cancelled) e.cancelled = true;
@@ -306,6 +315,7 @@ function readIcs(text: string): { events: CalEvent[]; calendar: string[]; unread
       else if (line.name === 'DTSTART') {
         const s = parseStamp(line);
         if (s) [cur.date, cur.start] = [s.date, s.time];
+        if (s?.zone) cur.keep.zone = s.zone;
       } else if (line.name === 'DTEND') {
         cur.endStamp = parseStamp(line) ?? undefined;
       } else if (line.name === 'DURATION') {
@@ -525,9 +535,32 @@ export function dayLabel(day: string, year = false): string {
 /** The reminder choices offered wherever an event is made (minutes before the start; -1 none). */
 export const REMIND_CHOICES: Array<[number, string]> = [[-1, 'No reminder'], [0, 'At the start'], [5, '5 minutes before'], [15, '15 minutes before'], [30, '30 minutes before'], [60, '1 hour before'], [1440, '1 day before']];
 
+/**
+ * The event as it shows on this day: a repeat written in another zone keeps its time there, so after a daylight-saving
+ * change in either zone its time here has moved. A copy with `of` the event itself; the event itself when nothing moves.
+ */
+function placedOn(e: CalEvent, day: string): CalEvent {
+  const z = e.keep?.zone;
+  if (!z || day === e.date || !e.start) return e;
+  const utcDay = (key: string) => { const [yy, mm, dd] = key.split('-').map(Number); return Date.UTC(yy, mm - 1, dd); };
+  const days = Math.round((utcDay(day) - utcDay(e.date)) / 86400000);
+  const source = addDays(z.date, days);
+  const [y, mo, d] = source.split('-').map(Number);
+  const [h, mi] = z.time.split(':').map(Number);
+  const at = zoneToUtc(y, mo, d, h, mi, z.name);
+  if (at === null) return e;
+  const t = new Date(at);
+  const start = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
+  if (start === e.start) return e;
+  const minutes = (time: string) => Number(time.slice(0, 2)) * 60 + Number(time.slice(3));
+  const shift = minutes(start) - minutes(e.start);
+  const end = e.end ? (() => { const n = (((minutes(e.end) + shift) % 1440) + 1440) % 1440; return `${String(Math.floor(n / 60)).padStart(2, '0')}:${String(n % 60).padStart(2, '0')}`; })() : '';
+  return { ...e, start, end, of: e };
+}
+
 /** The events on a day, all-day first, then by start time. */
 export function eventsOn(events: CalEvent[], day: string): CalEvent[] {
-  return events.filter(e => occursOn(e, day)).sort((a, b) => (a.start || '').localeCompare(b.start || '') || a.title.localeCompare(b.title));
+  return events.filter(e => occursOn(e, day)).map(e => placedOn(e, day)).sort((a, b) => (a.start || '').localeCompare(b.start || '') || a.title.localeCompare(b.title));
 }
 
 /** How far back to look for a repeat's showing that runs on into a day: a year, whatever a file says. */
@@ -550,7 +583,7 @@ function runsOn(e: CalEvent, day: string): boolean {
 /** The events to show on a day of the month grid and its list: with those that began earlier and run into it. (eventsOn
  *  gives only what starts that day: reminders and the Panel count from the start.) */
 export function eventsShownOn(events: CalEvent[], day: string): CalEvent[] {
-  return events.filter(e => runsOn(e, day)).sort((a, b) => (a.start || '').localeCompare(b.start || '') || a.title.localeCompare(b.title));
+  return events.filter(e => runsOn(e, day)).map(e => (occursOn(e, day) ? placedOn(e, day) : e)).sort((a, b) => (a.start || '').localeCompare(b.start || '') || a.title.localeCompare(b.title));
 }
 
 /** When the reminder for this event's showing on `day` is due, in ms since 1970 (local time); null if none. Counted back

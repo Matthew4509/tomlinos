@@ -183,3 +183,36 @@ test('O21: Calendar asks before an unsaved form is dropped by choosing another d
   await grid.fire('click', grid.querySelector('.cal-cell')!);
   assert.equal(t.app.root.querySelector('[aria-label="What"]'), null);
 });
+
+test('O17: a repeating event written in another zone keeps its time there across a daylight-saving change, so it moves here', () => {
+  const before = process.env.TZ;
+  process.env.TZ = 'Australia/Sydney';
+  try {
+    const text = ics(['UID:z1', 'DTSTART;TZID=Europe/London:20261012T090000', 'DTEND;TZID=Europe/London:20261012T100000', 'RRULE:FREQ=WEEKLY', 'SUMMARY:London stand-up']);
+    const events = parseIcs(text);
+    const at = (day: string) => eventsOn(events, day).map(e => `${e.start}-${e.end}`);
+    // London is on summer time (UTC+1) and Sydney on summer time (UTC+11): 09:00 there is 19:00 here.
+    assert.deepEqual(at('2026-10-12'), ['19:00-20:00']);
+    assert.deepEqual(at('2026-10-19'), ['19:00-20:00']);
+    // London goes back to UTC on 25 October: the same 09:00 there is an hour later here.
+    assert.deepEqual(at('2026-10-26'), ['20:00-21:00']);
+    assert.deepEqual(at('2026-11-02'), ['20:00-21:00']);
+    assert.deepEqual(eventsShownOn(events, '2026-11-02').map(e => e.start), ['20:00']);
+    // Sydney goes back to winter time on 4 April 2027, London already on summer time again (28 March): 09:00 there is 18:00 here.
+    assert.deepEqual(at('2027-03-22'), ['20:00-21:00']);
+    assert.deepEqual(at('2027-04-12'), ['18:00-19:00']);
+    // Only what is shown moves: the event itself, and what is written back, keep the first showing's time.
+    assert.equal(events[0].start, '19:00');
+    assert.equal(writeIcs(events, text), writeIcs(parseIcs(text), text));
+    assert.match(writeIcs(events, text), /DTSTART;TZID=Europe\/London:20261012T090000/);
+    // A showing opened to edit is the event itself, not the moved copy.
+    assert.equal(eventsOn(events, '2026-11-02')[0].of, events[0]);
+    // A UTC time repeats by the same rule; a time with no zone (a floating one) never moves.
+    const utc = parseIcs(ics(['UID:z2', 'DTSTART:20261012T080000Z', 'RRULE:FREQ=WEEKLY', 'SUMMARY:UTC']));
+    assert.deepEqual(eventsOn(utc, '2026-11-02').map(e => e.start), ['19:00']);
+    const floating = parseIcs(ics(['UID:z3', 'DTSTART:20261012T090000', 'RRULE:FREQ=WEEKLY', 'SUMMARY:Floating']));
+    assert.deepEqual(eventsOn(floating, '2026-11-02').map(e => e.start), ['09:00']);
+  } finally {
+    if (before === undefined) delete process.env.TZ; else process.env.TZ = before;
+  }
+});

@@ -130,7 +130,7 @@ export const calendarApp: AppDef = {
     function edit(existing: CalEvent | null): void {
       const signal = fresh();
       editing = true;
-      const e: CalEvent = existing ? { ...existing } : { uid: crypto.randomUUID(), title: '', date: chosen, start: '', end: '', notes: '', repeat: 'none', remind: -1 };
+      const e: CalEvent = existing ? { ...(existing.of ?? existing) } : { uid: crypto.randomUUID(), title: '', date: chosen, start: '', end: '', notes: '', repeat: 'none', remind: -1 };
       const titleIn = h('input', { type: 'text', class: 'field', value: e.title, maxlength: 500, 'aria-label': 'What' });
       // A repeat is one event: its date is the day of its first showing, whichever showing was opened, and moving it
       // moves them all. Named for what it is, so that is never a surprise.
