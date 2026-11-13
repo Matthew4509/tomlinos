@@ -7,28 +7,6 @@
 declare(strict_types=1);
 
 require __DIR__ . '/../lib/http.php';
-
-/**
- * The request body, up to $limit bytes, read in chunks. file_get_contents() with a length reserves the whole length
- * first on PHP 8.2, so a 256 MB limit under a 128 MB memory_limit died on every save however small the body was.
- */
-function store_read_body(int $limit): string
-{
-    $in = fopen('php://input', 'rb');
-    if ($in === false) {
-        return '';
-    }
-    $out = '';
-    while (strlen($out) < $limit && !feof($in)) {
-        $chunk = fread($in, min(1048576, $limit - strlen($out)));
-        if ($chunk === false || $chunk === '') {
-            break;
-        }
-        $out .= $chunk;
-    }
-    fclose($in);
-    return $out;
-}
 require __DIR__ . '/../lib/auth.php';
 require __DIR__ . '/../lib/store.php';
 
@@ -73,7 +51,7 @@ try {
         }
         $quota = (int) ($config['quota_mb'] ?? 0) * 1048576;
         // Read at most one byte over the limit: a body sent in chunks has no Content-Length to check above.
-        $raw = store_read_body($max + 1);
+        $raw = read_request_body($max + 1);
         if (strlen($raw) > $max) {
             api_fail(413, sprintf('That save is over %.1f MB, the most this server takes at once. Split it into smaller files.', $max / 1048576));
         }

@@ -138,6 +138,29 @@ function body_str(array $body, string $key): string
     return is_string($v) ? $v : (is_int($v) || is_float($v) ? (string) $v : '');
 }
 
+/**
+ * The request body, up to $limit bytes, read in chunks. file_get_contents() with a length reserves the whole length
+ * first on PHP 8.2, so a 256 MB limit under a 128 MB memory_limit died on every save however small the body was (and
+ * mail's 26 MB limit took 26 MB on every send).
+ */
+function read_request_body(int $limit): string
+{
+    $in = fopen('php://input', 'rb');
+    if ($in === false) {
+        return '';
+    }
+    $out = '';
+    while (strlen($out) < $limit && !feof($in)) {
+        $chunk = fread($in, min(1048576, $limit - strlen($out)));
+        if ($chunk === false || $chunk === '') {
+            break;
+        }
+        $out .= $chunk;
+    }
+    fclose($in);
+    return $out;
+}
+
 /** The JSON object a POST carried, or a refusal. */
 function api_body(): array
 {

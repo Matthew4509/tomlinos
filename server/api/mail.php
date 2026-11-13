@@ -32,7 +32,7 @@ $op = query_str('op');
 // 18 MB of attachments is about 24 MB once base64-encoded in the request; more would not fit a 25 MB mail limit
 // and would risk the host's 128 MB PHP memory limit while the message is built.
 $max = $op === 'send' ? 26 * 1048576 : 65536;
-$raw = (string) file_get_contents('php://input', false, null, 0, $max + 1);
+$raw = read_request_body($max + 1);
 if (strlen($raw) > $max) {
     api_fail(413, $op === 'send' ? 'That message with its attachments is over 18 MB of files. Mail servers such as Gmail refuse bigger messages; send the files in several messages.' : 'The request is too big.');
 }
