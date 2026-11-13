@@ -33,6 +33,7 @@ import {
 import { openInNewTab } from './link.ts';
 import { pdfOf, printPreview, snapshot } from './write/print.ts';
 import { buildSchema, htmlIsOnlyPicture, pastedHtml, type PM } from './write/schema.ts';
+import { serialQueue } from '../core/serial.ts';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -43,6 +44,9 @@ const MAX_PICTURE_BYTES = 15 * 1024 * 1024;
 const ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 /** Documents shorter than this (about 25 pages) have their words counted on every change. */
 const COUNT_AT_ONCE = 100_000;
+/** A document with more blocks than this is measured after a pause in the typing, not on every key. */
+const LONG_DOC_BLOCKS = 1200;
+const LONG_DOC_PAUSE_MS = 400;
 /** Pictures that can go in a document by pasting or dropping (WebP and BMP go in as a PNG). */
 const PICTURE_TYPES = /^image\/(png|jpeg|gif|webp|bmp)$/;
 /** Said when a text file's accents had to be guessed. */
@@ -609,7 +613,18 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
 
   let pageCount = 1;
   let layoutFrame = 0;
+  let layoutTimer = 0;
   function scheduleLayout(): void {
+    // Measuring every paragraph takes a good part of a second in a very long document, so there the pages wait for a
+    // short pause in the typing (the words go on the page at once; only the page breaks catch up).
+    if (view.state.doc.childCount > LONG_DOC_BLOCKS) {
+      if (layoutTimer) clearTimeout(layoutTimer);
+      layoutTimer = window.setTimeout(() => {
+        layoutTimer = 0;
+        layout(0);
+      }, LONG_DOC_PAUSE_MS);
+      return;
+    }
     if (layoutFrame) return;
     layoutFrame = requestAnimationFrame(() => {
       layoutFrame = 0;
@@ -1141,8 +1156,13 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
     if (!dirty) recovery.drop();
   }
 
-  async function save(): Promise<boolean> {
-    if (!path) return saveAs();
+  // One Save at a time: an older, slower Save must not finish after (and overwrite) a newer one.
+  const oneSave = serialQueue();
+  const save = (): Promise<boolean> => oneSave(saveNow);
+  const saveAs = (): Promise<boolean> => oneSave(saveAsNow);
+
+  async function saveNow(): Promise<boolean> {
+    if (!path) return saveAsNow();
     if (lost.length) {
       const listed = `${lost.slice(0, 3).join('; ')}${lost.length > 3 ? '; and more' : ''}`;
       const answer = await shell.dialogs.ask<'copy' | 'over' | null>({
@@ -1154,7 +1174,7 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
         cancel: null,
       });
       if (answer === null) return false;
-      if (answer === 'copy') return saveAs();
+      if (answer === 'copy') return saveAsNow();
     }
     if (!(await okToSaveAs(kind, label))) return false;
     try {
@@ -1175,7 +1195,7 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
     }
   }
 
-  async function saveAs(): Promise<boolean> {
+  async function saveAsNow(): Promise<boolean> {
     const folder = path ? parentPath(path) : folderHint ?? '/Documents';
     let taken: string[] = [];
     try {
@@ -2028,6 +2048,7 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
   }, app.signal);
   app.signal.addEventListener('abort', () => {
     if (layoutFrame) cancelAnimationFrame(layoutFrame);
+    if (layoutTimer) clearTimeout(layoutTimer);
     if (wordsTimer) clearTimeout(wordsTimer);
     view.destroy();
   });

@@ -163,11 +163,14 @@ function readBlocks(source: string): NodeJSON {
       i++;
       continue;
     }
-    const fence = /^\s*(```|~~~)/.exec(line);
+    const fence = /^\s*(`{3,}|~{3,})/.exec(line);
     if (fence) {
       i++;
       const code: string[] = [];
-      while (i < lines.length && !lines[i].trim().startsWith(fence[1])) code.push(lines[i++]);
+      // The block ends at a line of the same fence character at least as long as the one that opened it (so a longer
+      // fence can hold a literal ``` line), and at nothing else.
+      const closes = new RegExp(`^\s*${fence[1][0] === '`' ? '`' : '~'}{${fence[1].length},}\s*$`);
+      while (i < lines.length && !closes.test(lines[i])) code.push(lines[i++]);
       i++;
       for (const c of code) blocks.push(c ? { type: 'paragraph', attrs: { style: 'normal', after: 0 }, content: [{ type: 'text', text: c, marks: [{ type: 'font', attrs: { face: CODE_FACE } }] }] } : { type: 'paragraph', attrs: { style: 'normal', after: 0 } });
       continue;
@@ -176,8 +179,8 @@ function readBlocks(source: string): NodeJSON {
     if (heading) {
       const level = heading[1].length;
       // The heading's words, without the #s some people also put at its end.
-      let words = line.slice(level).trim();
-      while (words.endsWith('#')) words = words.slice(0, -1);
+      // Only a run of #s set apart by a space closes it: "C#" keeps its #.
+      const words = line.slice(level).trim().replace(/(^|\s)#+\s*$/, '');
       blocks.push(para(words.trim(), { style: `h${level}` }));
       i++;
       continue;
@@ -397,6 +400,9 @@ export function markdownLoses(doc: NodeJSON): string[] {
 }
 
 /** The document as Markdown. */
+/** Stands in for an empty line inside a code block while the output is tidied (it is never in a document's text). */
+const EMPTY_CODE_LINE = '';
+
 export function writeMarkdown(doc: NodeJSON): string {
   const out: string[] = [];
   const blocks = (nodes: NodeJSON[], indent: string) => {
@@ -408,13 +414,16 @@ export function writeMarkdown(doc: NodeJSON): string {
         for (let k = at + 1; k < nodes.length && isCodeLine(nodes[k]); k++) if (nodes[k].content?.length) last = k;
         const code = nodes.slice(at, last + 1).map(p => (p.content ?? []).map(n => n.text ?? '').join(''));
         const fence = '`'.repeat(Math.max(3, ...code.map(l => Math.max(0, ...(l.match(/`+/g) ?? []).map(r => r.length + 1)))));
-        out.push(indent + fence, ...code.map(l => (l ? indent + l : '')), indent + fence, '');
+        // An empty line inside code is marked, so the tidy-up of blank lines below leaves it alone.
+        out.push(indent + fence, ...code.map(l => (l ? indent + l : EMPTY_CODE_LINE)), indent + fence, '');
         at = last;
         continue;
       }
       if (b.type === 'paragraph') {
         const style = b.attrs?.style;
-        const text = inlineToMd(b.content);
+        const plain = inlineToMd(b.content);
+        // A heading that ends in a set-apart "#" gets a closing one, so the reader gives back that "#".
+        const text = /^(title|h[1-6])$/.test(String(style)) && /(^|\s)#+$/.test(plain) ? `${plain} #` : plain;
         if (style === 'title' || style === 'h1') out.push(`${indent}# ${text}`, '');
         else if (style === 'h2') out.push(`${indent}## ${text}`, '');
         else if (/^h[3-6]$/.test(String(style))) out.push(`${indent}${'#'.repeat(Number(String(style).slice(1)))} ${text}`, '');
@@ -446,5 +455,5 @@ export function writeMarkdown(doc: NodeJSON): string {
   };
   blocks(doc.content ?? [], '');
   while (out.length && out[out.length - 1] === '') out.pop();
-  return `${out.join('\n').replace(/\n{3,}/g, '\n\n')}\n`;
+  return `${out.join('\n').replace(/\n{3,}/g, '\n\n').replaceAll(EMPTY_CODE_LINE, '')}\n`;
 }

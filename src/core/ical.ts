@@ -30,6 +30,8 @@ export interface CalEvent {
   where?: string;
   /** The My Projects project it belongs to (its uid), if any. */
   project?: string;
+  /** The file says this event is cancelled (STATUS:CANCELLED): kept and written back, but never shown or booked. */
+  cancelled?: boolean;
   /** Minutes before the start to show a reminder; -1 for none. All-day events count back from 09:00 on the day. */
   remind: number;
   /** What the file held for this event beyond the fields above (absent for an event made here). */
@@ -242,7 +244,7 @@ function readIcs(text: string): { events: CalEvent[]; calendar: string[]; unread
   // Each repeat by the file's UID, and each moved showing: the day it was moved from, for the series to skip.
   const series = new Map<string, EventKeep>();
   const moved: Array<{ uid: string; day: string }> = [];
-  let cur: (Partial<CalEvent> & { keep: EventKeep; raw: string[]; recurrence: string; movedFrom?: string; ruleText?: string; endStamp?: { date: string; time: string }; duration?: string }) | null = null;
+  let cur: (Partial<CalEvent> & { keep: EventKeep; raw: string[]; recurrence: string; movedFrom?: string; cancelled?: boolean; ruleText?: string; endStamp?: { date: string; time: string }; duration?: string }) | null = null;
   // Inner parts (an event's alarms; the calendar's time zones) are kept whole, line for line.
   let depth = 0;
   let inCalendar = false;
@@ -285,6 +287,7 @@ function readIcs(text: string): { events: CalEvent[]; calendar: string[]; unread
         }
         if (cur.where) e.where = cur.where;
         if (cur.project) e.project = cur.project;
+        if (cur.cancelled) e.cancelled = true;
         keep.uid = fileUid || base;
         keep.was = { date: e.date, start: e.start, end: e.end, endDate: e.endDate ?? '', repeat: e.repeat, count: e.count ?? 0, until: e.until ?? '', where: e.where ?? '' };
         e.keep = keep;
@@ -325,6 +328,7 @@ function readIcs(text: string): { events: CalEvent[]; calendar: string[]; unread
         const v = line.value.trim();
         if (PROJECT_ID.test(v)) cur.project = v;
       }
+      if (line.name === 'STATUS' && line.value.trim().toUpperCase() === 'CANCELLED') cur.cancelled = true;
       if (line.name === 'RECURRENCE-ID') {
         cur.recurrence = line.value.trim().slice(0, 40);
         cur.movedFrom = parseStamp(line)?.date;
@@ -461,6 +465,7 @@ function weekdayIndex(diff: number, firstDay: number, shape: NonNullable<EventKe
 
 /** Does the event fall on this day (YYYY-MM-DD), counting its repeats and where they end ("for 3 days", "until")? */
 export function occursOn(e: CalEvent, day: string): boolean {
+  if (e.cancelled) return false;
   // A rule this calendar cannot show still has its first day, which may be skipped like any other.
   if ((e.repeat !== 'none' || e.keep?.rule.length) && e.keep?.skip?.includes(day)) return false;
   if (day === e.date) return true;
@@ -472,8 +477,10 @@ export function occursOn(e: CalEvent, day: string): boolean {
 
 /** The first day on or after `from` the event shows on, looking at most `within` days ahead; null when none. */
 export function nextShowing(e: CalEvent, from: string, within = 400): string | null {
-  if (e.date >= from) return e.date;
-  return e.repeat === 'none' ? null : nextAfter(e, from, within);
+  // The first day counts only when it really shows (a repeat may skip it, or the whole event be cancelled).
+  if (e.date >= from && occursOn(e, e.date)) return e.date;
+  if (e.repeat === 'none') return null;
+  return nextAfter(e, e.date >= from ? e.date : from, within);
 }
 
 function nextAfter(e: CalEvent, from: string, within: number): string | null {

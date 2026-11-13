@@ -25,6 +25,19 @@ export const contactsApp: AppDef = {
 
     let people: Contact[] = [];
     let chosen: string | null = null;
+    /** Set while a form is open: whether anything in it differs from what it opened with. */
+    let formDirty: (() => boolean) | null = null;
+    const isDirty = () => !!formDirty?.();
+    /** True when it is fine to leave the form (it holds nothing unsaved, or the person chose to discard it). */
+    async function leaveForm(): Promise<boolean> {
+      if (!isDirty()) return true;
+      const ok = await shell.dialogs.confirm({ title: 'Discard your changes?', text: 'This contact has changes that are not saved. If you leave, they are lost.', ok: 'Discard', danger: true, cancel: 'Keep editing' });
+      if (ok) {
+        formDirty = null;
+        app.setDirty(false);
+      }
+      return ok;
+    }
     let cardDraw = new AbortController();
     const fresh = () => {
       cardDraw.abort();
@@ -62,6 +75,8 @@ export const contactsApp: AppDef = {
 
     function drawCard(): void {
       const signal = fresh();
+      formDirty = null;
+      app.setDirty(false);
       const p = people.find(x => x.uid === chosen);
       if (!p) {
         card.replaceChildren(h('p', { class: 'hint pad' }, 'Choose someone on the left.'));
@@ -87,6 +102,8 @@ export const contactsApp: AppDef = {
       for (const b of busy) b.disabled = true;
       try {
         people = await file.change(list => apply(list).sort(byName));
+        formDirty = null;
+        app.setDirty(false);
         return true;
       } catch (error) {
         await shell.report('Could not save the contacts', error);
@@ -130,6 +147,10 @@ export const contactsApp: AppDef = {
         problem,
         h('div', { class: 'row-buttons' }, saveBtn, cancel, existing ? del : null),
       );
+      const snap = () => JSON.stringify([nameIn.value, orgIn.value, phoneIn.value, emailIn.value, addrIn.value, bdayIn.value, notesIn.value]);
+      const was = snap();
+      formDirty = () => snap() !== was;
+      card.addEventListener('input', () => app.setDirty(isDirty()), { signal });
       nameIn.focus();
       saveBtn.addEventListener('click', async () => {
         const name = nameIn.value.trim();
@@ -142,7 +163,12 @@ export const contactsApp: AppDef = {
         if (phones.some(p => p.length > 60)) return void (problem.textContent = 'A phone number can be up to 60 characters.');
         if (emails.some(e => e.length > 200)) return void (problem.textContent = 'An email address can be up to 200 characters.');
         const saved: Contact = { ...c, name, org: orgIn.value.trim(), phones, emails, address: addrIn.value.trim().replace(/\s*\n\s*/g, ', '), birthday: bdayIn.value, notes: notesIn.value.trim() };
-        if (await save(list => [...list.filter(x => x.uid !== saved.uid), saved], [saveBtn, del])) pick(saved.uid, true);
+        // An edit of a contact someone deleted meanwhile (another window) is refused, not quietly put back.
+        const edited = existing !== null;
+        if (await save(list => {
+          if (edited && !list.some(x => x.uid === saved.uid)) throw new Error('This contact was deleted in another window, so your changes were not saved. Choose New contact to add it again.');
+          return [...list.filter(x => x.uid !== saved.uid), saved];
+        }, [saveBtn, del])) pick(saved.uid, true);
       }, { signal });
       cancel.addEventListener('click', () => {
         drawCard();
@@ -161,7 +187,7 @@ export const contactsApp: AppDef = {
 
     on(list, 'click', (event: MouseEvent) => {
       const row = event.target instanceof Element ? event.target.closest<HTMLElement>('.person-row') : null;
-      if (row?.dataset.uid) pick(row.dataset.uid, true);
+      if (row?.dataset.uid) void leaveForm().then(ok => ok && row.dataset.uid && pick(row.dataset.uid, true));
     }, app.signal);
     on(list, 'keydown', (event: KeyboardEvent) => {
       const rows = [...list.querySelectorAll<HTMLElement>('.person-row')];
@@ -171,7 +197,7 @@ export const contactsApp: AppDef = {
       event.preventDefault();
       if (to < 0) return find.focus();
       const row = rows[Math.min(to, rows.length - 1)];
-      if (row?.dataset.uid) pick(row.dataset.uid, true);
+      if (row?.dataset.uid) void leaveForm().then(ok => ok && row.dataset.uid && pick(row.dataset.uid, true));
     }, app.signal);
     on(find, 'input', drawList, app.signal);
     on(find, 'keydown', (event: KeyboardEvent) => {
@@ -179,10 +205,11 @@ export const contactsApp: AppDef = {
       const first = list.querySelector<HTMLElement>('.person-row');
       if (first?.dataset.uid) {
         event.preventDefault();
-        pick(first.dataset.uid, true);
+        void leaveForm().then(ok => ok && first.dataset.uid && pick(first.dataset.uid, true));
       }
     }, app.signal);
-    on(newBtn, 'click', () => editCard(null), app.signal);
+    on(newBtn, 'click', () => void leaveForm().then(ok => ok && editCard(null)), app.signal);
+    app.onClose(leaveForm);
     file.watch(shell.changes, app.signal, latest => {
       people = latest;
       drawList();

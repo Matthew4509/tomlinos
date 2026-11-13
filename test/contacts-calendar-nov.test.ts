@@ -1,0 +1,185 @@
+// November office-deep faults O16 to O24: cancelled imported events, the first showing of a series that skips it, a
+// damaged contact card kept on save, a stale edit never reviving a deletion, unsaved-form protection in Contacts and
+// Calendar, and the My Projects booking rules.
+// Run: node --test test/contacts-calendar-nov.test.ts
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { eventsOn, eventsShownOn, nextShowing, occursOn, parseIcs, writeIcs, dateKey } from '../src/core/ical.ts';
+import { parseVcf, writeVcf } from '../src/core/vcard.ts';
+import { entryFrom, parseProjects, projectEntries, writeProjects, type EntryForm } from '../src/apps/projects/data.ts';
+import { FileSystem } from '../src/fs/fs.ts';
+import { MemoryStore } from '../src/store/memory-store.ts';
+import { recordFile } from '../src/shell/recordfile.ts';
+
+const ics = (...events: string[][]) => ['BEGIN:VCALENDAR', 'VERSION:2.0', ...events.flatMap(e => ['BEGIN:VEVENT', ...e, 'END:VEVENT']), 'END:VCALENDAR', ''].join('\r\n');
+
+test('O16: a cancelled imported event is not shown or booked, and is written back as it was', () => {
+  const text = ics(['UID:c1', 'DTSTART:20261110T090000', 'SUMMARY:Cancelled meeting', 'STATUS:CANCELLED']);
+  const events = parseIcs(text);
+  assert.equal(eventsOn(events, '2026-11-10').length, 0);
+  assert.equal(eventsShownOn(events, '2026-11-10').length, 0);
+  assert.equal(nextShowing(events[0], '2026-11-01'), null);
+  assert.match(writeIcs(events, text), /STATUS:CANCELLED/);
+});
+
+test('O18: the next showing skips an excluded first day', () => {
+  const [e] = parseIcs(ics(['UID:d1', 'DTSTART:20261110T090000', 'RRULE:FREQ=DAILY', 'EXDATE:20261110T090000', 'SUMMARY:Daily']));
+  assert.equal(occursOn(e, '2026-11-10'), false);
+  assert.equal(nextShowing(e, '2026-11-10'), '2026-11-11');
+  assert.equal(nextShowing(e, '2026-11-05'), '2026-11-11');
+});
+
+test('O19: a damaged contact card is kept when another contact is saved', () => {
+  const text = 'BEGIN:VCARD\r\nVERSION:3.0\r\nUID:a\r\nFN:Alice\r\nEND:VCARD\r\nBEGIN:VCARD\r\nVERSION:3.0\r\nUID:b\r\nFN:Bob\r\nTEL:123\r\n';
+  const people = parseVcf(text);
+  assert.deepEqual(people.map(p => p.name), ['Alice']);
+  const out = writeVcf([...people, { ...people[0], uid: 'new', name: 'Carol', keep: undefined }], text);
+  assert.match(out, /FN:Bob/);
+  assert.match(out, /TEL:123/);
+  assert.match(out, /FN:Carol/);
+  // Written again from what was written, nothing grows or is lost.
+  const again = writeVcf(parseVcf(out), out);
+  assert.equal((again.match(/FN:Bob/g) ?? []).length, 1);
+});
+
+test('O19: a card cut off by the next BEGIN is kept too', () => {
+  const text = 'BEGIN:VCARD\r\nFN:Cut\r\nBEGIN:VCARD\r\nUID:z\r\nFN:Zed\r\nEND:VCARD\r\n';
+  assert.deepEqual(parseVcf(text).map(p => p.name), ['Zed']);
+  assert.match(writeVcf(parseVcf(text), text), /FN:Cut/);
+});
+
+const form = (f: Partial<EntryForm>): EntryForm => ({ title: 'Visit', day: '2026-11-01', allDay: false, start: '09:00', hours: '', daily: false, runDays: 0, remind: 0, notes: '', ...f });
+
+test('O22: an ongoing multi-day booking is coming, with its real end, not only past', () => {
+  const e = entryFrom(form({ project: 'p', day: '2026-11-01', allDay: true }), 'v1');
+  assert.ok(typeof e !== 'string');
+  const ongoing = { ...e, endDate: '2026-11-04' };
+  const { coming, past } = projectEntries([ongoing], 'p', '2026-11-02');
+  assert.equal(coming.length, 1);
+  assert.equal(coming[0].next, '2026-11-02');
+  assert.equal(coming[0].event.endDate, '2026-11-04');
+  assert.equal(past.length, 1);
+  assert.equal(projectEntries([ongoing], 'p', '2026-11-05').coming.length, 0);
+});
+
+test('O23: a duration under a minute is refused', () => {
+  assert.match(String(entryFrom(form({ hours: '0.001' }))), /minute/);
+  assert.equal(typeof entryFrom(form({ hours: '0.25' })), 'object');
+});
+
+test('O24: two different projects with one id both survive and stay apart', () => {
+  const list = parseProjects(JSON.stringify([{ uid: 'b', name: 'B' }, { uid: 'b', name: 'B2' }, { uid: 'b', name: 'B' }]));
+  assert.deepEqual(list.map(p => p.name), ['B', 'B2']);
+  assert.equal(new Set(list.map(p => p.uid)).size, 2);
+  assert.equal(list[0].uid, 'b');
+  const back = parseProjects(writeProjects(list));
+  assert.deepEqual(back.map(p => [p.uid, p.name]), list.map(p => [p.uid, p.name]));
+});
+
+// ---- Controller tests: a small element fixture, not a browser. ----
+class Fixture {
+  tagName: string; attrs: Record<string, string> = {}; children: Fixture[] = []; listeners: Record<string, Array<{ fn: (e: unknown) => unknown; signal?: AbortSignal }>> = {};
+  value = ''; checked = false; hidden = false; disabled = false; dataset: Record<string, string> = {}; parentElement: Fixture | null = null; _text = '';
+  classList = { add: (...n: string[]) => { this.attrs.class = [this.attrs.class, ...n].filter(Boolean).join(' '); } };
+  constructor(tag: string, text = '') { this.tagName = tag.toUpperCase(); this._text = text; }
+  setAttribute(k: string, v: string) { this.attrs[k] = v; if (k === 'value') this.value = v; if (k === 'checked') this.checked = true; if (k.startsWith('data-')) this.dataset[k.slice(5)] = v; }
+  getAttribute(k: string) { return this.attrs[k] ?? null; }
+  append(...kids: Array<Fixture | string | null>) { for (const k of kids) { if (typeof k === 'string') { this.children.push(new Fixture('#text', k)); continue; } if (k) { k.parentElement = this; this.children.push(k); } } }
+  replaceChildren(...kids: Array<Fixture | string | null>) { this.children = []; this._text = ''; this.append(...kids); }
+  set textContent(s: string) { this._text = s; this.children = []; }
+  get textContent(): string { return this._text + this.children.map(c => c.textContent).join(''); }
+  matches(sel: string): boolean {
+    if (sel.startsWith('.')) return (this.attrs.class ?? '').split(' ').includes(sel.slice(1));
+    if (sel.startsWith('[')) { const m = /^\[([^=\]]+)(?:="([^"]*)")?\]$/.exec(sel); return !!m && (m[2] === undefined ? m[1] in this.attrs : this.attrs[m[1]] === m[2]); }
+    return this.tagName === sel.toUpperCase();
+  }
+  querySelectorAll(sel: string): Fixture[] { return this.children.flatMap(c => [...(c.matches(sel) ? [c] : []), ...c.querySelectorAll(sel)]); }
+  querySelector(sel: string) { return this.querySelectorAll(sel)[0] ?? null; }
+  closest(sel: string): Fixture | null { return this.matches(sel) ? this : this.parentElement?.closest(sel) ?? null; }
+  addEventListener(type: string, fn: (e: unknown) => unknown, options: { signal?: AbortSignal } = {}) { (this.listeners[type] ??= []).push({ fn, signal: options.signal }); }
+  async fire(type: string, target: Fixture = this) { for (const x of this.listeners[type] ?? []) if (!x.signal?.aborted) await x.fn({ target, key: '', preventDefault() {} }); }
+  focus() { (globalThis as { document: { activeElement: unknown } }).document.activeElement = this; }
+}
+Object.assign(globalThis, { Element: Fixture, HTMLElement: Fixture, CSS: { escape: (s: string) => s }, document: { createElement: (t: string) => new Fixture(t), createTextNode: (t: string) => new Fixture('#text', t), activeElement: null } });
+const { contactsApp } = await import('../src/apps/contacts.ts');
+const { calendarApp } = await import('../src/apps/calendar.ts');
+
+async function launch(def: { launch: (app: never, arg?: string) => unknown }, files: Record<string, string>) {
+  const fs = new FileSystem(new MemoryStore());
+  await fs.list('/');
+  for (const [p, t] of Object.entries(files)) await fs.writeText(p, t);
+  const ctl = new AbortController();
+  const state = { confirms: 0, answer: false, reports: [] as string[], guards: [] as Array<() => boolean | Promise<boolean>>, dirty: false };
+  const app = {
+    root: new Fixture('div'), signal: ctl.signal, setTitle() {}, setDirty: (d: boolean) => { state.dirty = d; }, onClose: (g: () => boolean | Promise<boolean>) => state.guards.push(g), close() {},
+    shell: { fs, changes: { on() {} }, dialogs: { confirm: async () => { state.confirms++; return state.answer; } }, report: async (_t: string, e: unknown) => { state.reports.push(String(e)); } },
+  };
+  await def.launch(app as never);
+  return { fs, app, state, button: (label: string) => app.root.querySelectorAll('button').find(b => b.textContent === label)! };
+}
+
+const ALICE = 'BEGIN:VCARD\r\nVERSION:3.0\r\nUID:alice\r\nFN:Alice\r\nEND:VCARD\r\nBEGIN:VCARD\r\nVERSION:3.0\r\nUID:bob\r\nFN:Bob\r\nEND:VCARD\r\n';
+const today = dateKey(new Date());
+const MEETING = ics(['UID:m1', `DTSTART:${today.replace(/-/g, '')}T090000`, 'SUMMARY:Meeting']);
+
+test('O20: Contacts: a stale edit does not revive a contact deleted in another window', async () => {
+  const t = await launch(contactsApp, { '/Documents/Contacts.vcf': ALICE });
+  const list = t.app.root.querySelector('.people')!;
+  await list.fire('click', list.querySelector('[data-uid="alice"]')!);
+  await t.button('Edit').fire('click');
+  const file = recordFile(t.fs, '/Documents/Contacts.vcf', parseVcf, writeVcf);
+  await file.change(l => l.filter(x => x.name !== 'Alice'));
+  t.app.root.querySelector('[aria-label="Notes"]')!.value = 'late edit';
+  await t.button('Save').fire('click');
+  assert.deepEqual((await file.load()).map(c => c.name), ['Bob']);
+  assert.equal(t.state.reports.length, 1);
+});
+
+test('O20: Calendar: a stale edit does not revive an event deleted in another window', async () => {
+  const t = await launch(calendarApp, { '/Documents/Calendar.ics': MEETING });
+  await t.app.root.querySelector('.cal-event')!.fire('click');
+  const file = recordFile(t.fs, '/Documents/Calendar.ics', parseIcs, writeIcs);
+  await file.change(() => []);
+  t.app.root.querySelector('[aria-label="What"]')!.value = 'Late edit';
+  await t.button('Save').fire('click');
+  assert.equal((await file.load()).length, 0);
+  assert.equal(t.state.reports.length, 1);
+});
+
+test('O21: Contacts asks before an unsaved form is dropped by choosing someone else, New, or closing', async () => {
+  const t = await launch(contactsApp, { '/Documents/Contacts.vcf': ALICE });
+  const list = t.app.root.querySelector('.people')!;
+  await t.button('New contact').fire('click');
+  assert.equal(t.state.confirms, 0);
+  t.app.root.querySelector('[aria-label="Name"]')!.value = 'Typed but unsaved';
+  await list.fire('click', list.querySelector('[data-uid="bob"]')!);
+  assert.equal(t.state.confirms, 1);
+  assert.ok(t.app.root.querySelector('[aria-label="Name"]'), 'the form stays when the person keeps it');
+  await t.button('New contact').fire('click');
+  assert.equal(t.state.confirms, 2);
+  assert.equal(t.state.guards.length, 1);
+  assert.equal(await t.state.guards[0](), false);
+  assert.equal(t.state.confirms, 3);
+  t.state.answer = true;
+  await list.fire('click', list.querySelector('[data-uid="bob"]')!);
+  assert.equal(t.app.root.querySelector('[aria-label="Name"]'), null);
+  assert.equal(await t.state.guards[0](), true);
+});
+
+test('O21: Calendar asks before an unsaved form is dropped by choosing another day, New, or closing', async () => {
+  const t = await launch(calendarApp, {});
+  const grid = t.app.root.querySelector('.cal-month-grid')!;
+  await t.button('New event').fire('click');
+  assert.equal(t.state.confirms, 0);
+  t.app.root.querySelector('[aria-label="What"]')!.value = 'Typed but unsaved';
+  await grid.fire('click', grid.querySelector('.cal-cell')!);
+  assert.equal(t.state.confirms, 1);
+  assert.ok(t.app.root.querySelector('[aria-label="What"]'));
+  await t.button('New event').fire('click');
+  assert.equal(t.state.confirms, 2);
+  assert.equal(t.state.guards.length, 1);
+  assert.equal(await t.state.guards[0](), false);
+  t.state.answer = true;
+  await grid.fire('click', grid.querySelector('.cal-cell')!);
+  assert.equal(t.app.root.querySelector('[aria-label="What"]'), null);
+});

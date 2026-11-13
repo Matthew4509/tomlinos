@@ -29,6 +29,19 @@ export const calendarApp: AppDef = {
     let [year, month] = [new Date().getFullYear(), new Date().getMonth()];
     /** The side panel holds a form: looking at another month must not throw away what is typed in it. */
     let editing = false;
+    /** Set while a form is open: whether anything in it differs from what it opened with. */
+    let formDirty: (() => boolean) | null = null;
+    const isDirty = () => !!formDirty?.();
+    /** True when it is fine to leave the form (it holds nothing unsaved, or the person chose to discard it). */
+    async function leaveForm(): Promise<boolean> {
+      if (!isDirty()) return true;
+      const ok = await shell.dialogs.confirm({ title: 'Discard your changes?', text: 'This event has changes that are not saved. If you leave, they are lost.', ok: 'Discard', danger: true, cancel: 'Keep editing' });
+      if (ok) {
+        formDirty = null;
+        app.setDirty(false);
+      }
+      return ok;
+    }
     /** Aborted on every redraw of the side panel, so its buttons' listeners never pile up. */
     let sideDraw = new AbortController();
     const fresh = () => {
@@ -74,6 +87,8 @@ export const calendarApp: AppDef = {
     function drawDay(focusAfter = false): void {
       const signal = fresh();
       editing = false;
+      formDirty = null;
+      app.setDirty(false);
       const [y, m, d] = chosen.split('-').map(Number);
       const rows = eventsShownOn(events, chosen).map(e => {
         const b = h('button', { type: 'button', class: 'cal-event' },
@@ -182,6 +197,11 @@ export const calendarApp: AppDef = {
         problem,
         h('div', { class: 'row-buttons' }, saveBtn, cancel, existing ? del : null),
       );
+      const snap = () => JSON.stringify([titleIn.value, dateIn.value, allDay.checked, startIn.value, endIn.value, endDayIn.value, whereIn.value, repeatSel.value, remindSel.value, notesIn.value]);
+      const was = snap();
+      formDirty = () => snap() !== was;
+      side.addEventListener('input', () => app.setDirty(isDirty()), { signal });
+      side.addEventListener('change', () => app.setDirty(isDirty()), { signal });
       titleIn.focus();
       saveBtn.addEventListener('click', async () => {
         const start = allDay.checked ? '' : startIn.value;
@@ -196,7 +216,12 @@ export const calendarApp: AppDef = {
         if (later && !allDay.checked && !end) return void (problem.textContent = 'Choose an end time for that end day, or clear the end day.');
         if (end && (!isTime(end) || (!later && end <= start))) return void (problem.textContent = 'The end time must be after the start time, or choose a later end day (or leave it empty).');
         const saved: CalEvent = { ...e, title: titleIn.value.trim(), date: dateIn.value, start, end, endDate: later ? endDay : undefined, notes: notesIn.value, where: whereIn.value.trim(), repeat: repeatSel.value as Repeat, ...limits(), remind: Number(remindSel.value) };
-        if (await save(list => [...list.filter(x => x.uid !== saved.uid), saved], [saveBtn, del])) {
+        // An edit of an event someone deleted meanwhile (another window) is refused, not quietly put back.
+        const edited = existing !== null;
+        if (await save(list => {
+          if (edited && !list.some(x => x.uid === saved.uid)) throw new Error('This event was deleted in another window, so your changes were not saved. Choose New event to add it again.');
+          return [...list.filter(x => x.uid !== saved.uid), saved];
+        }, [saveBtn, del])) {
           // Saving a later showing stays on that day, unless the event was moved off it.
           if (saved.date !== e.date || !occursOn(saved, chosen)) {
             chosen = saved.date;
@@ -220,19 +245,21 @@ export const calendarApp: AppDef = {
 
     on(grid, 'click', (event: MouseEvent) => {
       const cell = event.target instanceof Element ? event.target.closest<HTMLElement>('.cal-cell') : null;
-      if (cell?.dataset.day) choose(cell.dataset.day, true);
+      const day = cell?.dataset.day;
+      if (day) void leaveForm().then(ok => ok && choose(day, true));
     }, app.signal);
     on(grid, 'dblclick', (event: MouseEvent) => {
-      if (event.target instanceof Element && event.target.closest('.cal-cell')) edit(null);
+      if (event.target instanceof Element && event.target.closest('.cal-cell')) void leaveForm().then(ok => ok && edit(null));
     }, app.signal);
     on(grid, 'keydown', (event: KeyboardEvent) => {
       const steps: Record<string, number> = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 };
       if (event.key in steps) {
         event.preventDefault();
-        choose(addDays(chosen, steps[event.key]), true);
+        const day = addDays(chosen, steps[event.key]);
+        void leaveForm().then(ok => ok && choose(day, true));
       } else if (event.key === 'Enter') {
         event.preventDefault();
-        edit(null);
+        void leaveForm().then(ok => ok && edit(null));
       }
     }, app.signal);
     const shift = (n: number) => {
@@ -246,8 +273,9 @@ export const calendarApp: AppDef = {
     };
     on(prev, 'click', () => shift(-1), app.signal);
     on(next, 'click', () => shift(1), app.signal);
-    on(todayBtn, 'click', () => choose(today, true), app.signal);
-    on(newBtn, 'click', () => edit(null), app.signal);
+    on(todayBtn, 'click', () => void leaveForm().then(ok => ok && choose(today, true)), app.signal);
+    on(newBtn, 'click', () => void leaveForm().then(ok => ok && edit(null)), app.signal);
+    app.onClose(leaveForm);
     file.watch(shell.changes, app.signal, list => {
       events = list;
       drawMonth();

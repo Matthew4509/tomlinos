@@ -82,3 +82,9 @@ test('a bomb: a stream that unpacks to far more than the limit is refused, not s
   const s = doc.resolve(doc.pages[0].dict.map.get('Contents')) as Stream;
   await assert.rejects(doc.streamData(s), (e: unknown) => e instanceof PdfError && /more than/.test(e.message));
 });
+
+test('pdfCannotShow names the letters a PDF would turn into "?", and nothing for Western European text', async () => {
+  const { pdfCannotShow } = await import('../src/apps/sheet/pdf.ts');
+  assert.deepEqual(pdfCannotShow('café – “quoted” €5 Ñandú\n\t'), []);
+  assert.deepEqual(pdfCannotShow('測量 Ж x 測'), ['測', '量', 'Ж']);
+});

@@ -7,7 +7,7 @@
 // Calendar, in the Panel and in the reminders with nothing else to change; the project's past events, with their
 // notes, are its log.
 import { FsError, type FileSystem } from '../../fs/fs.ts';
-import { addDays, isDate, isTime, nextShowing, type CalEvent } from '../../core/ical.ts';
+import { addDays, eventsShownOn, isDate, isTime, nextShowing, type CalEvent } from '../../core/ical.ts';
 
 export const PROJECTS_PATH = '/Documents/Projects.json';
 export const SETTINGS_PATH = '/System/projects.json';
@@ -66,14 +66,23 @@ export function parseProjects(textIn: string): Project[] {
   if (!textIn.trim()) return [];
   const data: unknown = JSON.parse(textIn);
   if (!Array.isArray(data)) throw new FsError('Projects.json is not a list of projects. It was left as it is; open it in Notepad to look.');
-  const seen = new Set<string>();
+  const seen = new Map<string, Project>();
   const out: Project[] = [];
   for (const raw of data) {
     const p = cleanProject(raw);
-    if (p && !seen.has(p.uid)) {
-      seen.add(p.uid);
-      out.push(p);
+    if (!p) continue;
+    const same = seen.get(p.uid);
+    // The very same record twice is one project. A different project with a taken id (two files merged by hand) is
+    // kept under an id of its own, the same one every time the file is read, so it is not lost on the next write.
+    if (same && JSON.stringify(same) === JSON.stringify(p)) continue;
+    if (same) {
+      let n = 2;
+      const room = (k: number) => p.uid.slice(0, 64 - String(k).length - 1) + '-' + k;
+      while (seen.has(room(n))) n++;
+      p.uid = room(n);
     }
+    seen.set(p.uid, p);
+    out.push(p);
   }
   return out;
 }
@@ -230,6 +239,7 @@ export function entryFrom(form: EntryForm, uid: string = crypto.randomUUID()): C
     if (hoursText) {
       const hours = Number(hoursText);
       if (!Number.isFinite(hours) || hours <= 0 || hours > 24) return 'Hours must be a number above 0, such as 1 or 2.5 (or leave it empty).';
+      if (Math.round(hours * 60) < 1) return 'Hours must be at least one minute (such as 0.25 for a quarter of an hour), or leave it empty.';
       const e = endAfter(start, hours);
       if (!e) return `${hoursText} hours from ${start} runs past midnight. Choose fewer hours, an earlier time, or leave Hours empty.`;
       end = e;
@@ -260,7 +270,9 @@ export function entryFrom(form: EntryForm, uid: string = crypto.randomUUID()): C
 export function projectEntries(events: CalEvent[], projectUid: string, today: string): { coming: Array<{ event: CalEvent; next: string }>; past: CalEvent[] } {
   const mine = events.filter(e => e.project === projectUid);
   const coming = mine.flatMap(event => {
-    const next = nextShowing(event, today);
+    let next = nextShowing(event, today);
+    // One that began earlier and is still running today (a visit over several days) is under way, not only past.
+    if ((next === null || next > today) && eventsShownOn([event], today).length) next = today;
     return next ? [{ event, next }] : [];
   }).sort((a, b) => a.next.localeCompare(b.next) || (a.event.start || '').localeCompare(b.event.start || ''));
   // Past: began before today (a repeat still running is in both lists: it began earlier and shows again).

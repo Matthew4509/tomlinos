@@ -171,8 +171,8 @@ test('Projects.json: shape, junk dropped, a damaged file refused (so never saved
   assert.equal(back.length, 2);
   assert.equal('extra' in back[1], false);
   assert.deepEqual(sortProjects(back).map(x => x.name), ['Corner Bakery', 'Word upgrade']);
-  // No name, no id, a repeated id: dropped.
-  assert.equal(parseProjects(JSON.stringify([{ uid: 'a' }, { name: 'x' }, { uid: 'b', name: 'B' }, { uid: 'b', name: 'B2' }])).length, 1);
+  // No name, no id: dropped. The same record twice is one; a different project with a taken id is kept under its own id.
+  assert.equal(parseProjects(JSON.stringify([{ uid: 'a' }, { name: 'x' }, { uid: 'b', name: 'B' }, { uid: 'b', name: 'B2' }, { uid: 'b', name: 'B' }])).length, 2);
   assert.deepEqual(parseProjects(''), []);
   assert.throws(() => parseProjects('{"not":"a list"}'));
   assert.throws(() => parseProjects('[{"uid":'));

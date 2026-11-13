@@ -65,12 +65,13 @@ export function tableList(tsv: string, from: string): MergeList {
   const lines = readTable(tsv);
   const head = (lines.shift() ?? []).map(h => h.trim());
   // Columns with no name get one ("Column 3"); a name used twice gets a number.
-  const seen = new Map<string, number>();
+  // Every final name is unique, whatever the others are called ("Name", "Name", "Name 2" gives Name, Name 2, Name 2 2).
+  const used = new Set<string>();
   const columns = head.map((h, i) => {
-    let name = h || `Column ${i + 1}`;
-    const n = (seen.get(name) ?? 0) + 1;
-    seen.set(name, n);
-    if (n > 1) name = `${name} ${n}`;
+    const base = h || `Column ${i + 1}`;
+    let name = base;
+    for (let n = 2; used.has(name); n++) name = `${base} ${n}`;
+    used.add(name);
     return name;
   });
   while (columns.length && !head[columns.length - 1]) columns.pop();
@@ -79,7 +80,8 @@ export function tableList(tsv: string, from: string): MergeList {
     if (!cells.some(c => c.trim())) continue;
     const row: Row = {};
     columns.forEach((c, i) => {
-      row[c] = (cells[i] ?? '').trim();
+      // defineProperty, so a column called __proto__ is an ordinary column, not the row's prototype.
+      Object.defineProperty(row, c, { value: (cells[i] ?? '').trim(), enumerable: true, writable: true, configurable: true });
     });
     rows.push(row);
   }
@@ -102,7 +104,7 @@ export function fieldsIn(doc: NodeJSON): string[] {
 
 /** A column for a field: the same name, ignoring case and spaces ("first name" finds "First Name"). */
 const columnFor = (row: Row, name: string): string | undefined => {
-  if (name in row) return row[name];
+  if (Object.hasOwn(row, name)) return row[name];
   const key = name.toLowerCase().replace(/[\s_.-]/g, '');
   const found = Object.keys(row).find(k => k.toLowerCase().replace(/[\s_.-]/g, '') === key);
   return found === undefined ? undefined : row[found];

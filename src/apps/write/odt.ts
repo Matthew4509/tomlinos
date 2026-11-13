@@ -56,6 +56,10 @@ const attr = (el: XmlEl | undefined, name: string): string | undefined => {
   return el.attrs[name] ?? el.attrs[local];
 };
 
+const MAX_TABLE_ROWS = 2000;
+const MAX_TABLE_CELLS = 40000;
+const MAX_TABLE_COLUMNS = 63;
+
 export interface OdtRead {
   doc: NodeJSON;
   page: PageSetup;
@@ -374,27 +378,47 @@ export async function readOdt(bytes: Uint8Array): Promise<OdtRead> {
     };
     const trs: XmlEl[] = [];
     walkRows(el, trs);
-    for (const tr of trs.slice(0, 2000)) {
+    // A row or cell marked "repeated" stands for several: they are expanded, inside a total (a crafted file could
+    // claim a million of them). Whatever is past a limit is said, not silently dropped.
+    const repeats = (el: XmlEl, name: string) => Math.max(1, Math.floor(Number(attr(el, name) ?? 1)) || 1);
+    let budget = MAX_TABLE_CELLS;
+    let rowsLeft = MAX_TABLE_ROWS;
+    for (const tr of trs) {
+      if (rowsLeft <= 0 || budget <= 0) {
+        dropped.add(`table rows past the ${MAX_TABLE_ROWS.toLocaleString('en-GB')}-row / ${MAX_TABLE_CELLS.toLocaleString('en-GB')}-cell limit`);
+        break;
+      }
       const cells: NodeJSON[] = [];
       let col = 0;
       for (const tc of tr.kids) {
         if (tc.name === 'covered-table-cell') {
-          col++;
+          col += Math.min(MAX_TABLE_COLUMNS, repeats(tc, 'table:number-columns-repeated'));
           continue;
         }
         if (tc.name !== 'table-cell') continue;
         const span = Math.max(1, Math.min(63, Number(attr(tc, 'table:number-columns-spanned') ?? 1)));
         const down = Math.max(1, Math.min(500, Number(attr(tc, 'table:number-rows-spanned') ?? 1)));
+        const wanted = repeats(tc, 'table:number-columns-repeated');
+        const again = Math.min(wanted, Math.max(1, MAX_TABLE_COLUMNS - cells.length));
+        if (again < wanted) dropped.add(`table columns past the ${MAX_TABLE_COLUMNS}th`);
         const blocks = await body(tc, depth + 1);
-        const w = widths.slice(col, col + span);
-        cells.push({
-          type: 'table_cell',
-          attrs: { colspan: span, rowspan: down, colwidth: w.length === span && w.every(x => x > 0) ? w : null, background: resolved(attr(tc, 'table:style-name')).fill ?? null },
-          content: blocks.length ? blocks : [{ type: 'paragraph' }],
-        });
-        col += span;
+        for (let n = 0; n < again; n++) {
+          const w = widths.slice(col, col + span);
+          cells.push({
+            type: 'table_cell',
+            attrs: { colspan: span, rowspan: down, colwidth: w.length === span && w.every(x => x > 0) ? w : null, background: resolved(attr(tc, 'table:style-name')).fill ?? null },
+            content: blocks.length ? structuredClone(blocks) : [{ type: 'paragraph' }],
+          });
+          col += span;
+        }
       }
-      if (cells.length) rows.push({ type: 'table_row', content: cells });
+      if (!cells.length) continue;
+      const wantedRows = repeats(tr, 'table:number-rows-repeated');
+      const copies = Math.min(wantedRows, rowsLeft, Math.max(1, Math.floor(budget / cells.length)));
+      if (copies < wantedRows) dropped.add(`table rows past the ${MAX_TABLE_ROWS.toLocaleString('en-GB')}-row / ${MAX_TABLE_CELLS.toLocaleString('en-GB')}-cell limit`);
+      for (let n = 0; n < copies; n++) rows.push({ type: 'table_row', content: n ? structuredClone(cells) : cells });
+      rowsLeft -= copies;
+      budget -= copies * cells.length;
     }
     if (!rows.length) return { type: 'paragraph' };
     return { type: 'table', attrs: { borders: true }, content: rows };

@@ -12,6 +12,16 @@ const WIN: Record<number, number> = {
   0x2013: 0x96, 0x2014: 0x97, 0x02dc: 0x98, 0x2122: 0x99, 0x0161: 0x9a, 0x203a: 0x9b, 0x0153: 0x9c, 0x017e: 0x9e, 0x0178: 0x9f,
 };
 
+/** True when a PDF string can hold this character (the rest are written as "?"). */
+const pdfCanShow = (cp: number): boolean => (cp >= 32 && cp < 127) || (cp >= 160 && cp <= 255) || WIN[cp] !== undefined || cp === 9 || cp === 10 || cp === 13;
+
+/** The letters in `text` that a PDF made here would show as "?" (each once, in the order found). */
+export function pdfCannotShow(text: string): string[] {
+  const out = new Set<string>();
+  for (const ch of text) if (!pdfCanShow(ch.codePointAt(0)!)) out.add(ch);
+  return [...out];
+}
+
 /** Text as a PDF string in parentheses, in the Windows character set. */
 export function pdfString(text: string): string {
   let out = '(';

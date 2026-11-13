@@ -7,7 +7,7 @@ import { h, on, svg } from '../../core/dom.ts';
 import { joinPath, uniqueName } from '../../fs/names.ts';
 import type { Shell } from '../../shell/types.ts';
 import { cssFamily, fontKind, type FontKind } from '../sheet/fonts.ts';
-import { PdfDocument, type PdfPage } from '../sheet/pdf.ts';
+import { pdfCannotShow, PdfDocument, type PdfPage } from '../sheet/pdf.ts';
 import { pageAt, pageTop, type Geometry } from './layout.ts';
 import { frameOf, geometryOf, type Frame } from './measure.ts';
 import { depthKind, fillLine, NUMBER_KINDS, NUMBER_SHAPES, numberIn, paperPt, pxToPt, shapeNumber, type NumberKind, type NumberShape, type PageBox, type PageSetup } from './model.ts';
@@ -345,10 +345,13 @@ export async function printPreview(shell: Shell, take: () => Snapshot, page: Pag
   on(prev, 'click', () => { index--; draw(); }, done.signal);
   on(next, 'click', () => { index++; draw(); }, done.signal);
   draw();
+  // The letters this document has that the PDF cannot show (it is told which, not only that some may exist).
+  const unshowable = pdfCannotShow(snap.pages.flat().map(it => (it.k === 'text' ? it.text : '')).join(''));
   const body = h('div', { class: 'pp-dialog' },
     h('div', { class: 'pp-side' },
       h('p', { class: 'dialog-detail' }, `${page.paper === 'letter' ? 'Letter' : page.paper.toUpperCase()}, ${page.orient}. Paper, margins and the header and footer are on the Layout tab.`),
-      h('p', { class: 'dialog-detail' }, 'The PDF uses Helvetica, Times or Courier in place of each typeface (every PDF reader has them), so words keep their places but may look a little different. Letters outside Western European alphabets show as "?" in the PDF; Print keeps them.')),
+      h('p', { class: 'dialog-detail' }, 'The PDF uses Helvetica, Times or Courier in place of each typeface (every PDF reader has them), so words keep their places but may look a little different. Letters outside Western European alphabets show as "?" in the PDF; Print keeps them.'),
+      unshowable.length ? h('p', { class: 'dialog-detail', role: 'alert' }, `This document has letters the PDF will show as "?": ${unshowable.slice(0, 12).join(' ')}${unshowable.length > 12 ? ' and more' : ''}. Choose Print to keep them.`) : null),
     h('div', { class: 'pp-main' }, view, h('div', { class: 'pp-nav' }, prev, count, next)));
   const answer = await shell.dialogs.ask<'print' | 'pdf' | 'save' | null>({
     title: `Print: ${title}`,

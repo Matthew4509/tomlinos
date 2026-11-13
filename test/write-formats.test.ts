@@ -364,3 +364,51 @@ test('a text file not stored as UTF-8 (the usual way of storing letters today) k
   assert.deepEqual(decodeText(Uint8Array.from([0xfe, 0xff, 0x00, 0x63, 0x00, 0xe9])), { text: 'cé', guessed: false });
   assert.deepEqual(decodeText(new Uint8Array(0)), { text: '', guessed: false }, 'an empty file');
 });
+
+test('Markdown keeps what a person wrote in code and headings: blank lines in code, a longer fence, a heading ending in #', async () => {
+  const { readMarkdown, writeMarkdown } = await import('../src/apps/write/markdown.ts');
+  const again = (s: string) => writeMarkdown(readMarkdown(s));
+  assert.equal(again('```\nfirst\n\n\nlast\n```\n'), '```\nfirst\n\n\nlast\n```\n', 'two blank lines inside code stay two');
+  assert.equal(again('````\n```\nx\n````\n'), '````\n```\nx\n````\n', 'a longer fence holds a literal ``` line');
+  assert.equal(again('## C#\n'), '## C#\n');
+  assert.equal(again('## Title ##\n'), '## Title\n', 'a closing run of #s is still dropped');
+  const heading = { type: 'doc', content: [{ type: 'paragraph', attrs: { style: 'h2' }, content: [{ type: 'text', text: 'Grade C #' }] }] };
+  assert.equal(readMarkdown(writeMarkdown(heading)).content?.[0].content?.[0].text, 'Grade C #', 'a set-apart # that is the heading\'s own word survives a save');
+});
+
+test('ODT tables: repeated rows and cells are expanded, and a table past the limit says so', async () => {
+  const { readOdt } = await import('../src/apps/write/odt.ts');
+  const odt = async (table: string) => {
+    const ns = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"';
+    const content = `<?xml version="1.0"?><office:document-content ${ns}><office:body><office:text>${table}</office:text></office:body></office:document-content>`;
+    const manifest = '<?xml version="1.0"?><manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"><manifest:file-entry manifest:full-path="/" manifest:media-type="application/vnd.oasis.opendocument.text"/></manifest:manifest>';
+    return zipDeflate([
+      { name: 'mimetype', data: new TextEncoder().encode('application/vnd.oasis.opendocument.text'), modified: 0 },
+      { name: 'content.xml', data: new TextEncoder().encode(content), modified: 0 },
+      { name: 'META-INF/manifest.xml', data: new TextEncoder().encode(manifest), modified: 0 },
+    ]);
+  };
+  const cell = (t: string, extra = '') => `<table:table-cell ${extra}><text:p>${t}</text:p></table:table-cell>`;
+  const repeated = await readOdt(await odt(`<table:table table:name="T"><table:table-row table:number-rows-repeated="3">${cell('x', 'table:number-columns-repeated="2"')}</table:table-row></table:table>`));
+  const t = repeated.doc.content![0];
+  assert.equal(t.content!.length, 3, 'three rows');
+  assert.equal(t.content![0].content!.length, 2, 'two cells in each');
+  const rows = Array.from({ length: 2001 }, (_, i) => `<table:table-row>${cell(i === 2000 ? 'LAST' : 'r' + i)}</table:table-row>`).join('');
+  const big = await readOdt(await odt(`<table:table table:name="T">${rows}</table:table>`));
+  assert.equal(big.doc.content![0].content!.length, 2000);
+  assert.ok(big.dropped.some(d => /table rows/.test(d)), 'the cut is reported: ' + big.dropped.join(';'));
+  const huge = await readOdt(await odt(`<table:table table:name="T"><table:table-row table:number-rows-repeated="1000000">${cell('x')}</table:table-row></table:table>`));
+  assert.ok(huge.doc.content![0].content!.length <= 2000 && huge.dropped.length > 0, 'a claim of a million rows is bounded and said');
+});
+
+test('mail merge: columns named alike each keep their own data, and a column called __proto__ merges like any other', async () => {
+  const { tableList, fillFields } = await import('../src/apps/write/merge.ts');
+  const list = tableList('Name\tName\tName 2\nA\tB\tC\n', 'test');
+  assert.deepEqual(list.columns, ['Name', 'Name 2', 'Name 2 2']);
+  assert.deepEqual(Object.values(list.rows[0]), ['A', 'B', 'C']);
+  const odd = tableList('__proto__\tconstructor\nx\ty\n', 'test');
+  const field = (name: string) => ({ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'field', attrs: { name } }] }] });
+  assert.doesNotThrow(() => fillFields(field('__proto__'), odd.rows[0]));
+  assert.equal(JSON.stringify(fillFields(field('__proto__'), odd.rows[0])).includes('"x"'), true);
+  assert.equal(JSON.stringify(fillFields(field('constructor'), odd.rows[0])).includes('"y"'), true);
+});

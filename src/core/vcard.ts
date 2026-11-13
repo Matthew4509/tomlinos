@@ -86,7 +86,13 @@ function listLines(c: Contact, field: ListField, name: string): string[] {
 }
 
 export function parseVcf(text: string): Contact[] {
+  return readVcf(text).contacts;
+}
+
+/** The cards, and the lines of each card that never reached its END:VCARD (a damaged or cut-off file), which a save keeps. */
+function readVcf(text: string): { contacts: Contact[]; unread: string[][] } {
   const out: Contact[] = [];
+  const unread: string[][] = [];
   const seen = new Map<string, number>();
   const ids = uniqueIds();
   let cur: Contact | null = null;
@@ -95,6 +101,7 @@ export function parseVcf(text: string): Contact[] {
   let nameFromN = '';
   for (const line of readLines(text)) {
     if (line.name === 'BEGIN' && line.value.toUpperCase() === 'VCARD') {
+      if (cur) unread.push(['BEGIN:VCARD', ...raw]);
       cur = emptyContact();
       keep = { uid: '', version: '', lines: [], raw: {}, was: {} as Record<Field, string>, listed: { phones: [], emails: [] }, unlisted: { phones: [], emails: [] } };
       raw = [];
@@ -139,10 +146,15 @@ export function parseVcf(text: string): Contact[] {
       else if (!field) keep.lines.push(line.raw);
     }
   }
-  return out;
+  if (cur) unread.push(['BEGIN:VCARD', ...raw]);
+  return { contacts: out, unread };
 }
 
-export function writeVcf(contacts: Contact[]): string {
+/**
+ * The contacts file for these contacts. Given the file's text as it was read before the change (previous), a card in it
+ * that never ended (so was not read) is written back as it was, not lost.
+ */
+export function writeVcf(contacts: Contact[], previous?: string | null): string {
   const out: string[] = [];
   for (const c of copiesInOrder(contacts)) {
     const k = c.keep;
@@ -161,5 +173,6 @@ export function writeVcf(contacts: Contact[]): string {
     for (const raw of k?.lines ?? []) out.push(foldLine(raw));
     out.push('END:VCARD');
   }
+  for (const fragment of typeof previous === 'string' ? readVcf(previous).unread : []) out.push(...fragment.map(foldLine));
   return out.join('\r\n') + (out.length ? '\r\n' : '');
 }
