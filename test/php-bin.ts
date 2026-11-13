@@ -9,11 +9,23 @@ export const hasPhp = (() => {
   try { return spawnSync(PHP, ['-v'], { stdio: 'ignore' }).status === 0; } catch { return false; }
 })();
 
-// A portable Windows PHP ships openssl and curl unloaded beside it in ext/; a system PHP already loads them.
+// A portable Windows PHP ships openssl, curl and sodium unloaded beside it in ext/; a system PHP already loads them.
+// The folder is found from the PHP that actually runs, so "php" found on the PATH works the same as a full PHP_BIN,
+// and an extension that PHP already has loaded is left out: naming it again prints "Module is already loaded"
+// warnings into the output the tests read.
+const phpFacts = (() => {
+  try {
+    const r = spawnSync(PHP, ['-r', 'echo PHP_BINARY, "\\n", strtolower(implode(",", get_loaded_extensions()));'], { encoding: 'utf8' });
+    if (r.status !== 0) return null;
+    const [binary = '', loaded = ''] = r.stdout.trim().split(/\r?\n/);
+    return { dir: join(dirname(binary), 'ext'), loaded: new Set(loaded.split(',')) };
+  } catch { return null; }
+})();
+
 export function extFlags(...names: string[]): string[] {
-  const dir = join(dirname(PHP), 'ext');
-  if (!existsSync(dir)) return [];
-  return ['-d', `extension_dir=${dir}`, ...names.flatMap(n => ['-d', `extension=${n}`])];
+  if (!phpFacts || !existsSync(phpFacts.dir)) return [];
+  const wanted = names.filter(n => !phpFacts.loaded.has(n.toLowerCase()) && existsSync(join(phpFacts.dir, `php_${n}.dll`)));
+  return wanted.length ? ['-d', `extension_dir=${phpFacts.dir}`, ...wanted.flatMap(n => ['-d', `extension=${n}`])] : [];
 }
 
 /**

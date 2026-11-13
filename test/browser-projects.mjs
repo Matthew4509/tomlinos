@@ -379,7 +379,15 @@ await step('Calendar: after Next month twice a day can still be reached with the
   await C().getByLabel('What').fill('Half done');
   await next.click();
   eq(await C().getByLabel('What').inputValue(), 'Half done', 'the form is still there');
-  await close(C());
+  // Nor by closing the window: it asks first. Keep editing keeps the window and the form; Discard closes it.
+  await C().getByRole('button', { name: 'Close', exact: true }).first().click();
+  ok((await D().innerText()).includes('Discard your changes?'), 'closing over an unsaved event asks first');
+  await D().getByRole('button', { name: 'Keep editing' }).click();
+  await D().waitFor({ state: 'detached' });
+  eq(await C().getByLabel('What').inputValue(), 'Half done', 'Keep editing keeps the window and the form');
+  await C().getByRole('button', { name: 'Close', exact: true }).first().click();
+  await D().getByRole('button', { name: 'Discard' }).click();
+  await C().waitFor({ state: 'detached', timeout: 10000 });
 });
 
 await step('Calendar on a phone-sized screen: a busy day has a dot, an empty one has none', async () => {
