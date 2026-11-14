@@ -231,6 +231,8 @@ await step('Calculator sheet: Extend, type numbers, make =1 from A1 + B1 × A2, 
   await c.getByRole('button', { name: /Extend/ }).click();
   await c.locator('.calc-sheet').waitFor();
   ok((await c.boundingBox()).width > before + 300, 'window widened');
+  // The rows are laid out on the next frame, once the sheet has its height: wait for them, then count.
+  await c.locator('.calc-row:not(.head)').nth(6).waitFor({ timeout: 5000 }).catch(() => {});
   ok(await c.locator('.calc-row:not(.head)').count() >= 7, 'rows fill the height');
   const cellOf = id => c.locator(`[data-id="${id}"]`);
   await cellOf('L1').locator('input').fill('Rent');
