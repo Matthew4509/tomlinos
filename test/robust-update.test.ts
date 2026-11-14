@@ -87,10 +87,20 @@ test('an install killed at a random moment ends, after the next update request, 
   const fresh = tree(probe.priv, probe.web);
 
   const seen = { old: 0, new: 0, putBack: 0 };
-  for (let round = 0; round < 14; round++) {
+  const opFile = join(s.priv, 'update', 'operation.json');
+  const replacing = () => { try { return JSON.parse(readFileSync(opFile, 'utf8')).op === 'install'; } catch { return false; } };
+  // Random kills land anywhere, but how long each step takes changes with the machine's load, so none might land while
+  // files are being replaced. After the random rounds, rounds kill as soon as operation.json says files are being
+  // replaced (the step a backup must undo), until one has landed there.
+  for (let round = 0; round < 14 || (seen.putBack === 0 && round < 20); round++) {
+    const aimed = round >= 14;
     const r = php(['updater.php'], install(zip), env);
-    const wait = Math.floor(Math.random() * span * 1.1);
-    await new Promise(res => setTimeout(res, wait));
+    let exited = false;
+    r.done.then(() => (exited = true));
+    const t1 = Date.now();
+    if (aimed) while (!exited && !replacing() && Date.now() - t1 < span * 20) await new Promise(res => setTimeout(res, 1));
+    else await new Promise(res => setTimeout(res, Math.floor(Math.random() * span * 1.1)));
+    const wait = `${Date.now() - t1}${aimed ? ' (aimed at the replacing)' : ''}`;
     r.kill();
     await r.done;
     const rec = await php(['updater.php'], recover, env).done;
@@ -114,7 +124,7 @@ test('an install killed at a random moment ends, after the next update request, 
     } else seen.old++;
     assert.ok(!existsSync(join(s.priv, 'update', 'operation.json')), 'nothing left half-done');
   }
-  console.log(`      14 kills: ${seen.old} left the old version (${seen.putBack} of them undone from the backup after files had changed), ${seen.new} the new one`);
+  console.log(`      ${seen.old + seen.new} kills: ${seen.old} left the old version (${seen.putBack} of them undone from the backup after files had changed), ${seen.new} the new one`);
   assert.ok(seen.putBack > 0, 'at least one kill landed while files were being replaced (else this test proved little)');
 });
 
