@@ -110,6 +110,9 @@ await step('Games lists Office Printer from the signed list; the owner downloads
   await t.waitFor({ timeout: 10000 });
   ok(await t.locator('.ast-app').isDisabled(), 'it opens before it is on the server');
   await t.getByRole('button', { name: 'Download to this server' }).click();
+  // Putting code on the server asks for the owner's own password first.
+  await owner.locator('.dialog').getByLabel('Your password').fill('browser-test-passphrase-1');
+  await owner.locator('.dialog').getByRole('button', { name: 'Download', exact: true }).click();
   await t.getByRole('button', { name: 'Install' }).waitFor({ timeout: 30000 });
   ok(!(await startHas(owner, 'Office Printer')), 'downloading put it on the owner\'s desktop without Install');
 });
@@ -232,6 +235,7 @@ await step('Remove takes it off the owner\'s desktop and closes it; kept after a
 await step('the owner deletes it from the server: its files are gone', async () => {
   const win = await openManager(owner);
   await tile(win).getByRole('button', { name: 'Delete from server' }).click();
+  await owner.locator('.dialog').getByLabel('Your password').fill('browser-test-passphrase-1');
   await owner.locator('.dialog button', { hasText: 'Delete from server' }).click();
   await tile(win).getByRole('button', { name: 'Download to this server' }).waitFor({ timeout: 10000 });
   const status = await owner.evaluate(() => fetch('/apps/officeprinter/index.html').then(r => r.status));
@@ -250,7 +254,7 @@ await step('a list not signed by TOMLIN OS is refused, and so is a zip that does
   const zip = join(storeDir, `officeprinter-${payload.apps[0].version}.zip`);
   const bytes = readFileSync(zip);
   writeFileSync(zip, Buffer.concat([bytes, Buffer.from('tampered')]));
-  const r = await owner.evaluate(() => fetch('/api/apps.php?op=download', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-Desktop-Store': '1' }, body: JSON.stringify({ id: 'officeprinter' }) }).then(async x => [x.status, await x.text()]));
+  const r = await owner.evaluate(() => fetch('/api/apps.php?op=download', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-Desktop-Store': '1' }, body: JSON.stringify({ id: 'officeprinter', password: 'browser-test-passphrase-1', code: '' }) }).then(async x => [x.status, await x.text()]));
   ok(r[0] !== 200 && /fingerprint/.test(r[1]), `a changed zip was installed: ${r[0]} ${r[1].slice(0, 100)}`);
   writeFileSync(zip, bytes);
   const status = await owner.evaluate(() => fetch('/apps/officeprinter/index.html').then(x => x.status));
