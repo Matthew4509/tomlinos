@@ -400,7 +400,7 @@ await step('QN-r6a: a file that is not UTF-8 text says so, keeps every byte, and
   eq(await QN().locator('textarea').last().isDisabled(), true, 'box disabled');
 });
 
-await info('QN-15 (P2): a window that could not open its file names the file and still takes Ctrl+O and Alt+N', async () => {
+await step('QN-15 (P2): a window that could not open its file names the file and still takes Ctrl+O and Alt+N', async () => {
   const t = await titles();
   ok(t.includes('pic.txt'), 'titles ' + JSON.stringify(t));
   await front().locator('.win-bar').click();
@@ -408,14 +408,96 @@ await info('QN-15 (P2): a window that could not open its file names the file and
   await page.waitForTimeout(500);
   const opened = await page.locator('.dialog', { hasText: 'Open' }).count();
   await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
   ok(opened > 0, 'Ctrl+O did nothing');
+  const before = await QN().count();
+  await front().locator('.win-bar').click();
+  await page.keyboard.press('Alt+n');
+  await page.waitForTimeout(600);
+  eq(await QN().count(), before + 1, 'Alt+N opened a new note');
+  // Ctrl+S and zoom keys in the refused window still do nothing to the file or its message.
+  await front().locator('.win-close').first().click();
+  await page.waitForTimeout(300);
+  await QN().nth(before - 1).locator('.win-title-text').click();
+  await page.keyboard.press('Control+s');
+  await page.keyboard.press('Control+=');
+  await page.waitForTimeout(500);
+  ok(!(await page.locator('.dialog', { hasText: 'Save as' }).count()), 'a Save as box opened');
+  ok((await QN().nth(before - 1).locator('.editor-status').innerText()).includes('does not look like text'), 'message replaced');
+  eq(await dev.read('/Documents/pic.txt'), [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xfe, 0x00, 0x01], 'bytes');
 });
 
-await info('QN-9 (P2 interop): a UTF-16 file saved by Windows Notepad ("Unicode") opens as text', async () => {
-  const u16 = [0xff, 0xfe, ...[...Buffer.from('hello\r\n', 'utf16le')]];
+await step('QN-9 (P2 interop): a UTF-16 file saved by Windows Notepad ("Unicode") opens as text and saves back as UTF-16', async () => {
+  const u16 = [0xff, 0xfe, ...[...Buffer.from('hello é😀\r\n', 'utf16le')]];
   await dev.write('/Documents/unicode16.txt', u16);
   await openFile('unicode16.txt');
-  eq(await box().inputValue(), 'hello\n', 'text');
+  eq(await box().inputValue(), 'hello é😀\n', 'text');
+  ok((await statusOf()).includes('UTF-16 LE'), 'status ' + (await statusOf()));
+  await typeAtEnd('ß');
+  await page.keyboard.press('Control+s');
+  await page.waitForTimeout(700);
+  eq(await dev.read('/Documents/unicode16.txt'), [0xff, 0xfe, ...Buffer.from('hello é😀\r\nß', 'utf16le')], 'bytes on disk');
+  const be = [0xfe, 0xff, ...Buffer.from('big end\n', 'utf16le').swap16()];
+  await dev.write('/Documents/be16.txt', be);
+  await openFile('be16.txt');
+  eq(await box().inputValue(), 'big end\n', 'UTF-16 BE text');
+  await typeAtEnd('!');
+  await page.keyboard.press('Control+s');
+  await page.waitForTimeout(700);
+  eq(await dev.read('/Documents/be16.txt'), [0xfe, 0xff, ...Buffer.from('big end\n!', 'utf16le').swap16()], 'UTF-16 BE bytes on disk');
+});
+
+await step('QN-9 (P2 interop): an ANSI (Windows-1252) file opens, says so, and saves back in Windows-1252; a letter it cannot hold asks first', async () => {
+  const ansi = [0x43, 0x61, 0x66, 0xe9, 0x20, 0x80, 0x35, 0x0d, 0x0a];
+  await dev.write('/Documents/ansi.txt', ansi);
+  await openFile('ansi.txt');
+  eq(await box().inputValue(), 'Café €5\n', 'text');
+  ok((await statusOf()).includes('Windows-1252'), 'status ' + (await statusOf()));
+  await typeAtEnd('ü');
+  await page.keyboard.press('Control+s');
+  await page.waitForTimeout(700);
+  eq(await dev.read('/Documents/ansi.txt'), [...ansi, 0xfc], 'bytes on disk');
+  await typeAtEnd('😀');
+  await page.keyboard.press('Control+s');
+  await D().getByText('Save as UTF-8?').waitFor();
+  await D().getByRole('button', { name: 'Cancel' }).click();
+  await page.waitForTimeout(400);
+  eq(await dev.read('/Documents/ansi.txt'), [...ansi, 0xfc], 'Cancel kept the file');
+  await page.keyboard.press('Control+s');
+  await D().getByRole('button', { name: 'Save as UTF-8' }).click();
+  await page.waitForTimeout(700);
+  eq(text(await dev.read('/Documents/ansi.txt')), 'Café €5\r\nü😀', 'saved as UTF-8');
+  ok((await statusOf()).includes('UTF-8'), 'status ' + (await statusOf()));
+});
+
+await step('QN-12 (P2): a file with mixed line endings keeps each line\'s own ending; Line endings makes them one kind', async () => {
+  const file = 'one\r\ntwo\nthree\r\nfour\n';
+  await dev.write('/Documents/mixed.txt', utf8(file));
+  await openFile('mixed.txt');
+  ok((await statusOf()).includes('Mixed line endings'), 'status ' + (await statusOf()));
+  await box().focus();
+  await page.keyboard.press('Control+Home');
+  await page.keyboard.press('End');
+  await page.keyboard.type('!');
+  await page.keyboard.press('Control+s');
+  await page.waitForTimeout(700);
+  eq(text(await dev.read('/Documents/mixed.txt')), 'one!\r\ntwo\nthree\r\nfour\n', 'after one letter');
+  await front().locator('.cbar-title[data-menu=Format]').click();
+  await page.locator('.menu-item', { hasText: 'Line endings when saving' }).click();
+  await page.locator('.menu-item', { hasText: 'Unix (LF) (LF)' }).click();
+  await page.waitForTimeout(300);
+  await page.keyboard.press('Control+s');
+  await page.waitForTimeout(700);
+  eq(text(await dev.read('/Documents/mixed.txt')), 'one!\ntwo\nthree\nfour\n', 'after Unix chosen');
+});
+
+await step('QN-16 (P2): the status-bar column counts an emoji (even a joined one) as one letter', async () => {
+  await dev.write('/Documents/emoji.txt', utf8('😀👩‍👩‍👧x'));
+  await openFile('emoji.txt');
+  await box().focus();
+  await page.keyboard.press('Control+End');
+  await page.waitForTimeout(300);
+  ok((await statusOf()).startsWith('Ln 1, Col 4'), 'status ' + (await statusOf()));
 });
 
 await step('QN-r6b: a file over the limit says so and is unharmed', async () => {
@@ -490,7 +572,7 @@ await step('QN-r3c: two quick Ctrl+S on a new note give one Save as box', async 
   await closeAll();
 });
 
-await info('QN-14 (P2): File › Open lists every file Quick Notes opens (a .json is hidden until "All files" is chosen)', async () => {
+await step('QN-14 (P2): File › Open lists every file Quick Notes opens (a .json is hidden until "All files" is chosen)', async () => {
   await dev.write('/Documents/conf.json', utf8('{"a":1}'));
   await closeAll();
   await openQN();
@@ -549,7 +631,7 @@ await step('QN-r7a: Find after a Turkish İ selects the right word; Replace all 
   eq(await box().inputValue(), 'İstanbul and cat and Cat', 'after undo');
 });
 
-await info('QN-3 (P1): Find and Replace all agree on what matches (find "İ" in "i", Deseret capitals, ẞ)', async () => {
+await step('QN-3 (P1): Find and Replace all agree on what matches (find "İ" in "i", Deseret capitals, ẞ)', async () => {
   await setText('i 𐐨 ß');
   await box().focus();
   await page.keyboard.press('Control+h');
@@ -570,7 +652,22 @@ await info('QN-3 (P1): Find and Replace all agree on what matches (find "İ" in 
   ok(outcomes.every(o => /finds, replace all replaces|misses, replace all misses/.test(o)), outcomes.join('; '));
 });
 
-await info('QN-5 (P1): case-blind Find next in a 4.9 MB file answers within 300 ms', async () => {
+await step('QN-3 (P1): the Replace button replaces the match Find chose (dotted İ, final ς), not just moves on', async () => {
+  await setText('İ and ς and x');
+  await box().focus();
+  await page.keyboard.press('Control+Home');
+  await page.keyboard.press('Control+h');
+  const f = front();
+  await f.locator('input[aria-label="Replace with"]').fill('X');
+  for (const q of ['i', 'Σ']) {
+    await f.locator('input[aria-label="Find"]').fill(q);
+    await f.locator('input[aria-label="Find"]').press('Enter');
+    await f.getByRole('button', { name: 'Replace', exact: true }).click();
+  }
+  eq(await box().inputValue(), 'X and X and x', 'after two Replace');
+});
+
+await step('QN-5 (P1): case-blind Find next in a 4.9 MB file answers within 300 ms', async () => {
   const line = 'The quick brown fox jumps over the lazy dog. ';
   await setText(line.repeat(Math.floor(4.9e6 / line.length)));
   await page.waitForTimeout(500);
@@ -597,7 +694,7 @@ await step('QN-r7b: Go to line on a 20,000-line file lands on that line and show
   ok(visible, 'box did not scroll');
 });
 
-await info('QN-13 (P1, ridiculous tier): Find next for the last word of one 4.9 MB line answers within 1 s and shows it', async () => {
+await step('QN-13 (P1, ridiculous tier): Find next for the last word of one 4.9 MB line answers within 1 s and shows it', async () => {
   await setText('word '.repeat(980000) + 'needle');
   await page.waitForTimeout(500);
   await box().focus();
@@ -612,6 +709,9 @@ await info('QN-13 (P1, ridiculous tier): Find next for the last word of one 4.9 
   const sel = await box().evaluate(el => el.value.slice(el.selectionStart, el.selectionEnd));
   eq(sel, 'needle', 'selected');
   ok(ms < 1000, `took ${Math.round(ms)} ms`);
+  // The match is on the last row, so the box is scrolled to its bottom.
+  const view = await box().evaluate(el => ({ top: el.scrollTop, client: el.clientHeight, height: el.scrollHeight }));
+  ok(view.top + view.client >= view.height - 2, 'not scrolled to the match: ' + JSON.stringify(view));
 });
 
 // ---- Rule 8: names ----
