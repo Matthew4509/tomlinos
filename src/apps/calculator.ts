@@ -9,6 +9,8 @@ import { baseName, joinPath, nameProblem, parentPath, uniqueName } from '../fs/n
 import type { AppDef } from '../shell/types.ts';
 import { APPS } from './catalog.ts';
 import { saveOver } from '../shell/savefile.ts';
+import { classicBar } from '../shell/menubar.ts';
+import { helpMenu } from './classic-menus.ts';
 import {
   Calculator, cellId, cellName, describe, emptySheet, evaluate, isSumCell, OPS, parseNumber, parseSheet, show, sumProblem,
   type Col, type Op, type RowId, type SheetData, type Sum,
@@ -25,7 +27,9 @@ export const calculatorApp: AppDef = {
   ...APPS.calculator,
   async launch(app, arg) {
     const shell = app.shell;
-    app.root.classList.add('calc');
+    // The window: the menu bar across the top, the calculator and its sheet under it.
+    app.root.classList.add('calc-app');
+    const body = h('div', { class: 'calc' });
     const calc = new Calculator();
     let data: SheetData = emptySheet();
     // What counts as a change: everything but the row count, which follows the window's height (opening or Extend is not an edit).
@@ -59,7 +63,7 @@ export const calculatorApp: AppDef = {
     const note = h('div', { class: 'calc-note', role: 'status' });
     const grid = h('div', { class: 'calc-grid', role: 'grid', 'aria-label': 'Sheet' });
     const sheet = h('div', { class: 'calc-sheet', hidden: true }, h('div', { class: 'toolbar' }, saveBtn, saveAsBtn, clearBtn), note, grid);
-    app.root.append(pad, sheet);
+    body.append(pad, sheet);
 
     const cells = new Map<string, HTMLElement>();
     const dirty = () => content() !== savedJson;
@@ -316,7 +320,7 @@ export const calculatorApp: AppDef = {
     function setOpen(value: boolean) {
       open = value;
       sheet.hidden = !value;
-      app.root.classList.toggle('wide', value);
+      body.classList.toggle('wide', value);
       extendBtn.textContent = value ? '◂ Fold' : 'Extend ▸';
       extendBtn.setAttribute('aria-expanded', String(value));
       app.setWidth(value ? WIDE_WIDTH : PAD_WIDTH + 16);
@@ -413,7 +417,7 @@ export const calculatorApp: AppDef = {
     on(saveAsBtn, 'click', () => void saveAs(), app.signal);
     new ResizeObserver(() => open && fitRows()).observe(grid);
     // The sheet goes under the keypad in a narrow window, as it does on a narrow screen.
-    new ResizeObserver(() => app.root.classList.toggle('stacked', app.root.clientWidth > 0 && app.root.clientWidth < STACK_WIDTH)).observe(app.root);
+    new ResizeObserver(() => body.classList.toggle('stacked', body.clientWidth > 0 && body.clientWidth < STACK_WIDTH)).observe(body);
     on(app.root, 'keydown', (event: KeyboardEvent) => {
       const typing = (event.target as HTMLElement).tagName === 'INPUT';
       const ctrl = event.ctrlKey || event.metaKey;
@@ -440,6 +444,31 @@ export const calculatorApp: AppDef = {
         else press('CE');
       } else press(k);
     }, app.signal);
+
+    // ---- Menu bar: Edit, View, Help (the keypad is the toolbar) ----
+    const usable = () => !building;
+    const bar = classicBar({
+      menus: [
+        { label: 'Edit', items: [
+          { label: 'Clear entry', enabled: usable, action: () => press('CE') },
+          { label: 'Clear all', shortcut: 'Esc', enabled: usable, action: () => press('C') },
+          { label: 'Back one digit', shortcut: 'Backspace', enabled: usable, action: () => press('⌫') },
+          { label: 'Change sign', enabled: usable, action: () => press('±') },
+          { separator: true },
+          { label: 'Put the number in the chosen cell', shown: () => open, enabled: usable, action: toCell },
+          { label: 'Clear cell', icon: 'delete', shortcut: 'Delete', shown: () => open, enabled: () => usable() && selected !== null, action: clearCell },
+          { label: 'Stop making the sum', shortcut: 'Esc', shown: () => !!building, action: stopSum },
+          { separator: true },
+          { label: 'Save sheet', icon: 'save', shortcut: 'Ctrl+S', shown: () => open, action: () => void save() },
+          { label: 'Save sheet as...', icon: 'save-as', shortcut: 'Ctrl+Shift+S', shown: () => open, action: () => void saveAs() },
+        ] },
+        { label: 'View', items: [
+          { label: 'Sheet beside the calculator', checked: () => open, action: () => setOpen(!open) },
+        ] },
+        helpMenu(shell),
+      ],
+    }, { layer: shell.menus, signal: app.signal, scope: app.root, doc: () => pad, label: 'Calculator menu bar' });
+    app.root.append(bar.el, body);
 
     paint();
     if (arg) setOpen(true);

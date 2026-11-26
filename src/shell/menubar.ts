@@ -196,6 +196,12 @@ export function checkShortcuts(menus: BarMenu[]): string[] {
 
 const isOn = (getter: (() => boolean) | undefined, fallback = true) => (getter ? getter() : fallback);
 
+/** The description each bar on the page was made from, so a test can run checkShortcuts() over an app's real menus. */
+const specs = new WeakMap<Element, BarSpec>();
+export function barSpecOf(el: Element): BarSpec | undefined {
+  return specs.get(el);
+}
+
 /**
  * The described items as the menu layer's items, with every getter asked now: hidden items dropped, separators at the
  * ends or side by side dropped, a submenu with nothing in it shown disabled. `wrap` wraps each action (the bar uses it
@@ -509,6 +515,7 @@ export function classicBar(spec: BarSpec, opts: BarOptions): ClassicBar {
   }
 
   const bar = h('div', { class: 'cbar' }, menubar, toolbar);
+  specs.set(bar, spec);
 
   // ---- Pictures in the open menu ----
   // The menu layer draws a tick column at the left of each item; an item with a picture shows it there (a ticked item

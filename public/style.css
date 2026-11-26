@@ -1393,7 +1393,8 @@ textarea.field { resize: vertical; font: inherit; }
 .studio-full:hover { color: var(--st-text); border-color: var(--st-accent); }
 
 /* ---- Calculator (src/apps/calculator.ts) ---- */
-.calc { display: flex; flex-direction: row; height: 100%; overflow: hidden; background: var(--face); }
+.calc-app { display: flex; flex-direction: column; height: 100%; overflow: hidden; background: var(--face); }
+.calc { flex: 1; min-height: 0; display: flex; flex-direction: row; overflow: hidden; background: var(--face); }
 .calc-pad { flex: 0 0 auto; width: 100%; max-width: 320px; display: flex; flex-direction: column; gap: 8px; padding: 10px; outline: none; }
 .calc.wide .calc-pad { width: 280px; border-right: 1px solid var(--line); }
 .calc-screen { background: #fff; border: 1px solid var(--line); border-radius: 4px; padding: 6px 10px; text-align: right; }
