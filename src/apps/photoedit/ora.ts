@@ -35,6 +35,20 @@ export interface TextSpec {
   y: number;
   /** An outline drawn behind the letters (white text with a black edge). Width 0: worked out from the size. */
   outline?: TextOutline;
+  /** A text box (Meme): the words are wrapped to its width and stand in its middle; x and y are its top left. */
+  box?: TextBox;
+}
+
+export interface TextBox {
+  w: number;
+  h: number;
+  /** The size is worked out so the words fill the box (the size above is then not used). */
+  fit: boolean;
+  /** Kept at the top or bottom of the picture (in a bar when there is one); dragging the box lets it go. */
+  dock?: 'top' | 'bottom';
+  /** Its colours follow where it is: white with a black outline on the picture, black on a bar. Choosing a colour or
+   *  the outline by hand ends that. */
+  auto?: boolean;
 }
 
 export interface TextOutline {
@@ -102,6 +116,18 @@ function readOutline(raw: unknown): { outline?: TextOutline } {
   return { outline: { colour: String(o.colour), width: Math.min(20, Math.max(0, Math.round(width))) } };
 }
 
+/** A text box as saved; one that is not plainly a box is left off (the words then stand as plain text). */
+function readBox(raw: unknown): { box?: TextBox } {
+  if (!raw || typeof raw !== 'object') return {};
+  const b = raw as Partial<TextBox>;
+  const w = Number(b.w), hgt = Number(b.h);
+  if (!Number.isFinite(w) || !Number.isFinite(hgt) || w < 1 || hgt < 1) return {};
+  const box: TextBox = { w: Math.min(MAX_SIDE, Math.round(w)), h: Math.min(MAX_SIDE, Math.round(hgt)), fit: b.fit !== false };
+  if (b.dock === 'top' || b.dock === 'bottom') box.dock = b.dock;
+  if (b.auto === true) box.auto = true;
+  return { box };
+}
+
 function readText(raw: string | undefined): TextSpec | undefined {
   if (!raw) return undefined;
   try {
@@ -112,6 +138,7 @@ function readText(raw: string | undefined): TextSpec | undefined {
       colour: /^#[0-9a-f]{6}$/i.test(String(t.colour)) ? String(t.colour) : '#000000', bold: !!t.bold, italic: !!t.italic,
       align: t.align === 'center' || t.align === 'right' ? t.align : 'left', x: num(String(t.x), 0), y: num(String(t.y), 0),
       ...readOutline(t.outline),
+      ...readBox(t.box),
     };
   } catch {
     return undefined;

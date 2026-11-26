@@ -1586,6 +1586,22 @@ textarea.field { resize: vertical; font: inherit; }
 /* In a short window the panel scrolls inside itself, so the layer buttons stay above the status bar and can be clicked. */
 .pe-layers { flex: none; width: 230px; display: flex; flex-direction: column; background: var(--face); border-left: 1px solid var(--line); min-height: 0; overflow-y: auto; }
 .pe-layers[hidden] { display: none; }
+.pe-meme { flex: none; width: 270px; display: flex; flex-direction: column; background: var(--face); color: var(--ink); border-left: 1px solid var(--line); min-height: 0; overflow-y: auto; font-size: 13px; }
+.pe-meme[hidden] { display: none; }
+.pe-meme-part { display: flex; flex-direction: column; gap: 6px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+.pe-meme-part select.field { width: auto; min-height: 26px; padding: 1px 4px; }
+.pe-meme-part input[type="color"] { width: 36px; height: 26px; padding: 0 2px; border: 1px solid var(--line); border-radius: 4px; background: #fff; }
+.pe-meme-part .field.num { width: 60px; }
+.pe-meme-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.pe-meme-title { font-weight: 700; }
+.pe-meme-list { display: flex; flex-direction: column; gap: 6px; }
+.pe-meme-box { display: flex; flex-direction: column; gap: 4px; padding: 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--paper); }
+.pe-meme-box.on { border-color: var(--sel); box-shadow: 0 0 0 1px var(--sel); }
+.pe-meme-box .pe-meme-row > .field { flex: 1 1 auto; min-width: 0; }
+.pe-meme-box .pe-row3 { gap: 4px 8px; }
+.pe-meme-box input[type="color"] { width: 32px; height: 24px; }
+.pe-meme-box .field.num { width: 56px; }
+.pe-meme-foot { margin-top: auto; display: flex; justify-content: flex-end; padding: 6px 8px; border-top: 1px solid var(--line); }
 .pe-layers-head { padding: 4px 8px; font-weight: 700; font-size: 13px; border-bottom: 1px solid var(--line); }
 .pe-layer-props { display: flex; flex-wrap: wrap; gap: 4px 8px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
 .pe-layer-props select.field { width: 130px; min-height: 26px; padding: 1px 4px; }

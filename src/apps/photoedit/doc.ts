@@ -6,7 +6,7 @@ import { blendInfo, type BlendMode } from './layers.ts';
 import { maskBounds, maskEdges, maskMix, type Mask } from './selection.ts';
 import type { TextSpec } from './ora.ts';
 import type { Pixels } from './pixels.ts';
-import { fontOf, layoutText, outlineWidth } from './text.ts';
+import { fontOf, layoutText, outlineWidth, sizedText } from './text.ts';
 
 /** Undo keeps steps until they add up to this. */
 export const HISTORY_BYTES = 256 * 1024 * 1024;
@@ -96,12 +96,13 @@ export function paintText(layer: Layer): void {
   c.clearRect(0, 0, layer.canvas.width, layer.canvas.height);
   if (!t) return;
   c.save();
-  c.font = fontOf(t);
+  const e = drawnText(t, c);
+  c.font = fontOf(e);
   c.textBaseline = 'top';
-  const lines = layoutText(t, s => c.measureText(s).width).lines;
+  const lines = layoutText(e, s => c.measureText(s).width).lines;
   // The outline first, then the letters over it: a stroke twice the width, centred on each letter's edge, leaves the
   // chosen width showing outside once the fill covers its inner half. Round joins keep corners from spiking.
-  const ow = outlineWidth(t);
+  const ow = outlineWidth(e);
   if (ow && t.outline) {
     c.strokeStyle = t.outline.colour;
     c.lineWidth = ow * 2;
@@ -120,11 +121,19 @@ export function textBounds(layer: Layer): Rect | null {
   if (!t) return null;
   const c = layer.ctx;
   c.save();
-  c.font = fontOf(t);
-  const b = layoutText(t, s => c.measureText(s).width).bounds;
+  const e = drawnText(t, c);
+  c.font = fontOf(e);
+  const b = layoutText(e, s => c.measureText(s).width).bounds;
   c.restore();
-  const ow = outlineWidth(t);
+  const ow = outlineWidth(e);
   return ow ? { x: b.x - ow - 1, y: b.y - ow - 1, w: b.w + 2 * ow + 2, h: b.h + 2 * ow + 2 } : b;
+}
+
+/** The settings as drawn: a text box that fits its words gets the size that fits, measured with this canvas. */
+export function drawnText(t: TextSpec, c: CanvasRenderingContext2D): TextSpec {
+  if (!t.box?.fit) return t;
+  c.font = fontOf({ ...t, size: 100 });
+  return sizedText(t, line => c.measureText(line).width);
 }
 
 export class Doc {

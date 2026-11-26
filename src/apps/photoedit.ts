@@ -2,7 +2,9 @@
 // (rectangle, ellipse, lasso, magic wand, soft edges), painting (brush, eraser, shapes, fill, gradient, with size,
 // hardness, opacity, spacing and pen pressure), retouching (clone, heal, smudge, dodge / burn, blur / sharpen), colour
 // (levels, curves, hue / saturation, colour balance, threshold, posterise, desaturate), move / scale / turn, crop,
-// resize, canvas size, filters, undo and redo; opens and saves PNG, JPEG, WebP and OpenRaster (.ora, layers kept).
+// resize, canvas size, filters, undo and redo; text with an outline; Meme (bars and text boxes, photoedit/meme.ts);
+// opens and saves PNG, JPEG, WebP and OpenRaster (.ora, layers kept). The desktop's menu bar and toolbars
+// (shell/menubar.ts, shell/toolbars.ts): Standard, Tools (down the left) and Tool options, kept per person.
 // All our own code; the sums are in photoedit/*.ts. A picture is only ever drawn into a canvas, so nothing inside a
 // file (an SVG's script, say) can run.
 import { css, h, on } from '../core/dom.ts';
@@ -32,6 +34,7 @@ import { boxBounds, corners, dragBox, HANDLES, handlePoint, hitHandle, isIdentit
 import { autoOutline, FONT_FAMILIES } from './photoedit/text.ts';
 import { adjust, ADJUST_TITLES, type AdjustKind } from './photoedit/adjust-ui.ts';
 import { layersPanel } from './photoedit/layers-ui.ts';
+import { memePanel, readBars, type BarsSettings } from './photoedit/meme.ts';
 
 const MAX_FILE = 60 * 1024 * 1024;
 /** Beyond this many pixels a picture is refused (about 200 MB once decoded, for one layer). */
@@ -230,7 +233,51 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     },
   }, app.signal);
 
-  const body = h('div', { class: 'pe-body' }, stage, panel.el);
+  /** Keeps one setting in /System/photoedit.json; whatever else is kept there (by another window) stays. */
+  function keepSetting(key: 'toolbars' | 'meme', value: unknown): void {
+    void (async () => {
+      let now: Record<string, unknown> = {};
+      try {
+        const raw = JSON.parse(await shell.fs.readText(SETTINGS)) as unknown;
+        if (raw && typeof raw === 'object' && !Array.isArray(raw)) now = raw as Record<string, unknown>;
+      } catch {
+        // Nothing kept yet.
+      }
+      await shell.fs.writeText(SETTINGS, JSON.stringify({ ...now, [key]: value }), { hidden: true });
+    })().catch(() => {
+      // Not kept this time; the window still works.
+    });
+  }
+
+  // ---- Meme: bars and text boxes (photoedit/meme.ts), in a panel beside the picture ----
+  /** The bars last chosen (kept per person with the toolbars' places). */
+  let memeBars: BarsSettings = readBars(null);
+  const meme = memePanel({
+    doc, signal: app.signal,
+    resizeCanvas: (label, nw, nh, ox, oy) => resizeCanvas(label, nw, nh, ox, oy),
+    noRoom: extra => noRoomForLayer(doc.width, doc.height, doc.withMasks().length + extra - 1, maskCount()),
+    alert: (title, text) => void shell.dialogs.alert(title, text),
+    settle: () => settle(),
+    redraw: () => drawOverlay(),
+    refresh: () => {
+      panel.refresh();
+      refresh();
+    },
+    zoom: () => zoom,
+    get bars() {
+      return memeBars;
+    },
+    keepBars: s => {
+      memeBars = s;
+      keepSetting('meme', s);
+    },
+    onClose: () => {
+      css(over, { cursor: null });
+      stage.focus({ preventScroll: true });
+    },
+  });
+
+  const body = h('div', { class: 'pe-body' }, stage, meme.el, panel.el);
   const foot = h('div', { class: 'pe-foot' }, status, where);
 
   // ---- Showing ----
@@ -309,8 +356,10 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       antsPath = null;
       fit();
       panel.refresh();
+      meme.sync();
     } else if (what === 'layers') {
       panel.refresh();
+      meme.sync();
       refresh();
     } else if (what === 'selection') {
       antsPath = null;
@@ -347,6 +396,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       octx.setLineDash([]);
     }
     preview?.(octx, px);
+    meme.drawOverlay(octx, px);
   }
   const ants = window.setInterval(() => {
     // A selection with a huge outline (a magic wand on a noisy photo) is drawn once, not animated.
@@ -360,6 +410,8 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
   function undo() {
     if (xf) return cancelTransform();
     if (lasso) return endLasso();
+    // Words being typed into a Meme box are a step of their own first.
+    meme.commitTyping();
     // A stroke or drag still under the pointer is finished first, so Undo takes back that (not the step before it).
     finishGesture();
     doc.cancelPending();
@@ -373,7 +425,9 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     dirty = !doc.history.isAt(clean);
     edits++;
     panel.refresh();
+    meme.sync();
     refresh();
+    drawOverlay();
   }
 
   // ---- Opening and saving ----
@@ -1229,6 +1283,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
 
   /** Finishes whatever is half done (a stroke or drag under the pointer, a move, a lasso) before another command. */
   function settle() {
+    meme.commitTyping();
     finishGesture();
     if (xf) commitTransform();
     if (lasso) endLasso();
@@ -1316,6 +1371,12 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     // A press that never got its release (the pointer went elsewhere) ends here first.
     finishGesture();
     const p = toImage(e);
+    // While the Meme panel is open, a press picks, moves or stretches a text box (Space still moves the view).
+    if (meme.isOpen && !spaceHeld) {
+      meme.pointerDown(p);
+      over.setPointerCapture(e.pointerId);
+      return;
+    }
     const t = spaceHeld ? 'hand' : tool;
     if (t === 'hand') {
       drag = { kind: 'hand', start: p, last: p, moved: false, scroll: { x: stage.scrollLeft, y: stage.scrollTop, cx: e.clientX, cy: e.clientY } };
@@ -1445,6 +1506,10 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
   on(over, 'pointermove', (e: PointerEvent) => {
     const p = toImage(e);
     if (!xf?.drag) where.textContent = `${Math.floor(p.x)}, ${Math.floor(p.y)}`;
+    if (meme.isOpen && !drag) {
+      css(over, { cursor: meme.pointerMove(p) });
+      return;
+    }
     hoverCursor(p);
     if (lasso) {
       const l = lasso;
@@ -1599,6 +1664,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       }
       return;
     }
+    if (meme.dragging) meme.pointerUp();
     finishGesture();
     refresh();
   };
@@ -2149,6 +2215,8 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     { label: 'Flip upside down', action: () => flipAll(false) },
     { separator: true },
     { label: 'Flatten picture (join all layers)', disabled: doc.layers.length < 2, action: flattenAll },
+    { separator: true },
+    { label: 'Meme...', checked: meme.isOpen, action: () => meme.toggle() },
   ];
   const layerMenu = (): MenuItem[] => [
     { label: 'New layer', action: () => void addLayer() },
@@ -2234,7 +2302,8 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       btn('layers', 'layers', 'Layers', () => showPanel(panel.el.hidden === true), { shortcut: 'F7', pressed: () => !panel.el.hidden }),
     ] },
     { id: 'tools', name: 'Tools', side: 'left', columns: 2, tools: [
-      ...TOOLS.map(([id, icon, name, key]) => btn(`tool-${id}`, icon, name, () => setTool(id), { shortcut: keyName(key), pressed: () => tool === id })),
+      ...TOOLS.map(([id, icon, name, key]) => btn(`tool-${id}`, icon, name, () => setTool(id), { shortcut: keyName(key), pressed: () => tool === id })), '|',
+      btn('meme', 'meme', 'Meme: bars and text boxes', () => meme.toggle(), { pressed: () => meme.isOpen }),
     ] },
     { id: 'options', name: 'Tool options', tools: [{ widget: options }] },
   ];
@@ -2245,6 +2314,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
   } catch {
     // Nothing kept yet: the usual places.
   }
+  memeBars = readBars(kept.meme);
   bar = classicBar({
     menus: [
       { label: 'File', items: () => barItems(fileMenu()) },
@@ -2261,22 +2331,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     toolbars,
   }, {
     layer: shell.menus, signal: app.signal, scope: app.root, doc: () => stage, label: 'Photo Editor menus',
-    layout: { saved: kept.toolbars, save: v => {
-      kept.toolbars = v;
-      void (async () => {
-        // Only the toolbars are written; anything else kept there (by a newer window) stays.
-        let now: Record<string, unknown> = {};
-        try {
-          const raw = JSON.parse(await shell.fs.readText(SETTINGS)) as unknown;
-          if (raw && typeof raw === 'object' && !Array.isArray(raw)) now = raw as Record<string, unknown>;
-        } catch {
-          // Nothing kept yet.
-        }
-        await shell.fs.writeText(SETTINGS, JSON.stringify({ ...now, toolbars: v }), { hidden: true });
-      })().catch(() => {
-        // Not kept this time; the window still works.
-      });
-    } },
+    layout: { saved: kept.toolbars, save: v => keepSetting('toolbars', v) },
   });
   app.root.replaceChildren(bar.el, bar.dock(body), foot);
 
@@ -2284,6 +2339,8 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     await shell.dialogs.alert('Photo Editor', [
       'Layer masks (Layer menu): add one white, black or from the selection, then paint on it: black hides the layer, white shows it, grey shows it partly; the eraser shows it again. Click the mask’s small picture in the Layers panel (or Layer > Paint on the mask) to paint on it; click the layer’s to paint on the layer. Invert, apply or delete a mask. Saved in .ora: other programs see the layer as it looks here, and Photo Editor gets the mask back.',
       'Layers: add, copy, delete, rename, drag to reorder, hide, see-through amount, 16 blend modes, lock, merge down, flatten. Text layers stay editable until merged, turned into pixels, painted on or changed with a colour window or filter, or turned, flipped or resized with the whole picture (each says so, and Undo brings the words back).',
+      'Text: click with the Text tool to write; an outline can go round the letters (on or off, its colour and width; "White with black outline" sets both colours at once). The words stay editable, outline and all, in .ora files.',
+      'Meme (Image > Meme..., or the Meme button): white bars at the top, the bottom or both, added to the picture (it grows) or laid over it; text boxes whose words fit the box, white with a black outline on the picture and black on a bar. Drag a box to move it, its squares to stretch it; the arrow keys nudge it and Delete takes it away (with the picture clicked, not while typing). Done closes the panel; empty boxes go.',
       'Selections: rectangle, ellipse, lasso, magic wand; add (Shift), take away (Alt); invert; soft edges. Painting, fills, filters and colour changes stay inside the selection.',
       'Painting: brush and eraser (size, hardness, opacity, spacing, pen pressure), line, arrow, rectangle, ellipse, fill, gradient. Retouching: clone, heal, smudge, dodge / burn, blur / sharpen.',
       'Colour: brightness and contrast, levels, curves, hue and saturation, colour balance, threshold, posterise, desaturate, invert. Filters: greyscale, sepia, blur, sharpen.',
@@ -2370,6 +2427,8 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     }
     // The Delete key clears a selection only. With nothing selected (or in the Layers list) it leaves the pixels alone:
     // clearing the whole layer is Edit > Clear the layer.
+    // Meme: with the picture holding the keyboard (never a field), the arrows nudge the chosen box, Delete takes it away.
+    if (meme.isOpen && t === stage && meme.key(e)) return act(() => undefined);
     if ((e.key === 'Delete' || e.key === 'Backspace') && !control) {
       if (t instanceof Element && t.closest('.pe-layers')) return act(() => undefined);
       if (!doc.selection) return act(() => note('Nothing is selected: Delete clears a selection. To clear the whole layer, use Edit > Clear the layer.'));
