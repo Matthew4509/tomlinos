@@ -815,11 +815,32 @@ export function explode(s: Shape): Shape[] | string {
 
 // ---- Area and length --------------------------------------------------------------------------------------------------
 
+/** Whether two sides of a closed polyline that do not meet at a corner cross (checked on up to 2,000 corners). */
+function crossesItself(pts: Pt[]): boolean {
+  const n = pts.length;
+  if (n < 4 || n > 2000) return false;
+  const side = (a: Pt, b: Pt, c: Pt) => Math.sign((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x));
+  for (let i = 0; i < n; i++) {
+    const a = pts[i];
+    const b = pts[(i + 1) % n];
+    for (let j = i + 2; j < n; j++) {
+      if (i === 0 && j === n - 1) continue;
+      const c = pts[j];
+      const d = pts[(j + 1) % n];
+      if (side(a, b, c) * side(a, b, d) < 0 && side(c, d, a) * side(c, d, b) < 0) return true;
+    }
+  }
+  return false;
+}
+
 /** The area inside a closed shape (polyline, circle, whole ellipse), or null for an open one. */
 export function areaOf(s: Shape): number | null {
   if (s.type === 'circle') return Math.PI * s.r * s.r;
   if (s.type === 'ellipse') return isFull(s.t0, s.t1) ? Math.PI * len(s.m) * len(s.m) * s.ratio : null;
   if (s.type !== 'poly' || !s.closed) return null;
+  // A polyline that crosses itself (a bow tie) has no single inside: its signed parts cancel, and 0 would be a wrong
+  // answer. It gets no area rather than a wrong one.
+  if (crossesItself(s.pts)) return null;
   let a = 0;
   // Measured from the first point, so a shape far from (0, 0) does not lose its digits to the big numbers.
   const o = s.pts[0];

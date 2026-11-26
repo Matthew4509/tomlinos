@@ -1241,6 +1241,7 @@ export function readDxf(bytes: Uint8Array): DxfRead {
 
   // Layers.
   const layers: Layer[] = [];
+  const layerNames = new Set<string>();
   const tables = sections.get('TABLES') ?? [];
   const joinedLayers: string[] = [];
   const fullNameOf = new Map<string, string>();
@@ -1251,7 +1252,9 @@ export function readDxf(bytes: Uint8Array): DxfRead {
     // Two names that differ only after the 64th letter end up as one layer: said below.
     if (name && fullNameOf.has(name) && fullNameOf.get(name) !== full) joinedLayers.push(name);
     if (name && !fullNameOf.has(name)) fullNameOf.set(name, full);
-    if (!name || layers.some(l => l.name === name)) continue;
+    // A set, not a search of every layer read so far: a file listing 60,000 layers froze the page for many seconds.
+    if (!name || layerNames.has(name)) continue;
+    layerNames.add(name);
     const colour = num(r, 62, 7);
     const flags = num(r, 70, 0);
     const trueColour = get(r, 420);

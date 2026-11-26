@@ -329,7 +329,9 @@ export function dragGrip(t: TextShape, grip: Grip, from: Pt, to: Pt, shift: bool
       const q = worldToBox(t, to);
       const w = b.warp ?? presetWarp('none', 0);
       const pts = [...w[grip.edge]];
-      pts[grip.i] = P(q.x / b.w, q.y / b.h);
+      // Kept within what a saved drawing reads back (under 1000 box widths), so a handle dragged far out is not lost on reopening.
+      const keep = (v: number) => Math.max(-999, Math.min(999, v));
+      pts[grip.i] = P(keep(q.x / b.w), keep(q.y / b.h));
       return { ...t, box: { ...b, warp: recognise({ ...w, [grip.edge]: pts }) } };
     }
     case 'size': {
