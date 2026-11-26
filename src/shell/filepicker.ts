@@ -8,8 +8,11 @@ import { extensionOf, fileTypeOf } from './filetypes.ts';
 import { icon } from './icons.ts';
 import type { Shell } from './types.ts';
 
+export interface FileTypeChoice { label: string; ext: string[] }
+
 export interface PickOptions {
   title: string;
+  types?: FileTypeChoice[];
   /** Folder to start in (a missing folder falls back to /Documents, then the top). */
   folder?: string;
   /** Extensions to list, without the dot ("txt", "md"); empty lists every file. */
