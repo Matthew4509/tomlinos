@@ -518,10 +518,13 @@ await step('WR-16: File > Save PDF as says which letters will show as "?" (as Pr
   await page.keyboard.insertText('Dear Łukasz Wiśniewski of 北京, Ελλάδα');
   await settle();
   await fileMenu('Save PDF as...');
-  await D().locator('input[aria-label="File name"]').fill('names.pdf');
-  await D().getByRole('button', { name: 'Save' }).click();
-  const warned = await appears(page.locator('.dialog', { hasText: '"?"' }), 3000);
-  if (!warned) info('WR-16', 'the PDF was written with "?" for Ł, ś, 北京 and the Greek word, and nothing said so (Print and PDF names them; Save PDF as and Letters as a PDF do not)');
+  // The warning comes first, before a name is asked for: nothing is written unless the person goes on.
+  const warning = page.locator('.dialog', { hasText: '"?"' });
+  const warned = await appears(warning, 3000);
+  if (!warned) throw new Error('the PDF was about to be written with "?" for Ł, ś, 北京 and the Greek word, and nothing said so');
+  const text = await warning.textContent();
+  if (!/Ł/.test(text) || !/北/.test(text)) throw new Error(`the warning does not name the letters: ${text}`);
+  await warning.getByRole('button', { name: 'Cancel' }).click();
   await reset();
 });
 
