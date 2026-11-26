@@ -12,7 +12,27 @@ export const OPS: Op[] = ['+', '−', '×', '÷'];
 
 export class CalcError extends Error {}
 export const DIV_ZERO = "Can't divide by 0";
+export const TOO_BIG = 'Too big';
 const LOOP = 'Goes round in a loop';
+
+/** A result that does not fit in a number is an error, as ÷ 0 is, not a value that carries on as NaN. */
+function finite(n: number): number {
+  if (!Number.isFinite(n)) throw new CalcError(TOO_BIG);
+  return n;
+}
+
+/**
+ * A typed number: plain decimal, an optional sign and e-notation, commas only as thousands groups ("1,234.5").
+ * "1,5", "0x10", "0b11", "1e" and "Infinity" are not numbers here. Null when it is not one.
+ */
+export function parseNumber(text: string): number | null {
+  const raw = text.trim();
+  if (raw === '') return null;
+  const plain = /^[+-]?\d{1,3}(,\d{3})+(\.\d*)?$/.test(raw) ? raw.replace(/,/g, '') : raw;
+  if (!/^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i.test(plain)) return null;
+  const n = Number(plain);
+  return Number.isFinite(n) ? n : null;
+}
 
 export function apply(a: number, op: Op, b: number): number {
   switch (op) {
@@ -47,7 +67,7 @@ export function run(values: number[], ops: Op[]): number {
  * rounding noise a fraction carries (0.1 + 0.2).
  */
 export function show(n: number): string {
-  if (!Number.isFinite(n)) return 'Too big';
+  if (!Number.isFinite(n)) return TOO_BIG;
   if (Object.is(n, -0) || n === 0) return '0';
   const abs = Math.abs(n);
   if (abs >= 1e15 || abs < 1e-9) return n.toExponential(8).replace(/\.?0+e/, 'e');
@@ -73,12 +93,21 @@ export class Calculator {
    */
   private touched = false;
   error: string | null = null;
+  /**
+   * The full value of a result on the display. The display rounds a result of 1e15 or more to 9 digits; the next
+   * sum uses this, not the rounded text. Null once the entry is typed or edited.
+   */
+  private exact: number | null = null;
 
   get display(): string {
     return this.error ?? this.entry;
   }
   get value(): number {
-    return Number(this.entry);
+    return this.exact ?? Number(this.entry);
+  }
+  private result(n: number): void {
+    this.entry = show(finite(n));
+    this.exact = n;
   }
   /** The operator waiting for its next number. */
   get op(): Op | null {
@@ -96,6 +125,7 @@ export class Calculator {
   digit(d: string): void {
     if (this.error) this.clear();
     this.touched = true;
+    this.exact = null;
     if (this.fresh) {
       this.entry = d === '.' ? '0.' : d;
       this.fresh = false;
@@ -110,6 +140,7 @@ export class Calculator {
     if (this.error) return this.clear();
     if (this.fresh) return;
     this.touched = true;
+    this.exact = null;
     this.entry = this.entry.length > 1 && this.entry !== '-0' ? this.entry.slice(0, -1) : '0';
     if (this.entry === '-') this.entry = '0';
   }
@@ -118,11 +149,13 @@ export class Calculator {
     if (this.error) return;
     if (this.entry === '0') return;
     this.entry = this.entry.startsWith('-') ? this.entry.slice(1) : '-' + this.entry;
+    if (this.exact !== null) this.exact = -this.exact;
     this.touched = true;
   }
 
   private fail(error: unknown): void {
     this.error = error instanceof CalcError ? error.message : 'Error';
+    this.exact = null;
     this.values = [];
     this.ops = [];
     this.fresh = true;
@@ -132,15 +165,16 @@ export class Calculator {
   operator(op: Op): void {
     if (this.error) return;
     if (this.op !== null && !this.touched) {
-      this.ops[this.ops.length - 1] = op; // pressed twice: the second one counts
-      return;
+      // Pressed twice: the second one counts, and the display shows the running result for it.
+      this.ops[this.ops.length - 1] = op;
+    } else {
+      this.values.push(this.value);
+      this.ops.push(op);
     }
-    this.values.push(this.value);
-    this.ops.push(op);
     try {
       // The running result: everything so far for + and −; for × and ÷ only the product being built.
       const lastPlus = this.ops.slice(0, -1).map(o => o === '+' || o === '−').lastIndexOf(true);
-      this.entry = show(op === '+' || op === '−' ? run(this.values, this.ops.slice(0, -1)) : run(this.values.slice(lastPlus + 1), this.ops.slice(lastPlus + 1, -1)));
+      this.result(op === '+' || op === '−' ? run(this.values, this.ops.slice(0, -1)) : run(this.values.slice(lastPlus + 1), this.ops.slice(lastPlus + 1, -1)));
     } catch (error) {
       this.fail(error);
     }
@@ -152,7 +186,7 @@ export class Calculator {
     if (this.error || this.op === null) return;
     this.values.push(this.value);
     try {
-      this.entry = show(run(this.values, this.ops));
+      this.result(run(this.values, this.ops));
       this.values = [];
       this.ops = [];
     } catch (error) {
@@ -165,12 +199,14 @@ export class Calculator {
   clearEntry(): void {
     if (this.error) return this.clear();
     this.entry = '0';
+    this.exact = null;
     this.fresh = false;
     this.touched = true;
   }
 
   clear(): void {
     this.entry = '0';
+    this.exact = null;
     this.values = [];
     this.ops = [];
     this.error = null;
@@ -181,7 +217,7 @@ export class Calculator {
   /** Puts a number in the display as if typed (used when a sheet cell is sent back). */
   load(n: number): void {
     this.error = null;
-    this.entry = show(n);
+    this.result(n);
     this.fresh = true;
     this.touched = true;
   }
@@ -245,8 +281,8 @@ export function emptySheet(rows = 10): SheetData {
 function typed(data: SheetData, id: string): number {
   const raw = (data.values[id] ?? '').trim();
   if (raw === '') return 0;
-  const n = Number(raw.replace(/,/g, ''));
-  if (!Number.isFinite(n)) throw new CalcError(`${cellName(id, data.rows)} is not a number`);
+  const n = parseNumber(raw);
+  if (n === null) throw new CalcError(`${cellName(id, data.rows)} is not a number`);
   return n;
 }
 
@@ -271,7 +307,7 @@ export function evaluate(data: SheetData): Map<string, number | string> {
           throw new CalcError(reason === LOOP ? LOOP : `Uses ${cellName(ref, data.rows)}, which has a problem`);
         }
       });
-      const n = run(values, sum.ops);
+      const n = finite(run(values, sum.ops));
       out.set(id, n);
       return n;
     } catch (error) {
@@ -317,8 +353,9 @@ export function parseSheet(text: string): SheetData {
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new SyntaxError('not a sheet');
   const raw = parsed as Partial<SheetData>;
   const data = emptySheet(Math.min(200, Math.max(1, Math.floor(Number(raw.rows) || 10))));
-  const okId = (id: string) => /^[LABR](\d{1,3}|f1|f2)$/.test(id);
-  for (const [id, v] of Object.entries(raw.values ?? {})) if (okId(id) && typeof v === 'string') data.values[id] = v.slice(0, 200);
+  // Only cells the window draws: no row 0, no "A007" beside "A7", and no typed value hidden in a sum cell.
+  const okId = (id: string) => /^[LABR]([1-9]\d{0,2}|f1|f2)$/.test(id) && (/f[12]$/.test(id) || Number(id.slice(1)) <= 200);
+  for (const [id, v] of Object.entries(raw.values ?? {})) if (okId(id) && !isSumCell(id) && typeof v === 'string') data.values[id] = v.slice(0, 200);
   for (const [id, s] of Object.entries(raw.sums ?? {})) {
     if (!okId(id) || !isSumCell(id) || !s || !Array.isArray(s.refs) || !Array.isArray(s.ops)) continue;
     // A sum with any part that is not right is dropped whole: half a sum would give a wrong number.

@@ -1265,6 +1265,7 @@ textarea.field { resize: vertical; font: inherit; }
 .calc-screen { background: #fff; border: 1px solid var(--line); border-radius: 4px; padding: 6px 10px; text-align: right; }
 .calc-history { min-height: 16px; font-size: 12px; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .calc-display { display: block; font-size: 30px; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-variant-numeric: tabular-nums; }
+.calc-display.long { font-size: 20px; line-height: 36px; }
 .calc-display.building { font-size: 18px; line-height: 36px; color: #1e5aa8; }
 .calc-keys { flex: 1; display: grid; grid-template-columns: repeat(4, 1fr); grid-auto-rows: minmax(36px, 1fr); gap: 4px; }
 .calc-key { border: 1px solid var(--line); border-radius: 4px; background: linear-gradient(to bottom, #fff, #eceae0); color: var(--ink); font-size: 17px; cursor: pointer; }
@@ -1301,6 +1302,11 @@ textarea.field { resize: vertical; font: inherit; }
   .calc.wide .calc-pad { width: 100%; max-width: none; border-right: 0; border-bottom: 1px solid var(--line); flex: 0 0 auto; }
   .calc.wide .calc-keys { grid-auto-rows: 36px; }
 }
+/* The same for a narrow window on a wide screen (calculator.ts sets .stacked from the window's width). */
+.calc.wide.stacked { flex-direction: column; overflow: auto; }
+.calc.wide.stacked .calc-pad { width: 100%; max-width: none; border-right: 0; border-bottom: 1px solid var(--line); flex: 0 0 auto; }
+.calc.wide.stacked .calc-keys { grid-auto-rows: 36px; }
+.calc.wide.stacked .calc-sheet { min-height: 240px; }
 /* The key to press next glows: = after choosing an "=" cell, + − × ÷ after clicking a cell for a sum. */
 .calc-key.gleam { border-color: #e0a800; box-shadow: 0 0 0 2px #ffd54a, 0 0 12px 2px rgba(255, 193, 7, .75); animation: calc-gleam 1.2s ease-in-out infinite; }
 @keyframes calc-gleam { 50% { box-shadow: 0 0 0 2px #ffe58a, 0 0 4px 1px rgba(255, 193, 7, .35); } }

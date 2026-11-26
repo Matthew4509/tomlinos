@@ -10,7 +10,7 @@ import type { AppDef } from '../shell/types.ts';
 import { APPS } from './catalog.ts';
 import { saveOver } from '../shell/savefile.ts';
 import {
-  Calculator, cellId, cellName, describe, emptySheet, evaluate, isSumCell, OPS, parseSheet, show, sumProblem,
+  Calculator, cellId, cellName, describe, emptySheet, evaluate, isSumCell, OPS, parseNumber, parseSheet, show, sumProblem,
   type Col, type Op, type RowId, type SheetData, type Sum,
 } from './calculator/model.ts';
 
@@ -18,6 +18,8 @@ const ROW_HEIGHT = 28;
 const PAD_WIDTH = 280;
 const WIDE_WIDTH = 820;
 const MAX_FILE = 256 * 1024;
+/** Below this window width the sheet goes under the keypad instead of beside it. */
+const STACK_WIDTH = 560;
 
 export const calculatorApp: AppDef = {
   ...APPS.calculator,
@@ -68,6 +70,8 @@ export const calculatorApp: AppDef = {
 
     function paint() {
       display.textContent = building ? describe(building.sum, data.rows, building.op) || 'Click a cell' : calc.display;
+      // A long number gets a smaller size rather than losing digits off the edge.
+      display.classList.toggle('long', !building && (display.textContent ?? '').length > 13);
       history.textContent = building ? `Making ${cellName(building.target, data.rows)}:  = saves, Esc stops` : calc.history;
       display.classList.toggle('building', !!building);
       for (const b of keys.querySelectorAll<HTMLElement>('.calc-key.op')) b.classList.toggle('on', !building && calc.lit === b.dataset.key);
@@ -119,6 +123,9 @@ export const calculatorApp: AppDef = {
     }
 
     function build() {
+      // Rows change when the note above the grid wraps or the window is resized; the cell in use keeps the focus.
+      const active = document.activeElement;
+      const keep = active && grid.contains(active) ? active.closest<HTMLElement>('[data-id]')?.dataset.id : undefined;
       cells.clear();
       const head = h('div', { class: 'calc-row head', role: 'row' },
         h('span', { class: 'calc-no', role: 'columnheader' }, ''),
@@ -131,6 +138,10 @@ export const calculatorApp: AppDef = {
           ...(['L', 'A', 'B', 'R'] as Col[]).map(col => cell(cellId(col, row))));
       });
       grid.replaceChildren(head, ...rows);
+      if (keep) {
+        const el = cells.get(keep);
+        (el?.querySelector('input') ?? el)?.focus({ preventScroll: true });
+      }
       recalc();
     }
 
@@ -138,7 +149,8 @@ export const calculatorApp: AppDef = {
       const col = id[0] as Col;
       let el: HTMLElement;
       if (isSumCell(id)) {
-        el = h('div', { class: 'calc-cell sum', role: 'gridcell', tabindex: '-1', 'data-id': id }, h('span', { class: 'calc-sum' }));
+        el = h('div', { class: 'calc-cell sum', role: 'gridcell', tabindex: '0', 'data-id': id, 'aria-label': cellName(id, data.rows) }, h('span', { class: 'calc-sum' }));
+        on(el, 'focus', () => !building && selected !== id && choose(id), app.signal);
       } else if (col === 'L' && id.includes('f')) {
         el = h('div', { class: 'calc-cell blank', role: 'gridcell', 'data-id': id });
       } else {
@@ -148,7 +160,7 @@ export const calculatorApp: AppDef = {
         });
         el = h('div', { class: `calc-cell${col === 'L' ? ' label' : ''}`, role: 'gridcell', 'data-id': id }, input);
         on(input, 'input', () => {
-          if (col !== 'L') input.classList.toggle('bad', input.value.trim() !== '' && !Number.isFinite(Number(input.value.replace(/,/g, ''))));
+          if (col !== 'L') input.classList.toggle('bad', input.value.trim() !== '' && parseNumber(input.value) === null);
           if (input.value === '') delete data.values[id];
           else data.values[id] = input.value;
           recalc();
@@ -163,6 +175,14 @@ export const calculatorApp: AppDef = {
         }
       }, app.signal);
       on(el, 'click', () => !building && choose(id), app.signal);
+      // The keyboard way to pick a cell while making a sum: Tab to it, then Space.
+      on(el, 'keydown', (event: KeyboardEvent) => {
+        if (building && event.key === ' ') {
+          event.preventDefault();
+          event.stopPropagation();
+          pick(id);
+        }
+      }, app.signal);
       cells.set(id, el);
       return el;
     }
@@ -249,6 +269,11 @@ export const calculatorApp: AppDef = {
         return;
       }
       if (k === '=' && open && selected && isSumCell(selected)) return startSum(selected);
+      // Any other key means the calculator is in use again: a sum cell clicked only to look at it no longer takes =.
+      if (selected && isSumCell(selected)) {
+        selected = null;
+        recalc();
+      }
       if (/^[\d.]$/.test(k)) calc.digit(k);
       else if (OPS.includes(k as Op)) calc.operator(k as Op);
       else if (k === '=') calc.equals();
@@ -264,7 +289,10 @@ export const calculatorApp: AppDef = {
         note.textContent = 'Click an A or B cell first; → cell puts the calculator\'s number there.';
         return;
       }
-      if (calc.error) return;
+      if (calc.error || !Number.isFinite(calc.value)) {
+        note.textContent = 'The display shows an error, so there is no number to put in a cell.';
+        return;
+      }
       data.values[selected] = show(calc.value);
       const input = cells.get(selected)?.querySelector('input');
       if (input) {
@@ -321,7 +349,11 @@ export const calculatorApp: AppDef = {
         value: uniqueName(path ? baseName(path) : 'Sums.calc', taken),
         ok: 'Save',
         selectStem: true,
-        check: v => nameProblem(v) ?? (taken.some(t => t.toLowerCase() === v.toLowerCase()) ? `There is already something called "${v}" here.` : null),
+        check: v => {
+          // The name is checked as it will be saved, with ".calc" added, so a taken one is caught here, not at Save.
+          const final = /\.calc$/i.test(v) ? v : `${v}.calc`;
+          return nameProblem(v) ?? (taken.some(t => t.toLowerCase() === final.toLowerCase()) ? `There is already something called "${final}" here.` : null);
+        },
       });
       if (name === null) return false;
       const finalName = /\.calc$/i.test(name) ? name : `${name}.calc`;
@@ -380,6 +412,8 @@ export const calculatorApp: AppDef = {
     on(saveBtn, 'click', () => void save(), app.signal);
     on(saveAsBtn, 'click', () => void saveAs(), app.signal);
     new ResizeObserver(() => open && fitRows()).observe(grid);
+    // The sheet goes under the keypad in a narrow window, as it does on a narrow screen.
+    new ResizeObserver(() => app.root.classList.toggle('stacked', app.root.clientWidth > 0 && app.root.clientWidth < STACK_WIDTH)).observe(app.root);
     on(app.root, 'keydown', (event: KeyboardEvent) => {
       const typing = (event.target as HTMLElement).tagName === 'INPUT';
       const ctrl = event.ctrlKey || event.metaKey;
@@ -389,6 +423,8 @@ export const calculatorApp: AppDef = {
         return;
       }
       if (event.key === 'Escape') {
+        // Escape in a sheet cell is the cell's own business; it does not clear the calculator.
+        if (typing && !building) return;
         event.preventDefault();
         if (building) stopSum();
         else press('C');
