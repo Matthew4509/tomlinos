@@ -112,15 +112,17 @@ export const recycleBinApp: AppDef = {
 
     async function empty(): Promise<void> {
       if (!items.length) return;
+      // Only what the question names: an item binned while it is up stays in the bin.
+      const asked = items.map(i => i.slot);
       const ok = await shell.dialogs.confirm({
         title: 'Empty the Recycle Bin?',
-        text: `All ${plural(items.length, 'item')} in it will be deleted for good. This cannot be undone.`,
+        text: `All ${plural(asked.length, 'item')} in it will be deleted for good. This cannot be undone.`,
         ok: 'Empty Recycle Bin',
         danger: true,
       });
       if (!ok) return;
       try {
-        const { failures } = await shell.bin.empty();
+        const { failures } = await shell.bin.empty(asked);
         if (failures.length) await shell.dialogs.alert('Some items could not be deleted', failures.map(f => `${f.name}: ${f.reason}`).join('\n'));
       } catch (error) {
         await shell.report('Could not empty the Recycle Bin', error);

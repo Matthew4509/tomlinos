@@ -262,8 +262,15 @@ export class RecycleBin {
     return old.length - failures.length;
   }
 
-  async empty(): Promise<{ failures: Failure[] }> {
-    return this.destroy((await this.list()).map(i => i.slot));
+  /**
+   * Empties the bin. `slots`: the items the person was shown when asked, so an item binned while the question was up
+   * (in another window or tab) is left alone. Without it, everything in the bin now goes.
+   */
+  async empty(slots?: string[]): Promise<{ failures: Failure[] }> {
+    if (!slots) return this.destroy((await this.list()).map(i => i.slot));
+    // One restored or deleted elsewhere meanwhile is already gone: nothing to report about it.
+    const there = new Set((await this.slotFolders()).map(s => s.name));
+    return this.destroy(slots.filter(s => there.has(s)));
   }
 }
 

@@ -65,7 +65,7 @@ test('RB-P1-3: a restore that fails names the item, not its slot id', async () =
   assert.ok(!failures[0].name.includes(slots[0]), `shown to the person as "${failures[0].name}: ${failures[0].reason}"`);
 });
 
-test('RB-P1-4: Empty deletes only what the person was told it would (not items binned after the question)', { todo: 'P1' }, async () => {
+test('RB-P1-4: Empty deletes only what the person was told it would (not items binned after the question)', async () => {
   const fs = new FileSystem(new MemoryStore());
   const bin = new RecycleBin(fs);
   await fs.ensureFolder('/Documents');
@@ -74,7 +74,7 @@ test('RB-P1-4: Empty deletes only what the person was told it would (not items b
   const shown = await bin.list(); // "All 1 item in it will be deleted for good"
   await fs.writeText('/Documents/new.txt', 'new');
   await bin.put(['/Documents/new.txt']); // deleted in another window while the question is up
-  await bin.empty();
+  await bin.empty(shown.map(i => i.slot)); // what the window listed when it asked
   const left = (await bin.list()).map(i => i.name);
   assert.equal(shown.length, 1);
   assert.deepEqual(left, ['new.txt'], 'empty() lists the bin again and deletes the item the person was never asked about');
