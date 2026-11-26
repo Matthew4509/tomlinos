@@ -432,7 +432,7 @@ await step('Photo Editor layers: a new layer painted, a selection cleared, saved
   await page.mouse.move(...at(190, 50), { steps: 8 });
   await page.mouse.up();
   ok((await screen(100, 50))[0] > 200 && (await screen(100, 50))[1] < 80, 'red stroke on screen');
-  await w.locator('.pe-tools').getByRole('button', { name: 'Select a rectangle', exact: true }).click();
+  await w.locator('[data-toolbar="tools"]').getByRole('button', { name: 'Select a rectangle', exact: true }).click();
   await page.mouse.move(...at(80, 20));
   await page.mouse.down();
   await page.mouse.move(...at(120, 80), { steps: 4 });

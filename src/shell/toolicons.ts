@@ -18,7 +18,7 @@ export const TOOL_ICON_IDS = [
   'move', 'select-rect', 'select-ellipse', 'lasso', 'magic-wand', 'crop', 'brush', 'pencil', 'eraser', 'fill-bucket',
   'gradient', 'line', 'arrow-line', 'rectangle', 'ellipse', 'text', 'eyedropper', 'clone-stamp', 'heal', 'smudge',
   'dodge-burn', 'blur-sharpen', 'hand', 'meme', 'rotate-left', 'rotate-right', 'flip-horizontal', 'flip-vertical',
-  'layers', 'zoom-actual', 'swap-colours',
+  'layers', 'zoom-actual', 'swap-colours', 'layer-new', 'layer-up', 'layer-down', 'merge-down',
 ] as const;
 
 export type ToolIconId = (typeof TOOL_ICON_IDS)[number];
@@ -181,6 +181,10 @@ const SHAPES: Record<ToolIconId, Part[]> = {
   layers: [p('M8 1.5l6.5 3.5L8 8.5 1.5 5z', AF), p('M1.5 8L8 11.5 14.5 8M1.5 11L8 14.5 14.5 11')],
   'zoom-actual': [p('M2.5 4.5l2-1.5v10M10.5 4.5l2-1.5v10'), r(7, 6, 2, 2, AF), r(7, 10, 2, 2, AF)],
   'swap-colours': [r(5.5, 5.5, 9, 9), r(1, 1, 8, 8, AF), p('M10.5 1.5H12a1.5 1.5 0 0 1 1.5 1.5v.5'), p('M11.5 3.5h4l-2 2z', F), p('M5.5 14.5H4A1.5 1.5 0 0 1 2.5 13v-.5'), p('M0.5 12.5h4l-2-2z', F)],
+  'layer-new': [p('M1.5 8.5l6 3 6-3-6-3z'), p('M1.5 11.5l6 3 6-3'), p('M13.5 0.5v5M11 3h5', A)],
+  'layer-up': [p('M1.5 11l6.5 3.5 6.5-3.5-6.5-3.5z'), p('M8 8V1.5M5.5 4L8 1.5 10.5 4', { acc: true, w: 1.5 })],
+  'layer-down': [p('M1.5 5l6.5-3.5 6.5 3.5-6.5 3.5z'), p('M8 8v6.5M5.5 12L8 14.5 10.5 12', { acc: true, w: 1.5 })],
+  'merge-down': [p('M1.5 11.5l6.5-3 6.5 3-6.5 3z', AF), p('M1.5 11.5l6.5-3 6.5 3-6.5 3z'), p('M8 1v5.5M5.5 4L8 6.5 10.5 4', { w: 1.5 })],
 };
 
 /** The parts of a picture, for the tests and anything else that wants to read the drawing. */

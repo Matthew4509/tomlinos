@@ -38,6 +38,8 @@ export interface ToolbarSpec {
   side?: Side;
   /** Starts hidden. */
   hidden?: boolean;
+  /** Down a side, the buttons stand in this many columns (an image editor's toolbox: 2). Across the top, one row. */
+  columns?: number;
 }
 
 export interface ToolbarPlace {
@@ -222,6 +224,7 @@ export function docking(specs: ToolbarSpec[], ctx: DockContext): Docking {
     });
     const more = h('button', { type: 'button', class: 'cbar-tool cbar-more', tabindex: -1, 'aria-label': 'More buttons', title: 'More buttons', 'aria-haspopup': 'menu', hidden: true }, '»');
     const el = h('div', { class: 'cbar-band', role: 'toolbar', 'aria-label': spec.name, 'data-toolbar': spec.id }, grip, ...items.map(i => i.el), more);
+    if (spec.columns && spec.columns > 1) el.dataset.cols = String(Math.min(4, Math.round(spec.columns)));
     const band: Band = { spec, el, grip, more, items, spill: new Set(), stop: null };
     bands.set(spec.id, band);
     wireBand(band);
@@ -468,8 +471,27 @@ export function docking(specs: ToolbarSpec[], ctx: DockContext): Docking {
         const room = b.el.clientHeight - (parseFloat(cs.paddingTop) || 0) - (parseFloat(cs.paddingBottom) || 0) - measure(b.grip);
         if (room > 0) {
           const gap = parseFloat(cs.rowGap) || 0;
-          const heights = b.items.map((t, i) => (wanted(i) ? measure(t.el) + gap : 0));
-          const n = fitCount(heights, room - gap - 1, measure(b.more) + gap + 2);
+          // The rows as drawn: one item each, or with columns, that many buttons side by side (a separator takes a
+          // row of its own); as many whole rows as fit are shown.
+          const cols = Number(b.el.dataset.cols) || 1;
+          const rows: number[][] = [];
+          let row: number[] = [];
+          b.items.forEach((t, i) => {
+            if (!wanted(i)) return;
+            if (t.entry === '|' && row.length) {
+              rows.push(row);
+              row = [];
+            }
+            row.push(i);
+            if (t.entry === '|' || row.length >= cols) {
+              rows.push(row);
+              row = [];
+            }
+          });
+          if (row.length) rows.push(row);
+          const heights = rows.map(r => Math.max(...r.map(i => measure(b.items[i].el))) + gap);
+          const fits = fitCount(heights, room - gap - 1, measure(b.more) + gap + 2);
+          const n = fits >= rows.length ? b.items.length : (rows[fits]?.[0] ?? b.items.length);
           b.items.forEach((t, i) => {
             const show = wanted(i) && i < n;
             if (wanted(i) && !show) b.spill.add(i);

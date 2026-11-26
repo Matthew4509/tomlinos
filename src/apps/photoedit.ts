@@ -12,6 +12,9 @@ import { pickFile, pickSave } from '../shell/filepicker.ts';
 import { extensionOf } from '../shell/filetypes.ts';
 import type { AppDef, AppHandle } from '../shell/types.ts';
 import type { MenuItem } from '../shell/menu.ts';
+import { classicBar, type BarItem, type ClassicBar, type ToolButton } from '../shell/menubar.ts';
+import type { ToolbarSpec } from '../shell/toolbars.ts';
+import { toolIcon, type ToolIconId } from '../shell/toolicons.ts';
 import { mediaTypeOf } from './media.ts';
 import { MAX_PICTURE_PIXELS, pictureTooBig } from '../core/imagesize.ts';
 import { APPS } from './catalog.ts';
@@ -40,20 +43,22 @@ const ZOOMS = [0.05, 0.1, 0.17, 0.25, 0.33, 0.5, 0.67, 0.75, 1, 1.5, 2, 3, 4, 6,
 type Tool =
   | 'move' | 'rselect' | 'eselect' | 'lasso' | 'wand' | 'crop' | 'brush' | 'eraser' | 'fill' | 'gradient' | 'line' | 'arrow'
   | 'rect' | 'ellipse' | 'text' | 'picker' | 'clone' | 'heal' | 'smudge' | 'dodge' | 'blur' | 'hand';
-/** id, picture, name, key (a capital letter means with Shift). */
-const TOOLS: Array<[Tool, string, string, string]> = [
-  ['move', '✥', 'Move, stretch and turn', 'v'], ['rselect', '⬚', 'Select a rectangle', 'm'],
-  ['eselect', '◌', 'Select an ellipse', 'M'], ['lasso', '➰', 'Lasso: drag freely, or click corner by corner', 'f'],
-  ['wand', '✦', 'Magic wand: select by colour', 'w'], ['crop', '⛶', 'Crop', 'c'],
-  ['brush', '✎', 'Brush', 'b'], ['eraser', '⌫', 'Eraser (to see-through)', 'e'],
-  ['fill', '▧', 'Fill (paint bucket)', 'g'], ['gradient', '▤', 'Gradient', 'G'],
-  ['line', '╱', 'Line', 'l'], ['arrow', '➔', 'Arrow', 'a'],
-  ['rect', '▭', 'Rectangle', 'r'], ['ellipse', '◯', 'Ellipse', 'o'],
-  ['text', 'T', 'Text', 't'], ['picker', '⊙', 'Pick a colour from the picture', 'i'],
-  ['clone', '⎘', 'Clone stamp (Alt+click where to copy from)', 's'], ['heal', '✚', 'Heal (Alt+click where to copy from)', 'j'],
-  ['smudge', '☝', 'Smudge', 'u'], ['dodge', '◐', 'Dodge / burn (lighten / darken)', 'n'],
-  ['blur', '◍', 'Blur / sharpen brush', 'y'], ['hand', '✋', 'Move around (or hold Space)', 'h'],
+/** id, picture (toolicons.ts), name, key (a capital letter means with Shift). */
+const TOOLS: Array<[Tool, ToolIconId, string, string]> = [
+  ['move', 'move', 'Move, stretch and turn', 'v'], ['rselect', 'select-rect', 'Select a rectangle', 'm'],
+  ['eselect', 'select-ellipse', 'Select an ellipse', 'M'], ['lasso', 'lasso', 'Lasso: drag freely, or click corner by corner', 'f'],
+  ['wand', 'magic-wand', 'Magic wand: select by colour', 'w'], ['crop', 'crop', 'Crop', 'c'],
+  ['brush', 'brush', 'Brush', 'b'], ['eraser', 'eraser', 'Eraser (to see-through)', 'e'],
+  ['fill', 'fill-bucket', 'Fill (paint bucket)', 'g'], ['gradient', 'gradient', 'Gradient', 'G'],
+  ['line', 'line', 'Line', 'l'], ['arrow', 'arrow-line', 'Arrow', 'a'],
+  ['rect', 'rectangle', 'Rectangle', 'r'], ['ellipse', 'ellipse', 'Ellipse', 'o'],
+  ['text', 'text', 'Text', 't'], ['picker', 'eyedropper', 'Pick a colour from the picture', 'i'],
+  ['clone', 'clone-stamp', 'Clone stamp (Alt+click where to copy from)', 's'], ['heal', 'heal', 'Heal (Alt+click where to copy from)', 'j'],
+  ['smudge', 'smudge', 'Smudge', 'u'], ['dodge', 'dodge-burn', 'Dodge / burn (lighten / darken)', 'n'],
+  ['blur', 'blur-sharpen', 'Blur / sharpen brush', 'y'], ['hand', 'hand', 'Move around (or hold Space)', 'h'],
 ];
+/** Where the toolbars' places are kept per person. */
+const SETTINGS = '/System/photoedit.json';
 const keyName = (k: string) => (k === k.toUpperCase() && k !== k.toLowerCase() ? `Shift+${k}` : k.toUpperCase());
 const PAINT_TOOLS: Tool[] = ['brush', 'eraser', 'clone', 'heal', 'smudge', 'dodge', 'blur'];
 const RETOUCH: Tool[] = ['clone', 'heal', 'smudge', 'dodge', 'blur'];
@@ -113,44 +118,13 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
   const sheet = h('div', { class: 'pe-sheet' }, display, over);
   const stage = h('div', { class: 'pe-stage', tabindex: '0', 'aria-label': 'Picture' }, sheet);
 
-  // ---- Controls ----
+  // ---- Controls (the menu bar and toolbars are made further down, once everything they reach is there) ----
   const tool$ = (label: string, title: string, extra: Record<string, string> = {}) => h('button', { type: 'button', class: 'tool wide', title, ...extra }, label);
-  const newBtn = tool$('New...', 'A new blank picture');
-  const openBtn = tool$('Open...', 'Open a picture (Ctrl+O)');
-  const saveBtn = tool$('Save', 'Save (Ctrl+S)');
-  const saveAsBtn = tool$('Save as...', 'Save as PNG, JPEG, WebP or OpenRaster (.ora, keeps the layers) (Ctrl+Shift+S)');
-  const undoBtn = tool$('↶', 'Undo (Ctrl+Z)', { 'aria-label': 'Undo' });
-  const redoBtn = tool$('↷', 'Redo (Ctrl+Y)', { 'aria-label': 'Redo' });
-  const menuBtn = (label: string, title: string) => h('button', { type: 'button', class: 'tool wide', title, 'aria-haspopup': 'menu' }, `${label} ▾`);
-  const editMenu = menuBtn('Edit', 'Cut, copy, paste, fill');
-  const imageMenu = menuBtn('Image', 'Resize, canvas size, crop, turn, flip');
-  const layerMenu = menuBtn('Layer', 'Add, copy, merge and change layers');
-  const selectMenu = menuBtn('Select', 'Select all, none, invert, soften the edge');
-  const colourMenu = menuBtn('Colours', 'Levels, curves, hue and saturation...');
-  const filterBtn = menuBtn('Filters', 'Greyscale, sepia, blur, sharpen');
-  const helpMenu = menuBtn('Help', 'What Photo Editor does and leaves out');
-  const rotL = tool$('⟲', 'Rotate the picture left', { 'aria-label': 'Rotate left' });
-  const rotR = tool$('⟳', 'Rotate the picture right', { 'aria-label': 'Rotate right' });
-  const flipH = tool$('⇋', 'Flip the picture left to right', { 'aria-label': 'Flip left to right' });
-  const flipV = tool$('⇵', 'Flip the picture upside down', { 'aria-label': 'Flip upside down' });
-  const zoomOut = tool$('−', 'Zoom out (-)', { 'aria-label': 'Zoom out' });
-  const zoomFit = tool$('Fit', 'Fit the window (0)');
-  const zoom100 = tool$('100%', 'Actual size (1)');
-  const zoomIn = tool$('+', 'Zoom in (+)', { 'aria-label': 'Zoom in' });
-  const layersToggle = tool$('Layers', 'Show or hide the Layers panel (F7)', { 'aria-pressed': 'true' });
-
-  const toolButtons = new Map<Tool, HTMLButtonElement>();
-  const palette = h('div', { class: 'pe-tools', role: 'toolbar', 'aria-label': 'Tools', 'aria-orientation': 'vertical' },
-    ...TOOLS.map(([id, glyph, name, key]) => {
-      const b = h('button', { type: 'button', class: 'pe-tool', title: `${name} (${keyName(key)})`, 'aria-label': name, 'aria-pressed': 'false' }, glyph);
-      toolButtons.set(id, b);
-      on(b, 'click', () => setTool(id), app.signal);
-      return b;
-    }));
+  let bar: ClassicBar | null = null;
 
   const colour = h('input', { type: 'color', value: '#d62828', 'aria-label': 'Colour', title: 'Colour' });
   const colour2 = h('input', { type: 'color', value: '#ffffff', 'aria-label': 'Second colour', title: 'Second colour (gradients, Edit > Fill with the second colour)' });
-  const swapBtn = h('button', { type: 'button', class: 'tool', title: 'Swap the two colours (X)', 'aria-label': 'Swap colours' }, '⇄');
+  const swapBtn = h('button', { type: 'button', class: 'tool pe-swap', title: 'Swap the two colours (X)', 'aria-label': 'Swap colours' }, toolIcon('swap-colours'));
   const range = (label: string, min: number, max: number, value: number, unit: string, title: string) => {
     const input = h('input', { type: 'range', min, max, value, 'aria-label': label, title });
     const out = h('span', { class: 'pe-num' }, `${value}${unit}`);
@@ -186,7 +160,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
   const xfApply = tool$('Apply', 'Apply the move (Enter)');
   const xfCancel = tool$('Cancel', 'Put it back (Escape)');
   const xfBar = h('span', { class: 'pe-opt pe-cropbar', hidden: true }, xfApply, xfCancel);
-  const options = h('div', { class: 'toolbar pe-options' }, colour, swapBtn, colour2, size.wrap, hardness.wrap, opacity.wrap, spacing.wrap, fillLabel,
+  const options = h('div', { class: 'pe-options' }, colour, swapBtn, colour2, size.wrap, hardness.wrap, opacity.wrap, spacing.wrap, fillLabel,
     tolerance.wrap, joinedLabel, featherLabel, gradLabel, dodgeMode, blurMode, cropBar, xfBar, hint);
 
   const status = h('div', { class: 'statusbar pe-status', role: 'status' });
@@ -238,11 +212,8 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     },
   }, app.signal);
 
-  app.root.replaceChildren(
-    h('div', { class: 'toolbar pe-top' }, newBtn, openBtn, saveBtn, saveAsBtn, h('span', { class: 'tool-gap' }), undoBtn, redoBtn,
-      h('span', { class: 'tool-gap' }), editMenu, imageMenu, layerMenu, selectMenu, colourMenu, filterBtn, helpMenu,
-      h('span', { class: 'tool-gap' }), rotL, rotR, flipH, flipV, h('span', { class: 'tool-gap' }), zoomOut, zoomFit, zoom100, zoomIn, layersToggle),
-    options, h('div', { class: 'pe-body' }, palette, stage, panel.el), h('div', { class: 'pe-foot' }, status, where));
+  const body = h('div', { class: 'pe-body' }, stage, panel.el);
+  const foot = h('div', { class: 'pe-foot' }, status, where);
 
   // ---- Showing ----
   function paintZoom() {
@@ -265,6 +236,11 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     zoom = Math.max(0.02, Math.min(1, w / doc.width, hgt / doc.height));
     paintZoom();
   }
+  function actualSize() {
+    autoFit = false;
+    zoom = 1;
+    paintZoom();
+  }
   function stepZoom(dir: 1 | -1) {
     const next = dir > 0 ? ZOOMS.find(z => z > zoom + 1e-6) : [...ZOOMS].reverse().find(z => z < zoom - 1e-6);
     if (next) {
@@ -274,10 +250,13 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     }
   }
   function refresh() {
-    undoBtn.disabled = doc.history.undoList.length === 0;
-    redoBtn.disabled = doc.history.redoList.length === 0;
-    undoBtn.title = doc.history.undoList.length ? `Undo ${doc.history.undoList[doc.history.undoList.length - 1].label} (Ctrl+Z)` : 'Undo (Ctrl+Z)';
-    redoBtn.title = doc.history.redoList.length ? `Redo ${doc.history.redoList[doc.history.redoList.length - 1].label} (Ctrl+Y)` : 'Redo (Ctrl+Y)';
+    // The toolbars ask their getters again (Undo and Redo greyed, the tool pressed); Undo and Redo say what they take.
+    bar?.refresh();
+    const std = bar?.toolbarEl('standard');
+    const undoEl = std?.querySelector<HTMLElement>('[data-tool="undo"]');
+    const redoEl = std?.querySelector<HTMLElement>('[data-tool="redo"]');
+    if (undoEl) undoEl.title = doc.history.undoList.length ? `Undo ${doc.history.undoList[doc.history.undoList.length - 1].label} (Ctrl+Z)` : 'Undo (Ctrl+Z)';
+    if (redoEl) redoEl.title = doc.history.redoList.length ? `Redo ${doc.history.redoList[doc.history.redoList.length - 1].label} (Ctrl+Y)` : 'Redo (Ctrl+Y)';
     const name = path ? baseName(path) : recoveredName ?? 'Untitled.png';
     // A move not yet applied is a change too (closing the window asks first).
     const unsaved = dirty || !!xf;
@@ -750,7 +729,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       if (tool === 'crop') endCrop();
     }
     tool = t;
-    for (const [id, b] of toolButtons) b.setAttribute('aria-pressed', String(id === t));
+    bar?.refresh();
     stage.dataset.tool = t;
     const show = (el: HTMLElement, yes: boolean) => (el.hidden = !yes);
     const brushy = PAINT_TOOLS.includes(t);
@@ -2091,11 +2070,17 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     doc.history.squash(mark, ADJUST_TITLES[kind]);
     refresh();
   };
-  const showMenu = (btn: HTMLElement, items: MenuItem[]) => {
-    const r = btn.getBoundingClientRect();
-    shell.menus.show(items, r.left, r.bottom, { returnFocus: btn });
-  };
-  on(editMenu, 'click', () => showMenu(editMenu, [
+  // ---- The menu bar and the toolbars (the desktop's own: shell/menubar.ts and shell/toolbars.ts) ----
+  const fileMenu = (): MenuItem[] => [
+    { label: 'New...', action: () => void askNew() },
+    { label: 'Open...', hint: 'Ctrl+O', action: () => void openPicked() },
+    { separator: true },
+    { label: 'Save', hint: 'Ctrl+S', action: () => void save() },
+    { label: 'Save as...', hint: 'Ctrl+Shift+S', action: () => void saveAs() },
+    { separator: true },
+    { label: 'Close', action: () => app.close() },
+  ];
+  const editMenu = (): MenuItem[] => [
     { label: 'Undo', hint: 'Ctrl+Z', disabled: !doc.history.undoList.length, action: undo },
     { label: 'Redo', hint: 'Ctrl+Y', disabled: !doc.history.redoList.length, action: redo },
     { separator: true },
@@ -2107,8 +2092,16 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     { label: doc.selection ? 'Delete the selected part' : 'Clear the layer', hint: 'Delete', action: clearSelected },
     { label: 'Fill with the colour', action: () => fillSelected(colour.value) },
     { label: 'Fill with the second colour', action: () => fillSelected(colour2.value) },
-  ]), app.signal);
-  on(imageMenu, 'click', () => showMenu(imageMenu, [
+  ];
+  const viewMenu = (): MenuItem[] => [
+    { label: 'Zoom in', hint: '+', action: () => stepZoom(1) },
+    { label: 'Zoom out', hint: '-', action: () => stepZoom(-1) },
+    { label: 'Fit the window', hint: '0', action: fit },
+    { label: 'Actual size', hint: '1', action: actualSize },
+    { separator: true },
+    { label: 'Layers panel', hint: 'F7', checked: !panel.el.hidden, action: () => showPanel(panel.el.hidden === true) },
+  ];
+  const imageMenu = (): MenuItem[] => [
     { label: 'Resize picture...', action: () => void askResize() },
     { label: 'Canvas size...', action: () => void askCanvasSize() },
     { label: 'Crop to selection', disabled: !doc.selection, action: cropToSelection },
@@ -2119,8 +2112,8 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     { label: 'Flip upside down', action: () => flipAll(false) },
     { separator: true },
     { label: 'Flatten picture (join all layers)', disabled: doc.layers.length < 2, action: flattenAll },
-  ]), app.signal);
-  on(layerMenu, 'click', () => showMenu(layerMenu, [
+  ];
+  const layerMenu = (): MenuItem[] => [
     { label: 'New layer', action: () => void addLayer() },
     { label: 'Duplicate layer', action: duplicateLayer },
     { label: 'Delete layer', disabled: doc.layers.length < 2, action: deleteLayer },
@@ -2144,16 +2137,17 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     { separator: true },
     { label: 'Flip layer left to right', action: () => flipLayer(true) },
     { label: 'Flip layer upside down', action: () => flipLayer(false) },
-  ]), app.signal);
-  on(selectMenu, 'click', () => showMenu(selectMenu, [
+  ];
+  const selectMenu = (): MenuItem[] => [
     { label: 'All', hint: 'Ctrl+A', action: selectAll },
     { label: 'None', hint: 'Ctrl+Shift+A', disabled: !doc.selection, action: selectNone },
     { label: 'Invert', hint: 'Ctrl+I', action: selectInvert },
     { separator: true },
     { label: 'Soften the edge...', disabled: !doc.selection, action: () => void askFeather() },
     { label: 'Crop to selection', disabled: !doc.selection, action: cropToSelection },
-  ]), app.signal);
-  on(colourMenu, 'click', () => showMenu(colourMenu, [
+  ];
+  const toolsMenu = (): MenuItem[] => TOOLS.map(([id, , name, key]) => ({ label: name, hint: keyName(key), checked: tool === id, action: () => setTool(id) }));
+  const colourMenu = (): MenuItem[] => [
     { label: 'Brightness and contrast...', action: () => void runAdjust('brightness') },
     { label: 'Levels...', hint: 'Ctrl+L', action: () => void runAdjust('levels') },
     { label: 'Curves...', hint: 'Ctrl+M', action: () => void runAdjust('curves') },
@@ -2164,18 +2158,90 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     { label: 'Posterise...', action: () => void runAdjust('posterise') },
     { label: 'Desaturate...', action: () => void runAdjust('desaturate') },
     { label: 'Invert colours', action: () => applyFilter('Invert colours', invert) },
-  ]), app.signal);
-  on(filterBtn, 'click', () => showMenu(filterBtn, [
+  ];
+  const filterMenu = (): MenuItem[] => [
     { label: 'Greyscale', action: () => applyFilter('Greyscale', greyscale) },
     { label: 'Sepia', action: () => applyFilter('Sepia', sepia) },
     { separator: true },
     { label: 'Blur', action: () => applyFilter('Blur', p => convolve3(p, BLUR), 1) },
     { label: 'Sharpen', action: () => applyFilter('Sharpen', p => convolve3(p, SHARPEN), 1) },
-  ]), app.signal);
-  on(helpMenu, 'click', () => showMenu(helpMenu, [
+  ];
+  const helpMenu = (): MenuItem[] => [
     { label: 'What Photo Editor does and leaves out', action: () => void showHelp() },
     { label: 'Keys', action: () => void showKeys() },
-  ]), app.signal);
+  ];
+  /** The menus as the bar has them (each made afresh as it opens). */
+  const barItems = (items: MenuItem[]): BarItem[] => items.map(i => (i.separator ? { separator: true } : {
+    label: i.label, shortcut: i.hint, danger: i.danger, action: i.action,
+    enabled: i.disabled ? () => false : undefined,
+    checked: i.checked === undefined ? undefined : () => !!i.checked,
+    submenu: i.submenu ? barItems(i.submenu) : undefined,
+  }));
+  const btn = (id: string, icon: ToolIconId, label: string, action: () => void, more: Partial<ToolButton> = {}): ToolButton => ({ id, icon, label, action, ...more });
+  const toolbars: ToolbarSpec[] = [
+    { id: 'standard', name: 'Standard', tools: [
+      btn('new', 'new', 'New...', () => void askNew()),
+      btn('open', 'open', 'Open...', () => void openPicked(), { shortcut: 'Ctrl+O' }),
+      btn('save', 'save', 'Save', () => void save(), { shortcut: 'Ctrl+S' }),
+      btn('save-as', 'save-as', 'Save as...', () => void saveAs(), { shortcut: 'Ctrl+Shift+S' }), '|',
+      btn('undo', 'undo', 'Undo', undo, { shortcut: 'Ctrl+Z', enabled: () => doc.history.undoList.length > 0 }),
+      btn('redo', 'redo', 'Redo', redo, { shortcut: 'Ctrl+Y', enabled: () => doc.history.redoList.length > 0 }), '|',
+      btn('zoom-out', 'zoom-out', 'Zoom out', () => stepZoom(-1), { shortcut: '-' }),
+      btn('zoom-fit', 'zoom-fit', 'Fit the window', fit, { shortcut: '0' }),
+      btn('zoom-actual', 'zoom-actual', 'Actual size', actualSize, { shortcut: '1' }),
+      btn('zoom-in', 'zoom-in', 'Zoom in', () => stepZoom(1), { shortcut: '+' }), '|',
+      btn('rotate-left', 'rotate-left', 'Rotate left', () => rotate(-1)),
+      btn('rotate-right', 'rotate-right', 'Rotate right', () => rotate(1)),
+      btn('flip-horizontal', 'flip-horizontal', 'Flip left to right', () => flipAll(true)),
+      btn('flip-vertical', 'flip-vertical', 'Flip upside down', () => flipAll(false)), '|',
+      btn('layers', 'layers', 'Layers', () => showPanel(panel.el.hidden === true), { shortcut: 'F7', pressed: () => !panel.el.hidden }),
+    ] },
+    { id: 'tools', name: 'Tools', side: 'left', columns: 2, tools: [
+      ...TOOLS.map(([id, icon, name, key]) => btn(`tool-${id}`, icon, name, () => setTool(id), { shortcut: keyName(key), pressed: () => tool === id })),
+    ] },
+    { id: 'options', name: 'Tool options', tools: [{ widget: options }] },
+  ];
+  let kept: Record<string, unknown> = {};
+  try {
+    const raw = JSON.parse(await shell.fs.readText(SETTINGS)) as unknown;
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) kept = raw as Record<string, unknown>;
+  } catch {
+    // Nothing kept yet: the usual places.
+  }
+  bar = classicBar({
+    menus: [
+      { label: 'File', items: () => barItems(fileMenu()) },
+      { label: 'Edit', items: () => barItems(editMenu()) },
+      { label: 'View', items: () => barItems(viewMenu()) },
+      { label: 'Image', items: () => barItems(imageMenu()) },
+      { label: 'Layer', items: () => barItems(layerMenu()) },
+      { label: 'Select', items: () => barItems(selectMenu()) },
+      { label: 'Tools', items: () => barItems(toolsMenu()) },
+      { label: 'Colours', items: () => barItems(colourMenu()) },
+      { label: 'Filters', items: () => barItems(filterMenu()) },
+      { label: 'Help', items: () => barItems(helpMenu()) },
+    ],
+    toolbars,
+  }, {
+    layer: shell.menus, signal: app.signal, scope: app.root, doc: () => stage, label: 'Photo Editor menus',
+    layout: { saved: kept.toolbars, save: v => {
+      kept.toolbars = v;
+      void (async () => {
+        // Only the toolbars are written; anything else kept there (by a newer window) stays.
+        let now: Record<string, unknown> = {};
+        try {
+          const raw = JSON.parse(await shell.fs.readText(SETTINGS)) as unknown;
+          if (raw && typeof raw === 'object' && !Array.isArray(raw)) now = raw as Record<string, unknown>;
+        } catch {
+          // Nothing kept yet.
+        }
+        await shell.fs.writeText(SETTINGS, JSON.stringify({ ...now, toolbars: v }), { hidden: true });
+      })().catch(() => {
+        // Not kept this time; the window still works.
+      });
+    } },
+  });
+  app.root.replaceChildren(bar.el, bar.dock(body), foot);
 
   async function showHelp() {
     await shell.dialogs.alert('Photo Editor', [
@@ -2200,26 +2266,12 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
   }
 
   // ---- Wiring ----
-  on(newBtn, 'click', () => void askNew(), app.signal);
   const openPicked = async () => {
     settle();
     if (!(await guard())) return;
     const p = await pickFile(shell, { title: 'Open picture', folder: path ? parentPath(path) : '/Pictures', accept: OPEN_EXTS });
     if (p) await openPath(p);
   };
-  on(openBtn, 'click', () => void openPicked(), app.signal);
-  on(saveBtn, 'click', () => void save(), app.signal);
-  on(saveAsBtn, 'click', () => void saveAs(), app.signal);
-  on(undoBtn, 'click', undo, app.signal);
-  on(redoBtn, 'click', redo, app.signal);
-  on(rotL, 'click', () => rotate(-1), app.signal);
-  on(rotR, 'click', () => rotate(1), app.signal);
-  on(flipH, 'click', () => flipAll(true), app.signal);
-  on(flipV, 'click', () => flipAll(false), app.signal);
-  on(zoomIn, 'click', () => stepZoom(1), app.signal);
-  on(zoomOut, 'click', () => stepZoom(-1), app.signal);
-  on(zoomFit, 'click', fit, app.signal);
-  on(zoom100, 'click', () => ((autoFit = false), (zoom = 1), paintZoom()), app.signal);
   on(cropApply, 'click', applyCrop, app.signal);
   on(cropCancel, 'click', endCrop, app.signal);
   on(xfApply, 'click', () => {
@@ -2233,10 +2285,9 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
   on(swapBtn, 'click', () => ([colour.value, colour2.value] = [colour2.value, colour.value]), app.signal);
   const showPanel = (yes: boolean) => {
     panel.el.hidden = !yes;
-    layersToggle.setAttribute('aria-pressed', String(yes));
+    bar?.refresh();
     if (autoFit) requestAnimationFrame(fit);
   };
-  on(layersToggle, 'click', () => showPanel(panel.el.hidden === true), app.signal);
   on(stage, 'wheel', (e: WheelEvent) => {
     if (!e.ctrlKey) return;
     e.preventDefault();
@@ -2295,7 +2346,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     if (e.key === '+' || e.key === '=') return act(() => stepZoom(1));
     if (e.key === '-') return act(() => stepZoom(-1));
     if (e.key === '0') return act(fit);
-    if (e.key === '1') return act(() => ((autoFit = false), (zoom = 1), paintZoom()));
+    if (e.key === '1') return act(actualSize);
     if (e.key === '[' || e.key === ']') return act(() => size.set(Math.max(1, Math.min(400, Math.round(size.value * (e.key === ']' ? 1.25 : 0.8)) + (e.key === ']' ? 1 : 0)))));
     if (k === 'x' && !e.shiftKey) return act(() => swapBtn.click());
     const hit = TOOLS.find(([, , , key]) => key === (e.shiftKey ? e.key.toUpperCase() : e.key.toLowerCase()) && (e.shiftKey === (key !== key.toLowerCase())));

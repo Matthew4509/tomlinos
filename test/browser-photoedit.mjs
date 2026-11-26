@@ -63,9 +63,9 @@ async function clickPic(x, y, opts = {}) {
   if (opts.modifier) await page.keyboard.up(opts.modifier);
 }
 const layerNames = () => W().locator('.pe-layer-name').allInnerTexts();
-const tool = name => W().locator('.pe-tools').getByRole('button', { name, exact: true }).click();
+const tool = name => W().locator('[data-toolbar="tools"]').getByRole('button', { name, exact: true }).click();
 const menu = async (menuName, item) => {
-  await W().getByRole('button', { name: `${menuName} ▾` }).click();
+  await W().locator(`.cbar-title[data-menu="${menuName}"]`).click();
   await page.locator('.menu').getByText(item, { exact: true }).first().click();
 };
 const near = (a, b, tol = 6) => a.every((v, i) => Math.abs(v - b[i]) <= tol);
@@ -259,7 +259,7 @@ await step('Levels (histogram, Auto), Curves (point added), Hue, Balance, Thresh
     await d.waitFor({ state: 'detached' });
     // The change lands a frame after the window closes.
     const want = 'Undo ' + item.replace('...', '');
-    await page.waitForFunction(w => document.querySelector('.pe-top button[aria-label="Undo"]')?.title.startsWith(w), want, { timeout: 5000 })
+    await page.waitForFunction(w => document.querySelector('.pe [data-tool="undo"]')?.title.startsWith(w), want, { timeout: 5000 })
       .catch(async () => { throw new Error(`undo names ${item}: ${await W().getByRole('button', { name: 'Undo' }).getAttribute('title')}`); });
     await page.keyboard.press('Control+z');
   }
@@ -320,7 +320,7 @@ await step('copy and paste: Ctrl+C, Ctrl+V makes a "Pasted" layer and switches t
   await page.keyboard.press('Control+c');
   await page.keyboard.press('Control+v');
   await W().locator('.pe-layer-name', { hasText: 'Pasted' }).waitFor({ timeout: 5000 });
-  ok(await W().locator('.pe-tools').getByRole('button', { name: 'Move, stretch and turn' }).getAttribute('aria-pressed') === 'true', 'move tool on');
+  ok(await W().locator('[data-toolbar="tools"]').getByRole('button', { name: 'Move, stretch and turn' }).getAttribute('aria-pressed') === 'true', 'move tool on');
   await page.keyboard.press('Enter');
 });
 

@@ -52,9 +52,9 @@ async function dragPic(a, b, opts = {}) {
   await page.mouse.up();
 }
 const layerNames = () => W().locator('.pe-layer-name').allInnerTexts();
-const tool = name => W().locator('.pe-tools').getByRole('button', { name, exact: true }).click();
+const tool = name => W().locator('[data-toolbar="tools"]').getByRole('button', { name, exact: true }).click();
 const menu = async (menuName, item) => {
-  await W().getByRole('button', { name: `${menuName} ▾` }).click();
+  await W().locator(`.cbar-title[data-menu="${menuName}"]`).click();
   await page.locator('.menu').getByText(item, { exact: true }).first().click();
 };
 const near = (a, b, tol = 6) => a.every((v, i) => Math.abs(v - b[i]) <= tol);

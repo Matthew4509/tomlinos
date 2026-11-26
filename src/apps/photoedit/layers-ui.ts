@@ -5,6 +5,7 @@
 import { h, on } from '../../core/dom.ts';
 import type { Doc, Layer } from './doc.ts';
 import { BLEND_MODES, type BlendMode } from './layers.ts';
+import { toolIcon, type ToolIconId } from '../../shell/toolicons.ts';
 
 export interface LayerCommands {
   activate(layer: Layer): void;
@@ -31,17 +32,17 @@ export function layersPanel(doc: Doc, cmd: LayerCommands, signal: AbortSignal) {
   const opacity = h('input', { type: 'range', min: 0, max: 100, value: 100, 'aria-label': 'Layer opacity', title: 'How solid the layer is (0 = see-through)' });
   const opacityOut = h('span', { class: 'pe-num' }, '100%');
   const lock = h('input', { type: 'checkbox', 'aria-label': 'Lock this layer' });
-  const btn = (glyph: string, label: string, fn: () => void) => {
-    const b = h('button', { type: 'button', class: 'tool', title: label, 'aria-label': label }, glyph);
+  const btn = (icon: ToolIconId, label: string, fn: () => void) => {
+    const b = h('button', { type: 'button', class: 'tool pe-layer-tool', title: label, 'aria-label': label }, toolIcon(icon));
     on(b, 'click', fn, signal);
     return b;
   };
-  const addBtn = btn('+', 'New layer', () => cmd.add());
-  const dupBtn = btn('⧉', 'Duplicate layer', () => cmd.duplicate());
-  const upBtn = btn('▲', 'Raise layer', () => cmd.raise());
-  const downBtn = btn('▼', 'Lower layer', () => cmd.lower());
-  const mergeBtn = btn('⤓', 'Merge down', () => cmd.mergeDown());
-  const delBtn = btn('🗑', 'Delete layer', () => cmd.remove());
+  const addBtn = btn('layer-new', 'New layer', () => cmd.add());
+  const dupBtn = btn('copy', 'Duplicate layer', () => cmd.duplicate());
+  const upBtn = btn('layer-up', 'Raise layer', () => cmd.raise());
+  const downBtn = btn('layer-down', 'Lower layer', () => cmd.lower());
+  const mergeBtn = btn('merge-down', 'Merge down', () => cmd.mergeDown());
+  const delBtn = btn('recycle', 'Delete layer', () => cmd.remove());
   const el = h('div', { class: 'pe-layers', role: 'region', 'aria-label': 'Layers' },
     h('div', { class: 'pe-layers-head' }, 'Layers'),
     h('div', { class: 'pe-layer-props' },
