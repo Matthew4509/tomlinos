@@ -2,8 +2,9 @@
 // screensaver, the AI (the built-in model and keys for AI services: assistant/aisettings.ts), the Recycle Bin, and where
 // the desktop keeps its files. Opened with "ai" it starts at the AI section. Nothing here can erase files.
 import { askIdentity } from '../auth/identity.ts';
-import { h, on } from '../core/dom.ts';
-import { icon } from '../shell/icons.ts';
+import { h, on, type Child } from '../core/dom.ts';
+import { icon, type IconName } from '../shell/icons.ts';
+import { infoTip, setInfoTip } from '../shell/infotip.ts';
 import { THEMES, BIN_DAYS_MAX, BIN_LIMIT_MAX_MB, BIN_LIMIT_MIN_MB, DEFAULT_COLOUR, WALLPAPER_COLOURS } from '../shell/session.ts';
 import { extensionOf } from '../shell/filetypes.ts';
 import type { AppDef } from '../shell/types.ts';
@@ -15,6 +16,12 @@ import { clearOldThreads } from './chat/agents.ts';
 
 export const PICTURE_TYPES = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp'];
 
+/** One section of Settings: its picture on the left and its settings as short lines beside it. */
+const tile = (pic: IconName, ...lines: Child[]) => h('div', { class: 'bin-tile' },
+  h('span', { class: 'bin-tile-pic', 'aria-hidden': 'true' }, icon(pic, 40)),
+  h('div', { class: 'bin-tile-lines' }, ...lines));
+const line = (...kids: Child[]) => h('div', { class: 'bin-line' }, ...kids);
+
 export const settingsApp: AppDef = {
   ...APPS.settings,
   async launch(app, arg) {
@@ -25,7 +32,8 @@ export const settingsApp: AppDef = {
     const swatches = h('div', { class: 'swatches', role: 'radiogroup', 'aria-label': 'Background colour' });
     const custom = h('input', { type: 'color', class: 'colour-input', 'aria-label': 'Choose your own colour', value: DEFAULT_COLOUR });
     const pictures = h('div', { class: 'picture-list', role: 'radiogroup', 'aria-label': 'Background picture' });
-    const note = h('p', { class: 'hint' });
+    const note = h('span', { class: 'hint' });
+    const pictureTip = infoTip('background pictures', 'These are the pictures in your Pictures folder (PNG, JPG, GIF, WebP, AVIF or BMP). Put a new one there, then open Settings again. Choosing a colour puts the plain background back.');
 
     function drawSwatches(): void {
       const now = current();
@@ -57,9 +65,8 @@ export const settingsApp: AppDef = {
         return b;
       });
       pictures.replaceChildren(...rows);
-      note.textContent = rows.length
-        ? 'Pictures in your Pictures folder. Choosing a colour above puts the plain background back.'
-        : 'To use your own picture, put a PNG, JPG, GIF, WebP, AVIF or BMP file in your Pictures folder, then open Settings again.';
+      pictures.hidden = !rows.length;
+      note.textContent = rows.length ? '' : 'none in your Pictures folder yet';
     }
 
     on(custom, 'change', () => void shell.setWallpaper({ kind: 'colour', value: custom.value.toLowerCase() }).then(drawSwatches), app.signal);
@@ -68,7 +75,7 @@ export const settingsApp: AppDef = {
     const bin = shell.session.data.bin;
     // Storage tile: where files are kept and what is deleted by itself, in the days actually chosen.
     const storage = { vanish: null as number | null };
-    const storageWhere = h('div', { class: 'bin-line' }, `Your files are kept in ${shell.storeLabel}.`);
+    const storageWhere = h('div', { class: 'bin-line' }, `Your files are kept ${shell.storeLabel.includes('server') ? 'on' : 'in'} ${shell.storeLabel}.`);
     const storageBin = h('div', { class: 'bin-line' });
     const storageChats = h('div', { class: 'bin-line' });
     const paintStorage = () => {
@@ -154,8 +161,10 @@ export const settingsApp: AppDef = {
     // Chat's messages live on the server: how long they are kept is the owner's choice, for everyone. AI chats are each
     // person's own files (Documents › AI chats), so each person chooses.
     const dayChoices = (never: string) => [0, 3, 7, 30].map(d => h('option', { value: String(d) }, d ? `${d} days` : never));
-    const vanishPick = h('select', { class: 'field', 'aria-label': 'Chat messages vanish after', disabled: true }, ...dayChoices('Never (kept until deleted)'));
+    const vanishPick = h('select', { class: 'field', 'aria-label': 'Chat messages vanish after', disabled: true }, ...dayChoices('Never'));
     const vanishNote = h('p', { class: 'hint', role: 'status' });
+    const EVERYONE = 'This setting is for everyone on this desktop.';
+    const vanishTip = infoTip('chat messages vanishing', EVERYONE);
     const aiPick = h('select', { class: 'field', 'aria-label': 'Clear my AI chats after' }, ...dayChoices('Never'));
     const aiNote = h('p', { class: 'hint', role: 'status' });
     aiPick.value = String(shell.session.data.aiHistoryDays);
@@ -167,7 +176,7 @@ export const settingsApp: AppDef = {
         vanishPick.disabled = !r.owner;
         storage.vanish = r.vanishDays;
         paintStorage();
-        vanishNote.textContent = r.owner ? 'For everyone on this desktop. Older messages are deleted from the server.' : 'Set by the owner of this desktop, for everyone.';
+        setInfoTip(vanishTip, r.owner ? EVERYONE : `${EVERYONE} Only the owner can change it.`);
       }).catch(() => (vanishNote.textContent = 'Chat is not reachable just now.'));
       on(vanishPick, 'change', async () => {
         const days = Number(vanishPick.value);
@@ -220,8 +229,8 @@ export const settingsApp: AppDef = {
       h('option', { value: 'signin' }, 'The TOMLIN OS sign-in'));
     const frontNote = h('p', { class: 'hint', role: 'status' });
     const frontBox = account?.user().admin ? h('div', {},
-      h('label', { class: 'bin-set' }, 'Before anyone signs in, the site shows ', frontPick),
-      h('p', { class: 'hint' }, 'With the Reader, someone who finds this site, or a search engine’s robot, sees only an old book. Log in for more, in its corner, brings up the sign-in. Your own books and the Gutenberg library need a sign-in.'),
+      line(h('label', { class: 'bin-line' }, 'Before anyone signs in, show ', frontPick),
+        infoTip('what visitors see', 'With the Reader, someone who finds this site, or a search engine’s robot, sees only an old book; Log in for more, in its corner, brings up the sign-in. Your own books and the Gutenberg library need a sign-in.')),
       frontNote) : null;
     if (account && frontBox) {
       void account.api.status().then(st => { frontPick.value = st.front ?? 'reader'; }).catch(() => undefined);
@@ -236,33 +245,35 @@ export const settingsApp: AppDef = {
     }
     on(lockLink, 'click', () => void shell.openApp('account'), app.signal);
     app.root.append(
-      h('h2', { class: 'set-h' }, 'Background picture'),
-      pictures,
-      note,
-      h('h2', { class: 'set-h' }, 'Background colour'),
-      swatches,
-      h('label', { class: 'custom-row' }, 'Your own colour ', custom),
+      h('h2', { class: 'set-h' }, 'Background'),
+      tile('image',
+        swatches,
+        h('label', { class: 'bin-line' }, 'Your own colour ', custom),
+        line('Or one of your pictures ', note, pictureTip),
+        pictures),
       h('h2', { class: 'set-h' }, 'Colour scheme'),
-      themes,
-      h('p', { class: 'hint' }, 'Title bars, the taskbar and the Start menu. Standard is the look of Debian with Xfce; Glass has a see-through taskbar and glassy title bars; Flat is flat and square with one blue accent; Classic blue, Olive green and Silver have shaded title bars in those colours; Dark also darkens the inside of windows.'),
+      tile('app',
+        line(themes, infoTip('the colour schemes', 'A scheme colours the title bars, the taskbar and the Start menu. Standard is the look of Debian with Xfce; Glass has a see-through taskbar; Flat is flat and square with one blue accent; Classic blue, Olive green and Silver have shaded title bars; Dark also darkens the inside of windows.'))),
       h('h2', { class: 'set-h' }, 'Screensaver and lock'),
       ...saverControls(shell, app.signal),
-      ...(frontBox ? [frontBox] : []),
-      h('p', { class: 'hint' }, 'Your PIN, password and two-step sign-in are in My account.'),
-      lockLink,
+      h('h2', { class: 'set-h' }, 'Signing in'),
+      tile('user',
+        ...(frontBox ? [frontBox] : []),
+        line('PIN, password and two-step sign-in ', lockLink)),
       aiHead,
-      aiSettings(shell, app.signal),
+      h('div', { class: 'bin-tile tall' },
+        h('span', { class: 'bin-tile-pic', 'aria-hidden': 'true' }, icon('assistant', 40)),
+        h('div', { class: 'bin-tile-lines' }, aiSettings(shell, app.signal))),
       h('h2', { class: 'set-h' }, 'Chat and AI history'),
-      ...(chatApi ? [h('label', { class: 'bin-set' }, 'Internal chat messages vanish after ', vanishPick), vanishNote] : []),
-      h('label', { class: 'bin-set' }, 'Clear my AI chats after ', aiPick),
-      aiNote,
+      tile('chat',
+        h('label', { class: 'bin-line' }, 'Clear my AI chats after ', aiPick),
+        aiNote,
+        ...(chatApi ? [line(h('label', { class: 'bin-line' }, 'Internal chat messages vanish after ', vanishPick), vanishTip), vanishNote] : [])),
       h('h2', { class: 'set-h' }, 'Recycle Bin'),
-      h('div', { class: 'bin-tile' },
-        h('span', { class: 'bin-tile-pic', 'aria-hidden': 'true' }, icon('trash', 40)),
-        h('div', { class: 'bin-tile-lines' },
-          h('div', { class: 'bin-line' }, 'Delete items for good ', clearSel, ' ', daysPart),
-          h('div', { class: 'bin-line' }, 'Items over ', limitIn, ` MB: ask, then delete for good (${BIN_LIMIT_MIN_MB}–${BIN_LIMIT_MAX_MB})`),
-          binProblem)),
+      tile('trash',
+        line('Delete items for good ', clearSel, ' ', daysPart),
+        line('Items over ', limitIn, ' MB: ask, then delete for good ', infoTip('the size limit', `The limit can be from ${BIN_LIMIT_MIN_MB} MB to ${BIN_LIMIT_MAX_MB} MB (4 GB). Deleting anything bigger asks first, because it cannot go to the Recycle Bin.`)),
+        binProblem),
       h('h2', { class: 'set-h' }, 'Storage'),
       h('div', { class: 'bin-tile' },
         h('span', { class: 'bin-tile-pic', 'aria-hidden': 'true' }, icon('files', 40)),

@@ -1,6 +1,7 @@
 // "Your own OpenRouter key" in Settings › AI (server/api/openrouter.php): one key for hundreds of models from many makers.
 // As with Claude, the key goes to the server once and never comes back (only its last four characters), and the server
 // keeps the monthly limit and the cost log. The chat itself uses the same streamed answers as Claude (askClaude).
+import { infoTip } from '../../shell/infotip.ts';
 import { h, on } from '../../core/dom.ts';
 import type { ServiceApi } from '../../net/service.ts';
 import { money } from './claude.ts';
@@ -65,8 +66,8 @@ export function openRouterSection(api: ServiceApi | null, signal: AbortSignal, o
     h('div', { class: 'ai-row' }, modelSelect),
     modelNote,
     h('label', { class: 'ai-row' }, h('span', {}, 'Monthly limit, US$'), capInput),
-    h('p', { class: 'ai-cloud-hint' }, 'Before each question the most it could cost is checked against this limit; when the month\'s spending would pass it, OpenRouter is not asked. $0 stops it altogether.'),
-    h('p', { class: 'ai-cloud-hint' }, 'Your key is kept encrypted on this TOMLIN OS server and is never shown again, only its last four characters. Whoever runs this server could use it, so save it only on a server you trust. Make a key at openrouter.ai > Keys (you can give it its own credit limit there too).'),
+    h('p', { class: 'ai-cloud-hint' }, 'OpenRouter is not asked once a question could take the month past this limit. $0 stops it. ', infoTip('the monthly limit', 'Before each question, the most it could cost is checked against this limit.')),
+    h('p', { class: 'ai-cloud-hint' }, 'Whoever runs this server could use your key: save it only on a server you trust. ', infoTip('your key', 'It is kept encrypted on this server and never shown again, only its last four characters. Make a key at openrouter.ai > Keys; you can give it its own credit limit there too.')),
     h('div', { class: 'row-buttons' }, saveBtn, forgetBtn, cancelBtn),
     formMsg);
   const logBody = h('tbody');
@@ -75,8 +76,8 @@ export function openRouterSection(api: ServiceApi | null, signal: AbortSignal, o
     h('table', { class: 'ai-log-table' }, h('thead', {}, h('tr', {}, h('th', {}, 'When'), h('th', {}, 'Model'), h('th', {}, 'Tokens in'), h('th', {}, 'Tokens out'), h('th', {}, 'Cost'), h('th', {}, 'Note'))), logBody));
 
   const el = h('section', { class: 'ai-cloud' },
-    h('h2', {}, 'OpenRouter, with your own key'),
-    h('p', {}, 'One key for hundreds of AI models from many makers (Claude, GPT, Gemini, Llama, Mistral and more), some of them free. Answers are paid from your OpenRouter credit, and what you send goes to OpenRouter and the model\'s maker.'),
+    h('h2', {}, 'OpenRouter, with your own key ', infoTip('OpenRouter', 'Models from many makers: Claude, GPT, Gemini, Llama, Mistral and more.')),
+    h('p', {}, 'One key for hundreds of AI models, some of them free. Answers are paid from your OpenRouter credit, and what you send goes to OpenRouter and the model\'s maker.'),
     state,
     h('div', { class: 'row-buttons' }, useBtn, setBtn, logBtn),
     form, logBox);

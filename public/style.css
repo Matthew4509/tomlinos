@@ -305,6 +305,13 @@ body.is-dragging .win-body { pointer-events: none; }
 .custom-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .colour-input { width: 44px; height: 30px; padding: 0; }
 .hint { color: var(--ink-soft); font-size: 12px; }
+/* The "!" info tip (shell/infotip.ts): a small round button after a label; its tip is placed by the script, clear of
+   the window's edges. Colours come from the theme, so it follows Dark and the others. */
+.infotip { display: inline-flex; vertical-align: middle; flex: none; }
+.infotip-btn { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; min-height: 0; padding: 0; border: 1px solid var(--accent); border-radius: 50%; background: var(--paper); color: var(--accent); font: 700 12px/1 var(--font); cursor: help; }
+.infotip-btn:hover, .infotip.open .infotip-btn { background: var(--accent); color: var(--accent-ink); }
+.infotip-text { position: fixed; z-index: 10000; width: max-content; max-width: min(300px, calc(100vw - 16px)); padding: 6px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink); box-shadow: 0 4px 14px rgba(0, 0, 0, .3); font: 400 12px/1.4 var(--font); text-align: left; white-space: normal; text-shadow: none; }
+@media (pointer: coarse) { .infotip-btn { width: 28px; height: 28px; font-size: 14px; } }
 
 /* ---- Menus and dialogs ------------------------------------------------------------------------------------------ */
 #layer-menus > .menu-root { position: fixed; inset: 0; pointer-events: none; }
@@ -438,6 +445,10 @@ body.is-dragging .win-body { pointer-events: none; }
 .bin-tile .field { flex: none; width: auto; max-width: 100%; }
 .bin-line .field.num { width: 6em; }
 .bin-tile .dialog-problem:empty { display: none; }
+.bin-tile-lines > p { margin: 0; }
+.bin-tile-lines > .hint[role="status"]:empty { display: none; }
+.bin-tile.tall { align-items: flex-start; }
+.bin-tile .set-ai .field { width: 100%; }
 @media (max-width: 480px) { .bin-tile { align-items: flex-start; } .bin-tile-pic svg { width: 32px; height: 32px; } }
 .bin-set select { width: auto; flex: 1; min-width: 0; max-width: 100%; }
 .field.num { width: 90px; }

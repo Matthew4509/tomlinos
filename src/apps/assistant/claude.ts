@@ -1,6 +1,7 @@
 // The "your own Claude key" side (server/api/ai.php). The key goes to the
 // server once and never comes back: the page only ever learns its last four characters. The server keeps the monthly
 // limit and the cost log; this file shows them, and sends a conversation and reads the answer as it arrives.
+import { infoTip } from '../../shell/infotip.ts';
 import { h, on } from '../../core/dom.ts';
 import type { ServiceApi } from '../../net/service.ts';
 import type { ChatTurn } from './engine.ts';
@@ -114,8 +115,8 @@ export function claudeSection(api: ServiceApi | null, signal: AbortSignal, onUse
     h('p', { class: 'ai-cloud-hint' }, keyNote),
     h('label', { class: 'ai-row' }, h('span', {}, 'Model'), modelSelect),
     h('label', { class: 'ai-row' }, h('span', {}, 'Monthly limit, US$'), capInput),
-    h('p', { class: 'ai-cloud-hint' }, 'Before each question the most it could cost is checked against this limit; when the month\'s spending would pass it, Claude is not asked. $0 stops it altogether.'),
-    h('p', { class: 'ai-cloud-hint' }, 'Your key is kept encrypted on this TOMLIN OS server and is never shown again, only its last four characters. Whoever runs this server could use it, so save it only on a server you trust. Make a key at console.anthropic.com > API keys; a key just for TOMLIN OS is best, so you can delete it on its own.'),
+    h('p', { class: 'ai-cloud-hint' }, 'Claude is not asked once a question could take the month past this limit. $0 stops it. ', infoTip('the monthly limit', 'Before each question, the most it could cost is checked against this limit.')),
+    h('p', { class: 'ai-cloud-hint' }, 'Whoever runs this server could use your key: save it only on a server you trust. ', infoTip('your key', 'It is kept encrypted on this server and never shown again, only its last four characters. Make a key at console.anthropic.com > API keys; one just for TOMLIN OS can be deleted on its own.')),
     h('div', { class: 'row-buttons' }, saveBtn, forgetBtn, cancelBtn),
     formMsg);
   const logBody = h('tbody');
@@ -125,7 +126,7 @@ export function claudeSection(api: ServiceApi | null, signal: AbortSignal, onUse
 
   const el = h('section', { class: 'ai-cloud' },
     h('h2', {}, 'Claude, with your own API key'),
-    h('p', {}, 'Much more capable than the built-in AI, and it can take long text. It is not free: each answer is paid for by your own Anthropic account, and what you send goes to Anthropic.'),
+    h('p', {}, 'More capable than the built-in AI, and it takes long text. Not free: each answer is paid for by your Anthropic account, and what you send goes to Anthropic.'),
     state,
     h('div', { class: 'row-buttons' }, useBtn, setBtn, logBtn),
     form, logBox);

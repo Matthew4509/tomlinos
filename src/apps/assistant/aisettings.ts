@@ -11,6 +11,7 @@ import { h, on } from '../../core/dom.ts';
 import { formatSize } from '../../core/format.ts';
 import { ServiceApi } from '../../net/service.ts';
 import type { Shell } from '../../shell/types.ts';
+import { infoTip } from '../../shell/infotip.ts';
 import { BUILT_IN_MODELS, checkDevice, modelLabel } from './engine.ts';
 import { claudeSection } from './claude.ts';
 import { openRouterSection } from './openrouter.ts';
@@ -37,7 +38,7 @@ export function aiSettings(shell: Shell, signal: AbortSignal): HTMLElement {
   const waitLine = h('p', { class: 'hint', hidden: true });
   const retiredBox = h('div', {});
   const ownerBox = h('div', { hidden: true },
-    h('p', { class: 'hint' }, 'As the owner you can save a model\'s files on this TOMLIN OS, so browsers fetch it from here instead of Hugging Face.'),
+    h('p', { class: 'hint' }, 'As the owner you can save this model on your server, so browsers fetch it from here, not Hugging Face.'),
     h('div', { class: 'row-buttons' }, saveBtn, stopSaveBtn, removeBtn), waitLine, saveBar, saveText);
   const findBtn = h('button', { type: 'button', class: 'btn' }, 'Find AI models...');
   const myList = h('div', { class: 'ai-mylist', role: 'list', 'aria-label': 'Your model list' });
@@ -61,7 +62,7 @@ export function aiSettings(shell: Shell, signal: AbortSignal): HTMLElement {
     waitLine.hidden = wait <= 0;
     if (wait > 0 && m) {
       const at = new Date(Date.now() + wait * 1000);
-      waitLine.textContent = `${m.name} was removed from this TOMLIN OS less than a day ago. It can be saved again after ${at.toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' })}. Until then, browsers fetch it from Hugging Face.`;
+      waitLine.textContent = `${m.name} can be saved here again after ${at.toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' })}; until then browsers fetch it from Hugging Face.`;
     }
     stopSaveBtn.hidden = !saving;
     removeBtn.hidden = !m || (!m.saved && !m.saving) || saving;
@@ -177,16 +178,16 @@ export function aiSettings(shell: Shell, signal: AbortSignal): HTMLElement {
   const router = openRouterSection(shell.account ? new ServiceApi(shell.account.api.base, 'openrouter') : null, signal, () => void shell.openApp('chat', 'agents:openrouter'));
 
   const el = h('div', { class: 'set-ai' },
-    h('h3', { class: 'set-sub' }, 'Built-in AI'),
-    h('p', {}, 'An AI that downloads and runs on this device: free and private, as fast as your graphics chip allows. You talk to it in Chat › Agents and on the Panel.'),
+    h('h3', { class: 'set-sub' }, 'Built-in AI ', infoTip('the built-in AI', 'It downloads once and runs as fast as your graphics chip allows. You talk to it in Chat › Agents and on the Panel.')),
+    h('p', {}, 'An AI that runs on this device: free and private.'),
     deviceLine,
     h('label', { class: 'bin-set' }, 'Model ', pick),
     modelNote, sourceLine, ownerBox, retiredBox,
     h('div', { class: 'row-buttons' }, chatBtn, findBtn),
-    h('h4', { class: 'ai-mylist-head' }, 'Your model list'),
-    h('p', { class: 'hint' }, 'Favourites (★) come first in Chat › Agents, and the first is chosen when Chat opens. Untick "Show in Chat" to leave a model out of the list; it stays here, so you can bring it back.'),
+    h('h4', { class: 'ai-mylist-head' }, 'Your model list ', infoTip('your model list', 'Favourites (★) come first in Chat › Agents, and the first is chosen when Chat opens. Untick "Show in Chat" to leave a model out; it stays here, so you can bring it back.')),
     myList,
-    h('label', { class: 'check-row' }, idleBox, ` Disconnect when idle: after ${IDLE_MINUTES} minutes without a question, the built-in AI stops and frees its graphics memory. Your next message starts it again by itself.`),
+    h('div', { class: 'bin-line' }, h('label', { class: 'check-row' }, idleBox, ' Disconnect when idle'),
+      infoTip('disconnecting when idle', `After ${IDLE_MINUTES} minutes without a question the built-in AI stops and frees its graphics memory. Your next message starts it again.`)),
     cloud.el,
     router.el);
 
