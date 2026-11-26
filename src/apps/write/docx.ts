@@ -158,7 +158,16 @@ function ourStyles(): string {
 
 
 /** A merge field's name as Word takes it: letters, digits and _ - . (anything else becomes _). */
-export const fieldName = (name: string): string => name.trim().replace(/[^\p{L}\p{N}_.\-]/gu, '_').slice(0, 40);
+export const fieldName = (name: string): string => name.trim().replace(/[^\p{L}\p{N}_.\- ]/gu, '_').replace(/ +/g, ' ').slice(0, 40).trim();
+
+/** A merge field's name as its field code writes it: in quotes when it has a space (MERGEFIELD "First name"). */
+const quotedField = (name: string): string => (name.includes(' ') ? `"${name}"` : name);
+
+/** The field name in a MERGEFIELD code: a quoted name whole (spaces and all), or the first word. */
+const mergeName = (code: string): string | null => {
+  const m = /MERGEFIELD\s+(?:"([^"]+)"|([^"\s\\]+))/i.exec(code);
+  return m ? (m[1] ?? m[2]).trim().slice(0, 40) || null : null;
+};
 
 /** The document's headings (Heading 1 to 3, in order), for the contents page. */
 export function headingsOf(doc: NodeJSON): Array<{ level: number; text: string }> {
@@ -224,6 +233,8 @@ interface WriteCtx {
   notes: Array<{ id: number; text: string }>;
   nextNote: number;
   keptNotes: Map<number, string>;
+  /** Notes from the file already pointed at once (a pasted copy of one gets a note of its own). */
+  usedNotes: Set<number>;
   /** The page each heading is on (in the order of the headings), for the contents page. */
   headingPages: number[];
   /** The whole document's blocks (the contents page lists every heading in it). */
@@ -358,7 +369,8 @@ function inlineXml(nodes: NodeJSON[] | undefined, ctx: WriteCtx): string {
       const textNow = String(n.attrs?.text ?? '');
       const was = Number(n.attrs?.id) || 0;
       // A footnote from the file, unchanged, points at its own note there (with its own formatting); any other is new.
-      let id = was && ctx.keptNotes.get(was) === textNow ? was : 0;
+      let id = was && ctx.keptNotes.get(was) === textNow && !ctx.usedNotes.has(was) ? was : 0;
+      if (id) ctx.usedNotes.add(id);
       if (!id) {
         id = ctx.nextNote++;
         ctx.notes.push({ id, text: textNow });
@@ -366,7 +378,7 @@ function inlineXml(nodes: NodeJSON[] | undefined, ctx: WriteCtx): string {
       out += `<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:footnoteReference w:id="${id}"/></w:r>`;
     } else if (n.type === 'field') {
       const name = fieldName(String(n.attrs?.name ?? ''));
-      if (name) out += `<w:fldSimple w:instr=" MERGEFIELD ${name} "><w:r>${runProps(n.marks)}<w:t>${escapeXml(`«${name}»`)}</w:t></w:r></w:fldSimple>`;
+      if (name) out += `<w:fldSimple w:instr="${escapeAttr(` MERGEFIELD ${quotedField(name)} `)}"><w:r>${runProps(n.marks)}<w:t>${escapeXml(`«${name}»`)}</w:t></w:r></w:fldSimple>`;
     } else if (n.type === 'opaque_inline') {
       out += keptXml(n, ctx, false);
     } else if (n.type === 'image') {
@@ -588,7 +600,7 @@ export async function writeDocx(doc: NodeJSON, page: PageSetup, title = '', sour
   const dir = source ? source.main.slice(0, source.main.lastIndexOf('/') + 1) : 'word/';
   const relIds = new Set([...(source ? partText(source, source.rels) ?? '' : '').matchAll(/\bId="([^"]{1,200})"/g)].map(m => m[1].toLowerCase()));
   const partNames = new Set([...(source?.parts.keys() ?? [])].map(name => name.toLowerCase()));
-  const ctx: WriteCtx = { page, media: new Map(), ordered: [], links: new Map(), styleIds, nextNum: bulletNum + 1, bulletNum, drawingId: 0, bodyPx, mediaPrefix: source ? 'Tw' : '', notes: [], nextNote: 1, keptNotes: source?.notes ?? new Map(), headingPages: extras.headingPages ?? [], allBlocks: doc.content ?? [], fresh: !source, leftOut: extras.leftOut ?? [], dir, relIds, partNames };
+  const ctx: WriteCtx = { page, media: new Map(), ordered: [], links: new Map(), styleIds, nextNum: bulletNum + 1, bulletNum, drawingId: 0, bodyPx, mediaPrefix: source ? 'Tw' : '', notes: [], nextNote: 1, keptNotes: source?.notes ?? new Map(), usedNotes: new Set(),headingPages: extras.headingPages ?? [], allBlocks: doc.content ?? [], fresh: !source, leftOut: extras.leftOut ?? [], dir, relIds, partNames };
   if (source?.notes.size) ctx.nextNote = Math.max(...source.notes.keys()) + 1;
   const body = blocksXml(doc.content ?? [], ctx);
   const hasHeader = lineHas(page.header);
@@ -808,6 +820,8 @@ function writeKept(source: DocxSource, ctx: WriteCtx, body: string, pageXml: str
     }
     return '';
   });
+  // A relationships part written empty (<Relationships .../>) is opened up first, so the new ones have somewhere to go.
+  relsText = relsText.replace(/<Relationships\b([^>]*?)\s*\/>\s*$/, '<Relationships$1></Relationships>');
   out.set(source.rels, enc.encode(relsText.replace(/<\/Relationships>\s*$/, `${newRels.join('')}</Relationships>`)));
 
   for (const [ext, type] of [['png', 'image/png'], ['jpeg', 'image/jpeg'], ['gif', 'image/gif']]) {
@@ -1403,10 +1417,10 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
                 if (!fieldHref) rd.dropped.add(LINKS);
               } else if (/^\s*HYPERLINK\b/i.test(k.text)) rd.dropped.add(LINKS);
               // A mail merge field written as a complex field: its shown result is skipped.
-              const m = /MERGEFIELD\s+"?([^"\s\\]+)/i.exec(k.text);
+              const m = mergeName(k.text);
               if (m) {
                 const marks = marksFor(look, style);
-                cur().push(marks.length ? { type: 'field', attrs: { name: m[1].slice(0, 40) }, marks } : { type: 'field', attrs: { name: m[1].slice(0, 40) } });
+                cur().push(marks.length ? { type: 'field', attrs: { name: m }, marks } : { type: 'field', attrs: { name: m } });
                 mergeSkip = true;
               }
             } else if (k.name === 'fldChar' && at(k, 'fldCharType') === 'separate') {
@@ -1471,10 +1485,10 @@ export async function readDocx(bytes: Uint8Array): Promise<DocxRead> {
           break;
         }
         case 'fldSimple': {
-          const m = /MERGEFIELD\s+"?([^"\s\\]+)/i.exec(el.attrs['w:instr'] ?? el.attrs.instr ?? '');
+          const m = mergeName(el.attrs['w:instr'] ?? el.attrs.instr ?? '');
           if (m) {
             const marks = marksFor(rd.runLook(child(child(el, 'r'), 'rPr'), styleRun), style);
-            cur().push(marks.length ? { type: 'field', attrs: { name: m[1].slice(0, 40) }, marks } : { type: 'field', attrs: { name: m[1].slice(0, 40) } });
+            cur().push(marks.length ? { type: 'field', attrs: { name: m }, marks } : { type: 'field', attrs: { name: m } });
           } else {
             const code = el.attrs['w:instr'] ?? el.attrs.instr ?? '';
             if (/^\s*HYPERLINK\b/i.test(code)) rd.dropped.add(LINKS);

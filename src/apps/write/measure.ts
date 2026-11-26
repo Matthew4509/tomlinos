@@ -19,7 +19,16 @@ type Place = { kind: 'at'; pos: number } | { kind: 'cells'; pos: number[] };
 interface Measured {
   unit: Unit;
   place: () => Place | null;
+  /** A whole paragraph measured as one box: its lines, measured one by one (asked only when it does not fit its page). */
+  lines?: () => Measured[];
 }
+
+/**
+ * While measuring: whether a paragraph with no page space inside it may be taken as one box at first. Its lines are
+ * measured only when it does not fit where it falls, so a long document of short paragraphs is not measured letter by
+ * letter (that took most of a second each time in a document of 36,000 lines).
+ */
+let wholeParagraphs = false;
 
 export const geometryOf = (box: PageBox): Geometry => ({ pageH: box.h, top: box.top, body: box.body, gap: GAP });
 
@@ -40,13 +49,53 @@ export function frameOf(paper: HTMLElement, widthPx: number): Frame {
 
 const yOf = (f: Frame, y: number) => (y - f.top) / f.k;
 
+/**
+ * The editor's own record of each child of a node it shows (its "view description"), in the order of the children.
+ * Asking the editor for one node's box by its position (view.nodeDOM) walks from the top of the document each time,
+ * which over a long document (tens of thousands of paragraphs) made laying out the pages take many seconds; walking
+ * the children once, side by side with the document's, finds them all in one pass. Undefined where none is found
+ * (the caller then asks by position).
+ */
+function childDescs(desc: any, node: any): any[] {
+  const out: any[] = [];
+  const kids: any[] = desc?.children ?? [];
+  let j = 0;
+  node.forEach((child: any) => {
+    let k = j;
+    // (Only a few widgets, such as the spaces before a page, sit between one child's record and the next.)
+    while (k < kids.length && k - j < 8 && kids[k].node !== child) k++;
+    if (k < kids.length && kids[k].node === child) {
+      out.push(kids[k]);
+      j = k + 1;
+    } else out.push(undefined);
+  });
+  return out;
+}
+
+const domOfDesc = (desc: any): HTMLElement | null => (desc ? ((desc.nodeDOM ?? desc.dom) as HTMLElement | null) : null);
+
 /** The lines of a paragraph, each with its own box (half way between one line's letters and the next's). */
-function paragraphUnits(view: any, node: any, pos: number, f: Frame): Measured[] {
-  const dom = view.nodeDOM(pos) as HTMLElement | null;
+function paragraphUnits(view: any, node: any, pos: number, f: Frame, desc?: any): Measured[] {
+  const dom = (domOfDesc(desc) ?? view.nodeDOM(pos)) as HTMLElement | null;
   if (!dom || !(dom instanceof HTMLElement)) return [];
   const box = dom.getBoundingClientRect();
   const pTop = yOf(f, box.top);
   const pBottom = yOf(f, box.bottom);
+  if (wholeParagraphs && !dom.querySelector('.wp-spacer') && node.content.size) {
+    const whole = wholeParagraphs;
+    return [{
+      unit: { top: pTop, height: Math.max(1, pBottom - pTop), spacer: 0 },
+      place: () => ({ kind: 'at', pos: pos + 1 }),
+      lines: () => {
+        wholeParagraphs = false;
+        try {
+          return paragraphUnits(view, node, pos, f, desc);
+        } finally {
+          wholeParagraphs = whole;
+        }
+      },
+    }];
+  }
   const spacers = [...dom.querySelectorAll<HTMLElement>('.wp-spacer')].map(s => {
     const r = s.getBoundingClientRect();
     return { top: yOf(f, r.top), bottom: yOf(f, r.bottom) };
@@ -114,13 +163,14 @@ function cellStart(cell: any, cellPos: number): number {
   return cell.firstChild?.isTextblock ? cellPos + 2 : cellPos + 1;
 }
 
-function tableUnits(view: any, table: any, pos: number, f: Frame): Measured[] {
+function tableUnits(view: any, table: any, pos: number, f: Frame, desc?: any): Measured[] {
   const out: Measured[] = [];
-  const outer = view.nodeDOM(pos) as HTMLElement | null;
+  const outer = (domOfDesc(desc) ?? view.nodeDOM(pos)) as HTMLElement | null;
   const before = outer?.previousElementSibling;
+  const rows = childDescs(desc, table);
   table.forEach((row: any, offset: number, index: number) => {
     const rowPos = pos + 1 + offset;
-    const tr = view.nodeDOM(rowPos) as HTMLElement | null;
+    const tr = (domOfDesc(rows[index]) ?? view.nodeDOM(rowPos)) as HTMLElement | null;
     if (!tr) return;
     const r = tr.getBoundingClientRect();
     let top = yOf(f, r.top);
@@ -147,12 +197,12 @@ function tableUnits(view: any, table: any, pos: number, f: Frame): Measured[] {
   return out;
 }
 
-function blockUnits(view: any, node: any, pos: number, f: Frame, out: Measured[]): void {
+function blockUnits(view: any, node: any, pos: number, f: Frame, out: Measured[], desc?: any): void {
   const name = node.type.name;
-  if (name === 'paragraph') out.push(...paragraphUnits(view, node, pos, f));
-  else if (name === 'table') out.push(...tableUnits(view, node, pos, f));
+  if (name === 'paragraph') out.push(...paragraphUnits(view, node, pos, f, desc));
+  else if (name === 'table') out.push(...tableUnits(view, node, pos, f, desc));
   else if (node.isAtom && node.isBlock) {
-    const dom = view.nodeDOM(pos) as HTMLElement | null;
+    const dom = (domOfDesc(desc) ?? view.nodeDOM(pos)) as HTMLElement | null;
     if (!dom) return;
     const r = dom.getBoundingClientRect();
     const prev = dom.previousElementSibling;
@@ -160,7 +210,8 @@ function blockUnits(view: any, node: any, pos: number, f: Frame, out: Measured[]
     out.push({ unit: { top: yOf(f, r.top) - spacer, height: Math.max(1, r.height / f.k), spacer, breakAfter: name === 'page_break' }, place: () => ({ kind: 'at', pos }) });
   } else {
     // Lists (and list items): their paragraphs and tables, in order.
-    node.forEach((child: any, offset: number) => blockUnits(view, child, pos + 1 + offset, f, out));
+    const kids = childDescs(desc, node);
+    node.forEach((child: any, offset: number, i: number) => blockUnits(view, child, pos + 1 + offset, f, out, kids[i]));
   }
 }
 
@@ -177,8 +228,24 @@ export interface Laid {
  */
 export function measure(view: any, paper: HTMLElement, box: PageBox, noteHeights: number[] = []): Laid {
   const f = frameOf(paper, box.w);
-  const measured: Measured[] = [];
-  view.state.doc.forEach((node: any, offset: number) => blockUnits(view, node, offset, f, measured));
+  let measured: Measured[] = [];
+  const top = childDescs(view.docView, view.state.doc);
+  // With footnotes, every line is measured (a note belongs to the line its number is on).
+  wholeParagraphs = !(view.dom as HTMLElement).querySelector('.wp-fn');
+  try {
+    view.state.doc.forEach((node: any, offset: number, i: number) => blockUnits(view, node, offset, f, measured, top[i]));
+  } finally {
+    wholeParagraphs = false;
+  }
+  // A paragraph taken whole that is moved to a new page, or is the last thing on its page (it may run past its end),
+  // is measured line by line, and the pages are worked out again, until every such paragraph is.
+  for (let round = 0; round < 50; round++) {
+    const trial = paginate(measured.map(m => m.unit), geometryOf(box));
+    const split = measured.map((m, i) => !!m.lines && (trial.spacers[i] > 0 || i === measured.length - 1 || trial.pageOf[i + 1] !== trial.pageOf[i]));
+    if (!split.some(Boolean)) break;
+    measured = measured.flatMap((m, i) => (split[i] ? m.lines!() : [m]));
+  }
+  for (const m of measured) delete m.lines;
   // Each footnote belongs to the line (or table row) its number is on.
   const unitNotes: number[][] = measured.map(() => []);
   [...(view.dom as HTMLElement).querySelectorAll('.wp-fn')].forEach((el, i) => {

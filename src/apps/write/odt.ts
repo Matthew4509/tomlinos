@@ -7,7 +7,7 @@
 import { ArchiveError, readZip } from '../archive/read.ts';
 import { child, children, parseXml, unescapeXml, XmlProblem, type XmlEl } from '../../core/xml.ts';
 import { addPicture } from './images.ts';
-import { cleanPage, defaultPage, PAPERS, STYLES, type HeaderLine, type MarkJSON, type NodeJSON, type PageSetup, type Paper, type StyleId } from './model.ts';
+import { cleanPage, defaultPage, linkHref, PAPERS, STYLES, type HeaderLine, type MarkJSON, type NodeJSON, type PageSetup, type Paper, type StyleId } from './model.ts';
 import { lengthPt, readColour } from './schema.ts';
 
 export class OdtProblem extends Error {}
@@ -288,7 +288,25 @@ export async function readOdt(bytes: Uint8Array): Promise<OdtRead> {
       }
       switch (part.name) {
         case 'span': await inline(part, { ...look, ...resolved(attr(part, 'text:style-name')).text }, style, into); break;
-        case 'a': case 'bookmark-ref': case 'reference-ref': case 'sequence': case 'date': case 'time': case 'page-number': case 'page-count': case 'chapter': case 'title': case 'author-name':
+        case 'a': {
+          // A link: its words, with its address when it is one Write opens.
+          const href = linkHref(attr(part, 'xlink:href') ?? '');
+          if (!href) {
+            await inline(part, look, style, into);
+            break;
+          }
+          const inner: NodeJSON[] = [];
+          await inline(part, look, style, inner);
+          for (const n of inner) {
+            const linked = n.type === 'text' ? { ...n, marks: [...(n.marks ?? []), { type: 'link', attrs: { href } }] } : n;
+            const last = into[into.length - 1];
+            if (linked.type === 'text' && last?.type === 'text' && JSON.stringify(last.marks ?? []) === JSON.stringify(linked.marks)) last.text = (last.text ?? '') + (linked.text ?? '');
+            else into.push(linked);
+          }
+          break;
+        }
+        case 'hidden-text': case 'ruby-text': case 'bookmark': case 'bookmark-start': case 'bookmark-end': case 'soft-page-break': break;
+        case 'bookmark-ref': case 'reference-ref': case 'sequence': case 'date': case 'time': case 'page-number': case 'page-count': case 'chapter': case 'title': case 'author-name':
           await inline(part, look, style, into);
           break;
         case 's': push(' '.repeat(Math.min(200, Number(attr(part, 'text:c') ?? 1)))); break;
@@ -315,7 +333,8 @@ export async function readOdt(bytes: Uint8Array): Promise<OdtRead> {
           break;
         }
         case 'custom-shape': case 'rect': case 'ellipse': case 'line': case 'g': dropped.add('drawings and shapes'); break;
-        default: break;
+        // Any other field or mark (file name, input field, variable, metadata...): the words it shows are kept.
+        default: await inline(part, look, style, into); break;
       }
     }
   };
@@ -487,7 +506,7 @@ export async function readOdt(bytes: Uint8Array): Promise<OdtRead> {
     const words: string[] = [];
     const walk = (e: XmlEl) => {
       for (const part of mixedOf(e)) {
-        if (typeof part === 'string') words.push(part);
+        if (typeof part === 'string') words.push(part.replace(/&/g, '&&')); // A typed & stays one (&P would be the page number).
         else if (part.name === 'page-number') words.push('&P');
         else if (part.name === 'page-count') words.push('&N');
         else if (part.name === 'tab') words.push('\t');
