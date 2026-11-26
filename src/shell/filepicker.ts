@@ -6,13 +6,14 @@
 import { blobUrl, mediaTypeOf } from '../apps/media.ts';
 import { css, h, on, svg } from '../core/dom.ts';
 import { formatDate, formatSize, plural } from '../core/format.ts';
+import { FsError } from '../fs/errors.ts';
 import type { Entry } from '../fs/fs.ts';
 import { baseName, joinPath, nameKey, nameProblem, parentPath, splitPath, uniqueName } from '../fs/names.ts';
 import { protectedReason } from './actions.ts';
 import { describeError } from './dialogs.ts';
 import { extensionOf, fileTypeOf } from './filetypes.ts';
 import { icon, STANDARD_FOLDERS, type IconName } from './icons.ts';
-import { allows, finalSaveName, startingType, swapExtension, typeChoices } from './picktypes.ts';
+import { allows, finalSaveName, saveNameProblem, startingType, swapExtension, typeChoices } from './picktypes.ts';
 import { toolIcon, type ToolIconId } from './toolicons.ts';
 import type { Shell } from './types.ts';
 
@@ -139,6 +140,8 @@ function picker(shell: Shell, options: PickOptions, save: SaveOptions | null, fo
   let sortDir = 1;
   let lastPane: 'tree' | 'list' = 'list';
   let editing = false;
+  /** A folder chosen in the list by the person (not one left selected after Up): Save opens it, Choose this folder chooses it. */
+  let picked = false;
   let goSeq = 0;
   let previewSeq = 0;
   const back: string[] = [];
@@ -165,6 +168,10 @@ function picker(shell: Shell, options: PickOptions, save: SaveOptions | null, fo
   const detailsBtn = toolButton(viewIcon('details'), 'Details');
   const tilesBtn = toolButton(viewIcon('tiles'), 'Tiles');
   const previewBtn = toolButton(viewIcon('preview'), 'Preview pane');
+  // Tiles have no column headings to click, so they get their own sort choice.
+  const sortSelect = h('select', { class: 'field pick-sortby', 'aria-label': 'Sort by', title: 'Sort by' },
+    h('option', { value: 'name' }, 'Name'), h('option', { value: 'modified' }, 'Date modified'),
+    h('option', { value: 'type' }, 'Type'), h('option', { value: 'size' }, 'Size'));
 
   const tree = h('div', { class: 'pick-tree', role: 'tree', 'aria-label': 'Folders', tabindex: '0' });
   const recentList = h('div', { class: 'pick-recent', role: 'list' });
@@ -202,12 +209,32 @@ function picker(shell: Shell, options: PickOptions, save: SaveOptions | null, fo
 
   const body = h('div', { class: `pick${mem.preview ? ' with-preview' : ''}` },
     h('div', { class: 'pick-bar' }, backBtn, forwardBtn, upBtn, crumbs, search),
-    h('div', { class: 'pick-bar pick-tools' }, foldersBtn, newFolderBtn, renameBtn, refreshBtn, h('span', { class: 'pick-gap' }), detailsBtn, tilesBtn, previewBtn),
+    h('div', { class: 'pick-bar pick-tools' }, foldersBtn, newFolderBtn, renameBtn, refreshBtn, h('span', { class: 'pick-gap' }), sortSelect, detailsBtn, tilesBtn, previewBtn),
     main, foot, problem);
 
   const okBtn = () => body.closest('.dialog')?.querySelector<HTMLButtonElement>('.btn.primary');
   const changed = () => list.dispatchEvent(new Event('change', { bubbles: true }));
   const showProblem = (error: unknown) => { problem.textContent = error instanceof Error ? describeError(error) : String(error); };
+  const okLabel = options.ok ?? (save ? 'Save' : folderOnly ? 'Choose this folder' : 'Open');
+  /** The folder the person chose in the list, if one is chosen now. */
+  const pickedFolder = (): string | null => {
+    if (!picked || selected === null) return null;
+    return shown.find(e => e.name === selected)?.kind === 'folder' ? selected : null;
+  };
+  /** In Save as, a chosen folder turns Save into Open, as on other desktops: pressing it opens the folder. */
+  const labelOk = () => {
+    const btn = okBtn();
+    if (btn && save) btn.textContent = !editing && pickedFolder() !== null ? 'Open' : okLabel;
+  };
+  /** Save (or Enter) with a folder chosen opens that folder instead of saving beside it. True when it did. */
+  const openPickedFolder = (): boolean => {
+    const name = save && !editing ? pickedFolder() : null;
+    if (name === null) return false;
+    void go(joinPath(folder, name)).then(() => labelOk());
+    return true;
+  };
+  /** Why Save cannot save the name in the box under the chosen type, or null. */
+  const saveProblem = () => (nameInput ? saveNameProblem(nameInput.value, types, typeIndex) : null);
 
   // ---- Loading ----
   async function loadKids(path: string, fresh = false): Promise<string[]> {
@@ -218,9 +245,25 @@ function picker(shell: Shell, options: PickOptions, save: SaveOptions | null, fo
       kids.set(path, names);
       return names;
     } catch {
-      kids.set(path, []);
+      // A failed read is not remembered as "no folders inside": the next look tries again.
       return [];
     }
+  }
+
+  /** A folder found gone (deleted or moved elsewhere) leaves Recent folders and the tree at once, not at the next Refresh. */
+  async function forgetIfGone(path: string) {
+    if (path === '/') return;
+    const gone = await shell.fs.stat(path).then(e => e?.kind !== 'folder', (e: unknown) => e instanceof FsError);
+    if (!gone || signal.aborted) return;
+    const under = (p: string) => p === path || p.startsWith(`${path}/`);
+    mem.recent = mem.recent.filter(p => !under(p));
+    for (const k of [...kids.keys()]) if (under(k)) kids.delete(k);
+    for (const k of [...expanded]) if (under(k)) expanded.delete(k);
+    const parent = parentPath(path);
+    const siblings = kids.get(parent);
+    if (siblings) kids.set(parent, siblings.filter(n => n !== baseName(path)));
+    renderTree();
+    renderRecent();
   }
 
   /** Opens a folder. `record` puts the folder being left on the Back list. Resolves false when it cannot be opened. */
@@ -231,17 +274,10 @@ function picker(shell: Shell, options: PickOptions, save: SaveOptions | null, fo
       listed = await shell.fs.list(path);
     } catch (error) {
       if (seq === goSeq) problem.textContent = error instanceof Error ? error.message : 'That folder cannot be opened.';
+      void forgetIfGone(path);
       return false;
     }
     if (seq !== goSeq) return false;
-    if (record && path !== folder) {
-      back.push(folder);
-      forward.length = 0;
-    }
-    if (path !== folder) search.value = '';
-    folder = path;
-    entries = listed;
-    problem.textContent = '';
     kids.set(path, listed.filter(e => e.kind === 'folder').map(e => e.name).sort(byName));
     const parts = splitPath(path);
     for (let i = 0; i < parts.length; i++) {
@@ -252,6 +288,16 @@ function picker(shell: Shell, options: PickOptions, save: SaveOptions | null, fo
     // The folder being shown is open in the tree too, so a folder just made in it shows there at once.
     expanded.add(path);
     if (seq !== goSeq) return false;
+    // Only now is the folder the one shown: a Save pressed while the tree was still loading goes where the window shows.
+    if (record && path !== folder) {
+      back.push(folder);
+      forward.length = 0;
+    }
+    if (path !== folder) search.value = '';
+    folder = path;
+    entries = listed;
+    picked = false;
+    problem.textContent = '';
     selected = select !== null && listed.some(e => e.name === select) ? select : null;
     renderAll();
     return true;
@@ -323,6 +369,14 @@ function picker(shell: Shell, options: PickOptions, save: SaveOptions | null, fo
   }
 
   function renderRecent() {
+    // A focused button redrawn away would drop the keyboard out of the window (Escape would stop working).
+    const hadFocus = recentList.contains(document.activeElement);
+    queueMicrotask(() => {
+      if (!hadFocus || recentList.contains(document.activeElement) || signal.aborted) return;
+      const current = recentList.querySelector<HTMLElement>('.pick-recent-item.current');
+      if (current && !recentBox.hidden) current.focus();
+      else list.focus();
+    });
     recentBox.hidden = mem.recent.length === 0;
     recentList.replaceChildren(...mem.recent.map(path => {
       const b = h('button', { type: 'button', class: `pick-recent-item${path === folder ? ' current' : ''}`, title: path === '/' ? ROOT_NAME : path, role: 'listitem' },
@@ -367,6 +421,8 @@ function picker(shell: Shell, options: PickOptions, save: SaveOptions | null, fo
     const view = mem.view;
     list.className = `pick-list ${view}`;
     head.hidden = view !== 'details';
+    sortSelect.hidden = view !== 'tiles';
+    sortSelect.value = sortKey;
     for (const b of headBtns) {
       const active = b.dataset.key === sortKey;
       b.setAttribute('aria-sort', active ? (sortDir > 0 ? 'ascending' : 'descending') : 'none');
@@ -422,6 +478,7 @@ function picker(shell: Shell, options: PickOptions, save: SaveOptions | null, fo
     }
     chosen = !save && !folderOnly && selected !== null && shown.find(e => e.name === selected)?.kind === 'file' ? joinPath(folder, selected) : null;
     renameBtn.disabled = selected === null && folder === '/';
+    labelOk();
     void showPreview();
     changed();
   }
@@ -491,11 +548,13 @@ function picker(shell: Shell, options: PickOptions, save: SaveOptions | null, fo
     for (const [n, row] of rowByName) row.setAttribute('aria-selected', String(n === name));
     const e = name === null ? null : shown.find(x => x.name === name) ?? null;
     chosen = !save && !folderOnly && e?.kind === 'file' ? joinPath(folder, e.name) : null;
+    picked = e?.kind === 'folder';
     if (nameInput && e?.kind === 'file') {
       nameInput.value = e.name;
       lastFileName = e.name;
     }
     renameBtn.disabled = name === null && folder === '/';
+    labelOk();
     if (focus && name !== null) {
       const row = rowByName.get(name);
       row?.focus();
@@ -551,6 +610,11 @@ function picker(shell: Shell, options: PickOptions, save: SaveOptions | null, fo
       on(input, 'blur', () => finish(nameProblem(input.value) === null ? input.value : null), signal);
       for (const type of ['click', 'dblclick', 'pointerdown'] as const) on(input, type, (event: Event) => event.stopPropagation(), signal);
       input.focus();
+      // A box that cannot take the keyboard (its pane is hidden) would leave the window stuck in editing: give up.
+      if (document.activeElement !== input) {
+        finish(null);
+        return;
+      }
       const dot = isFile ? value.lastIndexOf('.') : -1;
       input.setSelectionRange(0, dot > 0 ? dot : value.length);
     });
@@ -612,9 +676,15 @@ function picker(shell: Shell, options: PickOptions, save: SaveOptions | null, fo
     tree.focus();
   }
 
+  /** The pane last used, unless that is the folder tree and it is hidden (a narrow screen with Show folders off). */
+  function treePane(): 'tree' | 'list' {
+    return lastPane === 'tree' && tree.getClientRects().length > 0 ? 'tree' : 'list';
+  }
+
   async function newFolder() {
     if (editing) return;
-    const pane = lastPane;
+    // The folder tree is hidden on a narrow screen unless Show folders is on: the name box then goes in the list.
+    const pane = treePane();
     const name = uniqueName('New folder', entries.map(e => e.name), true);
     try {
       await shell.fs.mkdir(joinPath(folder, name));
@@ -636,8 +706,9 @@ function picker(shell: Shell, options: PickOptions, save: SaveOptions | null, fo
   function rename() {
     // Rename acts on the chosen item; in the tree, on the folder chosen there. With nothing chosen in the list it does
     // nothing, rather than renaming the folder being shown.
-    if (selected !== null && (lastPane === 'list' || folder === '/')) void renameInList(selected);
-    else if (lastPane === 'tree' && folder !== '/') void renameInTree(folder);
+    const pane = treePane();
+    if (selected !== null && (pane === 'list' || folder === '/')) void renameInList(selected);
+    else if (pane === 'tree' && folder !== '/') void renameInTree(folder);
     else problem.textContent = 'Choose a file or folder to rename.';
   }
 
@@ -675,6 +746,11 @@ function picker(shell: Shell, options: PickOptions, save: SaveOptions | null, fo
     thumbs.clear();
     await go(folder, false, selected);
   }, signal);
+  on(sortSelect, 'change', () => {
+    sortKey = sortSelect.value as SortKey;
+    sortDir = 1;
+    renderList();
+  }, signal);
   on(detailsBtn, 'click', () => { mem.view = 'details'; renderList(); }, signal);
   on(tilesBtn, 'click', () => { mem.view = 'tiles'; renderList(); }, signal);
   on(previewBtn, 'click', () => {
@@ -710,13 +786,21 @@ function picker(shell: Shell, options: PickOptions, save: SaveOptions | null, fo
       nameInput.value = swapExtension(nameInput.value, types, types[typeIndex]);
       lastFileName = nameInput.value;
     }
+    sayNameProblem();
     renderList();
   }, signal);
 
   // A name the desktop cannot use greys out Save: the reason shows under it as it is typed.
-  if (nameInput) on(nameInput, 'input', () => { problem.textContent = nameInput.value.trim() === '' ? '' : nameProblem(nameInput.value) ?? ''; }, signal);
+  const sayNameProblem = () => { if (nameInput) problem.textContent = nameInput.value.trim() === '' ? '' : saveProblem() ?? ''; };
+  if (nameInput) on(nameInput, 'input', sayNameProblem, signal);
   if (nameInput) on(nameInput, 'keydown', (event: KeyboardEvent) => {
     if (event.key !== 'Enter') return;
+    // With a folder chosen in the list, Enter opens it (as Save does then); the name typed is kept for saving there.
+    if (openPickedFolder()) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
     // A folder's name typed in the box opens that folder, as in other desktops.
     const typed = nameKey(nameInput.value.trim());
     const hit = entries.find(e => e.kind === 'folder' && nameKey(e.name) === typed);
@@ -803,15 +887,15 @@ function picker(shell: Shell, options: PickOptions, save: SaveOptions | null, fo
   return (async () => {
     folder = await firstFolder(shell, [options.folder ?? '/Documents', '/Documents', '/']);
     if (!await go(folder, false)) renderAll();
-    const answer = await shell.dialogs.ask<string>({
+    const asking = shell.dialogs.ask<string>({
       title: options.title,
       body,
       buttons: [
-        { label: options.ok ?? (save ? 'Save' : folderOnly ? 'Choose this folder' : 'Open'), value: 'ok', primary: true },
+        { label: okLabel, value: 'ok', primary: true },
         { label: 'Cancel', value: 'cancel' },
       ],
       cancel: 'cancel',
-      primaryEnabled: () => (folderOnly ? true : save ? nameProblem(nameInput!.value) === null : chosen !== null),
+      primaryEnabled: () => (folderOnly ? true : save ? pickedFolder() !== null || saveProblem() === null : chosen !== null),
       focus: () => {
         if (!nameInput) return list;
         const dot = nameInput.value.lastIndexOf('.');
@@ -820,16 +904,29 @@ function picker(shell: Shell, options: PickOptions, save: SaveOptions | null, fo
         return nameInput;
       },
     });
+    // Save pressed with a folder chosen opens the folder; the dialog must not close and save beside it.
+    body.closest('.dialog')?.addEventListener('click', event => {
+      if (event.target instanceof Element && event.target.closest('.btn.primary') && openPickedFolder()) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+    }, { capture: true, signal });
+    const answer = await asking;
     abort.abort();
     (observer as IntersectionObserver | null)?.disconnect();
     for (const url of urls) URL.revokeObjectURL(url);
     if (answer !== 'ok') return null;
+    if (folderOnly) {
+      // A folder chosen in the list is the one chosen, not the folder around it.
+      const sub = pickedFolder();
+      const answerFolder = sub === null ? folder : joinPath(folder, sub);
+      remember(mem, answerFolder);
+      return answerFolder;
+    }
     remember(mem, folder);
-    if (folderOnly) return folder;
     if (!save) return chosen;
-    const typed = nameInput!.value;
-    const final = finalSaveName(typed, types, typeIndex);
-    return joinPath(folder, nameProblem(final.name) === null ? final.name : typed);
+    // Save is only on when the name with its ending is usable (saveNameProblem), so the ending is never dropped.
+    return joinPath(folder, finalSaveName(nameInput!.value, types, typeIndex).name);
   })();
 }
 
@@ -858,7 +955,10 @@ export async function pickSave(shell: Shell, options: SaveOptions): Promise<{ pa
       // Saving will say what is wrong.
     }
     if (!existing) return { path, replace: false };
-    if (existing.kind === 'folder') {
+    if (existing.hidden) {
+      // The desktop's own hidden folders and files are never named to the person.
+      await shell.dialogs.alert('Choose another name', 'That name is kept for the desktop itself. Choose another name.');
+    } else if (existing.kind === 'folder') {
       await shell.dialogs.alert('That is a folder', `“${baseName(path)}” is a folder. Choose another name.`);
     } else if (await shell.dialogs.confirm({ title: 'Replace it?', text: `“${existing.name}” already exists. Replace it with this one?`, ok: 'Replace', danger: true, cancel: 'Choose another name' })) {
       return { path, replace: true };

@@ -100,7 +100,7 @@ test('a file still gets its " (2)" before the ending (unchanged behaviour)', asy
 
 // ---- P1 notes (pass/fail here is information, not a release fault) ---------------------------------------------------
 
-test('E-P1-8: a copied file keeps its own modified time (as Windows and macOS do)', { todo: 'P1, waiting on direction' }, async () => {
+test('E-P1-8: a copied file keeps its own modified time (as Windows and macOS do)', async () => {
   const fs = new FileSystem(new MemoryStore());
   const original = await fs.writeText('/Documents/old.txt', 'x');
   await new Promise(resolve => setTimeout(resolve, 15));
@@ -110,17 +110,24 @@ test('E-P1-8: a copied file keeps its own modified time (as Windows and macOS do
   assert.equal(copy.modified, original.modified, 'the copy shows the time it was copied, so sorting by date puts an old file first');
 });
 
-test('E-P1-9: a standard folder (Documents) can be copied, since copying does not change it', { todo: 'P1, waiting on direction' }, async () => {
+test('E-P1-9: a standard folder (Documents) can be copied, since copying does not change it', async () => {
   const fs = new FileSystem(new MemoryStore());
   await fs.writeText('/Documents/a.txt', 'x');
   const { shell } = fakeShell(fs);
   new FileActions(shell).setClipboard('copy', ['/Documents']);
   assert.deepEqual(shell.clipboard?.paths, ['/Documents'], 'Copy on Documents says "cannot be deleted, moved or renamed" and copies nothing');
+  // Cut still refuses it, and nothing of the System folder can be copied.
+  const { shell: other, said } = fakeShell(fs);
+  const actions = new FileActions(other);
+  actions.setClipboard('cut', ['/Documents']);
+  assert.equal(other.clipboard, null);
+  actions.setClipboard('copy', ['/System/session.json']);
+  assert.equal(other.clipboard, null);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(said.length, 2);
 });
 
-// E-P1-6 and E-P1-10 are in src/shell/actions.ts (paste, moveInto): marked todo until that file is changed.
-
-test('E-P1-10: cut then paste keeps on the clipboard what could not be moved', { todo: 'P1, needs src/shell/actions.ts' }, async () => {
+test('E-P1-10: cut then paste keeps on the clipboard what could not be moved', async () => {
   const fs = new FileSystem(new MemoryStore());
   await fs.writeText('/Documents/a.txt', 'a');
   await fs.mkdir('/Documents/Into');
@@ -132,7 +139,7 @@ test('E-P1-10: cut then paste keeps on the clipboard what could not be moved', {
   assert.deepEqual(shell.clipboard?.paths, ['/Documents/gone.txt'], 'the clipboard is emptied though "gone.txt" was not moved');
 });
 
-test('E-P1-6: a name clash on move asks Replace / Keep both / Skip instead of adding " (2)" unasked', { todo: 'P1, needs src/shell/actions.ts' }, async () => {
+test('E-P1-6: a name clash on move asks (Keep both / Skip) instead of adding " (2)" unasked', async () => {
   const fs = new FileSystem(new MemoryStore());
   await fs.writeText('/Documents/a.txt', 'new');
   await fs.mkdir('/Documents/Into');

@@ -294,21 +294,37 @@ try {
   await closeAll();
 }
 
-// ---- FW-6 (P1, L16): a folder selected in Save mode, then Save, saves beside it, not in it ------------------------------
+// ---- FW-6 (P1, L16): a folder selected in Save mode, then Save, opens it (it used to save beside it) -------------------
 try {
   await quickNotesSaveAs('where am I');
   await pick().locator('.pick-row', { hasText: 'Alpha' }).click();
+  ok((await pick().locator('.btn.primary').textContent()) === 'Open', `FW-6: with a folder chosen, Save reads Open (${await pick().locator('.btn.primary').textContent()})`);
   await pick().locator('.pick-name-box').fill('placed.txt');
   await pick().locator('.btn.primary').click();
+  await p.waitForTimeout(800);
+  ok((await pick().count()) === 1 && (await crumbs()).endsWith('Alpha'), `FW-6: Save with the folder Alpha chosen opens Alpha and keeps the window open (${await crumbs()})`);
+  ok((await pick().locator('.pick-name-box').inputValue()) === 'placed.txt' && (await pick().locator('.btn.primary').textContent()) === 'Save', 'FW-6: the typed name is kept and the button reads Save again');
+  await pick().locator('.btn.primary').click();
   await p.waitForTimeout(1200);
+  ok((await p.locator('.dialog').count()) === 0, 'FW-6: the second Save saves');
+  // Enter in the name box with a folder chosen opens it too.
+  await quickNotesSaveAs('enter');
+  await pick().locator('.pick-row', { hasText: 'Alpha' }).click();
+  await pick().locator('.pick-name-box').press('Enter');
+  await p.waitForTimeout(800);
+  ok((await pick().count()) === 1 && (await crumbs()).endsWith('Alpha'), `FW-6: Enter in the name box with Alpha chosen opens Alpha (${await crumbs()})`);
+  await closeAll();
   const ex = await openApp(p, 'File Explorer');
   await ex.locator('.item', { hasText: 'Documents' }).first().dblclick();
   await p.waitForTimeout(700);
   const inDocs = (await ex.locator('.item .item-name').allTextContents()).includes('placed.txt');
-  info(!inDocs, `FW-6 (P1): with the folder Alpha selected, Save put placed.txt in ${inDocs ? 'Documents, beside Alpha' : 'Alpha'}`);
+  await ex.locator('.item', { hasText: 'Alpha' }).first().dblclick();
+  await p.waitForTimeout(700);
+  const inAlpha = (await ex.locator('.item .item-name').allTextContents()).includes('placed.txt');
+  ok(!inDocs && inAlpha, `FW-6: placed.txt is in Alpha, not beside it (in Documents: ${inDocs}, in Alpha: ${inAlpha})`);
   await closeAll();
 } catch (e) {
-  info(false, `FW-6: ${e.message.split('\n')[0]}`);
+  ok(false, `FW-6: ${e.message.split('\n')[0]}`);
   await closeAll();
 }
 
@@ -324,10 +340,10 @@ try {
   await pick().locator('.btn.primary').click();
   await p.waitForTimeout(400);
   const chosen = await win.locator('.npp-folder').textContent();
-  info(chosen === '/Documents/Alpha', `FW-7 (P1): Alpha selected, "Choose this folder" chose ${chosen}`);
+  ok(chosen === '/Documents/Alpha', `FW-7: Alpha selected, "Choose this folder" chooses it (chose ${chosen})`);
   await closeAll();
 } catch (e) {
-  info(false, `FW-7: ${e.message.split('\n')[0]}`);
+  ok(false, `FW-7: ${e.message.split('\n')[0]}`);
   await closeAll();
 }
 
@@ -336,13 +352,16 @@ try {
   await quickNotesSaveAs('long');
   const long = 'n'.repeat(252);
   await pick().locator('.pick-name-box').fill(long);
-  await pick().locator('.btn.primary').click();
-  await p.waitForTimeout(1200);
-  const title = (await p.locator('.win.active .win-title-text').textContent()) ?? '';
-  info(title.endsWith('.txt'), `FW-8 (P2): with "Text document (*.txt)" chosen, a 252-letter name was saved ${title.endsWith('.txt') ? 'with' : 'without'} .txt`);
+  await p.waitForTimeout(200);
+  const off = await pick().locator('.btn.primary').isDisabled();
+  const said = ((await pick().locator('.dialog-problem').textContent()) ?? '').trim();
+  ok(off && /too long once/.test(said), `FW-8: with "Text document (*.txt)" chosen, a 252-letter name turns Save off and says why ("${said}")`);
+  await pick().locator('.pick-name-box').fill('n'.repeat(251));
+  await p.waitForTimeout(200);
+  ok(!(await pick().locator('.btn.primary').isDisabled()) && ((await pick().locator('.dialog-problem').textContent()) ?? '') === '', 'FW-8: a name that fits with its ending turns Save back on');
   await closeAll();
 } catch (e) {
-  info(false, `FW-8: ${e.message.split('\n')[0]}`);
+  ok(false, `FW-8: ${e.message.split('\n')[0]}`);
   await closeAll();
 }
 
@@ -414,12 +433,95 @@ try {
   await ex.locator('.statusbar').click();
   await p.keyboard.press('Control+l');
   await p.waitForTimeout(300);
-  info(await ex.locator('input.address').isVisible(), 'FW-10 (P2): after a click on the status bar, Ctrl+L (type a path) does nothing');
+  ok(await ex.locator('input.address').isVisible(), 'FW-10: after a click on the status bar, Ctrl+L opens the path box');
   await p.keyboard.press('Escape');
+  await ex.locator('.statusbar').click();
+  await p.keyboard.press('Control+f');
+  await p.waitForTimeout(200);
+  ok(await ex.locator('input.search').evaluate(e => e === document.activeElement), 'FW-10: after a click on the status bar, Ctrl+F goes to the search box');
+  await ex.locator('.statusbar').click();
+  const before = (await p.locator('.win.active .win-title-text').textContent()) ?? '';
+  await p.keyboard.press('Alt+ArrowUp');
+  await p.waitForTimeout(700);
+  const upTo = (await p.locator('.win.active .win-title-text').textContent()) ?? '';
+  ok(before !== upTo && upTo === 'Documents', `FW-10: after a click on the status bar, Alt+Up goes up (${before} to ${upTo})`);
   await closeAll();
 } catch (e) {
   ok(false, `Explorer rules: ${e.message.split('\n')[0]} (dialogs open: ${(await p.locator('.dialog').allTextContents()).join(' | ')})`);
   await shot('explorer-rules');
+  await closeAll();
+}
+
+// ---- L22, Tiles sort, FW-9 and FW-11c ----------------------------------------------------------------------------------
+try {
+  await quickNotesSaveAs('band');
+  // L22: no empty band between the file-type row and the buttons.
+  const band = await pick().evaluate(d => Math.round(d.querySelector('.dialog-buttons').getBoundingClientRect().top - d.querySelector('.pick-foot').getBoundingClientRect().bottom));
+  ok(band <= 22, `L22: the space between the file-type row and the buttons is only the dialog's own padding (${band} px)`);
+  // Tiles view has a sort choice; Details does not need one (its headings sort).
+  const sortBy = pick().locator('select[aria-label="Sort by"]');
+  ok(!(await sortBy.isVisible()), 'Details view shows no extra sort choice (the column headings sort)');
+  await pick().locator('button[aria-label="Tiles"]').click();
+  await p.waitForTimeout(300);
+  ok(await sortBy.isVisible(), 'Tiles view shows a Sort by choice');
+  ok((await sortBy.locator('option').allTextContents()).join(',') === 'Name,Date modified,Type,Size', 'with Name, Date modified, Type and Size');
+  await sortBy.selectOption({ label: 'Size' });
+  await p.waitForTimeout(300);
+  await pick().locator('button[aria-label="Details"]').click();
+  await p.waitForTimeout(200);
+  ok((await pick().locator('.pick-col-size').getAttribute('aria-sort')) === 'ascending', 'choosing Size in Tiles sorts by size (the Size heading shows it in Details)');
+  // FW-9: saving as "system" at the top does not name the hidden folder.
+  await goTop();
+  await pick().locator('select.pick-type-box').selectOption({ label: 'All files (*.*)' });
+  await pick().locator('.pick-name-box').fill('system');
+  await pick().locator('.btn.primary').click();
+  await p.waitForTimeout(600);
+  const said = (await p.locator('.dialog:not(:has(.pick))').allTextContents()).join(' | ');
+  ok(said !== '' && !/System/.test(said.replace(/system/g, '')), `FW-9: saving as "system" at the top is refused without naming the hidden folder ("${said}")`);
+  await closeAll();
+} catch (e) {
+  ok(false, `L22 / Tiles sort / FW-9: ${e.message.split('\n')[0]}`);
+  await closeAll();
+}
+
+// FW-11c: a folder deleted in another tab leaves Recent folders and the tree when it is clicked.
+try {
+  await quickNotesSaveAs('gone');
+  await pick().locator('.pick-list').click({ position: { x: 4, y: 4 } }).catch(() => {});
+  await pick().locator('button[aria-label="New folder"]').click();
+  await pick().locator('input.pick-edit').waitFor({ timeout: 5000 });
+  await pick().locator('input.pick-edit').fill('Gone1');
+  await pick().locator('input.pick-edit').press('Enter');
+  await p.waitForTimeout(600);
+  await pick().locator('.pick-row', { hasText: 'Gone1' }).dblclick();
+  await p.waitForTimeout(600);
+  await pick().locator('.pick-name-box').fill('g.txt');
+  await pick().locator('.btn.primary').click();
+  await p.waitForTimeout(1200);
+  await closeAll();
+  const q = await context.newPage();
+  await signIn(q);
+  const ex = await openApp(q, 'File Explorer');
+  await ex.locator('.item', { hasText: 'Documents' }).first().dblclick();
+  await q.waitForTimeout(600);
+  await ex.locator('.item', { hasText: 'Gone1' }).first().click();
+  await q.keyboard.press('Delete');
+  await q.waitForTimeout(1200);
+  await q.close();
+  await quickNotesSaveAs('after');
+  const recent = pick().locator('.pick-recent-item', { hasText: 'Gone1' });
+  const node = pick().locator('.pick-node', { hasText: 'Gone1' });
+  ok((await recent.count()) === 1, 'Gone1 is in Recent folders after saving there');
+  await recent.click();
+  await p.waitForTimeout(800);
+  ok((await recent.count()) === 0 && (await node.count()) === 0, `FW-11c: clicking the deleted Gone1 drops it from Recent folders and the tree (recent ${await recent.count()}, tree ${await node.count()})`);
+  // The button clicked is gone: the keyboard stays in the window, so Escape still closes it.
+  await p.keyboard.press('Escape');
+  await p.waitForTimeout(300);
+  ok((await pick().count()) === 0, 'and Escape still closes the window afterwards');
+  await closeAll();
+} catch (e) {
+  ok(false, `FW-11c: ${e.message.split('\n')[0]}`);
   await closeAll();
 }
 
@@ -435,7 +537,14 @@ try {
       .map(e => `${e.className.split(' ').pop()} ends at ${Math.round(e.getBoundingClientRect().right)}`)
       .concat(`dialog ends at ${Math.round(box.right)}`);
   });
-  info(over.length === 1, `FW-5 (P1): at 375 px the window's parts stick out past its right edge: ${over.join(', ')}`);
+  ok(over.length === 1, `FW-5: at 375 px no part of the window sticks out past its right edge (${over.join(', ')})`);
+  const clipped = await pick().evaluate(d => {
+    const box = d.querySelector('.pick').getBoundingClientRect();
+    return [...d.querySelectorAll('.pick-col-size, button[aria-label="Preview pane"], button[aria-label="Tiles"], .pick-search, .pick-type-box')]
+      .filter(e => e.getClientRects().length && e.getBoundingClientRect().right > box.right + 0.5)
+      .map(e => `${e.getAttribute('aria-label') ?? e.className} ends at ${Math.round(e.getBoundingClientRect().right)} (window ${Math.round(box.right)})`);
+  });
+  ok(clipped.length === 0, `FW-5: the Size column, the view buttons, search and type box fit (${clipped.join(', ') || 'all fit'})`);
   await shot('fw5-375');
   // FW-4: use the tree, hide it, press New folder: the name box goes into the hidden tree and the window stops opening folders.
   await pick().locator('button[aria-label="Show folders"]').click();
@@ -446,14 +555,20 @@ try {
   await p.waitForTimeout(300);
   await pick().locator('button[aria-label="New folder"]').click();
   await p.waitForTimeout(800);
-  const boxShown = await pick().locator('input.pick-edit').isVisible().catch(() => false);
-  await pick().locator('.pick-row', { hasText: 'New folder' }).dblclick();
+  const boxShown = await pick().locator('.pick-list input.pick-edit').isVisible().catch(() => false);
+  ok(boxShown, 'FW-4: at phone width, New folder after using the hidden tree puts its name box in the list, where it shows');
+  if (boxShown) {
+    await pick().locator('input.pick-edit').fill('Phone made');
+    await pick().locator('input.pick-edit').press('Enter');
+    await p.waitForTimeout(700);
+  }
+  await pick().locator('.pick-row', { hasText: boxShown ? 'Phone made' : 'New folder' }).dblclick();
   await p.waitForTimeout(600);
-  const inIt = (await crumbs()).endsWith('New folder');
-  info(boxShown || inIt, `FW-4 (P1): at phone width, New folder after using the tree puts its name box in the hidden tree (box shown: ${boxShown}); double-clicking the new folder then does nothing (${await crumbs()})`);
+  ok((await crumbs()).endsWith(boxShown ? 'Phone made' : 'New folder'), `FW-4: and the window still opens folders (${await crumbs()})`);
   await closeAll();
 } catch (e) {
-  info(false, `FW-4/5: ${e.message.split('\n')[0]}`);
+  ok(false, `FW-4/5: ${e.message.split('\n')[0]}`);
+  await shot('fw4-error');
   await closeAll();
 }
 

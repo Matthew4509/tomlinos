@@ -61,6 +61,11 @@ function findEntry(folder: FolderRecord, name: string): Entry | undefined {
   return folder.entries.find(e => nameKey(e.name) === key);
 }
 
+/** The words for a name already taken. A hidden entry (the desktop's own System folder) is never named. */
+function takenMessage(taken: Entry, words: string): string {
+  return taken.hidden ? 'That name is kept for the desktop itself. Choose another name.' : words;
+}
+
 /**
  * Drops any path inside another path of the list: acting on the outer one already covers it. The same item named twice
  * (in another letter case or Unicode spelling) counts once, not as each inside the other and so dropped altogether.
@@ -385,7 +390,7 @@ export class FileSystem {
       // Only a new name is checked: a file made before a name was refused ("nul.txt") must still save in place.
       if (!old) checkName(name);
       if (old && (old.kind === 'folder' || options.mustBeNew)) {
-        throw new FsError(`There is already ${old.kind === 'folder' ? 'a folder' : 'a file'} called "${old.name}" here.`);
+        throw new FsError(takenMessage(old, `There is already ${old.kind === 'folder' ? 'a folder' : 'a file'} called "${old.name}" here.`));
       }
       if (old && options.replacing && old.id !== options.replacing) throw new FileChanged(old.name, old.id);
       const id = newKey();
@@ -414,7 +419,7 @@ export class FileSystem {
       const parentKey = await c.folderKey(parentPath(path));
       const folder = await c.folder(parentKey);
       const old = findEntry(folder, name);
-      if (old) throw new FsError(`There is already ${old.kind === 'folder' ? 'a folder' : 'a file'} called "${old.name}" here.`);
+      if (old) throw new FsError(takenMessage(old, `There is already ${old.kind === 'folder' ? 'a folder' : 'a file'} called "${old.name}" here.`));
       const id = newKey();
       c.saveFolder(id, { v: 1, entries: [] }, true);
       const entry: Entry = { name, id, kind: 'folder', size: 0, modified: Date.now(), ...(options.hidden ? { hidden: true } : {}) };
@@ -450,7 +455,7 @@ export class FileSystem {
       const { parent, entry } = await c.entry(path);
       const folder = await c.folder(parent);
       const clash = findEntry(folder, newName);
-      if (clash && clash.id !== entry.id) throw new FsError(`There is already something called "${clash.name}" here.`);
+      if (clash && clash.id !== entry.id) throw new FsError(takenMessage(clash, `There is already something called "${clash.name}" here.`));
       const renamed = { ...entry, name: newName };
       folder.entries = folder.entries.map(e => (e.id === entry.id ? renamed : e));
       c.saveFolder(parent, folder);
@@ -479,7 +484,7 @@ export class FileSystem {
         c.saveFolder(parent, from);
         const dest = await c.folder(destKey);
         const clash = findEntry(dest, entry.name);
-        if (clash && !options.keepBoth) throw new FsError(`"${toFolder}" already has something called "${clash.name}". Nothing was moved.`);
+        if (clash && !options.keepBoth) throw new FsError(takenMessage(clash, `"${toFolder}" already has something called "${clash.name}".`) + ' Nothing was moved.');
         const placed = clash ? { ...entry, name: uniqueName(entry.name, dest.entries.map(e => e.name), entry.kind === 'folder') } : entry;
         dest.entries.push(placed);
         c.saveFolder(destKey, dest);
@@ -520,7 +525,8 @@ export class FileSystem {
       for (const child of (await c.folder(entry.id)).entries) children.push(await this.copyEntry(c, child, child.name));
       c.saveFolder(id, { v: 1, entries: children }, true);
     }
-    return { ...entry, id, name, modified: Date.now() };
+    // A copy keeps the time its original was last changed, as other desktops do.
+    return { ...entry, id, name };
   }
 
   /** Deletes entries and everything inside them, all at once. */

@@ -28,6 +28,13 @@ export function protectedReason(path: string): string | null {
  * Why nothing may be put into `folder`, or null. The desktop's own System folder takes nothing from a person: what was
  * put there could never be deleted, moved, copied or downloaded again.
  */
+/** Why a path cannot be copied, or null: the top folder, and anything of the desktop's own System folder. */
+export function copyReason(path: string): string | null {
+  const parts = splitPath(path);
+  if (parts.length === 0) return 'That is the top folder; it cannot be copied.';
+  return nameKey(parts[0]) === 'system' ? 'That belongs to the desktop itself and cannot be copied.' : null;
+}
+
 export function destinationReason(folder: string): string | null {
   const parts = splitPath(folder);
   return parts.length && nameKey(parts[0]) === 'system' ? 'The System folder belongs to the desktop itself; nothing can be put there. Choose another folder.' : null;
@@ -194,10 +201,13 @@ export class FileActions {
   // ---- Cut, copy, paste, move ----------------------------------------------------------------------------------
 
   setClipboard(mode: 'copy' | 'cut', paths: string[]): void {
-    const usable = mode === 'cut' ? paths.filter(p => !protectedReason(p)) : paths.filter(p => splitPath(p).length > 0 && !protectedReason(p));
+    // Copying leaves the original as it was, so a standard folder (Documents...) may be copied; only the top folder and
+    // the desktop's own System folder may not. Cut moves, so it takes only what may be moved.
+    const why = (p: string) => (mode === 'cut' ? protectedReason(p) : copyReason(p));
+    const usable = paths.filter(p => !why(p));
     this.shell.clipboard = usable.length ? { mode, paths: usable } : null;
     this.shell.clipboardChanged.emit();
-    if (!usable.length && paths.length) void this.shell.dialogs.alert('Nothing to copy', protectedReason(paths[0]) ?? 'That cannot be copied.');
+    if (!usable.length && paths.length) void this.shell.dialogs.alert(mode === 'cut' ? 'Nothing to cut' : 'Nothing to copy', why(paths[0]) ?? 'That cannot be copied.');
   }
 
   async paste(destFolder: string): Promise<void> {
@@ -212,9 +222,12 @@ export class FileActions {
       if (clip.mode === 'copy') {
         await this.shell.fs.copy(clip.paths, destFolder);
       } else {
-        await this.moveInto(clip.paths, destFolder);
-        this.shell.clipboard = null;
-        this.shell.clipboardChanged.emit();
+        // What could not be moved stays on the clipboard, ready to paste again; what moved (or was skipped) leaves it.
+        const { left } = await this.moveInto(clip.paths, destFolder);
+        if (this.shell.clipboard === clip) {
+          this.shell.clipboard = left.length ? { mode: 'cut', paths: left } : null;
+          this.shell.clipboardChanged.emit();
+        }
       }
     } catch (error) {
       await this.shell.report('Could not paste', error);
@@ -222,32 +235,70 @@ export class FileActions {
   }
 
   /**
-   * Moves paths into a folder, one at a time so one failure does not stop the rest. A name already taken there is not
-   * replaced: the moved item gets " (2)" added, in the same change as the move (so it is never renamed where it stood).
+   * Moves paths into a folder, one at a time so one failure does not stop the rest. A name already taken there is never
+   * replaced: the person is asked first whether to keep both (the moved item gets " (2)" added, in the same change as
+   * the move, so it is never renamed where it stood) or to skip those items. Returns the paths that were not moved
+   * because something went wrong (or the question was cancelled), for the clipboard to keep.
    */
-  async moveInto(paths: string[], destFolder: string): Promise<void> {
+  async moveInto(paths: string[], destFolder: string): Promise<{ left: string[] }> {
     const fs = this.shell.fs;
     const refused = destinationReason(destFolder);
     if (refused) {
       await this.shell.dialogs.alert('Cannot move there', refused);
-      return;
+      return { left: [...paths] };
     }
     const failures: Failure[] = [];
+    const left: string[] = [];
+    const todo: string[] = [];
     for (const path of paths) {
-      const name = baseName(path);
       const reason = protectedReason(path);
       if (reason) {
-        failures.push({ name, reason });
-        continue;
-      }
-      if (nameKey(parentPath(path)) === nameKey(joinPath(destFolder))) continue;
-      try {
-        await fs.move([path], destFolder, { keepBoth: true });
-      } catch (error) {
-        failures.push({ name, reason: describeError(error) });
+        failures.push({ name: baseName(path), reason });
+        left.push(path);
+      } else if (nameKey(parentPath(path)) !== nameKey(joinPath(destFolder))) {
+        todo.push(path);
       }
     }
+    let skip = new Set<string>();
+    let taken: string[] = [];
+    try {
+      taken = (await fs.list(destFolder, true)).map(e => nameKey(e.name));
+    } catch {
+      // The move itself will say what is wrong with the folder.
+    }
+    const clashing = todo.filter(p => taken.includes(nameKey(baseName(p))));
+    if (clashing.length) {
+      const where = destFolder === '/' ? 'This desktop' : `“${baseName(destFolder)}”`;
+      const named = clashing.slice(0, 5).map(p => `“${baseName(p)}”`).join(', ') + (clashing.length > 5 ? ` and ${clashing.length - 5} more` : '');
+      const one = clashing.length === 1;
+      const answer = await this.shell.dialogs.ask<'keep' | 'skip' | 'cancel'>({
+        title: 'Name already taken',
+        text: `${where} already has something called ${named}. Keep both (the one moved gets a number added, nothing is replaced), or skip ${one ? 'it' : 'those'} and move the rest?`,
+        buttons: [
+          { label: 'Keep both', value: 'keep', primary: true },
+          { label: one ? 'Skip it' : 'Skip those', value: 'skip' },
+          { label: 'Cancel', value: 'cancel' },
+        ],
+        cancel: 'cancel',
+      });
+      if (answer !== 'keep' && answer !== 'skip') return { left: [...paths] };
+      if (answer === 'skip') skip = new Set(clashing);
+    }
+    const renamed: string[] = [];
+    for (const path of todo) {
+      if (skip.has(path)) continue;
+      const name = baseName(path);
+      try {
+        const [placed] = await fs.move([path], destFolder, { keepBoth: true });
+        if (placed && placed.name !== name) renamed.push(`“${name}” is now “${placed.name}”`);
+      } catch (error) {
+        failures.push({ name, reason: describeError(error) });
+        left.push(path);
+      }
+    }
+    if (renamed.length) this.shell.toast(renamed.length === 1 ? `Moved: ${renamed[0]}.` : `Moved ${plural(renamed.length, 'item')} under new names.`);
     if (failures.length) await this.failed('Some items could not be moved', failures);
+    return { left };
   }
 
   // ---- Properties ----------------------------------------------------------------------------------------------

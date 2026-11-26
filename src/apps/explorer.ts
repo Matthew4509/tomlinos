@@ -425,7 +425,8 @@ export const explorerApp: AppDef = {
     on(address, 'blur', () => !asking && stopEditing(), app.signal);
     on(uploadBtn, 'click', (event: MouseEvent) => shell.transfers.choose(event.shiftKey ? 'folder' : 'files', path), app.signal);
     on(downloadBtn, 'click', download, app.signal);
-    on(app.root, 'keydown', (event: KeyboardEvent) => {
+    // Heard on the whole window: a click on the status bar or the frame focuses the window itself, outside app.root.
+    on(app.root.closest<HTMLElement>('.win') ?? app.root, 'keydown', (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
         event.preventDefault();
         search.focus();

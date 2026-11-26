@@ -1570,7 +1570,12 @@ textarea.field { resize: vertical; font: inherit; }
 .npp-status { white-space: pre; overflow: hidden; text-overflow: ellipsis; }
 
 /* ---- Open / Save as picker (src/shell/filepicker.ts) ---- */
-.pick { display: flex; flex-direction: column; gap: 6px; width: min(900px, 96vw); height: min(560px, 80vh); min-height: 0; }
+.pick { display: flex; flex-direction: column; gap: 6px; width: min(900px, 96vw, calc(100vw - 54px)); height: min(560px, 80vh); min-height: 0; }
+/* The problem line takes no room until there is something to say (no empty band above the buttons). */
+.pick > .dialog-problem { margin: 0; min-height: 0; }
+.pick > .dialog-problem:empty { display: none; }
+.pick-sortby { flex: none; width: auto; min-width: 0; height: 24px; padding: 0 4px; font-size: 12px; }
+.pick-sortby[hidden] { display: none; }
 .pick-bar { flex: none; display: flex; align-items: center; gap: 4px; min-width: 0; }
 .pick-tool { display: inline-flex; align-items: center; justify-content: center; padding: 0 5px; }
 .pick-tool[aria-pressed="true"] { border-color: var(--sel); background: var(--sel-soft); }
@@ -1628,11 +1633,12 @@ textarea.field { resize: vertical; font: inherit; }
 .pick-pv-name { font-weight: 700; overflow-wrap: anywhere; }
 .pick-pv-line { font-size: 12px; color: var(--ink-soft); overflow-wrap: anywhere; }
 .pick-pv-text { margin: 4px 0 0; padding: 4px; max-height: 220px; overflow: hidden; border: 1px solid var(--line); background: var(--face-hi); font: 12px/1.35 ui-monospace, Consolas, "Courier New", monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
-.pick-foot { flex: none; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 4px 8px; }
+.pick-foot { flex: none; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 4px 8px; min-width: 0; }
 .pick-foot-label { font-size: 13px; }
-.pick-foot .field { font-size: 13px; }
+.pick-foot .field { font-size: 13px; min-width: 0; width: 100%; box-sizing: border-box; }
 @media (max-width: 720px) {
-  .pick { width: 96vw; height: min(560px, 74vh); }
+  /* The backdrop's padding, the dialog's border and its body's padding come off the width, so nothing sticks out. */
+  .pick { width: calc(100vw - 54px); height: min(560px, 74vh); }
   .pick-bar { flex-wrap: wrap; }
   .pick-search { flex: 1 1 100%; }
   .pick-folders-btn { display: inline-flex; }
@@ -1643,7 +1649,7 @@ textarea.field { resize: vertical; font: inherit; }
   .pick-head, .pick-list.details .pick-row { grid-template-columns: minmax(0, 1fr) 72px; }
   .pick-col-modified, .pick-col-type, .pick-list.details .pick-date, .pick-list.details .pick-type { display: none; }
   .pick-list.tiles { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
-  .pick-foot { grid-template-columns: 1fr; }
+  .pick-foot { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* ---- Photo Editor (src/apps/photoedit.ts) ---- */
