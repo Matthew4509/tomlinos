@@ -65,7 +65,7 @@ export function cleanProject(raw: unknown): Project | null {
 export function parseProjects(textIn: string): Project[] {
   if (!textIn.trim()) return [];
   const data: unknown = JSON.parse(textIn);
-  if (!Array.isArray(data)) throw new FsError('Projects.json is not a list of projects. It was left as it is; open it in Notepad to look.');
+  if (!Array.isArray(data)) throw new FsError('Projects.json is not a list of projects. It was left as it is; open it in Quick Notes to look.');
   const seen = new Map<string, Project>();
   const out: Project[] = [];
   for (const raw of data) {

@@ -1,11 +1,13 @@
-// Notepad: plain text only. Opens a file (or starts an empty one), saves with Ctrl+S, and asks before losing changes.
+// Quick Notes: plain text only. Opens a file (or starts an empty one), saves with Ctrl+S, and asks before losing changes.
+// File > Open and Save as use the desktop's own Open and Save windows.
 // Tab types a tab (Escape then Tab, or Shift+Tab, moves on). Find and Replace (Ctrl+F, Ctrl+H), Go to line (Ctrl+G), word wrap, zoom (Ctrl + and -), and a status bar with the
 // line, column and the file's line endings, which are kept on save. It never shows anything as a page, so a .html
 // file is just letters. If the file was changed elsewhere since it was opened, saving asks before replacing it.
 // The app id stays "editor" so file types, the Terminal's "nano file" and saved sessions keep working.
 import { h, on } from '../core/dom.ts';
 import { formatSize } from '../core/format.ts';
-import { baseName, joinPath, nameProblem, parentPath, uniqueName } from '../fs/names.ts';
+import { baseName, parentPath } from '../fs/names.ts';
+import { pickFile, pickSave, type FileTypeChoice } from '../shell/filepicker.ts';
 import type { AppDef } from '../shell/types.ts';
 import { detectEol, EOL_NAMES, fileBytes, fileSize, findNext, hasBom, lineCol, lineStart, replaceAll, toBox, type Eol } from './notepad/text.ts';
 import { APPS } from './catalog.ts';
@@ -13,8 +15,17 @@ import { saveOver } from '../shell/savefile.ts';
 import { classicBar } from '../shell/menubar.ts';
 import { helpMenu, textBoxEdits } from './classic-menus.ts';
 
-// One limit for opening and saving (the same as Notepad Pro's), so Notepad never saves a file it then refuses to open.
+// One limit for opening and saving (the same as Notepad Pro's), so Quick Notes never saves a file it then refuses to open.
 const MAX_TEXT_BYTES = 5 * 1024 * 1024;
+/** What the Save as window offers; the path it gives back already ends in the chosen kind's extension. */
+const SAVE_TYPES: FileTypeChoice[] = [
+  { label: 'Text document', ext: ['txt'] },
+  { label: 'Markdown', ext: ['md'] },
+  { label: 'Log file', ext: ['log'] },
+  { label: 'CSV', ext: ['csv'] },
+  { label: 'All files', ext: [] },
+];
+const OPEN_TYPES: FileTypeChoice[] = [{ label: 'Text files', ext: ['txt', 'md', 'log', 'csv'] }, ...SAVE_TYPES];
 const ZOOMS = [50, 67, 80, 90, 100, 110, 125, 150, 175, 200, 250, 300];
 const EOL_SHORT: Record<Eol, string> = { '\r\n': 'CRLF', '\n': 'LF', '\r': 'CR' };
 
@@ -70,6 +81,9 @@ export const editorApp: AppDef = {
     const bar = classicBar({
       menus: [
         { label: 'File', items: [
+          { label: 'New', icon: 'new', shortcut: 'Alt+N', action: () => void shell.openApp('editor') },
+          { label: 'Open...', icon: 'open', shortcut: 'Ctrl+O', action: () => void openPicked() },
+          { separator: true },
           { label: 'Save', icon: 'save', shortcut: 'Ctrl+S', enabled: can, action: () => void save() },
           { label: 'Save as...', icon: 'save-as', shortcut: 'Ctrl+Shift+S', enabled: can, action: () => void saveAs() },
           { separator: true },
@@ -96,7 +110,7 @@ export const editorApp: AppDef = {
         ] },
         helpMenu(shell),
       ],
-    }, { layer: shell.menus, signal: app.signal, scope: app.root, doc: () => (findBar.contains(document.activeElement) ? null : area), label: 'Notepad menu bar' });
+    }, { layer: shell.menus, signal: app.signal, scope: app.root, doc: () => (findBar.contains(document.activeElement) ? null : area), label: 'Quick Notes menu bar' });
     app.root.append(bar.el, findBar, area, status);
 
     const dirty = () => area.value !== saved || eol !== savedEol;
@@ -143,7 +157,7 @@ export const editorApp: AppDef = {
           area.disabled = true;
           usable = false;
           bar.refresh();
-          status.textContent = `This file is ${formatSize(entry.size)}. Notepad opens text up to ${formatSize(MAX_TEXT_BYTES)}. It is safe where it is.`;
+          status.textContent = `This file is ${formatSize(entry.size)}. Quick Notes opens text up to ${formatSize(MAX_TEXT_BYTES)}. It is safe where it is.`;
           return;
         }
         const bytes = await shell.fs.readFile(path);
@@ -190,37 +204,29 @@ export const editorApp: AppDef = {
     const save = () => once(() => (path ? saveNow() : saveAsNow()));
     app.onSave?.(save);
 
-    /** Says so, before anything is written or a name asked for, when the text is more than Notepad opens. */
+    /** Says so, before anything is written or a name asked for, when the text is more than Quick Notes opens. */
     async function tooBig(bytes: number): Promise<boolean> {
       if (bytes <= MAX_TEXT_BYTES) return false;
-      await shell.dialogs.alert('Too big to save', `This text would make a file of ${formatSize(bytes)}. Notepad saves and opens text up to ${formatSize(MAX_TEXT_BYTES)}, so it was not saved. The text is still here: make it shorter, or split it into more than one file.`);
+      await shell.dialogs.alert('Too big to save', `This text would make a file of ${formatSize(bytes)}. Quick Notes saves and opens text up to ${formatSize(MAX_TEXT_BYTES)}, so it was not saved. The text is still here: make it shorter, or split it into more than one file.`);
       return true;
     }
 
     async function saveAsNow(): Promise<boolean> {
       if (await tooBig(snapshot().bytes.length)) return false;
-      const folder = path ? parentPath(path) : '/Documents';
-      let taken: string[] = [];
-      try {
-        taken = (await shell.fs.list(folder, true)).map(e => e.name);
-      } catch {
-        // The folder is gone; saving will say so.
-      }
       naming = true;
-      const name = await shell.dialogs.prompt({
+      const target = await pickSave(shell, {
         title: 'Save as',
-        label: `Name (saved in ${folder})`,
-        value: uniqueName(path ? baseName(path) : 'Untitled.txt', taken),
+        folder: path ? parentPath(path) : '/Documents',
+        name: path ? baseName(path) : 'Untitled.txt',
         ok: 'Save',
-        selectStem: true,
-        check: v => nameProblem(v) ?? (taken.some(t => t.toLowerCase() === v.toLowerCase()) ? `There is already something called "${v}" here.` : null),
+        types: SAVE_TYPES,
       }).finally(() => (naming = false));
-      if (name === null) return false;
+      if (!target) return false;
       try {
         const snap = snapshot();
         if (await tooBig(snap.bytes.length)) return false;
-        const entry = await shell.fs.writeFile(joinPath(folder, name), snap.bytes, { mustBeNew: true });
-        path = joinPath(folder, entry.name);
+        const entry = await shell.fs.writeFile(target.path, snap.bytes, target.replace ? {} : { mustBeNew: true });
+        path = target.path;
         markSaved(entry.id, snap);
         shell.toast(`Saved “${entry.name}”.`);
         return true;
@@ -244,6 +250,15 @@ export const editorApp: AppDef = {
         await shell.report('Could not save', error);
         return false;
       }
+    }
+
+    async function openPicked(): Promise<void> {
+      const picked = await pickFile(shell, { title: 'Open', folder: path ? parentPath(path) : '/Documents', ok: 'Open', types: OPEN_TYPES });
+      if (!picked) return;
+      const blank = () => !path && usable && area.value === '' && !dirty();
+      const takeOver = blank();
+      await shell.openApp('editor', picked);
+      if (takeOver && blank()) app.close();
     }
 
     /** Puts text in place of the selection so Ctrl+Z can take it back (setting .value would wipe the undo list). */
@@ -380,6 +395,9 @@ export const editorApp: AppDef = {
         run();
       };
       if (ctrl && key === 's') act(() => void (event.shiftKey ? saveAs() : save()));
+      else if (ctrl && !event.shiftKey && key === 'o') act(() => void openPicked());
+      // Alt+N is the one shown: a browser keeps Ctrl+N, which still works where a browser passes it on.
+      else if (!event.shiftKey && ((event.altKey && !ctrl && event.code === 'KeyN') || (ctrl && !event.altKey && key === 'n'))) act(() => void shell.openApp('editor'));
       else if (ctrl && key === 'f') act(() => openFind(false));
       else if (ctrl && key === 'h') act(() => openFind(true));
       else if (ctrl && key === 'g') act(() => void goToLine());

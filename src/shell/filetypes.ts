@@ -37,7 +37,7 @@ const PDF: FileType = { label: 'PDF document', icon: 'pdf', apps: ['pdf'] };
 const CALENDAR: FileType = { label: 'Calendar', icon: 'calendar', apps: ['calendar', 'editor'] };
 const CONTACTS: FileType = { label: 'Contacts', icon: 'contacts', apps: ['contacts', 'editor'] };
 const LINK: FileType = { label: 'Web link', icon: 'link', apps: ['link'] };
-/** Opened by the shell itself (appshortcut.ts), not by an app; Notepad can show what is in it. */
+/** Opened by the shell itself (appshortcut.ts), not by an app; Quick Notes can show what is in it. */
 const APP_SHORTCUT: FileType = { label: 'App shortcut', icon: 'app', apps: ['editor', 'notepadpro'] };
 const OTHER: FileType = { label: 'File', icon: 'file', apps: [] };
 export const FOLDER: FileType = { label: 'Folder', icon: 'folder', apps: ['explorer'] };

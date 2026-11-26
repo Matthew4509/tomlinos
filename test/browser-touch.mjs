@@ -65,13 +65,13 @@ for (const device of ['iPhone 13', 'Pixel 5']) {
   ok(await p.evaluate(() => !document.documentElement.classList.contains('kb-open')), `${device}: a pinch zoom alone is not taken for a keyboard`);
   await p.evaluate(() => window.__keyboard(0));
 
-  for (const app of ['Panel', 'Notepad', 'Terminal', 'Chat']) {
+  for (const app of ['Panel', 'Quick Notes', 'Terminal', 'Chat']) {
     const at = `${device}, ${app}`;
     await p.locator('.start-btn').tap();
     await p.locator('.start-filter').tap();
     await p.keyboard.type(app);
-    // Notepad is opened with the keyboard's Go key (Enter), the others with a tap.
-    if (app === 'Notepad') await p.keyboard.press('Enter');
+    // Quick Notes is opened with the keyboard's Go key (Enter), the others with a tap.
+    if (app === 'Quick Notes') await p.keyboard.press('Enter');
     else await p.locator('.start-menu .start-item', { hasText: app }).first().tap();
     await p.locator('.win.active').waitFor();
     await p.waitForTimeout(500);
@@ -82,13 +82,13 @@ for (const device of ['iPhone 13', 'Pixel 5']) {
 
     const field = p.locator({
       Panel: '.win.active input.pad-name',
-      Notepad: '.win.active textarea.editor-text',
+      'Quick Notes': '.win.active textarea.editor-text',
       Terminal: '.win.active input.term-in',
       Chat: '.win.active textarea.chat-box[aria-label="Message"]',
     }[app]);
     const size = await field.evaluate(el => parseFloat(getComputedStyle(el).fontSize));
     ok(size >= 16, `${at}: the box's text is ${size}px, so Safari does not zoom in`);
-    if (app === 'Notepad') {
+    if (app === 'Quick Notes') {
       const cut = await p.locator('.win.active .toolbar > .tool').evaluateAll(bs => bs.filter(b => b.scrollWidth > b.clientWidth + 1).map(b => b.textContent));
       ok(cut.length === 0, `${at}: no toolbar button has its words cut (${cut.join(', ')})`);
     }

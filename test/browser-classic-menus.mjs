@@ -69,7 +69,7 @@ await step('set up the owner', async () => {
 const APPS = [
   { label: 'write', name: 'Write', root: '.write', menus: ['File', 'Edit', 'View', 'Insert', 'Format', 'Table', 'Tools', 'Help'], toolbar: true },
   { label: 'spreadsheet', name: 'Spreadsheet', root: '.sheet', menus: ['File', 'Edit', 'View', 'Insert', 'Format', 'Tools', 'Data', 'Help'], toolbar: false },
-  { label: 'notepad', name: 'Notepad', root: '.editor', menus: ['File', 'Edit', 'View', 'Format', 'Help'], toolbar: false },
+  { label: 'notepad', name: 'Quick Notes', root: '.editor', menus: ['File', 'Edit', 'View', 'Format', 'Help'], toolbar: false },
   { label: 'notepad pro', name: 'Notepad Pro', root: '.npp', menus: ['File', 'Edit', 'View', 'Search', 'Format', 'Help'], toolbar: true },
   { label: 'file explorer', name: 'File Explorer', root: '.explorer', menus: ['File', 'Edit', 'View', 'Go', 'Help'], toolbar: true },
   { label: 'calculator', name: 'Calculator', root: '.calc-app', menus: ['Edit', 'View', 'Help'], toolbar: false },

@@ -7,7 +7,7 @@
 // Find and Replace is a panel over the grid; the filter's ▾ opens a list of values; charts float over the cells.
 import { css, h, on } from '../core/dom.ts';
 import { formatSize } from '../core/format.ts';
-import { baseName, joinPath, nameProblem, parentPath, splitExtension, uniqueName } from '../fs/names.ts';
+import { baseName, joinPath, parentPath, splitExtension, uniqueName } from '../fs/names.ts';
 import type { MenuItem } from '../shell/menu.ts';
 import type { AppDef } from '../shell/types.ts';
 import type { NativeHost } from '../shell/native.ts';
@@ -66,6 +66,22 @@ const CELL_STYLES: Array<{ label: string; look: CellStyle }> = [
 ];
 import { saveOver } from '../shell/savefile.ts';
 import { createRecovery } from '../shell/recovery.ts';
+import { pickFile, pickSave, type FileTypeChoice } from '../shell/filepicker.ts';
+
+/** What the desktop's Save as window offers; the path it gives back ends in the chosen kind's extension. */
+const SAVE_TYPES: FileTypeChoice[] = [
+  { label: 'Spreadsheet (.sheet)', ext: ['sheet'] },
+  { label: 'Excel workbook (.xlsx)', ext: ['xlsx'] },
+  { label: 'CSV, the active sheet only (.csv)', ext: ['csv'] },
+];
+const OPEN_TYPES: FileTypeChoice[] = [
+  { label: 'Spreadsheets', ext: ['sheet', 'xlsx', 'xlsm', 'csv', 'tsv'] },
+  { label: 'Spreadsheet (.sheet)', ext: ['sheet'] },
+  { label: 'Excel workbook (.xlsx)', ext: ['xlsx'] },
+  { label: 'Excel workbook with macros (.xlsm)', ext: ['xlsm'] },
+  { label: 'CSV (.csv)', ext: ['csv'] },
+  { label: 'Tab-separated text (.tsv)', ext: ['tsv'] },
+];
 
 const PALETTE: Array<[string, string]> = [
   ['White', '#ffffff'], ['Light grey', '#d9d9d9'], ['Grey', '#7f7f7f'], ['Black', '#000000'],
@@ -1539,31 +1555,38 @@ export const sheetApp: AppDef = {
     async function saveAs(): Promise<boolean> {
       if (!grid.commit()) return false;
       if (shell.native) return saveAsNative(shell.native);
-      const folder = path ? parentPath(path) : '/Documents';
-      let taken: string[] = [];
-      try {
-        taken = (await shell.fs.list(folder, true)).map(e => e.name);
-      } catch {
-        // Saving will say the folder is gone.
-      }
       const asExcel = kind === 'xlsx' || /\.xls[xm]?$/i.test(label);
-      // The ending chooses the kind: .xlsx is an Excel workbook, anything else this spreadsheet's own .sheet file.
-      const final = (v: string) => (/\.(sheet|xlsx)$/i.test(v) ? v : `${v}.sheet`);
-      const name = await shell.dialogs.prompt({
+      const target = await pickSave(shell, {
         title: 'Save as',
-        label: `Name (saved in ${folder}). End it in .xlsx for an Excel workbook, or .sheet for this spreadsheet's own kind of file.`,
-        value: uniqueName(`${baseLabel()}.${asExcel ? 'xlsx' : 'sheet'}`, taken),
+        folder: path ? parentPath(path) : '/Documents',
+        name: `${baseLabel()}.${asExcel ? 'xlsx' : 'sheet'}`,
         ok: 'Save',
-        selectStem: true,
-        check: v => nameProblem(final(v)) ?? (taken.some(t => t.toLowerCase() === final(v).toLowerCase()) ? `There is already something called "${final(v)}" here.` : null),
+        types: SAVE_TYPES,
       });
-      if (name === null) return false;
-      const finalName = final(name);
-      const as = /\.xlsx$/i.test(finalName) ? 'xlsx' : 'sheet';
+      if (!target) return false;
+      // The ending chooses the kind: .xlsx is an Excel workbook, .csv the active sheet's cells, anything else this
+      // spreadsheet's own .sheet file.
+      let { path: to, replace } = target;
+      if (!/\.(sheet|xlsx|csv)$/i.test(to)) {
+        to = `${to}.sheet`;
+        replace = false;
+      }
+      const write = (bytes: Uint8Array) => shell.fs.writeFile(to, bytes, replace ? {} : { mustBeNew: true });
+      if (/\.csv$/i.test(to)) {
+        // A CSV holds one sheet's values: it is saved as a copy, and this window keeps the whole spreadsheet as it was.
+        try {
+          const entry = await write(csvBytes());
+          shell.toast(`Saved the sheet “${wb.sheets[wb.active].name}” as “${entry.name}”. A CSV keeps only one sheet's values, so the spreadsheet itself is not saved.`);
+        } catch (error) {
+          await shell.report('Could not save', error);
+        }
+        return false;
+      }
+      const as = /\.xlsx$/i.test(to) ? 'xlsx' : 'sheet';
       try {
         const version = wb.version;
-        const entry = await shell.fs.writeFile(joinPath(folder, finalName), await fileBytes(as), { mustBeNew: true });
-        path = joinPath(folder, entry.name);
+        const entry = await write(await fileBytes(as));
+        path = to;
         label = entry.name;
         loadedId = entry.id;
         savedVersion = version;
@@ -1576,6 +1599,12 @@ export const sheetApp: AppDef = {
         await shell.report('Could not save', error);
         return false;
       }
+    }
+
+    /** Opens a spreadsheet chosen in the desktop's Open window, in a window of its own. */
+    async function openPicked(): Promise<void> {
+      const chosen = await pickFile(shell, { title: 'Open', folder: path ? parentPath(path) : '/Documents', ok: 'Open', types: OPEN_TYPES });
+      if (chosen) await shell.openPath(chosen);
     }
 
     /** Save as through the computer's own Save box: it asks before replacing a file, so the write may replace one. */
@@ -1614,10 +1643,14 @@ export const sheetApp: AppDef = {
       return label.replace(/\.(csv|tsv|txt|sheet|xlsx|xlsm|xls)$/i, '') || 'Spreadsheet';
     }
 
+    /** The active sheet's cells as CSV, with the mark that tells Excel it is UTF-8. */
+    function csvBytes(): Uint8Array {
+      return new TextEncoder().encode('﻿' + wb.exportText(wb.active, wb.usedRange(wb.active), ','));
+    }
+
     function exportCsv(): void {
       if (!grid.commit()) return;
-      const bytes = new TextEncoder().encode('﻿' + wb.exportText(wb.active, wb.usedRange(wb.active), ','));
-      shell.transfers.save(`${baseLabel()}.csv`, bytes);
+      shell.transfers.save(`${baseLabel()}.csv`, csvBytes());
     }
 
     async function exportXlsx(): Promise<void> {
@@ -1723,6 +1756,9 @@ export const sheetApp: AppDef = {
         ];
       }
       return [
+        { label: 'New', action: () => void shell.openApp('sheet') },
+        { label: 'Open...', hint: 'Ctrl+O', action: () => void openPicked() },
+        { separator: true },
         { label: 'Save', hint: 'Ctrl+S', action: () => void save() },
         { label: 'Save as...', hint: 'Ctrl+Shift+S', action: () => void saveAs() },
         { separator: true },
@@ -1775,7 +1811,7 @@ export const sheetApp: AppDef = {
     const redoTb = tb('redo', 'Redo (Ctrl+Y)', redo);
     const standardBar = h('div', { class: 'toolbar', role: 'toolbar', 'aria-label': 'Standard' },
       tb('new', shell.native ? 'New (Ctrl+N)' : 'New: a new spreadsheet in Documents, opened in a window of its own', () => (shell.native ? shell.native.newWindow() : void newInDocuments())),
-      tb('open', shell.native ? 'Open (Ctrl+O)' : 'Open: shows the folder in File Explorer, where a double-click opens a spreadsheet', () => (shell.native ? void openNative(shell.native) : void shell.openApp('explorer', path ? parentPath(path) : '/Documents'))),
+      tb('open', 'Open (Ctrl+O)', () => (shell.native ? void openNative(shell.native) : void openPicked())),
       tb('save', 'Save (Ctrl+S)', () => void save()),
       tbSep(),
       tb('print', 'Print, with a preview of each page (Ctrl+P)', () => void printPreview(ctx)),
@@ -2262,9 +2298,9 @@ export const sheetApp: AppDef = {
       } else if (shell.native && ctrl && !event.shiftKey && k === 'n') {
         event.preventDefault();
         shell.native.newWindow();
-      } else if (shell.native && ctrl && !event.shiftKey && k === 'o') {
+      } else if (ctrl && !event.shiftKey && k === 'o') {
         event.preventDefault();
-        void openNative(shell.native);
+        void (shell.native ? openNative(shell.native) : openPicked());
       } else if (ctrl && !event.shiftKey && (k === 'f' || k === 'h')) {
         event.preventDefault();
         openFind(k === 'h');

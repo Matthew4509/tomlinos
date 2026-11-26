@@ -257,7 +257,7 @@ await step('FAULT (P1): text Notepad saved over 2 MB can be opened again by Note
   await closeAll();
   const again = await openInNotepad('huge');
   const status = await again.locator('.editor-status').innerText();
-  ok(!status.includes('Notepad opens text up to'), 'reopening says: ' + status);
+  ok(!status.includes('Quick Notes opens text up to'), 'reopening says: ' + status);
 });
 
 await step('N-P1-1: text over what Notepad can open again is refused before saving, and the text stays in the window', async () => {

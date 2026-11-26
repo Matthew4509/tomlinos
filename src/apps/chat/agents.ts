@@ -3,7 +3,7 @@
 // person's own files.
 //
 // Each thread is one Markdown file in Documents/AI chats, saved as each message is sent and answered, so closing or
-// reloading the page loses nothing. The file reads as a plain conversation in Notepad; each message starts with a line
+// reloading the page loses nothing. The file reads as a plain conversation in Quick Notes; each message starts with a line
 // "### You · <time>" or "### AI (<name>) · <time>". A line of the message itself that starts with "###" is written
 // with a backslash in front ("\###"), and one backslash is taken off such lines when read, so any text survives.
 import { cleanName, joinPath, uniqueName } from '../../fs/names.ts';
