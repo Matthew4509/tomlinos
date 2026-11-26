@@ -227,6 +227,16 @@ export const panelApp: AppDef = {
         if (entry.guard && !(await entry.guard())) return false;
         if (!entry.guard && !(await shell.dialogs.confirm({ title: 'Close without saving?', text: `“${entry.title}” in the Panel has changes that are not saved. If you close the Panel they will be lost.`, ok: 'Close without saving', danger: true, cancel: 'Keep it open' }))) return false;
       }
+      // A chat message typed but not sent (the Overview's chat, or a chat section): Chat keeps no draft of its own.
+      const unsent = [...app.root.querySelectorAll<HTMLTextAreaElement>('textarea.chat-box')].find(box => box.value.trim());
+      if (unsent) {
+        const inSection = [...hosted].find(([, entry]) => entry.area.contains(unsent));
+        show(inSection ? inSection[0] : 'overview');
+        if (!(await shell.dialogs.confirm({ title: 'Close without sending?', text: 'A chat message is typed but not sent. If you close the Panel it will be lost.', ok: 'Close without saving', danger: true, cancel: 'Keep it open' }))) {
+          unsent.focus();
+          return false;
+        }
+      }
       return true;
     });
 
