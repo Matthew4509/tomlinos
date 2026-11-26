@@ -120,7 +120,7 @@ async function boot(root: HTMLElement): Promise<void> {
         await showRecoveryKey(root, await files.makeRecoveryKey(status.password, ''), intro);
       }
     } catch (error) {
-      firstRunNote = `Your files could not be set up just now (${error instanceof Error ? error.message : 'unknown error'}), so they are not encrypted yet. Open My account > Your files to encrypt them, and Sign-in options for a recovery key.`;
+      firstRunNote = `Your files could not be set up just now (${error instanceof Error ? error.message : 'unknown error'}), so they are not encrypted yet. Go to My account > Your files to encrypt them, and Sign-in options for a recovery key.`;
     }
   }
   // Opened with the recovery key after a reset by the owner: anything started under the password that was set for

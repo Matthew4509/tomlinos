@@ -190,7 +190,7 @@ export const settingsApp: AppDef = {
       }
     }, app.signal);
 
-    const lockLink = h('button', { type: 'button', class: 'btn' }, 'Open My account');
+    const lockLink = h('button', { type: 'button', class: 'btn' }, 'Manage my account');
     const aiHead = h('h2', { class: 'set-h', id: `${app.id}-ai` }, 'AI');
 
     // The front page, for the owner: what anyone not signed in sees (auth/gate.ts). The Reader shows only Sherlock Holmes;
