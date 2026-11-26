@@ -833,10 +833,63 @@ function crossesItself(pts: Pt[]): boolean {
   return false;
 }
 
-/** The area inside a closed shape (polyline, circle, whole ellipse), or null for an open one. */
+/** The corners a closed curve through points is checked for crossing itself on (16 a span). */
+function splineOutline(s: Extract<Shape, { type: 'spline' }>): Pt[] {
+  const out: Pt[] = [];
+  for (const b of piecesOf(s)) {
+    if (b.k !== 'bez') continue;
+    const [p0, p1, p2, p3] = b.p;
+    for (let i = 0; i < 16; i++) {
+      const t = i / 16;
+      const u = 1 - t;
+      out.push({
+        x: p0.x * u * u * u + 3 * p1.x * u * u * t + 3 * p2.x * u * t * t + p3.x * t * t * t,
+        y: p0.y * u * u * u + 3 * p1.y * u * u * t + 3 * p2.y * u * t * t + p3.y * t * t * t,
+      });
+    }
+  }
+  return out;
+}
+
+/** The area inside a closed curve through points: exact for its cubic pieces (Green's theorem, Gauss in three points). */
+function splineArea(s: Extract<Shape, { type: 'spline' }>): number | null {
+  const pieces = piecesOf(s).filter(p => p.k === 'bez');
+  if (pieces.length < 2) return null;
+  if (crossesItself(splineOutline(s))) return null;
+  const o = s.fit[0];
+  const g = [
+    [0.5 - Math.sqrt(15) / 10, 5 / 18],
+    [0.5, 8 / 18],
+    [0.5 + Math.sqrt(15) / 10, 5 / 18],
+  ];
+  let a = 0;
+  for (const b of pieces) {
+    if (b.k !== 'bez') continue;
+    const [p0, p1, p2, p3] = b.p.map(q => sub(q, o));
+    for (const [t, w] of g) {
+      const u = 1 - t;
+      const x = p0.x * u * u * u + 3 * p1.x * u * u * t + 3 * p2.x * u * t * t + p3.x * t * t * t;
+      const y = p0.y * u * u * u + 3 * p1.y * u * u * t + 3 * p2.y * u * t * t + p3.y * t * t * t;
+      const dx = 3 * u * u * (p1.x - p0.x) + 6 * u * t * (p2.x - p1.x) + 3 * t * t * (p3.x - p2.x);
+      const dy = 3 * u * u * (p1.y - p0.y) + 6 * u * t * (p2.y - p1.y) + 3 * t * t * (p3.y - p2.y);
+      a += (w * (x * dy - y * dx)) / 2;
+    }
+  }
+  return Math.abs(a);
+}
+
+/** Why a shape has no area: it is open, or it is closed but crosses itself. */
+export function whyNoArea(s: Shape): 'crosses' | 'open' {
+  if (s.type === 'poly' && s.closed && crossesItself(s.pts)) return 'crosses';
+  if (s.type === 'spline' && s.closed && piecesOf(s).length >= 2 && crossesItself(splineOutline(s))) return 'crosses';
+  return 'open';
+}
+
+/** The area inside a closed shape (polyline, closed curve through points, circle, whole ellipse), or null for an open one. */
 export function areaOf(s: Shape): number | null {
   if (s.type === 'circle') return Math.PI * s.r * s.r;
   if (s.type === 'ellipse') return isFull(s.t0, s.t1) ? Math.PI * len(s.m) * len(s.m) * s.ratio : null;
+  if (s.type === 'spline') return s.closed ? splineArea(s) : null;
   if (s.type !== 'poly' || !s.closed) return null;
   // A polyline that crosses itself (a bow tie) has no single inside: its signed parts cancel, and 0 would be a wrong
   // answer. It gets no area rather than a wrong one.

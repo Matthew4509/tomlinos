@@ -1312,7 +1312,7 @@ await step('a DWG (AutoCAD 2018, made by ACadSharp for the tests) opens: its ite
   await page.locator('.menu').getByText('Open...', { exact: true }).click();
   await D().locator('.pick-row', { hasText: 'acadsharp-full-AC1032.dwg' }).first().dblclick();
   await D().getByText(/Read from an AutoCAD 2018 DWG \(AC1032\)/).waitFor();
-  ok((await D().innerText()).includes('2 filled triangle or square (SOLID)s'), 'what was left out is said: ' + (await D().innerText()));
+  ok((await D().innerText()).includes('2 filled triangles or squares (SOLID)'), 'what was left out is said: ' + (await D().innerText()));
   await shot('cad-dwg-opened');
   await D().getByRole('button', { name: 'OK' }).click();
   await page.locator('.win .win-bar', { hasText: 'acadsharp-full-AC1032.dwg' }).waitFor();
