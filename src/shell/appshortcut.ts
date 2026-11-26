@@ -82,7 +82,7 @@ export async function openShortcut(shell: Shell, path: string, name: string): Pr
   if (!id || !shell.hasApp(id)) {
     await shell.dialogs.alert(`“${shortcutLabel(name)}” opens nothing here`, id
       ? `It is a shortcut to an app called “${id}”, which this TOMLIN OS does not have. You can delete the shortcut; nothing else is affected.`
-      : 'This shortcut file does not name a TOMLIN OS app. You can open it in Notepad to see what is in it, or delete it.');
+      : 'This shortcut file does not name a TOMLIN OS app. You can open it in Quick Notes to see what is in it, or delete it.');
     return;
   }
   await shell.openApp(id);

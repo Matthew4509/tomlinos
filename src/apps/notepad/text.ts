@@ -1,4 +1,4 @@
-// Notepad's text sums, kept apart from the window so they can be tested: where the caret is, which line ending a file
+// Quick Notes' text sums, kept apart from the window so they can be tested: where the caret is, which line ending a file
 // uses, finding and replacing. A text box always holds "\n" line ends, so the file's own ending is remembered and put
 // back on save; before this, a Windows file (CRLF) was quietly saved with Linux endings.
 

@@ -489,9 +489,9 @@ export class TerminalShell {
           this.refuseInto(parentPath(path), `${cmd}: cannot open '${plain[0]}'`);
           if (!(await this.stat(path))) await fs.writeFile(path, new Uint8Array(0), { mustBeNew: true });
           await this.machine.open(path);
-          return [{ text: `Opened ${plain[0]} in Notepad.`, kind: 'dim' }];
+          return [{ text: `Opened ${plain[0]} in Quick Notes.`, kind: 'dim' }];
         }
-        throw new Fail(`${cmd}: not on this machine. On the desktop, "${cmd} file" opens Notepad.`);
+        throw new Fail(`${cmd}: not on this machine. On the desktop, "${cmd} file" opens Quick Notes.`);
       default:
         return [{ text: `${cmd}: command not found. Type help for the list.`, kind: 'err' }];
     }

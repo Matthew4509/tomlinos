@@ -2,7 +2,7 @@
 // Save, New and Open full, so notes can be jotted down fast.
 //
 // Each pad is a plain text file in Documents/Scratch pad, named by the person or, when they give no name, by the day
-// (day-month-year, such as "27-09-2026"). Plain files: Files, Notepad and the Terminal all see them, and a backup copies them.
+// (day-month-year, such as "27-09-2026"). Plain files: Files, Quick Notes and the Terminal all see them, and a backup copies them.
 import { cleanName, joinPath, uniqueName } from '../../fs/names.ts';
 import { FsError, type Entry, type FileSystem } from '../../fs/fs.ts';
 

@@ -6,7 +6,7 @@
 import { h, on } from '../core/dom.ts';
 import { formatSize, plural } from '../core/format.ts';
 import { baseName, parentPath } from '../fs/names.ts';
-import { pickFile, pickFolder, pickSave } from '../shell/filepicker.ts';
+import { pickFile, pickFolder, pickSave, type FileTypeChoice } from '../shell/filepicker.ts';
 import type { AppDef, AppHandle } from '../shell/types.ts';
 import { detectEol, EOL_NAMES, fileBytes, hasBom, toBox, type Eol } from './notepad/text.ts';
 import { findInFolder, makePattern, type FileHits, type FindOptions } from './notepadpro/findfiles.ts';
@@ -18,6 +18,19 @@ import { classicBar } from '../shell/menubar.ts';
 import { helpMenu } from './classic-menus.ts';
 
 const MAX_BYTES = 5 * 1024 * 1024;
+/** The kinds the Open and Save as windows offer. All files comes first: it edits code of every kind. */
+const CODE_TYPES: FileTypeChoice[] = [
+  { label: 'All files', ext: [] },
+  { label: 'Text', ext: ['txt'] },
+  { label: 'Markdown', ext: ['md', 'markdown'] },
+  { label: 'JSON', ext: ['json'] },
+  { label: 'HTML', ext: ['html', 'htm'] },
+  { label: 'CSS', ext: ['css'] },
+  { label: 'JavaScript', ext: ['js', 'mjs', 'cjs'] },
+  { label: 'TypeScript', ext: ['ts', 'tsx'] },
+  { label: 'PHP', ext: ['php'] },
+  { label: 'Python', ext: ['py'] },
+];
 const ZOOMS = [60, 70, 80, 90, 100, 110, 125, 150, 175, 200];
 
 let loading: Promise<Bundle> | null = null;
@@ -487,7 +500,7 @@ async function run(app: AppHandle, cm: Bundle, arg: string | undefined): Promise
   }
 
   async function openPicked() {
-    const path = await pickFile(shell, { title: 'Open', folder: active?.path ? parentPath(active.path) : '/Documents' });
+    const path = await pickFile(shell, { title: 'Open', folder: active?.path ? parentPath(active.path) : '/Documents', types: CODE_TYPES });
     if (path) await openPath(path);
   }
 
@@ -543,7 +556,7 @@ async function run(app: AppHandle, cm: Bundle, arg: string | undefined): Promise
   async function saveAs(): Promise<boolean> {
     const d = active;
     if (!d) return false;
-    const target = await pickSave(shell, { title: 'Save as', folder: d.path ? parentPath(d.path) : '/Documents', name: d.name });
+    const target = await pickSave(shell, { title: 'Save as', folder: d.path ? parentPath(d.path) : '/Documents', name: d.name, types: CODE_TYPES });
     if (!target) return false;
     try {
       const snap = snapshot(d);

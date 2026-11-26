@@ -65,7 +65,7 @@ async function closeAll() {
 
 // ---- A maximised window, minimised from the taskbar, comes back maximised ----------------------------------------------
 {
-  const win = await openApp('Notepad');
+  const win = await openApp('Quick Notes');
   await win.locator('.win-btn[aria-label="Maximise"]').click();
   await p.waitForTimeout(200);
   ok((await win.locator('.win-btn[aria-label="Restore"]').count()) === 1, 'Notepad is maximised');
@@ -92,14 +92,14 @@ async function closeAll() {
     await p.keyboard.press('Escape');
   };
   try {
-    await addShortcut('Notepad');
+    await addShortcut('Quick Notes');
     const shortcut = p.locator('#desktop .item[title$=".desktop"]').first();
     await shortcut.waitFor({ timeout: 10000 });
     const label1 = (await shortcut.locator('.item-name').textContent()) ?? '';
     ok(!label1.endsWith('.desktop'), `a new shortcut shows the app's name, not the file name ("${label1}")`);
     await addShortcut('Calculator');
     await p.waitForTimeout(800);
-    const label2 = (await p.locator('#desktop .item[title="Notepad.desktop"] .item-name').textContent()) ?? '';
+    const label2 = (await p.locator('#desktop .item[title="Quick Notes.desktop"] .item-name').textContent()) ?? '';
     ok(!label2.endsWith('.desktop'), `after the desktop folder changed, the first shortcut still shows the app's name ("${label2}")`);
   } catch (e) {
     ok(false, `shortcut label: ${e.message.split('\n')[0]}`);
@@ -140,7 +140,7 @@ const dragBar = async (win, dx, dy) => {
   await p.waitForTimeout(150);
 };
 try {
-  await openApp('Notepad');
+  await openApp('Quick Notes');
   await openApp('Calculator');
   const cad = await openApp('CAD Draft');
   const r = await rectOf(cad);
@@ -156,13 +156,13 @@ await closeAll();
 
 // ---- ...and that leaves moving, snapping and a remembered place alone --------------------------------------------------------
 try {
-  let win = await openApp('Notepad');
+  let win = await openApp('Quick Notes');
   const start = await rectOf(win);
   await dragBar(win, 120, 90);
   const moved = await rectOf(win);
   ok(moved.x === start.x + 120 && moved.y === start.y + 90, `a window goes where it is dragged (${moved.x}, ${moved.y})`);
   await closeAll();
-  win = await openApp('Notepad');
+  win = await openApp('Quick Notes');
   const again = await rectOf(win);
   ok(again.x === moved.x && again.y === moved.y && again.w === moved.w, `closed and opened again, it comes back to the place it remembered (${again.x}, ${again.y})`);
   await p.keyboard.press('Control+Alt+ArrowLeft');
@@ -177,7 +177,7 @@ try {
   const off = await rectOf(win);
   ok(off.right > 1024, `a window can still be dragged partly past the screen's edge (right ${off.right})`);
   await closeAll();
-  const pulled = await rectOf(await openApp('Notepad'));
+  const pulled = await rectOf(await openApp('Quick Notes'));
   ok(pulled.right <= 1024 && pulled.closeRight <= 1024, `opened again from there, it is pulled back so Close can be reached (right ${pulled.right})`);
 } catch (e) {
   ok(false, `moving and snapping: ${e.message.split('\n')[0]}`);
@@ -207,7 +207,7 @@ await closeAll();
 
 // ---- Ctrl+Alt+arrow belongs to the window: the app inside must not hear it as well (PDF turned the page, for one) -----------
 try {
-  const win = await openApp('Notepad');
+  const win = await openApp('Quick Notes');
   await win.evaluate(w => {
     window.heardKeys = [];
     w.addEventListener('keydown', e => window.heardKeys.push(e.key));
@@ -250,7 +250,7 @@ const CONTRAST_PROBE = `(() => {
   return [...new Set(out)].slice(0, 8);
 })()`;
 await p.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
-for (const app of ['File Explorer', 'Notepad', 'Settings', 'Calculator', 'Terminal', 'Mail', 'Chat', 'Task Manager', 'Application manager']) {
+for (const app of ['File Explorer', 'Quick Notes', 'Settings', 'Calculator', 'Terminal', 'Mail', 'Chat', 'Task Manager', 'Application manager']) {
   try {
     await openApp(app);
     await p.waitForTimeout(600);
@@ -316,7 +316,7 @@ await p.evaluate(() => { document.documentElement.dataset.theme = 'xfce'; });
 // ---- Phone width: no sideways scrolling, Close on screen ------------------------------------------------------------------------
 await p.setViewportSize({ width: 375, height: 812 });
 await p.waitForTimeout(500);
-for (const app of ['File Explorer', 'Notepad', 'Settings', 'Calculator', 'Terminal', 'Mail', 'Chat', 'Photo Editor', 'Reader']) {
+for (const app of ['File Explorer', 'Quick Notes', 'Settings', 'Calculator', 'Terminal', 'Mail', 'Chat', 'Photo Editor', 'Reader']) {
   try {
     const win = await openApp(app);
     await p.waitForTimeout(600);

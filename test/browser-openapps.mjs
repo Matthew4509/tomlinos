@@ -117,7 +117,7 @@ await step('three apps, one unsaved: the panel lists three, the unsaved one mark
   eq(await rows().count(), 3, 'rows');
   const notes = await rows().evaluateAll(rs => rs.map(r => r.textContent));
   eq(notes.filter(t => t.includes('Not saved')).length, 1, 'one row says Not saved: ' + notes);
-  ok(notes.find(t => t.includes('Not saved')).includes('Notepad') || (await rows().filter({ hasText: 'Not saved' }).locator('.apps-title').innerText()).length > 0, 'the unsaved row');
+  ok(notes.find(t => t.includes('Not saved')).includes('Quick Notes') || (await rows().filter({ hasText: 'Not saved' }).locator('.apps-title').innerText()).length > 0, 'the unsaved row');
   eq(await rows().locator('svg.icon').count(), 3, 'each row has its app picture');
   eq(await panel().locator('[role="listbox"]').count(), 1, 'a listbox');
   const fonts = await panel().evaluate(el => [...el.querySelectorAll('*')].filter(e => e.childNodes.length && [...e.childNodes].some(n => n.nodeType === 3 && n.textContent.trim())).map(e => parseFloat(getComputedStyle(e).fontSize)));

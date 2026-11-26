@@ -6,7 +6,7 @@ import type { AppDef, AppMeta } from '../shell/types.ts';
 
 export const APPS = {
   explorer: { id: 'explorer', title: 'File Explorer', icon: 'files', size: [640, 440], start: true },
-  editor: { id: 'editor', title: 'Notepad', icon: 'editor', size: [680, 480], minSize: [420, 300], start: true },
+  editor: { id: 'editor', title: 'Quick Notes', icon: 'editor', size: [680, 480], minSize: [420, 300], start: true },
   notepadpro: { id: 'notepadpro', title: 'Notepad Pro', icon: 'code', size: [900, 580], minSize: [420, 300], start: true },
   calculator: { id: 'calculator', title: 'Calculator', icon: 'calculator', size: [296, 460], minSize: [280, 400], start: true },
   photoedit: { id: 'photoedit', title: 'Photo Editor', icon: 'photoedit', size: [980, 660], minSize: [480, 360], start: true },
