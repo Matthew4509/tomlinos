@@ -12,6 +12,7 @@ import { h, on } from '../core/dom.ts';
 import { infoTip } from '../shell/infotip.ts';
 import { formatSize, plural } from '../core/format.ts';
 import { pickSave } from '../shell/filepicker.ts';
+import { extensionOf, fileTypeOf } from '../shell/filetypes.ts';
 import type { AppDef, AppHandle } from '../shell/types.ts';
 import { fromBase64, loadAccount, MailClient, PRESETS, rememberForNow, saveAccount, forgetAccount, type FolderRow, type MailAccount, type Security } from './mail/account.ts';
 import { composeApp, openCompose, stageDraft, type Draft } from './mail/compose.ts';
@@ -447,7 +448,10 @@ async function run(app: AppHandle, acct: MailAccount): Promise<void> {
   }
 
   async function saveAttachment(name: string, data: Uint8Array) {
-    const target = await pickSave(shell, { title: 'Save attachment', folder: '/Documents', name });
+    // The attachment's own kind first, so the window starts on it; then every file.
+    const ext = extensionOf(name);
+    const types = [...(ext ? [{ label: fileTypeOf(name).label, ext: [ext] }] : []), { label: 'All files', ext: [] }];
+    const target = await pickSave(shell, { title: 'Save attachment', folder: '/Documents', name, types });
     if (!target) return;
     try {
       const entry = await shell.fs.writeFile(target.path, data, target.replace ? {} : { mustBeNew: true });

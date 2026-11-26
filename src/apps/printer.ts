@@ -74,7 +74,7 @@ export const printerApp: AppDef = {
         },
       },
       pickFile: async () => {
-        const path = await pickFile(shell, { title: 'Print which file?', ok: 'Print this' });
+        const path = await pickFile(shell, { title: 'Print which file?', ok: 'Print this', types: [{ label: 'All files', ext: [] }, { label: 'Documents', ext: ['pdf', 'docx', 'rtf', 'odt', 'txt', 'md'] }, { label: 'Pictures', ext: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'] }] });
         return path ? fileAt(shell, path) : null;
       },
       onError: (error: unknown) => shell.toast(`Office Printer: ${error instanceof Error ? error.message : String(error)}`),

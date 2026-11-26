@@ -6,7 +6,7 @@
 // → cell puts the number on the display into the chosen A or B cell. Sheets save as small .calc files.
 import { h, on } from '../core/dom.ts';
 import { baseName, parentPath, uniqueName } from '../fs/names.ts';
-import { pickSave } from '../shell/filepicker.ts';
+import { pickFile, pickSave } from '../shell/filepicker.ts';
 import type { AppDef } from '../shell/types.ts';
 import { APPS } from './catalog.ts';
 import { saveOver } from '../shell/savefile.ts';
@@ -58,12 +58,13 @@ export const calculatorApp: AppDef = {
       h('div', { class: 'calc-actions' }, extendBtn, toCellBtn));
 
     // ---- The sheet (right) ----
+    const openBtn = h('button', { type: 'button', class: 'tool wide', title: 'Open a saved sheet (Ctrl+O)' }, 'Open...');
     const saveBtn = h('button', { type: 'button', class: 'tool wide', title: 'Save the sheet (Ctrl+S)' }, 'Save');
     const saveAsBtn = h('button', { type: 'button', class: 'tool wide', title: 'Save a copy under another name' }, 'Save as...');
     const clearBtn = h('button', { type: 'button', class: 'tool wide', title: 'Empty the chosen cell (Delete)' }, 'Clear cell');
     const note = h('div', { class: 'calc-note', role: 'status' });
     const grid = h('div', { class: 'calc-grid', role: 'grid', 'aria-label': 'Sheet' });
-    const sheet = h('div', { class: 'calc-sheet', hidden: true }, h('div', { class: 'toolbar' }, saveBtn, saveAsBtn, clearBtn), note, grid);
+    const sheet = h('div', { class: 'calc-sheet', hidden: true }, h('div', { class: 'toolbar' }, openBtn, saveBtn, saveAsBtn, clearBtn), note, grid);
     body.append(pad, sheet);
 
     const cells = new Map<string, HTMLElement>();
@@ -352,7 +353,6 @@ export const calculatorApp: AppDef = {
         title: 'Save sheet as',
         folder,
         name: uniqueName(path ? baseName(path) : 'Sums.calc', taken),
-        accept: ['calc'],
         ok: 'Save',
         types: [{ label: 'Calculator sheet', ext: ['calc'] }],
       });
@@ -389,21 +389,53 @@ export const calculatorApp: AppDef = {
       }
     }
 
-    if (arg) {
+    /** Reads a .calc file into this window. False (after saying why) when it cannot be read. */
+    async function load(file: string, fresh: boolean): Promise<boolean> {
       try {
-        const entry = await shell.fs.stat(arg);
+        const entry = await shell.fs.stat(file);
         if (!entry || entry.kind !== 'file') throw new Error('gone');
         if (entry.size > MAX_FILE) throw new SyntaxError('too big');
-        data = parseSheet(new TextDecoder().decode(await shell.fs.readFile(arg)));
-        path = arg;
+        data = parseSheet(new TextDecoder().decode(await shell.fs.readFile(file)));
+        path = file;
         loadedId = entry.id;
         savedJson = content();
+        return true;
       } catch (error) {
+        const after = fresh ? ' A new sheet was started instead.' : '';
         await shell.dialogs.alert('Could not open the sheet', error instanceof SyntaxError
-          ? 'This file is not a Calculator sheet, or it is damaged. It is safe where it is; a new sheet was started instead.'
-          : 'That file is not there any more. It may have been moved or deleted. A new sheet was started instead.');
+          ? `This file is not a Calculator sheet, or it is damaged. It is safe where it is.${after}`
+          : `That file is not there any more. It may have been moved or deleted.${after}`);
+        return false;
       }
     }
+
+    /** File > Open...: a sheet opens here if this window has nothing in it yet, otherwise in a new window. */
+    async function openSheet(): Promise<void> {
+      const chosen = await pickFile(shell, {
+        title: 'Open a sheet',
+        folder: path ? parentPath(path) : '/Documents',
+        ok: 'Open',
+        types: [{ label: 'Calculator sheet', ext: ['calc'] }],
+      });
+      if (!chosen) {
+        pad.focus();
+        return;
+      }
+      if (path || dirty()) {
+        void shell.openApp('calculator', chosen);
+        return;
+      }
+      if (!(await load(chosen, false))) return;
+      if (building) stopSum();
+      selected = null;
+      cells.clear();
+      if (open) fitRows();
+      else setOpen(true);
+      title();
+      paint();
+    }
+
+    if (arg) await load(arg, true);
 
     // ---- Wiring ----
     on(keys, 'click', (event: MouseEvent) => {
@@ -413,6 +445,7 @@ export const calculatorApp: AppDef = {
     on(extendBtn, 'click', () => setOpen(!open), app.signal);
     on(toCellBtn, 'click', toCell, app.signal);
     on(clearBtn, 'click', clearCell, app.signal);
+    on(openBtn, 'click', () => void openSheet(), app.signal);
     on(saveBtn, 'click', () => void save(), app.signal);
     on(saveAsBtn, 'click', () => void saveAs(), app.signal);
     new ResizeObserver(() => open && fitRows()).observe(grid);
@@ -424,6 +457,11 @@ export const calculatorApp: AppDef = {
       if (ctrl && event.key.toLowerCase() === 's') {
         event.preventDefault();
         if (open) void (event.shiftKey ? saveAs() : save());
+        return;
+      }
+      if (ctrl && !event.shiftKey && event.key.toLowerCase() === 'o') {
+        event.preventDefault();
+        if (!building) void openSheet();
         return;
       }
       if (event.key === 'Escape') {
@@ -445,10 +483,17 @@ export const calculatorApp: AppDef = {
       } else press(k);
     }, app.signal);
 
-    // ---- Menu bar: Edit, View, Help (the keypad is the toolbar) ----
+    // ---- Menu bar: File, Edit, View, Help (the keypad is the toolbar) ----
     const usable = () => !building;
     const bar = classicBar({
       menus: [
+        { label: 'File', items: [
+          { label: 'Open...', icon: 'open', shortcut: 'Ctrl+O', enabled: usable, action: () => void openSheet() },
+          { label: 'Save sheet', icon: 'save', shortcut: 'Ctrl+S', enabled: () => open, action: () => void save() },
+          { label: 'Save sheet as...', icon: 'save-as', shortcut: 'Ctrl+Shift+S', enabled: () => open, action: () => void saveAs() },
+          { separator: true },
+          { label: 'Close', icon: 'close', action: () => app.close() },
+        ] },
         { label: 'Edit', items: [
           { label: 'Clear entry', enabled: usable, action: () => press('CE') },
           { label: 'Clear all', shortcut: 'Esc', enabled: usable, action: () => press('C') },
@@ -458,9 +503,6 @@ export const calculatorApp: AppDef = {
           { label: 'Put the number in the chosen cell', shown: () => open, enabled: usable, action: toCell },
           { label: 'Clear cell', icon: 'delete', shortcut: 'Delete', shown: () => open, enabled: () => usable() && selected !== null, action: clearCell },
           { label: 'Stop making the sum', shortcut: 'Esc', shown: () => !!building, action: stopSum },
-          { separator: true },
-          { label: 'Save sheet', icon: 'save', shortcut: 'Ctrl+S', shown: () => open, action: () => void save() },
-          { label: 'Save sheet as...', icon: 'save-as', shortcut: 'Ctrl+Shift+S', shown: () => open, action: () => void saveAs() },
         ] },
         { label: 'View', items: [
           { label: 'Extended', checked: () => open, action: () => setOpen(!open) },

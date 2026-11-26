@@ -21,7 +21,7 @@ import { openXlsx, saveOverLosses, saveXlsx, type XlsxReport } from './sheet/xls
 import { CHART_LABEL, CHART_TYPES } from './sheet/chart.ts';
 import { chartIcon, mountCharts } from './sheet/charts-ui.ts';
 import { MARGINS, pageOf, PAPERS, planPages, type Paper } from './sheet/print.ts';
-import { downloadPdf, marginName, pageSetupDialog, printPreview, savePdfInDocuments, setPage, type PrintContext } from './sheet/print-ui.ts';
+import { downloadPdf, marginName, pageSetupDialog, printPreview, savePdfAsFile, setPage, type PrintContext } from './sheet/print-ui.ts';
 import { conditionalMenu, validationDialog } from './sheet/rules-ui.ts';
 import { autoSumMenu, createFromSelection, functionMenu, insertFunctionDialog, nameDialog, nameManager, useInFormulaMenu } from './sheet/formulas-ui.ts';
 import { APPS } from './catalog.ts';
@@ -290,7 +290,7 @@ export const sheetApp: AppDef = {
       else await shell.report('The spreadsheet could not do that', error);
     };
     // What the chart, rule and printing screens need from this window.
-    const ctx: PrintContext = { shell, wb, grid, root: app.root, signal: app.signal, onChange: () => onChange(), report, fileLabel: () => label };
+    const ctx: PrintContext = { shell, wb, grid, root: app.root, signal: app.signal, onChange: () => onChange(), report, fileLabel: () => label, folder: () => (path ? parentPath(path) : '/Documents') };
     const charts = mountCharts(ctx);
     // The grid, and beside it the PivotTable Fields pane (shown while the active cell is in a PivotTable).
     const main = h('div', { class: 'sheet-main' }, grid.el);
@@ -1771,7 +1771,7 @@ export const sheetApp: AppDef = {
         { label: 'Page setup...', action: () => void pageSetupDialog(ctx) },
         ...printing,
         { label: 'Download as PDF', action: () => void downloadPdf(ctx) },
-        { label: 'Save as PDF in Documents', action: () => void savePdfInDocuments(ctx) },
+        { label: 'Save PDF as...', action: () => void savePdfAsFile(ctx) },
         { separator: true },
         dates,
       ];

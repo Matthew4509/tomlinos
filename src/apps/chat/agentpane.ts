@@ -728,7 +728,7 @@ export function agentPane(app: AppHandle): { el: HTMLElement; shown: (want?: Clo
 
   // ---- Quick jobs ----
   async function chooseTextFile(): Promise<{ name: string; text: string } | null> {
-    const path = await pickFile(shell, { title: 'Choose a text file', folder: '/Documents' });
+    const path = await pickFile(shell, { title: 'Choose a text file', folder: '/Documents', types: [{ label: 'Text files', ext: ['txt', 'md', 'csv', 'json', 'log'] }, { label: 'All files', ext: [] }] });
     if (!path) return null;
     if (!isTextName(path)) {
       await shell.dialogs.alert('Not a text file', 'This reads text files (.txt, .md, .csv, code and the like). For a PDF or a picture, copy the words into the box instead.');
@@ -794,7 +794,7 @@ ${text}`;
   on(saveBtn, 'click', async () => {
     const file = live.file;
     if (!file) return;
-    const target = await pickSave(shell, { title: 'Save a copy of this thread', folder: '/Documents', name: file });
+    const target = await pickSave(shell, { title: 'Save a copy of this thread', folder: '/Documents', name: file, types: [{ label: 'Markdown', ext: ['md'] }, { label: 'Plain text', ext: ['txt'] }] });
     if (!target) return;
     try {
       await shell.fs.writeFile(target.path, new TextEncoder().encode(threadToText(live.thread)), target.replace ? {} : { mustBeNew: true });
