@@ -5,19 +5,20 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseVcf, writeVcf, type Contact } from '../src/core/vcard.ts';
 import { contactsList } from '../src/apps/write/merge.ts';
-import { isDate } from '../src/core/ical.ts';
 import { FileSystem } from '../src/fs/fs.ts';
 import { MemoryStore } from '../src/store/memory-store.ts';
 import { recordFile } from '../src/shell/recordfile.ts';
+import { formChanges, formValues, type FormValues } from '../src/apps/contacts.ts';
 
 const BS = '\\';
 const card = (...l: string[]) => ['BEGIN:VCARD', ...l, 'END:VCARD', ''].join('\r\n');
-const lines = (text: string) => text.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-/** What the Contacts form saves when Edit is clicked and then Save with nothing typed (src/apps/contacts.ts:165). */
-const formSave = (c: Contact): Contact => ({
-  ...c, name: c.name.trim(), org: c.org.trim(), phones: lines(c.phones.join('\n')), emails: lines(c.emails.join('\n')),
-  address: c.address.trim().replace(/\s*\n\s*/g, ', '), birthday: isDate(c.birthday) ? c.birthday : '', notes: c.notes.trim(),
-});
+/** What the Contacts form saves when Edit is clicked, the given boxes are changed, and Save is clicked. */
+const formSave = (c: Contact, typed: Partial<FormValues> = {}): Contact => {
+  const opened = formValues(c);
+  const changes = formChanges(opened, { ...opened, ...typed });
+  if (typeof changes === 'string') throw new Error(changes);
+  return { ...c, ...changes };
+};
 
 test('CON-P0-1: an Apple Contacts card shows its grouped email and phone (item1.EMAIL, item2.TEL)', () => {
   const [c] = parseVcf(card('VERSION:3.0', 'FN:Anna Apple', 'item1.EMAIL;type=INTERNET;type=pref:anna@example.com', 'item1.X-ABLabel:_$!<Other>!$_', 'item2.TEL;type=CELL:+44 7700 900111', 'item3.ADR;type=HOME:;;1 Lane;Town;;AB1;UK'));
@@ -35,7 +36,7 @@ test('CON-P0-1: a grouped email is written back once, on its own line, after it 
 test('CON-P0-2: editing a contact whose street has a line break keeps the city, region, postcode and country in their places', () => {
   const text = card('VERSION:3.0', 'UID:b', 'FN:Bob', `ADR;TYPE=home:;;1 Main St${BS}nFlat 2;Springfield;IL;62704;USA`, 'TEL:555 0100');
   const [c] = parseVcf(text);
-  const saved = formSave({ ...c, phones: ['555 0100', '555 0199'] });
+  const saved = formSave(c, { phones: '555 0100\n555 0199' });
   const adr = writeVcf([saved], text).split('\r\n').find(l => l.startsWith('ADR'))!;
   assert.match(adr, /;Springfield;IL;62704;USA$/);
 });
@@ -58,15 +59,25 @@ test('CON-P0-4: adding a contact to a UTF-16 .vcf does not replace every card in
   assert.ok(refused ? text.includes('Una') : ['Una', 'Vic', 'New'].every(n => text.includes(n)), 'the file now holds: ' + JSON.stringify(text.slice(0, 120)));
 });
 
-test('CON-P1: a name saved unchanged keeps the card\'s first and family names (trailing space in FN)', { todo: 'P1' }, () => {
+test('CON-P1-1: a name saved unchanged keeps the card\'s first and family names (trailing space in FN)', () => {
   const text = card('VERSION:3.0', 'UID:a', 'FN:John Smith ', 'N:Smith;John;;Dr.;');
-  const out = writeVcf([formSave(parseVcf(text)[0])], text);
-  assert.match(out, /N:Smith;John;;Dr\.;/);
+  const [c] = parseVcf(text);
+  assert.equal(formValues(c).name, 'John Smith');
+  for (const typed of [{}, { name: 'John Smith ' }, { name: ' John Smith' }, { notes: 'hi' }]) {
+    assert.match(writeVcf([formSave(c, typed)], text), /N:Smith;John;;Dr\.;/, JSON.stringify(typed));
+  }
+  // A name really changed is written fresh, without the spaces round it.
+  assert.match(writeVcf([formSave(c, { name: 'Jon Smith  ' })], text), /FN:Jon Smith\r\n/);
 });
 
-test('CON-P1: a birthday the date box cannot show is not dropped by Edit then Save', { todo: 'P1' }, () => {
-  const text = card('VERSION:3.0', 'UID:c', 'FN:C', 'BDAY:1985-02-30');
-  assert.match(writeVcf([formSave(parseVcf(text)[0])], text), /BDAY/);
+test('CON-P1-2: a birthday the date box cannot show is not dropped by Edit then Save', () => {
+  for (const bday of ['1985-02-30', '--0415', '--04-15']) {
+    const text = card('VERSION:4.0', 'UID:c', 'FN:C', `BDAY:${bday}`);
+    const [c] = parseVcf(text);
+    assert.equal(formValues(c).birthday, '', 'the date box shows it empty');
+    assert.ok(writeVcf([formSave(c)], text).includes(`BDAY:${bday}`), bday);
+    assert.ok(writeVcf([formSave(c, { name: 'Cee' })], text).includes(`BDAY:${bday}`), bday + ' with the name changed');
+  }
 });
 
 test('CON-P1: a vCard 4.0 birthday without a year (--0415) is shown', { todo: 'P1' }, () => {

@@ -15,6 +15,41 @@ export const CONTACTS_PATH = '/Documents/Contacts.vcf';
 const byName = (a: Contact, b: Contact) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
 const lines = (text: string) => text.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
 
+type FormField = 'name' | 'org' | 'phones' | 'emails' | 'address' | 'birthday' | 'notes';
+/** What each box of the edit form holds. */
+export type FormValues = Record<FormField, string>;
+const FORM_FIELDS: FormField[] = ['name', 'org', 'phones', 'emails', 'address', 'birthday', 'notes'];
+
+/**
+ * What the form shows for a contact when it opens: the name without the spaces round it, and a birthday the date box
+ * cannot hold (no year, not a real day) as an empty box, which Save leaves alone unless a date is put in.
+ */
+export const formValues = (c: Contact): FormValues => ({
+  name: c.name.trim(), org: c.org, phones: c.phones.join('\n'), emails: c.emails.join('\n'), address: c.address,
+  birthday: isDate(c.birthday) ? c.birthday : '', notes: c.notes,
+});
+
+/**
+ * What Save writes: a reason it cannot (a string), or the fields to change. For a contact being edited (opened given)
+ * only the fields changed in the form, so an untouched field keeps its own line in the file (the name's first and
+ * family parts, a birthday the date box could not show). Spaces typed round the name are not a change of name.
+ */
+export function formChanges(opened: FormValues | null, now: FormValues): Partial<Contact> | string {
+  const name = now.name.trim();
+  if (!name) return 'Give the contact a name.';
+  if (now.birthday && !isDate(now.birthday)) return 'That birthday is not a real date.';
+  // The most the file keeps of each (src/core/vcard.ts): said here rather than cut the next time it is read.
+  const phones = lines(now.phones);
+  const emails = lines(now.emails);
+  if (phones.length > 20 || emails.length > 20) return 'A contact keeps up to 20 phone numbers and 20 email addresses.';
+  if (phones.some(p => p.length > 60)) return 'A phone number can be up to 60 characters.';
+  if (emails.some(e => e.length > 200)) return 'An email address can be up to 200 characters.';
+  const typed: Partial<Contact> = { name, org: now.org.trim(), phones, emails, address: now.address.trim().replace(/\s*\n\s*/g, ', '), birthday: now.birthday, notes: now.notes.trim() };
+  if (!opened) return typed;
+  const changed = (f: FormField) => (f === 'name' ? name !== opened.name.trim() : now[f] !== opened[f]);
+  return Object.fromEntries(FORM_FIELDS.filter(changed).map(f => [f, typed[f]]));
+}
+
 export const contactsApp: AppDef = {
   ...APPS.contacts,
   async launch(app, arg) {
@@ -129,13 +164,14 @@ export const contactsApp: AppDef = {
         area.value = value;
         return area;
       };
-      const nameIn = field('Name', c.name, false, 500);
-      const orgIn = field('Company', c.org, false, 500);
-      const phoneIn = field('Phone numbers (one per line)', c.phones.join('\n'), true);
-      const emailIn = field('Email addresses (one per line)', c.emails.join('\n'), true);
-      const addrIn = field('Address', c.address, true, 500);
-      const bdayIn = h('input', { type: 'date', class: 'field', value: c.birthday, 'aria-label': 'Birthday' });
-      const notesIn = field('Notes', c.notes, true, 20000);
+      const shown = formValues(c);
+      const nameIn = field('Name', shown.name, false, 500);
+      const orgIn = field('Company', shown.org, false, 500);
+      const phoneIn = field('Phone numbers (one per line)', shown.phones, true);
+      const emailIn = field('Email addresses (one per line)', shown.emails, true);
+      const addrIn = field('Address', shown.address, true, 500);
+      const bdayIn = h('input', { type: 'date', class: 'field', value: shown.birthday, 'aria-label': 'Birthday' });
+      const notesIn = field('Notes', shown.notes, true, 20000);
       const problem = h('p', { class: 'dialog-problem', role: 'alert' });
       const saveBtn = h('button', { type: 'button', class: 'btn primary' }, 'Save');
       const cancel = h('button', { type: 'button', class: 'btn' }, 'Cancel');
@@ -153,27 +189,18 @@ export const contactsApp: AppDef = {
         h('div', { class: 'row-buttons' }, saveBtn, cancel, existing ? del : null),
       );
       /** Each field and what it held when the form opened. */
-      const inputs: Array<[keyof Contact, HTMLInputElement | HTMLTextAreaElement]> = [['name', nameIn], ['org', orgIn], ['phones', phoneIn], ['emails', emailIn], ['address', addrIn], ['birthday', bdayIn], ['notes', notesIn]];
-      const opened = Object.fromEntries(inputs.map(([f, input]) => [f, input.value])) as Partial<Record<keyof Contact, string>>;
-      const snap = () => JSON.stringify([nameIn.value, orgIn.value, phoneIn.value, emailIn.value, addrIn.value, bdayIn.value, notesIn.value]);
-      const was = snap();
-      formDirty = () => snap() !== was;
+      const inputs: Record<FormField, HTMLInputElement | HTMLTextAreaElement> = { name: nameIn, org: orgIn, phones: phoneIn, emails: emailIn, address: addrIn, birthday: bdayIn, notes: notesIn };
+      const read = () => Object.fromEntries(FORM_FIELDS.map(f => [f, inputs[f].value])) as FormValues;
+      const opened = read();
+      const was = JSON.stringify(opened);
+      formDirty = () => JSON.stringify(read()) !== was;
       card.addEventListener('input', () => app.setDirty(isDirty()), { signal });
       nameIn.focus();
       saveBtn.addEventListener('click', async () => {
-        const name = nameIn.value.trim();
-        if (!name) return void (problem.textContent = 'Give the contact a name.');
-        if (bdayIn.value && !isDate(bdayIn.value)) return void (problem.textContent = 'That birthday is not a real date.');
-        // The most the file keeps of each (src/core/vcard.ts): said here rather than cut the next time it is read.
-        const phones = lines(phoneIn.value);
-        const emails = lines(emailIn.value);
-        if (phones.length > 20 || emails.length > 20) return void (problem.textContent = 'A contact keeps up to 20 phone numbers and 20 email addresses.');
-        if (phones.some(p => p.length > 60)) return void (problem.textContent = 'A phone number can be up to 60 characters.');
-        if (emails.some(e => e.length > 200)) return void (problem.textContent = 'An email address can be up to 200 characters.');
-        const typed: Partial<Contact> = { name, org: orgIn.value.trim(), phones, emails, address: addrIn.value.trim().replace(/\s*\n\s*/g, ', '), birthday: bdayIn.value, notes: notesIn.value.trim() };
+        const changes = formChanges(existing ? opened : null, read());
+        if (typeof changes === 'string') return void (problem.textContent = changes);
         // Only the fields changed in the form are saved, onto the contact as the file holds it now: a change made in
         // another window since the form opened is kept, and a field not touched here keeps its own line in the file.
-        const changes: Partial<Contact> = existing ? Object.fromEntries(inputs.filter(([f, input]) => input.value !== opened[f]).map(([f]) => [f, typed[f]])) : typed;
         const uid = c.uid;
         if (await save(list => {
           const now = list.find(x => x.uid === uid);
