@@ -1524,6 +1524,14 @@ textarea.field { resize: vertical; font: inherit; }
   .mail-folders { flex: 0 0 auto; max-height: 120px; }
   .mail-list { flex: 0 0 35%; border-right: 0; border-bottom: 1px solid var(--line); }
 }
+/* A small Mail window on a wide screen keeps its three columns, narrower, so the open message stays readable. */
+.mail:not(.ticket) { container-type: inline-size; }
+@media (min-width: 721px) {
+  @container (max-width: 860px) {
+    .mail-body > .mail-folders { flex-basis: 120px; }
+    .mail-body > .mail-list { flex-basis: 34%; min-width: 150px; }
+  }
+}
 
 /* ---- Planetziods (src/apps/planetziods.ts) ---- */
 .pz { height: 100%; background: #0b1020; color: #e6e9f2; }
