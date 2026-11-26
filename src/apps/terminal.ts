@@ -106,31 +106,46 @@ export const terminalApp: AppDef = {
     let recall = -1;
     let draft = '';
     let busy = false;
+    /** Runs one line, as Enter does. */
+    const submit = async (text: string) => {
+      echo(text);
+      input.value = '';
+      recall = -1;
+      if (!term.waiting && text.trim() === 'clear') {
+        output.replaceChildren();
+        term.history.push('clear');
+        return;
+      }
+      busy = true;
+      input.disabled = true; // a long grep -r shows as busy, and nothing typed meanwhile is lost
+      try {
+        print(await term.run(text));
+      } catch (error) {
+        print([{ text: error instanceof Error ? error.message : String(error), kind: 'err' }]);
+      } finally {
+        busy = false;
+        input.disabled = false;
+        drawPrompt();
+        input.focus();
+      }
+    };
+    // Pasting more than one line runs each whole line in turn, as a shell does; the part after the last line break
+    // waits in the line for Enter. (A one-line input would otherwise join them into one command.)
+    on(input, 'paste', async (event: ClipboardEvent) => {
+      const pasted = event.clipboardData?.getData('text/plain') ?? '';
+      if (!/[\r\n]/.test(pasted)) return;
+      event.preventDefault();
+      if (busy) return;
+      const lines = (input.value.slice(0, input.selectionStart ?? input.value.length) + pasted + input.value.slice(input.selectionEnd ?? input.value.length)).split(/\r\n|\r|\n/);
+      const rest = lines.pop() ?? '';
+      for (const line of lines) await submit(line);
+      input.value = rest;
+    }, app.signal);
     on(input, 'keydown', async (event: KeyboardEvent) => {
       if (event.key === 'Enter') {
         event.preventDefault();
         if (busy) return;
-        const text = input.value;
-        echo(text);
-        input.value = '';
-        recall = -1;
-        if (!term.waiting && text.trim() === 'clear') {
-          output.replaceChildren();
-          term.history.push('clear');
-          return;
-        }
-        busy = true;
-        input.disabled = true; // a long grep -r shows as busy, and nothing typed meanwhile is lost
-        try {
-          print(await term.run(text));
-        } catch (error) {
-          print([{ text: error instanceof Error ? error.message : String(error), kind: 'err' }]);
-        } finally {
-          busy = false;
-          input.disabled = false;
-          drawPrompt();
-          input.focus();
-        }
+        await submit(input.value);
       } else if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
         if (term.waiting || !term.history.length) return;
         event.preventDefault();
