@@ -791,6 +791,17 @@ export const sheetApp: AppDef = {
         }
         return;
       }
+      // Inside a filter: its rows under its header row are sorted (shown or hidden), then filtered again, as in Excel.
+      const f = wb.sheets[wb.active].filter;
+      if (f && a.col >= f.range.c0 && a.col <= f.range.c1 && a.row >= f.range.r0 && a.row <= f.range.r1) {
+        try {
+          wb.sortFilter(wb.active, a.col, ascending);
+          onChange();
+        } catch (error) {
+          void report(error);
+        }
+        return;
+      }
       if (s.c0 === s.c1 && s.r0 === s.r1) {
         // One cell: sort the block of data around it.
         let { c0, r0, c1, r1 } = s;

@@ -3,7 +3,7 @@
 // file format. No page code here, so it can be tested without a browser.
 // A formula whose answer is a list (=SORT(A2:A9), =FILTER(...), =A1:A5*2) fills the cells below and to the right of it
 // ("spills"), as in Excel 365; nothing is stored in those cells, so typing in one of them stops the list (#SPILL!).
-import { localeDateOrder, readDateTime, shortDateCode, type DateOrder } from './dates.ts';
+import { daysInMonth, localeDateOrder, MAX_SERIAL, partsOf, readDateTime, serialOf, shortDateCode, type DateOrder } from './dates.ts';
 import { evaluateCell, givesList, leadingFunction, MAX_FORMULA_LENGTH, parseFormula, text as valueToText, type Context, type Grid, type Node } from './formula.ts';
 import { codeProblem, formatCode, isDateCode, type Formatted } from './numfmt.ts';
 import { plural } from '../../core/format.ts';
@@ -257,6 +257,33 @@ export function isDateStyle(style: CellStyle | undefined): boolean {
   return style?.fmt === 'custom' && !!style.code && isDateCode(style.code);
 }
 
+/**
+ * For whole dates on the same day of the month and the same number of months apart (12 for a year), that number of
+ * months; else 0, and the dates go on by days.
+ */
+function monthStep(nums: number[]): number {
+  if (nums.length < 2 || nums.some(n => !Number.isInteger(n) || n < 1 || n > MAX_SERIAL)) return 0;
+  const p = nums.map(partsOf);
+  const gap = (i: number) => (p[i].y - p[i - 1].y) * 12 + p[i].m - p[i - 1].m;
+  const k = gap(1);
+  if (!k) return 0;
+  for (let i = 1; i < p.length; i++) if (p[i].d !== p[0].d || gap(i) !== k) return 0;
+  return k;
+}
+
+/** The value `offset` places on from `base` in a filled series: by days (`step`), or by months when `months` is set (the day kept, or the month's last day if it is shorter, as in Excel). */
+function seriesAt(base: number, step: number, months: number, offset: number): number {
+  if (months) {
+    const p = partsOf(base);
+    const total = p.m - 1 + months * offset;
+    const y = p.y + Math.floor(total / 12);
+    const m = (((total % 12) + 12) % 12) + 1;
+    const v = y >= 1900 && y <= 9999 ? serialOf(y, m, Math.min(p.d, daysInMonth(y, m))) : NaN;
+    if (Number.isFinite(v)) return v;
+  }
+  return clean(base + step * offset);
+}
+
 /** A date (and time) as it is put in the editor: in the short date format, so it reads back as the same date. */
 function dateEditText(v: number, order: DateOrder): string {
   let day = Math.floor(v);
@@ -353,10 +380,8 @@ export class Workbook {
       dateOrder: this.dateOrder,
       name: (n, sheet) => this.nameNode(n, sheet, current),
       rowHidden: (s, r) => {
-        const sh = this.sheets[s];
-        if (!sh?.hiddenRows.has(r)) return null;
-        const f = sh.filter;
-        return f && (f.cols.size || f.rules?.size) && r > f.range.r0 && r <= f.range.r1 ? 'filter' : 'hand';
+        if (!this.sheets[s]?.hiddenRows.has(r)) return null;
+        return this.filterHides(s, r) ? 'filter' : 'hand';
       },
       isSubtotal: (s, c, r) => {
         const f = this.sheets[s]?.cells.get(keyOf(c, r))?.f;
@@ -683,8 +708,9 @@ export class Workbook {
         const out = evaluateCell(tree, ctx);
         if (Array.isArray(out)) result = this.place(s, col, row, memoKey, out);
         else {
-          result = out;
-          if (givesList(tree, ctx)) this.spills.set(memoKey, out instanceof CellError ? null : [[out]]);
+          // An answer that is an empty cell (=B2 with B2 empty) is the number 0, as in Excel.
+          result = out ?? 0;
+          if (givesList(tree, ctx)) this.spills.set(memoKey, result instanceof CellError ? null : [[result]]);
         }
       }
     } finally {
@@ -876,13 +902,13 @@ export class Workbook {
     if (this.sheets[s].tables.length && !this.batching) this.afterTyping(s, col, row);
   }
 
-  /** Clears what is typed in the cells but keeps their formatting. */
+  /** Clears what is typed in the cells but keeps their formatting. Rows the filter hides are left alone, as in Excel. */
   clearContents(s: number, r: Range): void {
     const changes: Change[] = [];
     for (const [k, cell] of this.sheets[s].cells) {
       const c = colOfKey(k);
       const rw = rowOfKey(k);
-      if (c < r.c0 || c > r.c1 || rw < r.r0 || rw > r.r1) continue;
+      if (c < r.c0 || c > r.c1 || rw < r.r0 || rw > r.r1 || this.filterHides(s, rw)) continue;
       const kept: Cell = { ...(cell.s ? { s: cell.s } : {}), ...(cell.n !== undefined ? { n: cell.n } : {}) };
       if (kept.s === cell.s && kept.n === cell.n && cell.v === undefined && cell.f === undefined) continue;
       changes.push({ sheet: s, key: k, after: bare(kept) ? undefined : kept });
@@ -1513,13 +1539,13 @@ export class Workbook {
     return out.sort((a, b) => a.row - b.row || a.col - b.col);
   }
 
-  /** Takes the formatting off the cells (what is typed in them stays), as Home > Clear > Clear formats. */
+  /** Takes the formatting off the cells (what is typed in them stays), as Home > Clear > Clear formats. Rows the filter hides are left alone. */
   clearFormats(s: number, r: Range): void {
     const changes: Change[] = [];
     for (const [k, cell] of this.sheets[s].cells) {
       const c = colOfKey(k);
       const rw = rowOfKey(k);
-      if (c < r.c0 || c > r.c1 || rw < r.r0 || rw > r.r1 || !cell.s) continue;
+      if (c < r.c0 || c > r.c1 || rw < r.r0 || rw > r.r1 || !cell.s || this.filterHides(s, rw)) continue;
       const after: Cell = { ...cell };
       delete after.s;
       changes.push({ sheet: s, key: k, after: bare(after) ? undefined : after });
@@ -1530,47 +1556,53 @@ export class Workbook {
   /**
    * Copies cells from `src` onto `dest` (top-left corner), shifting relative references. `cut` empties the source.
    * `what` pastes only part of each cell (Paste Special): its value (a formula's answer), its formula, its formatting,
-   * or its value with its formatting; `transpose` turns rows into columns.
+   * or its value with its formatting; `transpose` turns rows into columns. `rows` copies only those rows of `src` (the
+   * rows in view of a filtered list), put down one under the other.
    */
-  copyBlock(s: number, src: Range, dest: { col: number; row: number }, opts: { cut?: boolean; fromSheet?: number; what?: 'all' | 'values' | 'formulas' | 'formats' | 'valuesFormats'; transpose?: boolean } = {}): void {
+  copyBlock(s: number, src: Range, dest: { col: number; row: number }, opts: { cut?: boolean; fromSheet?: number; what?: 'all' | 'values' | 'formulas' | 'formats' | 'valuesFormats'; transpose?: boolean; rows?: number[] } = {}): void {
     const from = opts.fromSheet ?? s;
     const what = opts.cut ? 'all' : opts.what ?? 'all';
+    const rows = opts.rows && !opts.cut ? opts.rows.filter(r => r >= src.r0 && r <= src.r1) : null;
     const width = src.c1 - src.c0 + 1;
-    const height = src.r1 - src.r0 + 1;
+    const height = rows ? rows.length : src.r1 - src.r0 + 1;
+    if (!height) return;
     const [outW, outH] = opts.transpose ? [height, width] : [width, height];
     if (dest.col + outW > MAX_COLS || dest.row + outH > MAX_ROWS) throw new SyntaxProblem('That does not fit on the sheet.');
-    const grabbed: Array<{ dc: number; dr: number; cell?: Cell; value: Value }> = [];
+    const grabbed: Array<{ dc: number; dr: number; sc: number; sr: number; cell?: Cell; value: Value }> = [];
     for (let dr = 0; dr < height; dr++) {
+      const sr = rows ? rows[dr] : src.r0 + dr;
       for (let dc = 0; dc < width; dc++) {
-        const cell = this.sheets[from].cells.get(keyOf(src.c0 + dc, src.r0 + dr));
+        const sc = src.c0 + dc;
+        const cell = this.sheets[from].cells.get(keyOf(sc, sr));
         // A formula's answer (or a value a list formula fills in) is what Paste Values puts down.
-        const value = what === 'values' || what === 'valuesFormats' ? this.value(from, src.c0 + dc, src.r0 + dr) : null;
-        grabbed.push(opts.transpose ? { dc: dr, dr: dc, cell, value } : { dc, dr, cell, value });
+        const value = what === 'values' || what === 'valuesFormats' ? this.value(from, sc, sr) : null;
+        grabbed.push(opts.transpose ? { dc: dr, dr: dc, sc, sr, cell, value } : { dc, dr, sc, sr, cell, value });
       }
     }
     const changes: Change[] = [];
     const moved = new Set<number>();
     let created = 0;
     // A cut moves the cells themselves: a moved formula keeps pointing where it did, and a formula anywhere that points at
-    // a moved cell (or at a range lying wholly inside the cut cells) follows it. (Only within one sheet.)
-    const follow = opts.cut && !opts.transpose && from === s;
+    // a moved cell (or at a range lying wholly inside the cut cells) follows it, to the other sheet when pasted on one.
+    const follow = opts.cut && !opts.transpose;
     const offC = dest.col - src.c0;
     const offR = dest.row - src.r0;
     const inside = (r: Ref): boolean => r.col >= src.c0 && r.col <= src.c1 && r.row >= src.r0 && r.row <= src.r1;
-    const follows = (f: string, home: number): string => mapRefs(f, (a, b, refSheet) => {
+    // `home` is the sheet the formula was on, `lands` the sheet it is on after the paste (they differ only for a
+    // formula moved to another sheet). A reference gets a sheet name when it no longer points at the formula's own sheet.
+    const follows = (f: string, home: number, lands = home): string => mapRefs(f, (a, b, refSheet) => {
       const at = refSheet === undefined ? home : this.sheets.findIndex(x => x.name.toLowerCase() === refSheet.toLowerCase());
-      if (at !== from) return [a, b];
       const go = (r: Ref): Ref => ({ ...r, col: r.col + offC, row: r.row + offR });
-      if (!b) return inside(a) ? [go(a), null] : [a, null];
-      return inside(a) && inside(b) ? [go(a), go(b)] : [a, b];
+      const goes = at === from && inside(a) && (!b || inside(b));
+      const to = goes ? s : at;
+      const sheet = (refSheet === undefined || (goes && at !== s)) && to === lands ? undefined : to === at && refSheet !== undefined ? refSheet : this.sheets[to]?.name;
+      return goes ? [go(a), b ? go(b) : null, sheet] : [a, b, sheet];
     });
     for (const g of grabbed) {
       const key = keyOf(dest.col + g.dc, dest.row + g.dr);
       moved.add(key);
       const old = this.sheets[s].cells.get(key);
-      const srcCol = src.c0 + (opts.transpose ? g.dr : g.dc);
-      const srcRow = src.r0 + (opts.transpose ? g.dc : g.dr);
-      const shifted = (c: Cell): Cell => (c.f === undefined ? { ...c } : opts.cut ? { ...c, f: follow ? follows(c.f, s) : c.f } : { ...c, f: shiftFormula(c.f, dest.col + g.dc - srcCol, dest.row + g.dr - srcRow) });
+      const shifted = (c: Cell): Cell => (c.f === undefined ? { ...c } : opts.cut ? { ...c, f: follow ? follows(c.f, from, s) : c.f } : { ...c, f: shiftFormula(c.f, dest.col + g.dc - g.sc, dest.row + g.dr - g.sr) });
       let after: Cell | undefined;
       if (what === 'all') after = g.cell ? shifted(g.cell) : undefined;
       else {
@@ -1593,7 +1625,7 @@ export class Workbook {
     }
     if (opts.cut) {
       for (const g of grabbed) {
-        const key = keyOf(src.c0 + g.dc, src.r0 + g.dr);
+        const key = keyOf(g.sc, g.sr);
         if (from === s && moved.has(key)) continue;
         changes.push({ sheet: from, key, after: undefined });
       }
@@ -1605,7 +1637,7 @@ export class Workbook {
           if (cell.f === undefined) continue;
           const col = colOfKey(key);
           const row = rowOfKey(key);
-          if (si === s && ((col >= src.c0 && col <= src.c1 && row >= src.r0 && row <= src.r1) || moved.has(key))) continue;
+          if ((si === from && col >= src.c0 && col <= src.c1 && row >= src.r0 && row <= src.r1) || (si === s && moved.has(key))) continue;
           const f = follows(cell.f, si);
           if (f !== cell.f) changes.push({ sheet: si, key, after: { ...cell, f } });
         }
@@ -1641,8 +1673,10 @@ export class Workbook {
         const oneDate = height === 1 && nums.length === 1 && isDateStyle(this.styleOf(sheet.cells.get(keyOf(col, src.r0))));
         const series = (nums.length >= 2 && nums.length === height) || oneDate;
         const step = oneDate ? 1 : series ? nums[nums.length - 1] - nums[nums.length - 2] : 0;
+        const months = series && !oneDate && isDateStyle(this.styleOf(sheet.cells.get(keyOf(col, src.r0)))) ? monthStep(nums) : 0;
         for (let row = target.r0; row <= target.r1; row++) {
-          if (row >= src.r0 && row <= src.r1) continue;
+          // Rows the filter hides are passed over, as in Excel.
+          if ((row >= src.r0 && row <= src.r1) || this.filterHides(s, row)) continue;
           const srcRow = src.r0 + mod(row - src.r0, height);
           const offset = row < src.r0 ? row - src.r0 : row - src.r1;
           const from = sheet.cells.get(keyOf(col, srcRow));
@@ -1650,7 +1684,7 @@ export class Workbook {
           const after: Cell = { ...from };
           if (after.f !== undefined) after.f = shiftFormula(after.f, 0, row - srcRow);
           // Filled upward the series runs back from its first number (1, 2 filled up gives 0, -1), downward on from its last.
-          else if (series && typeof after.v === 'number') after.v = clean((offset < 0 ? nums[0] : nums[nums.length - 1]) + step * offset);
+          else if (series && typeof after.v === 'number') after.v = seriesAt(offset < 0 ? nums[0] : nums[nums.length - 1], step, months, offset);
           put(col, row, after);
         }
       }
@@ -1664,6 +1698,8 @@ export class Workbook {
         const oneDate = src.c1 === src.c0 && nums.length === 1 && isDateStyle(this.styleOf(sheet.cells.get(keyOf(src.c0, row))));
         const series = (nums.length >= 2 && nums.length === src.c1 - src.c0 + 1) || oneDate;
         const step = oneDate ? 1 : series ? nums[nums.length - 1] - nums[nums.length - 2] : 0;
+        const months = series && !oneDate && isDateStyle(this.styleOf(sheet.cells.get(keyOf(src.c0, row)))) ? monthStep(nums) : 0;
+        if (this.filterHides(s, row)) continue;
         for (let col = target.c0; col <= target.c1; col++) {
           if (col >= src.c0 && col <= src.c1) continue;
           const width = src.c1 - src.c0 + 1;
@@ -1673,7 +1709,7 @@ export class Workbook {
           if (!from) { put(col, row, undefined); continue; }
           const after: Cell = { ...from };
           if (after.f !== undefined) after.f = shiftFormula(after.f, col - srcCol, 0);
-          else if (series && typeof after.v === 'number') after.v = clean((offset < 0 ? nums[0] : nums[nums.length - 1]) + step * offset);
+          else if (series && typeof after.v === 'number') after.v = seriesAt(offset < 0 ? nums[0] : nums[nums.length - 1], step, months, offset);
           put(col, row, after);
         }
       }
@@ -1917,8 +1953,8 @@ export class Workbook {
     }
   }
 
-  /** Inserts (n > 0) or deletes (n < 0, at..at-n-1) rows or columns, moving cells and rewriting formulas. */
-  shiftAxis(s: number, axis: 'row' | 'col', at: number, n: number): void {
+  /** Inserts (n > 0) or deletes (n < 0, at..at-n-1) rows or columns, moving cells and rewriting formulas. Calls with the same `run` make one Undo step. */
+  shiftAxis(s: number, axis: 'row' | 'col', at: number, n: number, run?: string): void {
     const limit = axis === 'row' ? MAX_ROWS : MAX_COLS;
     if (n > 0 && this.bounds(s)[axis === 'row' ? 'rows' : 'cols'] + n > limit) throw new SyntaxProblem('There is no room to insert that many.');
     this.snapshotChange(() => {
@@ -2070,7 +2106,7 @@ export class Workbook {
           target.filter = { range, cols, ...(rules.size ? { rules } : {}) };
         }
       }
-    });
+    }, run);
   }
 
   addSheet(): number {
@@ -2308,6 +2344,38 @@ export class Workbook {
     put({ rows: r, cols: c })();
     this.viewStep(put(f), put({ rows: r, cols: c }));
   }
+
+  /** True when the row is hidden by the sheet's filter (not by hand). Clear, fill, copy and delete row pass over such rows, as in Excel. */
+  filterHides(s: number, row: number): boolean {
+    const sh = this.sheets[s];
+    if (!sh?.hiddenRows.has(row)) return false;
+    const f = sh.filter;
+    return !!f && !!(f.cols.size || f.rules?.size) && row > f.range.r0 && row <= f.range.r1;
+  }
+
+  /** The rows from..to that the filter hides, top to bottom. */
+  filterHidden(s: number, from: number, to: number): number[] {
+    const sh = this.sheets[s];
+    if (!sh?.filter) return [];
+    return [...sh.hiddenRows].filter(r => r >= from && r <= to && this.filterHides(s, r)).sort((a, b) => a - b);
+  }
+
+  /** Deletes rows from..to, passing over the rows the filter hides (as Excel deletes only the rows in view). One Undo. */
+  deleteRows(s: number, from: number, to: number): void {
+    const skip = this.filterHidden(s, from, to);
+    if (!skip.length) return this.shiftAxis(s, 'row', from, -(to - from + 1));
+    const runs: Array<[number, number]> = [];
+    let start = from;
+    for (const h of [...skip, to + 1]) {
+      if (h > start) runs.push([start, h - 1]);
+      start = h + 1;
+    }
+    // Bottom run first, so the rows above keep their numbers; every run joins one Undo step.
+    const run = `delete rows ${++this.stepSeq}`;
+    for (const [a, b] of runs.reverse()) this.shiftAxis(s, 'row', a, -(b - a + 1), run);
+  }
+
+  private stepSeq = 0;
 
   /** Hides (or shows again) rows or columns from..to. */
   setHidden(s: number, axis: 'row' | 'col', from: number, to: number, hidden: boolean): void {
@@ -3077,7 +3145,10 @@ export class Workbook {
       const fields: string[] = [];
       for (let col = r.c0; col <= r.c1; col++) {
         const v = this.value(s, col, row);
-        let t = shown ? this.display(s, col, row) : valueToText(v);
+        // A number with no format of its own is written with every digit (447700900123, not 4.47701E+11); dates and
+        // formatted numbers as shown.
+        const general = typeof v === 'number' && !this.styleOf(this.sheets[s].cells.get(keyOf(col, row)))?.fmt;
+        let t = shown && !general ? this.display(s, col, row) : valueToText(v);
         // Any text that a spreadsheet program would read as a formula (typed, or the result of one) is kept as text.
         if (typeof v === 'string' && runsAsFormula(t)) t = `'${t}`;
         // A copy (tab-separated): a cell with line breaks or tabs goes in quotes, as Excel copies it, so it pastes back

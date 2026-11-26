@@ -74,9 +74,9 @@ test('MIN and MAX over a very big range', () => {
 });
 
 test('an argument left empty is a blank, not #NAME?', () => {
-  // Shown empty, as a formula pointing at an empty cell is here, and 0 in arithmetic.
+  // An empty argument as a formula's answer shows 0, as a formula pointing at an empty cell does (as in Excel).
   const wb = book({ A1: '=IF(1>2,"y",)', A2: '=SUM(1,,2)', A3: '=CONCATENATE("a",,"b")', A4: '=IF(1>2,"y",)+5' });
-  assert.deepEqual(['A1', 'A2', 'A3', 'A4'].map(a => at(wb, a)), ['', '3', 'ab', '5']);
+  assert.deepEqual(['A1', 'A2', 'A3', 'A4'].map(a => at(wb, a)), ['0', '3', 'ab', '5']);
 });
 
 test('filling upward runs the series back from its first number', () => {

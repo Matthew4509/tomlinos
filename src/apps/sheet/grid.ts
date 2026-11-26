@@ -74,6 +74,8 @@ interface Clip {
   range: Range;
   cut: boolean;
   text: string;
+  /** A copy over a filtered list: the rows in view, which paste one under the other. */
+  rows?: number[];
 }
 
 export interface Grid {
@@ -1862,7 +1864,9 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
     const at = axis === 'row' ? s.r0 : s.c0;
     const count = axis === 'row' ? s.r1 - s.r0 + 1 : s.c1 - s.c0 + 1;
     try {
-      grid.wb.shiftAxis(grid.wb.active, axis, at, n * count);
+      // Deleting rows of a filtered list takes only the rows in view.
+      if (axis === 'row' && n < 0) grid.wb.deleteRows(grid.wb.active, s.r0, s.r1);
+      else grid.wb.shiftAxis(grid.wb.active, axis, at, n * count);
       state.clip = null;
       afterEdit();
     } catch (error) {
@@ -1929,15 +1933,28 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
     if (formula === '=SUM()') cellInput.setSelectionRange(5, 5);
   }
 
-  function tsv(r: Range): string {
-    return grid.wb.exportText(grid.wb.active, r, '\t');
+  function tsv(r: Range, rows?: number[]): string {
+    if (!rows) return grid.wb.exportText(grid.wb.active, r, '\t');
+    return rows.map(row => grid.wb.exportText(grid.wb.active, { ...r, r0: row, r1: row }, '\t')).join('\r\n');
   }
 
   function copy(cut: boolean): void {
     const r = sel();
-    state.clip = { sheet: grid.wb.active, range: r, cut, text: tsv(r) };
+    // A copy over a filtered list takes only the rows in view, as in Excel (a cut moves every row).
+    let rows: number[] | undefined;
+    const skip = cut ? [] : grid.wb.filterHidden(grid.wb.active, r.r0, r.r1);
+    if (skip.length) {
+      const out = new Set(skip);
+      const used = grid.wb.usedBounds(grid.wb.active);
+      rows = [];
+      for (let row = r.r0; row <= Math.min(r.r1, Math.max(r.r0, used.rows - 1)); row++) if (!out.has(row)) rows.push(row);
+    }
+    state.clip = { sheet: grid.wb.active, range: r, cut, text: tsv(r, rows), ...(rows ? { rows } : {}) };
     redraw();
   }
+
+  /** The height of what was copied: the rows in view of a filtered list, or the whole range. */
+  const clipHeight = (clip: Clip) => (clip.rows ? clip.rows.length : clip.range.r1 - clip.range.r0 + 1);
 
   function paste(): void {
     // Toolbar Paste: works from the copy made inside this window.
@@ -1952,10 +1969,10 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
     }
     const target = { col: sel().c0, row: sel().r0 };
     try {
-      grid.wb.copyBlock(grid.wb.active, clip.range, target, { fromSheet: clip.sheet, what, transpose, cut: clip.cut && what === 'all' && !transpose });
+      grid.wb.copyBlock(grid.wb.active, clip.range, target, { fromSheet: clip.sheet, what, transpose, cut: clip.cut && what === 'all' && !transpose, rows: clip.rows });
       if (clip.cut && what === 'all' && !transpose) state.clip = null;
       const w = clip.range.c1 - clip.range.c0 + 1;
-      const h = clip.range.r1 - clip.range.r0 + 1;
+      const h = clipHeight(clip);
       const [ow, oh] = transpose ? [h, w] : [w, h];
       select({ c0: target.col, r0: target.row, c1: target.col + ow - 1, r1: target.row + oh - 1 }, target);
       afterEdit();
@@ -1971,13 +1988,13 @@ export function createGrid(shell: Shell, wb: Workbook, signal: AbortSignal): Gri
       if (clip && (text === null || text === clip.text)) {
         const s = sel();
         const width = clip.range.c1 - clip.range.c0 + 1;
-        const height = clip.range.r1 - clip.range.r0 + 1;
+        const height = clipHeight(clip);
         // A selection larger than the copied block repeats it.
         const tilesX = Math.max(1, Math.floor((s.c1 - s.c0 + 1) / width));
         const tilesY = Math.max(1, Math.floor((s.r1 - s.r0 + 1) / height));
-        if (tilesX * tilesY <= 1 || clip.cut) grid.wb.copyBlock(grid.wb.active, clip.range, target, { cut: clip.cut, fromSheet: clip.sheet });
+        if (tilesX * tilesY <= 1 || clip.cut) grid.wb.copyBlock(grid.wb.active, clip.range, target, { cut: clip.cut, fromSheet: clip.sheet, rows: clip.rows });
         else grid.wb.batch(() => {
-          for (let ty = 0; ty < tilesY; ty++) for (let tx = 0; tx < tilesX; tx++) grid.wb.copyBlock(grid.wb.active, clip.range, { col: target.col + tx * width, row: target.row + ty * height }, { fromSheet: clip.sheet });
+          for (let ty = 0; ty < tilesY; ty++) for (let tx = 0; tx < tilesX; tx++) grid.wb.copyBlock(grid.wb.active, clip.range, { col: target.col + tx * width, row: target.row + ty * height }, { fromSheet: clip.sheet, rows: clip.rows });
         });
         if (clip.cut) state.clip = null;
         select({ c0: target.col, r0: target.row, c1: target.col + width * (clip.cut ? 1 : tilesX) - 1, r1: target.row + height * (clip.cut ? 1 : tilesY) - 1 }, target);

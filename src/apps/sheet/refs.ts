@@ -226,11 +226,12 @@ export function quoteSheet(name: string): string {
 
 /**
  * Rewrites every cell reference in a formula (text after "="). `fn` gets the reference (or both ends of a range) and the
- * sheet it points at (undefined = the formula's own sheet) and returns the new reference(s), or null for #REF!.
+ * sheet it points at (undefined = the formula's own sheet) and returns the new reference(s), or null for #REF!. A third
+ * item, when given, is the sheet the reference is written with from now on (undefined: none, the formula's own sheet).
  */
 export function mapRefs(
   formula: string,
-  fn: (a: Ref, b: Ref | null, sheet: string | undefined) => [Ref, Ref | null] | null,
+  fn: (a: Ref, b: Ref | null, sheet: string | undefined) => [Ref, Ref | null] | [Ref, Ref | null, string | undefined] | null,
 ): string {
   const toks = tokenize(formula);
   const edits: Array<{ start: number; end: number; text: string }> = [];
@@ -249,7 +250,8 @@ export function mapRefs(
       }
       const [ra, rb] = wholeColumns(wa, wb);
       const result = fn(ra, rb, sheet);
-      const prefix = sheet !== undefined ? `${quoteSheet(sheet)}!` : '';
+      const named = result && result.length > 2 ? result[2] : sheet;
+      const prefix = named !== undefined ? `${quoteSheet(named)}!` : '';
       const colText = (r: Ref) => `${r.absC ? '$' : ''}${colName(r.col)}`;
       edits.push({ start: toks[first].start, end: toks[k + 2].end, text: result && result[1] ? prefix + colText(result[0]) + ':' + colText(result[1]) : '#REF!' });
       k += 2;
@@ -273,7 +275,8 @@ export function mapRefs(
       }
     }
     const result = fn(a, b, sheet);
-    const prefix = sheet !== undefined ? `${quoteSheet(sheet)}!` : '';
+    const named = result && result.length > 2 ? result[2] : sheet;
+    const prefix = named !== undefined ? `${quoteSheet(named)}!` : '';
     let text: string;
     if (!result) text = "#REF!";
     else text = prefix + refText(result[0]) + (result[1] ? `:${refText(result[1])}` : '');
