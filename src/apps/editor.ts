@@ -10,6 +10,8 @@ import type { AppDef } from '../shell/types.ts';
 import { detectEol, EOL_NAMES, fileBytes, fileSize, findNext, hasBom, lineCol, lineStart, replaceAll, toBox, type Eol } from './notepad/text.ts';
 import { APPS } from './catalog.ts';
 import { saveOver } from '../shell/savefile.ts';
+import { classicBar } from '../shell/menubar.ts';
+import { helpMenu, textBoxEdits } from './classic-menus.ts';
 
 // One limit for opening and saving (the same as Notepad Pro's), so Notepad never saves a file it then refuses to open.
 const MAX_TEXT_BYTES = 5 * 1024 * 1024;
@@ -31,15 +33,9 @@ export const editorApp: AppDef = {
     app.root.classList.add('editor');
 
     const tool = (label: string, title: string, extra: Record<string, string> = {}) => h('button', { type: 'button', class: 'tool wide', title, ...extra }, label);
-    const saveBtn = tool('Save', 'Save (Ctrl+S)');
-    const saveAsBtn = tool('Save as...', 'Save a copy under another name (Ctrl+Shift+S)');
-    const findBtn = tool('Find', 'Find (Ctrl+F)');
-    const replaceBtn = tool('Replace', 'Find and replace (Ctrl+H)');
-    const gotoBtn = tool('Go to', 'Go to line (Ctrl+G)');
-    const wrapBtn = tool('Word wrap', 'Wrap long lines at the window edge', { 'aria-pressed': 'true' });
-    const zoomOut = tool('−', 'Zoom out (Ctrl+-)', { 'aria-label': 'Zoom out' });
-    const zoomIn = tool('+', 'Zoom in (Ctrl++)', { 'aria-label': 'Zoom in' });
-    const eolBtn = tool('', 'Line endings used when saving: click to switch');
+    /** False when the file could not be opened: there is no text for the menus to work on. */
+    let usable = true;
+    let wrapOn = true;
     const area = h('textarea', { class: 'editor-text', spellcheck: 'false', 'aria-label': 'Text', autocapitalize: 'off', wrap: 'soft' });
 
     // The find bar: shown by Find or Replace, hidden by Escape or ×.
@@ -58,9 +54,50 @@ export const editorApp: AppDef = {
       replaceRow, findNote);
 
     const status = h('div', { class: 'statusbar editor-status', role: 'status' });
-    app.root.append(
-      h('div', { class: 'toolbar' }, saveBtn, saveAsBtn, h('span', { class: 'tool-gap' }), findBtn, replaceBtn, gotoBtn, h('span', { class: 'tool-gap' }), wrapBtn, zoomOut, zoomIn, eolBtn),
-      findBar, area, status);
+
+    // The menu bar: File, Edit, Format, View, Help. Every command the old button row had is in a menu.
+    const can = () => usable;
+    const setWrap = (wrap: boolean) => {
+      wrapOn = wrap;
+      area.setAttribute('wrap', wrap ? 'soft' : 'off');
+    };
+    const setEol = (to: Eol) => {
+      eol = to;
+      refresh();
+      shell.toast(`Will save with ${EOL_NAMES[eol]} line endings.`);
+    };
+    const EOLS: Eol[] = ['\r\n', '\n', '\r'];
+    const bar = classicBar({
+      menus: [
+        { label: 'File', items: [
+          { label: 'Save', icon: 'save', shortcut: 'Ctrl+S', enabled: can, action: () => void save() },
+          { label: 'Save as...', icon: 'save-as', shortcut: 'Ctrl+Shift+S', enabled: can, action: () => void saveAs() },
+          { separator: true },
+          { label: 'Close', icon: 'close', shortcut: 'Alt+Q', action: () => app.close() },
+        ] },
+        { label: 'Edit', items: () => [
+          ...textBoxEdits(() => area, can),
+          { separator: true },
+          { label: 'Find...', icon: 'find', shortcut: 'Ctrl+F', enabled: can, action: () => openFind(false) },
+          { label: 'Find next', shortcut: 'F3', enabled: () => usable && findInput.value !== '', action: () => find() },
+          { label: 'Find previous', shortcut: 'Shift+F3', enabled: () => usable && findInput.value !== '', action: () => find(true) },
+          { label: 'Replace...', icon: 'replace', shortcut: 'Ctrl+H', enabled: can, action: () => openFind(true) },
+          { label: 'Go to line...', shortcut: 'Ctrl+G', enabled: can, action: () => void goToLine() },
+        ] },
+        { label: 'Format', items: [
+          { label: 'Word wrap', checked: () => wrapOn, enabled: can, action: () => setWrap(!wrapOn) },
+          { separator: true },
+          { label: 'Line endings when saving', enabled: can, submenu: () => EOLS.map(e => ({ label: `${EOL_NAMES[e]} (${EOL_SHORT[e]})`, checked: () => eol === e, action: () => setEol(e) })) },
+        ] },
+        { label: 'View', items: [
+          { label: 'Zoom in', icon: 'zoom-in', shortcut: 'Ctrl++', enabled: () => usable && zoom < ZOOMS[ZOOMS.length - 1], action: () => step(1) },
+          { label: 'Zoom out', icon: 'zoom-out', shortcut: 'Ctrl+-', enabled: () => usable && zoom > ZOOMS[0], action: () => step(-1) },
+          { label: 'Normal size (100%)', shortcut: 'Ctrl+0', enabled: () => usable && zoom !== 100, action: () => setZoom(100) },
+        ] },
+        helpMenu(shell),
+      ],
+    }, { layer: shell.menus, signal: app.signal, scope: app.root, doc: () => (findBar.contains(document.activeElement) ? null : area), label: 'Notepad menu bar' });
+    app.root.append(bar.el, findBar, area, status);
 
     const dirty = () => area.value !== saved || eol !== savedEol;
     const drawStatus = () => {
@@ -69,7 +106,6 @@ export const editorApp: AppDef = {
       const lines = text.split('\n').length;
       const size = fileSize(text, eol, bom);
       status.textContent = `Ln ${line}, Col ${col}  ·  ${lines} line${lines === 1 ? '' : 's'}, ${formatSize(size)}  ·  ${EOL_NAMES[eol]}  ·  UTF-8  ·  ${zoom}%${dirty() ? '  ·  not saved' : ''}`;
-      eolBtn.textContent = EOL_SHORT[eol];
     };
     // Counting lines and bytes goes over the whole text, and even reading a long text box's text back costs the browser
     // milliseconds, so in a long file a key only marks the window changed (at once: the close guard needs it), and the
@@ -92,8 +128,6 @@ export const editorApp: AppDef = {
     const setZoom = (z: number) => {
       zoom = z;
       area.style.fontSize = `${(14 * zoom) / 100}px`;
-      zoomOut.disabled = zoom === ZOOMS[0];
-      zoomIn.disabled = zoom === ZOOMS[ZOOMS.length - 1];
       refresh();
     };
     const step = (dir: 1 | -1) => {
@@ -107,9 +141,9 @@ export const editorApp: AppDef = {
         if (!entry || entry.kind !== 'file') throw new Error('gone');
         if (entry.size > MAX_TEXT_BYTES) {
           area.disabled = true;
-          for (const b of [saveBtn, saveAsBtn, findBtn, replaceBtn, gotoBtn, wrapBtn, zoomOut, zoomIn, eolBtn]) b.disabled = true;
+          usable = false;
+          bar.refresh();
           status.textContent = `This file is ${formatSize(entry.size)}. Notepad opens text up to ${formatSize(MAX_TEXT_BYTES)}. It is safe where it is.`;
-          saveBtn.disabled = saveAsBtn.disabled = true;
           return;
         }
         const bytes = await shell.fs.readFile(path);
@@ -121,8 +155,9 @@ export const editorApp: AppDef = {
         loadedId = entry.id;
       } catch (error) {
         area.disabled = true;
-        // Every button that works on the text is off: there is no text to work on.
-        for (const b of [saveBtn, saveAsBtn, findBtn, replaceBtn, gotoBtn, wrapBtn, zoomOut, zoomIn, eolBtn]) b.disabled = true;
+        // Every menu command that works on the text is off: there is no text to work on.
+        usable = false;
+        bar.refresh();
         status.textContent = error instanceof TypeError
           ? 'This file does not look like text, so it was not opened. It is safe where it is.'
           : 'That file is not there any more. It may have been moved or deleted.';
@@ -310,11 +345,6 @@ export const editorApp: AppDef = {
     on(area, 'blur', () => (leaving = false), app.signal);
     on(area, 'input', refresh, app.signal);
     for (const type of ['keyup', 'click', 'select'] as const) on(area, type, refresh, app.signal);
-    on(saveBtn, 'click', () => void save(), app.signal);
-    on(saveAsBtn, 'click', () => void saveAs(), app.signal);
-    on(findBtn, 'click', () => openFind(false), app.signal);
-    on(replaceBtn, 'click', () => openFind(true), app.signal);
-    on(gotoBtn, 'click', () => void goToLine(), app.signal);
     on(nextBtn, 'click', () => find(), app.signal);
     on(prevBtn, 'click', () => find(true), app.signal);
     on(oneBtn, 'click', replaceOne, app.signal);
@@ -341,19 +371,6 @@ export const editorApp: AppDef = {
         findBar.hidden = true;
         area.focus();
       }
-    }, app.signal);
-    on(wrapBtn, 'click', () => {
-      const wrap = wrapBtn.getAttribute('aria-pressed') !== 'true';
-      wrapBtn.setAttribute('aria-pressed', String(wrap));
-      area.setAttribute('wrap', wrap ? 'soft' : 'off');
-    }, app.signal);
-    on(zoomIn, 'click', () => step(1), app.signal);
-    on(zoomOut, 'click', () => step(-1), app.signal);
-    on(eolBtn, 'click', () => {
-      // LF, CRLF, CR in turn: an old Mac file can be kept as it is.
-      eol = eol === '\n' ? '\r\n' : eol === '\r\n' ? '\r' : '\n';
-      refresh();
-      shell.toast(`Will save with ${EOL_NAMES[eol]} line endings.`);
     }, app.signal);
     on(app.root, 'keydown', (event: KeyboardEvent) => {
       const ctrl = event.ctrlKey || event.metaKey;

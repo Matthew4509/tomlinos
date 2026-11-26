@@ -126,25 +126,35 @@ await step('FAULT: a UTF-8 file with a BOM keeps it when Notepad saves (Notepad 
 await step('FAULT: an old Mac (CR) file: the line-ending button names CR, not LF', async () => {
   const n = await openInNotepad('oldmac');
   ok((await n.locator('.editor-status').innerText()).includes('Old Mac (CR)'), 'status says CR');
-  const label = await n.locator('.toolbar button[title^="Line endings"]').innerText();
-  eq(label, 'CR', 'line-ending button');
+  // Format > Line endings when saving ticks the file's own (the old button row's LF/CR/CRLF button is a menu now).
+  await n.locator('.cbar-title[data-menu=Format]').click();
+  await page.locator('.menu-item', { hasText: 'Line endings when saving' }).click();
+  const label = await page.locator('.menu-item[aria-checked="true"]', { hasText: /\((CR|LF|CRLF)\)/ }).innerText();
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  ok(label.includes('(CR)'), 'line ending ticked in the Format menu: ' + label);
 });
 
 await step('FAULT: a file Notepad cannot open leaves no dead buttons (Find, Replace, Go to, zoom look usable but do nothing)', async () => {
   const n = await openInNotepad('latin');
   ok((await n.locator('.editor-status').innerText()).includes('does not look like text'), 'refused as not text');
-  const live = await n.locator('.toolbar button:not([disabled])').allInnerTexts();
-  eq(live, [], 'buttons still enabled');
+  // Every command that works on the text is off in the menus (File keeps Close; Help is the desktop's).
+  const live = [];
+  for (const menu of ['File', 'Edit', 'Format', 'View']) {
+    await n.locator(`.cbar-title[data-menu=${menu}]`).click();
+    live.push(...(await page.locator('.menu-root .menu-item:not([aria-disabled="true"]) .menu-label').allInnerTexts()));
+    await page.keyboard.press('Escape');
+  }
+  eq(live, ['Close'], 'menu commands still enabled');
 });
 
 await step('FAULT: clicking Save twice quickly does not claim the file was changed somewhere else', async () => {
   const n = await openInNotepad('plain');
   await n.locator('textarea').press('End');
   await n.locator('textarea').type(' now');
-  await n.evaluate(win => {
-    const save = win.querySelector('.toolbar button[title^="Save (Ctrl+S)"]');
-    save.click();
-    save.click();
+  // Two Saves at once (the old button row's Save button is File > Save and Ctrl+S now).
+  await n.locator('textarea').evaluate(area => {
+    for (let i = 0; i < 2; i++) area.dispatchEvent(new KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true, cancelable: true }));
   });
   await page.waitForTimeout(1500);
   const dialog = await page.locator('.dialog').count() ? await page.locator('.dialog').innerText() : '';
