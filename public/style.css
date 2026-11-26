@@ -1285,6 +1285,24 @@ textarea.field { resize: vertical; font: inherit; }
 .saver-sub { margin-left: 12px; }
 .saver-sub[hidden] { display: none; }
 .saver-way { margin: 0; }
+/* Step 4: one picture tile like the ones above (not a choice), with Show more opening a bigger picture and the words. */
+.saver-way-tile { cursor: default; }
+.saver-way-tile .saver-step-h { margin: 0; font-size: 13px; }
+.saver-way-btn { flex: none; font-size: 12px; padding: 1px 8px; cursor: pointer; }
+.saver-way-more { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; }
+.saver-way-more[hidden] { display: none; }
+.saver-way-more .saver-way { flex: 1 1 200px; }
+.mini-view.saver-way-big { width: 400px; height: 250px; flex: none; }
+.saver-way-big .mini-screen { transform: scale(.625); }
+@media (max-width: 480px) {
+  .mini-view.saver-way-big { width: 300px; height: 187.5px; }
+  .saver-way-big .mini-screen { transform: scale(.46875); }
+}
+.mini-ring { position: absolute; left: 0; top: 0; z-index: 2; pointer-events: none; }
+.saver-start .check-row { margin: 0; }
+.saver-start .bin-set { margin: 0; }
+.saver-start .bin-tile-lines > p:empty { display: none; }
+.saver-start .acct-buttons { margin: 0; }
 /* The guide's picture tiles (src/shell/saverminis.ts): the real screensaver or lock screen drawn on a 640 x 400 screen and
    scaled to a fifth (200 x 125). They sit side by side and wrap under each other in a narrow window or on a phone. */
 .mini-tiles { display: flex; flex-wrap: wrap; gap: 12px; margin: 4px 0 10px; }

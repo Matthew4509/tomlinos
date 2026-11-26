@@ -4,13 +4,14 @@
 //
 // Laid out as a guide: 1 what shows when you step away and 2 how the lock screen looks, each a row of small pictures of
 // the real thing to pick from (a pick is only a choice until that step's Save keeps it; leaving without saving changes
-// nothing), 3 try it (Preview locks nothing), 4 how to get back in, which changes with the choices. Then when it starts
-// and the keys, which keep themselves as soon as they change.
+// nothing), 3 try it (Preview locks nothing), 4 how to get back in, a small picture with a red ring round the place to
+// press, which changes with the choices and opens to the words. Then the screensaver / lock screen tile (when it starts
+// and the keys), which keeps itself as soon as it changes.
 import { Bus } from '../core/bus.ts';
-import { h, on } from '../core/dom.ts';
+import { css, h, on } from '../core/dom.ts';
 import { localStatus } from '../core/local.ts';
 import { READER_PATH } from '../auth/lock.ts';
-import { blankMini, clockMini, lockMini, readerMini, sheetMini, tileGroup } from './saverminis.ts';
+import { blankMini, clockLockPic, clockMini, lockMini, MINI_H, MINI_W, readerMini, RING_AT, ringMini, sheetMini, tileGroup } from './saverminis.ts';
 import { IDLE_CHOICES, LOCK_WORDS_MAX, SHEET_KINDS, type LockSettings, type LockWords, type SheetKind } from './session.ts';
 import type { Shell } from './types.ts';
 
@@ -36,6 +37,48 @@ export function saverControls(shell: Shell, signal: AbortSignal): Node[] {
   };
   showOthers();
   const wayBack = h('p', { class: 'hint saver-way' });
+
+  // ---- 4. How to get back in: a small picture of the saved screensaver with a red ring round the place to press (or of
+  // the lock screen it leads to); "Show more" opens a bigger one with the words.
+  const wayScreen = () => {
+    const s = h('div', { class: 'mini-screen' });
+    css(s, { width: MINI_W, height: MINI_H });
+    return s;
+  };
+  const waySmall = wayScreen();
+  const wayLarge = wayScreen();
+  let wayKey = '';
+  let wayClock: AbortController | null = null;
+  signal.addEventListener('abort', () => wayClock?.abort(), { once: true });
+  const wayPicture = (): Node[] => {
+    if (lock.saver === 'sheet') return [sheetMini(lock.sheet.kind, lock.sheet.title), ...(canLock ? [ringMini(RING_AT.sheet)] : [])];
+    if (lock.saver === 'reader') return [readerMini(), ...(canLock ? [ringMini(RING_AT.reader)] : [])];
+    if (canLock) return [lockMini(lock.look, lock.words, user())];
+    if (lock.saver === 'clock') return [clockMini((wayClock ??= new AbortController()).signal)];
+    return [blankMini()];
+  };
+  const drawWay = () => {
+    const u = user();
+    const key = JSON.stringify([lock.saver, lock.sheet, lock.look, lock.words, u?.display, !!u?.pin, !!u?.totp]);
+    if (key === wayKey) return;
+    wayKey = key;
+    wayClock?.abort();
+    wayClock = null;
+    waySmall.replaceChildren(...wayPicture());
+    wayLarge.replaceChildren(...wayPicture());
+  };
+  const wayPanel = h('div', { class: 'saver-way-more', id: `saver-way-${Math.random().toString(36).slice(2)}`, hidden: true },
+    h('div', { class: 'mini-view saver-way-big', 'aria-hidden': 'true', inert: true }, wayLarge), wayBack);
+  const wayToggle = h('button', { type: 'button', class: 'btn saver-way-btn', 'aria-expanded': 'false', 'aria-controls': wayPanel.id }, '⤢ Show more');
+  const wayTile = h('div', { class: 'mini-tile saver-way-tile' },
+    h('div', { class: 'mini-view', 'aria-hidden': 'true', inert: true }, waySmall),
+    h('span', { class: 'mini-name' }, h('h3', { class: 'saver-step-h saver-way-h' }, '4. How to get back in'), wayToggle));
+  on(wayTile, 'click', () => {
+    const open = wayPanel.hidden;
+    wayPanel.hidden = !open;
+    wayToggle.setAttribute('aria-expanded', String(open));
+    wayToggle.textContent = open ? '⤡ Show less' : '⤢ Show more';
+  }, signal);
 
   // ---- 1. What shows when you step away
   const kind = h('select', { class: 'field' }, ...SHEET_KINDS.map(k => h('option', { value: k.id }, k.name)));
@@ -155,6 +198,7 @@ export function saverControls(shell: Shell, signal: AbortSignal): Node[] {
         : lock.saver === 'reader'
           ? `On the reader: press "Log in for more" in its top corner, then type your user name (${user()?.name ?? 'the one you sign in with'}) and your password. Escape does nothing there, so it gives nothing away.`
           : `Move the mouse or press a key to get ${title}, then your ${pin ? 'PIN or password' : 'password'}.`;
+    drawWay();
   }
 
   // The sheet's kind and title and the custom words are kept by their step's Save; the pictures follow them as they change.
@@ -218,16 +262,19 @@ export function saverControls(shell: Shell, signal: AbortSignal): Node[] {
     step(3, 'Try it',
       h('p', { class: 'hint' }, 'Preview shows exactly what others will see (what is saved). Nothing is locked: any way back, or "Close preview", ends it.'),
       h('div', { class: 'acct-buttons' }, button('Preview', () => shell.lock.preview(), 'btn primary'))),
-    step(4, 'How to get back in', wayBack),
-    h('h3', { class: 'saver-step-h' }, 'When it starts'),
-    h('label', { class: 'bin-set' }, 'Start the screensaver ', idle),
-    h('label', { class: 'check-row' }, lockBox, ' Lock when the screensaver starts'),
-    h('label', { class: 'check-row' }, panic, ' Escape twice, quickly: show the spreadsheet and lock at once'),
-    h('p', { class: 'hint' }, canLock ? 'Alt+L locks at any time, and so does the padlock by the clock. Alt+Shift+L (or right-click the padlock) signs out and shows the book.' : ''),
-    ...(canLock ? [h('label', { class: 'check-row' }, hintBox, ' Show these keys small on the desktop background (anyone passing can read it too)')] : []),
-    h('div', { class: 'acct-buttons' },
-      button('Show the screensaver now', () => void shell.lock.show(false)),
-      ...(canLock ? [button('Lock now (Alt+L)', () => void shell.lock.show(true), 'btn primary')] : []),
-    ),
+    h('div', { class: 'saver-step' }, h('div', { class: 'mini-tiles' }, wayTile), wayPanel),
+    h('h3', { class: 'saver-step-h' }, 'Screensaver / lock screen'),
+    h('div', { class: 'bin-tile tall saver-start' },
+      h('span', { class: 'bin-tile-pic', 'aria-hidden': 'true' }, clockLockPic(40)),
+      h('div', { class: 'bin-tile-lines' },
+        h('label', { class: 'bin-set' }, 'Start the screensaver ', idle),
+        h('label', { class: 'check-row' }, lockBox, ' Lock when the screensaver starts'),
+        h('label', { class: 'check-row' }, panic, ' Escape twice, quickly: show the spreadsheet and lock at once'),
+        h('p', { class: 'hint' }, canLock ? 'Alt+L locks at any time, and so does the padlock by the clock. Alt+Shift+L (or right-click the padlock) signs out and shows the book.' : ''),
+        ...(canLock ? [h('label', { class: 'check-row' }, hintBox, ' Show these keys small on the desktop background (anyone passing can read it too)')] : []),
+        h('div', { class: 'acct-buttons' },
+          button('Show the screensaver now', () => void shell.lock.show(false)),
+          ...(canLock ? [button('Lock now (Alt+L)', () => void shell.lock.show(true), 'btn primary')] : []),
+        ))),
   ];
 }
