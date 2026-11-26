@@ -248,6 +248,8 @@ function picker(shell: Shell, options: PickOptions, save: SaveOptions | null, fo
       expanded.add(ancestor);
       await loadKids(ancestor);
     }
+    // The folder being shown is open in the tree too, so a folder just made in it shows there at once.
+    expanded.add(path);
     if (seq !== goSeq) return false;
     selected = select !== null && listed.some(e => e.name === select) ? select : null;
     renderAll();

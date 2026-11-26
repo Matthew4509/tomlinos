@@ -18,11 +18,26 @@ export function typeLabel(ext: string): string {
   return `${kind} (*.${ext})`;
 }
 
+/**
+ * A label that shows its endings the same way in every app: "Markdown (*.md)", "All files (*.*)". A label that already
+ * names its endings ("Spreadsheet (.sheet)") gets the same "(*.sheet)" form; a label with other words in brackets is kept.
+ */
+export function withEndings(label: string, ext: string[]): string {
+  const endings = ext.length ? ext.map(e => `*.${e}`).join(', ') : '*.*';
+  const named = /\s*\((\.[a-z0-9]+(?:,\s*\.[a-z0-9]+)*)\)\s*$/i.exec(label);
+  if (named) return `${label.slice(0, named.index)} (${endings})`;
+  if (/\(\*\./.test(label)) return label;
+  return `${label} (${endings})`;
+}
+
 /** The drop-down's entries: the ones asked for, else made from `accept`, else "All files". */
 export function typeChoices(types: FileTypeChoice[] | undefined, accept: string[] | undefined, saving: boolean): FileTypeChoice[] {
   const given = (types ?? [])
     .filter(t => t && typeof t.label === 'string' && t.label !== '')
-    .map(t => ({ label: t.label, ext: [...new Set((t.ext ?? []).map(cleanExt).filter(e => e !== ''))] }));
+    .map(t => {
+      const ext = [...new Set((t.ext ?? []).map(cleanExt).filter(e => e !== ''))];
+      return { label: withEndings(t.label, ext), ext };
+    });
   if (given.length) return given;
   const exts = [...new Set((accept ?? []).map(cleanExt).filter(e => e !== ''))];
   if (!exts.length) return [{ label: 'All files (*.*)', ext: [] }];
