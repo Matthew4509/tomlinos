@@ -3,6 +3,7 @@
 // the desktop keeps its files. Opened with "ai" it starts at the AI section. Nothing here can erase files.
 import { askIdentity } from '../auth/identity.ts';
 import { h, on } from '../core/dom.ts';
+import { icon } from '../shell/icons.ts';
 import { THEMES, BIN_DAYS_MAX, BIN_LIMIT_MAX_MB, BIN_LIMIT_MIN_MB, DEFAULT_COLOUR, WALLPAPER_COLOURS } from '../shell/session.ts';
 import { extensionOf } from '../shell/filetypes.ts';
 import type { AppDef } from '../shell/types.ts';
@@ -65,23 +66,37 @@ export const settingsApp: AppDef = {
 
     // ---- Recycle Bin ----
     const bin = shell.session.data.bin;
+    // Storage tile: where files are kept and what is deleted by itself, in the days actually chosen.
+    const storage = { vanish: null as number | null };
+    const storageWhere = h('div', { class: 'bin-line' }, `Your files are kept in ${shell.storeLabel}.`);
+    const storageBin = h('div', { class: 'bin-line' });
+    const storageChats = h('div', { class: 'bin-line' });
+    const paintStorage = () => {
+      storageBin.textContent = 'Deleting a file moves it to the Recycle Bin, ' + (bin.clear === 'days' ? `which clears it after ${bin.days} day${bin.days === 1 ? '' : 's'}.` : bin.clear === 'daily' ? 'which clears it the next day.' : 'where it stays until you empty it.');
+      const ai = shell.session.data.aiHistoryDays;
+      const v = storage.vanish;
+      const days = (n: number) => `${n} day${n === 1 ? '' : 's'}`;
+      storageChats.textContent = v === null
+        ? (ai ? `AI chats are deleted after ${days(ai)}.` : 'AI chats are kept until you delete them.')
+        : ai && ai === v ? `AI chats and Chat messages are deleted after ${days(ai)}.`
+          : `AI chats are ${ai ? `deleted after ${days(ai)}` : 'kept until you delete them'}; Chat messages ${v ? `after ${days(v)}` : 'until someone deletes them'}.`;
+    };
     const clearSel = h('select', { class: 'field', 'aria-label': 'Clear old items' },
-      h('option', { value: 'days' }, 'Delete items after a number of days'),
-      h('option', { value: 'daily' }, 'Clear every day (items from before today)'),
-      h('option', { value: 'never' }, 'Never clear by itself'),
+      h('option', { value: 'days' }, 'after'),
+      h('option', { value: 'daily' }, 'every day (from before today)'),
+      h('option', { value: 'never' }, 'only when I empty it'),
     );
     const daysIn = h('input', { type: 'number', class: 'field num', min: 1, max: BIN_DAYS_MAX, step: 1, 'aria-label': 'Days to keep deleted items' });
     const limitIn = h('input', { type: 'number', class: 'field num', min: BIN_LIMIT_MIN_MB, max: BIN_LIMIT_MAX_MB, step: 1, 'aria-label': 'Size limit in megabytes' });
+    const daysPart = h('span', { class: 'bin-days' }, daysIn, ' days');
     const binProblem = h('p', { class: 'dialog-problem', role: 'alert' });
-    const binNote = h('p', { class: 'hint' });
     const showBin = () => {
       clearSel.value = bin.clear;
       daysIn.value = String(bin.days);
       limitIn.value = String(bin.limitMb);
       daysIn.disabled = bin.clear !== 'days';
-      binNote.textContent =
-        (bin.clear === 'days' ? `Deleted items are kept ${bin.days} day${bin.days === 1 ? '' : 's'}, then deleted for good. ` : bin.clear === 'daily' ? 'Items deleted before today are deleted for good each day. ' : 'Deleted items stay until you empty the Recycle Bin. ') +
-        `An item over ${bin.limitMb} MB is not kept: you are asked, and it is then deleted for good.`;
+      daysPart.hidden = bin.clear !== 'days';
+      paintStorage();
     };
     on(clearSel, 'change', () => {
       const before = { ...bin };
@@ -144,11 +159,14 @@ export const settingsApp: AppDef = {
     const aiPick = h('select', { class: 'field', 'aria-label': 'Clear my AI chats after' }, ...dayChoices('Never'));
     const aiNote = h('p', { class: 'hint', role: 'status' });
     aiPick.value = String(shell.session.data.aiHistoryDays);
+    new MutationObserver(paintStorage).observe(aiNote, { childList: true, characterData: true, subtree: true });
     const chatApi = shell.account ? new ServiceApi(shell.account.api.base, 'chat') : null;
     if (chatApi) {
       void chatApi.call<{ vanishDays: number; owner: boolean }>('settings').then(r => {
         vanishPick.value = String(r.vanishDays);
         vanishPick.disabled = !r.owner;
+        storage.vanish = r.vanishDays;
+        paintStorage();
         vanishNote.textContent = r.owner ? 'For everyone on this desktop. Older messages are deleted from the server.' : 'Set by the owner of this desktop, for everyone.';
       }).catch(() => (vanishNote.textContent = 'Chat is not reachable just now.'));
       on(vanishPick, 'change', async () => {
@@ -163,6 +181,7 @@ export const settingsApp: AppDef = {
         }
         try {
           await chatApi.call('settings', { body: { vanishDays: days, ...who } });
+          storage.vanish = days;
           vanishNote.textContent = days ? `Saved: messages vanish after ${days} days.` : 'Saved: messages are kept until someone deletes them.';
         } catch (error) {
           vanishNote.textContent = error instanceof Error ? error.message : 'It could not be saved.';
@@ -238,14 +257,16 @@ export const settingsApp: AppDef = {
       h('label', { class: 'bin-set' }, 'Clear my AI chats after ', aiPick),
       aiNote,
       h('h2', { class: 'set-h' }, 'Recycle Bin'),
-      h('label', { class: 'bin-set' }, 'Clearing ', clearSel),
-      h('label', { class: 'bin-set' }, 'Days to keep ', daysIn),
-      h('label', { class: 'bin-set' }, `Size limit (${BIN_LIMIT_MIN_MB}–${BIN_LIMIT_MAX_MB} MB) `, limitIn, ' MB'),
-      binProblem,
-      binNote,
+      h('div', { class: 'bin-tile' },
+        h('span', { class: 'bin-tile-pic', 'aria-hidden': 'true' }, icon('trash', 40)),
+        h('div', { class: 'bin-tile-lines' },
+          h('div', { class: 'bin-line' }, 'Delete items for good ', clearSel, ' ', daysPart),
+          h('div', { class: 'bin-line' }, 'Items over ', limitIn, ` MB: ask, then delete for good (${BIN_LIMIT_MIN_MB}–${BIN_LIMIT_MAX_MB})`),
+          binProblem)),
       h('h2', { class: 'set-h' }, 'Storage'),
-      h('p', {}, `Your files are kept in ${shell.storeLabel}.`),
-      h('p', { class: 'hint' }, `Deleting a file moves it to the Recycle Bin. The only automatic deleting is what is set above: the Recycle Bin clearing, AI chats cleared after the days you chose${chatApi ? ', and Chat messages when they are set to vanish (by the owner, for everyone)' : ''}. Restarting only reloads the page.`),
+      h('div', { class: 'bin-tile' },
+        h('span', { class: 'bin-tile-pic', 'aria-hidden': 'true' }, icon('files', 40)),
+        h('div', { class: 'bin-tile-lines', role: 'status' }, storageWhere, storageBin, storageChats)),
     );
     drawSwatches();
     if (arg === 'ai') requestAnimationFrame(() => aiHead.scrollIntoView({ block: 'start' }));

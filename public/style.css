@@ -406,6 +406,15 @@ body.is-dragging .win-body { pointer-events: none; }
 /* Wraps, and its list box may shrink below its longest choice: at phone width a row's words and list box used to run
    past the window's edge (453 px in 373), and the whole Settings body scrolled sideways. */
 .bin-set { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 6px 0; }
+/* Settings › Recycle Bin: one horizontal tile, the bin on the left and two lines of settings beside it. */
+.bin-tile { display: flex; align-items: center; gap: 14px; margin: 6px 0 10px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--face-hi); }
+.bin-tile-pic { flex: none; display: flex; }
+.bin-tile-lines { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.bin-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.bin-tile .field { flex: none; width: auto; max-width: 100%; }
+.bin-line .field.num { width: 6em; }
+.bin-tile .dialog-problem:empty { display: none; }
+@media (max-width: 480px) { .bin-tile { align-items: flex-start; } .bin-tile-pic svg { width: 32px; height: 32px; } }
 .bin-set select { width: auto; flex: 1; min-width: 0; max-width: 100%; }
 .field.num { width: 90px; }
 
