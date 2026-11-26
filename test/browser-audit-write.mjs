@@ -369,12 +369,25 @@ await step('W-P0-3 a paragraph that is just "---" survives Save as Markdown and 
   ok(/^---$/m.test(t), 'text after reopening: ' + JSON.stringify(t));
 });
 
-await step('W-P1 Save as "notes.rtf" makes "notes.rtf.docx" without saying so', async () => {
+await step('W-P1-9 Save as "notes.rtf" says Write cannot save .rtf and offers "notes.docx" (never a silent "notes.rtf.docx")', async () => {
   await newDoc();
   await page.keyboard.type('rtf name');
   await saveAs('notes.rtf');
+  const ask = D();
+  await ask.filter({ hasText: 'cannot save .rtf' }).waitFor({ timeout: 5000 });
+  await ask.getByRole('button', { name: 'Save as “notes.docx”' }).click();
   const t = await page.locator('.toast', { hasText: 'Saved' }).last().innerText({ timeout: 15000 });
-  ok(!/notes.rtf.docx/.test(t), 'toast: ' + t);
+  ok(/Saved “notes\.docx”/.test(t) && !/notes.rtf.docx/.test(t), 'toast: ' + t);
+});
+
+await step('W-P1-9 Cancel on that question saves nothing', async () => {
+  await newDoc();
+  await page.keyboard.type('odt name');
+  await saveAs('other.odt');
+  await D().filter({ hasText: 'cannot save .odt' }).getByRole('button', { name: 'Cancel' }).click();
+  await settle();
+  ok(!(await page.locator('.toast', { hasText: 'other.' }).count()), 'a Saved toast for other.*');
+  ok(!(await W().innerText()).includes('other.'), 'the window is still unnamed');
 });
 
 await step('no errors in the console', async () => {

@@ -1218,7 +1218,22 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
     // The ending chooses the kind: .txt is plain text, .md Markdown, anything else a Word document.
     let target = chosen.path;
     const as: 'docx' | 'txt' | 'md' = /\.txt$/i.test(target) ? 'txt' : /\.(md|markdown)$/i.test(target) ? 'md' : 'docx';
-    if (as === 'docx' && !/\.docx$/i.test(target)) target += '.docx';
+    // An ending of another kind of document Write cannot write (.rtf, .odt, .doc...) is swapped for .docx, and that is
+    // asked first: never a silent "notes.rtf.docx".
+    const other = /\.(rtf|odt|doc|docm|dot|dotx|wps|wpd|pages|pdf|html?|xml)$/i.exec(target);
+    if (other) {
+      target = target.slice(0, -other[0].length) + '.docx';
+      const ok = await shell.dialogs.confirm({
+        title: 'Save as a Word document?',
+        text: `Write cannot save ${other[0].toLowerCase()} files. It saves Word documents (.docx), plain text (.txt) and Markdown (.md). Save it as “${baseName(target)}” instead?`,
+        ok: `Save as “${baseName(target)}”`,
+        cancel: 'Cancel',
+      });
+      if (!ok) {
+        view.focus();
+        return false;
+      }
+    } else if (as === 'docx' && !/\.docx$/i.test(target)) target += '.docx';
     if (!(await okToSaveAs(as, baseName(target)))) return false;
     try {
       const docNow = view.state.doc;
