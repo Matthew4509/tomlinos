@@ -67,9 +67,25 @@ export const terminalApp: AppDef = {
       app.setTitle(term.machine.pretend ? 'Terminal - training (pretend)' : 'Terminal');
       screen.classList.toggle('pretend', term.machine.pretend);
     };
+    // Only the last rows that fit the scrollback are drawn, added in one batch, and the oldest rows go in one step:
+    // a cat of 30,000 lines used to add every row to the page and then take the extras off one at a time.
     const print = (lines: Line[]) => {
-      for (const l of lines) output.append(h('div', { class: `term-row${l.kind ? ' ' + l.kind : ''}` }, l.text || ' '));
-      while (output.childElementCount > MAX_LINES) output.firstElementChild?.remove();
+      const room = MAX_LINES - 1;
+      const skipped = Math.max(0, lines.length - room);
+      const batch = document.createDocumentFragment();
+      if (skipped) batch.append(h('div', { class: 'term-row dim' }, `(${skipped} earlier lines not shown; the terminal keeps the last ${MAX_LINES})`));
+      for (let i = skipped; i < lines.length; i++) {
+        const l = lines[i];
+        batch.append(h('div', { class: `term-row${l.kind ? ' ' + l.kind : ''}` }, l.text || ' '));
+      }
+      output.append(batch);
+      const extra = output.childElementCount - MAX_LINES;
+      if (extra > 0) {
+        const old = document.createRange();
+        old.setStartBefore(output.firstElementChild!);
+        old.setEndBefore(output.children[extra]);
+        old.deleteContents();
+      }
       screen.scrollTop = screen.scrollHeight;
     };
     const echo = (text: string) => {

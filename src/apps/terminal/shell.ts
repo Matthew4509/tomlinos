@@ -6,6 +6,7 @@
 import type { FileSystem, Entry } from '../../fs/fs.ts';
 import { baseName, joinPath, nameKey, parentPath, splitPath } from '../../fs/names.ts';
 import { formatSize } from '../../core/format.ts';
+import { destinationReason } from '../../shell/actions.ts';
 
 export interface Line {
   text: string;
@@ -32,6 +33,15 @@ export interface Machine {
 
 const MAX_READ = 512 * 1024;
 const MAX_WALK = 5000;
+/** grep stops after this many lines in one run, and says so. */
+const MAX_MATCHES = 2000;
+/** Long work gives the page a turn this often (ms), so typing and drawing never wait seconds. */
+const YIELD_EVERY = 25;
+/** The options each command knows; any other is refused, as Debian's commands do, rather than quietly ignored. */
+const OPTIONS: Record<string, string> = {
+  ls: 'lah', dir: 'lah', cd: '', pwd: '', cat: '', wc: 'lwc', grep: 'vclnirR', du: 'hs', tree: '', mkdir: 'p', touch: '',
+  cp: 'rR', mv: '', rm: 'rRf', rmdir: '', open: '', uname: 'a', ssh: '', scp: '', nano: '', vi: '', vim: '',
+};
 const utf8 = new TextDecoder('utf-8', { fatal: true });
 
 export const COMMANDS: Array<[string, string]> = [
@@ -39,16 +49,16 @@ export const COMMANDS: Array<[string, string]> = [
   ['cd [path]', 'change folder (cd alone goes home, cd - goes back)'],
   ['pwd', 'where you are'],
   ['cat / head / tail [-n N] file', 'show a text file (or its start / end)'],
-  ['wc file', 'count lines, words and bytes'],
-  ['grep [-i] [-r] [-n] text path…', 'find lines holding text'],
+  ['wc [-l] [-w] [-c] file', 'count lines, words and bytes'],
+  ['grep [-i] [-r] [-n] [-v] [-c] [-l] text path…', 'find lines holding text'],
   ['find [path] [-name "*.txt"] [-type f|d]', 'find files and folders'],
-  ['du [-h] [path]', 'how much space a folder uses'],
+  ['du [-h] [-s] [path]', 'how much space a folder uses'],
   ['tree [path]', 'draw the folders inside'],
   ['mkdir [-p] folder', 'make a folder'],
   ['touch file', 'make an empty file'],
   ['cp [-r] from… to', 'copy'],
   ['mv from… to', 'move or rename'],
-  ['rm [-r] path…', 'move to the Recycle Bin (on the desktop)'],
+  ['rm [-r] [-f] path…', 'move to the Recycle Bin (on the desktop)'],
   ['echo text [> file | >> file]', 'print, or write/append to a file'],
   ['open file', 'open it in its desktop app'],
   ['ssh training', 'log in to the pretend Debian training machine'],
@@ -120,6 +130,8 @@ export function splitWords(line: string): string[] {
 
 class Fail extends Error {}
 
+const invalidOption = (cmd: string, letter: string) => new Fail(`${cmd}: invalid option -- '${letter}'\nType help for the options this shell knows.`);
+
 export class TerminalShell {
   cwd: string;
   private previous: string;
@@ -147,6 +159,21 @@ export class TerminalShell {
     const home = this.machine.home;
     const shown = this.cwd === home ? '~' : this.cwd.startsWith(home === '/' ? '/' : home + '/') ? '~' + this.cwd.slice(home === '/' ? 0 : home.length) : this.cwd;
     return { userHost: `${this.machine.user}@${this.machine.host}`, path: shown, tail: '$ ' };
+  }
+
+  private lastYield = Date.now();
+
+  /** Gives the page a turn when this command has held it for a while. */
+  private async breathe(): Promise<void> {
+    if (Date.now() - this.lastYield < YIELD_EVERY) return;
+    await new Promise(resolve => setTimeout(resolve, 0));
+    this.lastYield = Date.now();
+  }
+
+  /** Refuses to put anything into the desktop's own System folder (nothing put there could be removed again). */
+  private refuseInto(folder: string, said: string): void {
+    const why = this.machine.pretend ? null : destinationReason(folder);
+    if (why) throw new Fail(`${said}: ${why}`);
   }
 
   get waiting(): boolean {
@@ -212,7 +239,7 @@ export class TerminalShell {
         // No such folder: leave the word as typed, the command will say so.
       }
       if (!names.length) out.push(w);
-      else out.push(...names.map(n => (slash >= 0 ? `${w.slice(0, slash)}/${n}` : n)));
+      else for (const n of names) out.push(slash >= 0 ? `${w.slice(0, slash)}/${n}` : n);
     }
     return out;
   }
@@ -229,10 +256,11 @@ export class TerminalShell {
     if (!line) return [];
     this.history.push(line);
     if (this.history.length > 500) this.history.shift();
+    this.lastYield = Date.now();
     try {
       return await this.dispatch(line);
     } catch (error) {
-      if (error instanceof Fail) return [{ text: error.message, kind: 'err' }];
+      if (error instanceof Fail) return error.message.split('\n').map((text, i): Line => ({ text, kind: i ? 'dim' : 'err' }));
       return [{ text: error instanceof Error ? error.message : String(error), kind: 'err' }];
     }
   }
@@ -250,10 +278,13 @@ export class TerminalShell {
     const args = cmd === 'find' || cmd === 'grep' || cmd === 'echo' ? raw.map(w => w.text) : await this.expand(raw);
     const flags = new Set(args.filter(a => /^-[a-zA-Z]+$/.test(a)).flatMap(a => [...a.slice(1)]));
     const plain = args.filter(a => !/^-[a-zA-Z]+$/.test(a));
+    if (cmd === 'rm' && flags.has('i')) throw new Fail('rm: option -i is not supported here: this terminal cannot ask before each item. Leave out -i.');
+    if (OPTIONS[cmd] !== undefined) for (const f of flags) if (!OPTIONS[cmd].includes(f)) throw invalidOption(cmd, f);
+    const path = redirect ? this.resolve(redirect.path) : '';
+    if (redirect) this.refuseInto(parentPath(path), `bash: ${redirect.path}`);
     const out = await this.command(cmd, args, flags, plain);
     if (!redirect) return out;
     const text = out.filter(l => l.kind !== 'err').map(l => l.text).join('\n') + '\n';
-    const path = this.resolve(redirect.path);
     const e = await this.stat(path);
     if (e?.kind === 'folder') throw new Fail(`${redirect.path}: Is a directory`);
     const before = redirect.append && e ? await this.readText(path, redirect.path) : '';
@@ -285,28 +316,55 @@ export class TerminalShell {
       case 'cat': {
         if (!plain.length) throw new Fail('cat: which file? (cat notes.txt)');
         const out: Line[] = [];
-        for (const a of plain) out.push(...(await this.readText(this.resolve(a), a)).replace(/\n$/, '').split('\n').map(text => ({ text })));
+        // One push per line: spreading a file of 250,000 short lines overflowed the call stack.
+        for (const a of plain) for (const text of (await this.readText(this.resolve(a), a)).replace(/\n$/, '').split('\n')) out.push({ text });
         return out;
       }
       case 'head':
       case 'tail': {
-        const nIdx = args.indexOf('-n');
-        const n = nIdx >= 0 ? Number(args[nIdx + 1]) : 10;
-        const files = args.filter((a, i) => !a.startsWith('-') && !(nIdx >= 0 && i === nIdx + 1));
+        // -n N, -nN and -N all set the count; any other option is refused.
+        let n = 10;
+        const files: string[] = [];
+        const count = (v: string | undefined) => {
+          const k = Number(v);
+          if (v === undefined || v === '' || !Number.isInteger(k) || k < 0) throw new Fail(`${cmd}: invalid number of lines: '${v ?? ''}'`);
+          return k;
+        };
+        for (let i = 0; i < args.length; i++) {
+          const a = args[i];
+          if (a === '-n') n = count(args[++i]);
+          else if (a.startsWith('-n')) n = count(a.slice(2));
+          else if (/^-\d+$/.test(a)) n = count(a.slice(1));
+          else if (a.length > 1 && a.startsWith('-')) throw invalidOption(cmd, a[1]);
+          else files.push(a);
+        }
         if (!files.length) throw new Fail(`${cmd}: which file?`);
-        if (!Number.isInteger(n) || n < 0) throw new Fail(`${cmd}: invalid number of lines`);
-        const lines = (await this.readText(this.resolve(files[0]), files[0])).replace(/\n$/, '').split('\n');
-        // slice(-0) is the whole file, so "tail -n 0" is spelt out: nothing.
-        return (cmd === 'head' ? lines.slice(0, n) : n === 0 ? [] : lines.slice(-n)).map(text => ({ text }));
+        const out: Line[] = [];
+        for (const [i, f] of files.entries()) {
+          if (files.length > 1) out.push({ text: `${i ? '\n' : ''}==> ${f} <==`, kind: 'dim' });
+          const lines = (await this.readText(this.resolve(f), f)).replace(/\n$/, '').split('\n');
+          // slice(-0) is the whole file, so "tail -n 0" is spelt out: nothing.
+          for (const text of cmd === 'head' ? lines.slice(0, n) : n === 0 ? [] : lines.slice(-n)) out.push({ text });
+        }
+        return out;
       }
       case 'wc': {
         if (!plain.length) throw new Fail('wc: which file?');
-        return Promise.all(plain.map(async a => {
+        // -l, -w and -c pick the columns (lines, words, bytes); none means all three.
+        const chosen = ['l', 'w', 'c'].filter(c => flags.has(c));
+        const pick = (chosen.length ? chosen : ['l', 'w', 'c']) as Array<'l' | 'w' | 'c'>;
+        const totals = { l: 0, w: 0, c: 0 };
+        const row = (n: typeof totals, label: string): Line => ({ text: `${pick.map(c => String(n[c]).padStart(7)).join(' ')} ${label}` });
+        const out: Line[] = [];
+        for (const a of plain) {
           const t = await this.readText(this.resolve(a), a);
           // Lines are counted by their line ends, as every wc does: "one\ntwo" is 1, and an empty file is 0.
-          const lines = t.split('\n').length - 1;
-          return { text: `${String(lines).padStart(7)} ${String(t.split(/\s+/).filter(Boolean).length).padStart(7)} ${String(new TextEncoder().encode(t).length).padStart(7)} ${a}` };
-        }));
+          const n = { l: t.split('\n').length - 1, w: t.split(/\s+/).filter(Boolean).length, c: new TextEncoder().encode(t).length };
+          for (const c of pick) totals[c] += n[c];
+          out.push(row(n, a));
+        }
+        if (plain.length > 1) out.push(row(totals, 'total'));
+        return out;
       }
       case 'grep':
         return this.grep(args);
@@ -320,6 +378,7 @@ export class TerminalShell {
         if (!plain.length) throw new Fail('mkdir: missing operand');
         for (const a of plain) {
           const path = this.resolve(a);
+          this.refuseInto(parentPath(path), `mkdir: cannot create directory '${a}'`);
           if (flags.has('p')) await fs.ensureFolder(path);
           else {
             if (await this.stat(path)) throw new Fail(`mkdir: cannot create directory '${a}': File exists`);
@@ -330,8 +389,10 @@ export class TerminalShell {
         return [];
       }
       case 'touch': {
+        if (!plain.length) throw new Fail('touch: missing file operand');
         for (const a of plain) {
           const path = this.resolve(a);
+          this.refuseInto(parentPath(path), `touch: cannot touch '${a}'`);
           const e = await this.stat(path);
           if (!e) await fs.writeFile(path, new Uint8Array(0), { mustBeNew: true });
           else if (e.kind === 'file') await fs.writeFile(path, await fs.readFile(path)); // a new "modified" time
@@ -347,6 +408,8 @@ export class TerminalShell {
         const paths: string[] = [];
         for (const a of plain) {
           const path = this.resolve(a);
+          // rm -f passes over a name that is not there, as on Debian.
+          if (cmd === 'rm' && flags.has('f') && !(await this.stat(path))) continue;
           const e = await this.mustStat(path, a);
           if (e.kind === 'folder' && cmd === 'rm' && !flags.has('r') && !flags.has('R')) throw new Fail(`rm: cannot remove '${a}': Is a directory (use rm -r)`);
           if (cmd === 'rmdir' && (e.kind !== 'folder' || (await fs.list(path, true)).length)) throw new Fail(`rmdir: failed to remove '${a}': ${e.kind !== 'folder' ? 'Not a directory' : 'Directory not empty'}`);
@@ -357,6 +420,7 @@ export class TerminalShell {
           if (nameKey(this.cwd) === nameKey(path) || nameKey(this.cwd).startsWith(nameKey(path) + '/')) throw new Fail(`rm: cannot remove '${a}': you are standing in it (cd out first)`);
           paths.push(path);
         }
+        if (!paths.length) return [];
         const said = await this.machine.trash(paths);
         return said ? [{ text: said, kind: 'dim' }] : [];
       }
@@ -400,6 +464,7 @@ export class TerminalShell {
       case 'vim':
         if (this.machine.open && plain[0]) {
           const path = this.resolve(plain[0]);
+          this.refuseInto(parentPath(path), `${cmd}: cannot open '${plain[0]}'`);
           if (!(await this.stat(path))) await fs.writeFile(path, new Uint8Array(0), { mustBeNew: true });
           await this.machine.open(path);
           return [{ text: `Opened ${plain[0]} in Notepad.`, kind: 'dim' }];
@@ -438,19 +503,28 @@ export class TerminalShell {
     return out;
   }
 
-  /** Every item under `root` (breadth first, capped), paths absolute. */
-  private async walk(root: string): Promise<Array<{ path: string; entry: Entry }>> {
-    const out: Array<{ path: string; entry: Entry }> = [];
+  /**
+   * Every item under `root` (breadth first, paths absolute), up to MAX_WALK. `cut` says there was more: whatever
+   * counts or searches the items must then say its answer is incomplete, never pass it off as the whole.
+   */
+  private async walk(root: string): Promise<{ items: Array<{ path: string; entry: Entry }>; cut: boolean }> {
+    const items: Array<{ path: string; entry: Entry }> = [];
     const queue = [root];
-    while (queue.length && out.length < MAX_WALK) {
-      const folder = queue.shift()!;
+    for (let q = 0; q < queue.length; q++) {
+      const folder = queue[q];
       for (const entry of await this.machine.fs.list(folder)) {
+        if (items.length >= MAX_WALK) return { items, cut: true };
         const path = joinPath(folder, entry.name);
-        out.push({ path, entry });
+        items.push({ path, entry });
         if (entry.kind === 'folder') queue.push(path);
       }
+      await this.breathe();
     }
-    return out;
+    return { items, cut: false };
+  }
+
+  private stoppedNote(cmd: string): Line {
+    return { text: `${cmd}: stopped after ${MAX_WALK} items; results are incomplete`, kind: 'err' };
   }
 
   private shown(path: string, arg: string, root: string): string {
@@ -466,27 +540,39 @@ export class TerminalShell {
     const type = typeAt >= 0 ? args[typeAt + 1] : null;
     const root = this.resolve(start);
     await this.mustStat(root, `find: '${start}'`);
-    return (await this.walk(root))
-      .filter(({ entry }) => (!re || re.test(entry.name)) && (!type || (type === 'd') === (entry.kind === 'folder')))
-      .map(({ path, entry }) => ({ text: this.shown(path, start, root), kind: entry.kind === 'folder' ? 'dir' : undefined }));
+    const { items, cut } = await this.walk(root);
+    const out: Line[] = [];
+    for (const { path, entry } of items) {
+      if ((!re || re.test(entry.name)) && (!type || (type === 'd') === (entry.kind === 'folder'))) out.push({ text: this.shown(path, start, root), kind: entry.kind === 'folder' ? 'dir' : undefined });
+    }
+    if (cut) out.push(this.stoppedNote('find'));
+    return out;
   }
 
   private async grep(args: string[]): Promise<Line[]> {
     const flags = new Set(args.filter(a => /^-[a-zA-Z]+$/.test(a)).flatMap(a => [...a.slice(1)]));
     const [pattern, ...targets] = args.filter(a => !/^-[a-zA-Z]+$/.test(a));
-    if (pattern === undefined || !targets.length) throw new Fail('grep: usage: grep [-i] [-r] [-n] text file-or-folder…');
-    const needle = flags.has('i') ? pattern.toLowerCase() : pattern;
+    if (pattern === undefined || !targets.length) throw new Fail('grep: usage: grep [-i] [-r] [-n] [-v] [-c] [-l] text file-or-folder…');
+    const fold = flags.has('i');
+    const invert = flags.has('v');
+    const needle = fold ? pattern.toLowerCase() : pattern;
+    const recursive = flags.has('r') || flags.has('R');
     const out: Line[] = [];
     const files: Array<{ path: string; label: string }> = [];
+    let cut = false;
     for (const t of await this.expand(targets)) {
       const path = this.resolve(t);
       const e = await this.mustStat(path, `grep: ${t}`);
       if (e.kind === 'file') files.push({ path, label: t });
-      else if (flags.has('r') || flags.has('R')) {
-        for (const w of await this.walk(path)) if (w.entry.kind === 'file' && w.entry.size <= MAX_READ) files.push({ path: w.path, label: this.shown(w.path, t, path) });
+      else if (recursive) {
+        const walked = await this.walk(path);
+        cut ||= walked.cut;
+        for (const w of walked.items) if (w.entry.kind === 'file' && w.entry.size <= MAX_READ) files.push({ path: w.path, label: this.shown(w.path, t, path) });
       } else out.push({ text: `grep: ${t}: Is a directory`, kind: 'err' });
     }
-    const many = files.length > 1 || flags.has('r') || flags.has('R');
+    const many = files.length > 1 || recursive;
+    let printed = 0;
+    let full = false;
     for (const f of files) {
       let text: string;
       try {
@@ -494,22 +580,44 @@ export class TerminalShell {
       } catch {
         continue; // Pictures and other non-text files are skipped, as grep -I does.
       }
-      text.split('\n').forEach((l, i) => {
-        if ((flags.has('i') ? l.toLowerCase() : l).includes(needle)) out.push({ text: `${many ? f.label + ':' : ''}${flags.has('n') ? i + 1 + ':' : ''}${l}` });
-      });
-      if (out.length > 2000) {
-        out.push({ text: '(stopped at 2000 lines)', kind: 'dim' });
-        break;
+      const lines = text.split('\n');
+      if (text.endsWith('\n')) lines.pop();
+      let hits = 0;
+      for (let i = 0; i < lines.length; i++) {
+        if (i % 5000 === 0) await this.breathe();
+        const l = lines[i];
+        if ((fold ? l.toLowerCase() : l).includes(needle) === invert) continue;
+        hits++;
+        if (flags.has('l')) break;
+        if (flags.has('c')) continue;
+        // The cap is counted within a file too: one big log could print a quarter of a million lines.
+        if (printed >= MAX_MATCHES) {
+          full = true;
+          break;
+        }
+        out.push({ text: `${many ? f.label + ':' : ''}${flags.has('n') ? i + 1 + ':' : ''}${l}` });
+        printed++;
       }
+      if (flags.has('l')) {
+        if (hits) out.push({ text: f.label });
+      } else if (flags.has('c')) out.push({ text: `${many ? f.label + ':' : ''}${hits}` });
+      if (full) break;
+      await this.breathe();
     }
+    if (full) out.push({ text: `grep: stopped after ${MAX_MATCHES} matching lines; there may be more`, kind: 'dim' });
+    if (cut) out.push(this.stoppedNote('grep'));
     return out;
   }
 
   private async du(arg: string, human: boolean): Promise<Line[]> {
     const root = this.resolve(arg);
     const e = await this.mustStat(root, `du: cannot access '${arg}'`);
-    const total = e.kind === 'file' ? e.size : (await this.walk(root)).reduce((n, w) => n + w.entry.size, 0);
-    return [{ text: `${human ? formatSize(total) : Math.ceil(total / 1024)}\t${arg}` }];
+    const walked = e.kind === 'file' ? null : await this.walk(root);
+    const total = walked ? walked.items.reduce((n, w) => n + w.entry.size, 0) : e.size;
+    const size = human ? formatSize(total) : String(Math.ceil(total / 1024));
+    // A partial sum is never shown as the total: it is said to be a lower bound.
+    if (walked?.cut) return [this.stoppedNote('du'), { text: `at least ${size}${human ? '' : ' KB'} in ${arg} (not the total)`, kind: 'dim' }];
+    return [{ text: `${size}\t${arg}` }];
   }
 
   private async tree(arg: string): Promise<Line[]> {
@@ -517,10 +625,16 @@ export class TerminalShell {
     const out: Line[] = [{ text: arg, kind: 'dir' }];
     let dirs = 0;
     let files = 0;
+    let cut = false;
     const draw = async (path: string, indent: string) => {
+      await this.breathe();
       const entries = (await this.machine.fs.list(path)).sort((a, b) => a.name.localeCompare(b.name));
       for (const [i, e] of entries.entries()) {
-        if (dirs + files > MAX_WALK) return;
+        if (cut) return;
+        if (dirs + files >= MAX_WALK) {
+          cut = true;
+          return;
+        }
         const last = i === entries.length - 1;
         out.push({ text: `${indent}${last ? '└── ' : '├── '}${e.name}`, kind: e.kind === 'folder' ? 'dir' : undefined });
         if (e.kind === 'folder') {
@@ -531,7 +645,8 @@ export class TerminalShell {
     };
     if ((await this.mustStat(root, arg)).kind !== 'folder') throw new Fail(`tree: ${arg}: Not a directory`);
     await draw(root, '');
-    out.push({ text: `\n${dirs} director${dirs === 1 ? 'y' : 'ies'}, ${files} file${files === 1 ? '' : 's'}`, kind: 'dim' });
+    if (cut) out.push(this.stoppedNote('tree'));
+    out.push({ text: `\n${dirs} director${dirs === 1 ? 'y' : 'ies'}, ${files} file${files === 1 ? '' : 's'}${cut ? ' shown' : ''}`, kind: 'dim' });
     return out;
   }
 
@@ -550,6 +665,7 @@ export class TerminalShell {
       }
     }
     const d = await this.stat(dest);
+    this.refuseInto(d?.kind === 'folder' ? dest : parentPath(dest), `${cmd}: cannot ${cmd === 'cp' ? 'copy' : 'move'} '${sources[0].a}' to '${destArg}'`);
     if (d?.kind === 'folder') {
       const paths = sources.map(s => s.path);
       if (cmd === 'cp') await fs.copy(paths, dest);
@@ -652,6 +768,7 @@ export class TerminalShell {
     const dest = this.resolve(to);
     const d = await this.stat(dest);
     const target = d?.kind === 'folder' ? joinPath(dest, e.name) : dest;
+    this.refuseInto(parentPath(target), `scp: cannot write '${to}'`);
     if (await this.stat(target)) throw new Fail(`scp: '${baseName(target)}' already exists here (nothing is overwritten)`);
     await this.machine.fs.writeFile(target, bytes, { mustBeNew: true });
     return [{ text: `${e.name.padEnd(30)} 100% ${formatSize(bytes.length).padStart(9)}   pretend link   00:00`, kind: 'dim' }];
