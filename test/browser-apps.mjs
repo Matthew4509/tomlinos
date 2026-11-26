@@ -18,7 +18,16 @@ const PASS = 'orchard-lantern-harbour-58';
 let passed = 0;
 const failures = [];
 
+// Steps that make the server talk to mail, Hugging Face or Anthropic run only against the stand-ins (test/fake-*.mjs),
+// which tools/run-browser-tests.sh starts the server with and says so (TOMLIN_STAND_INS=1). Run bare, the server would
+// reach the real services: those steps are skipped instead, and say so.
+const STAND_INS = process.env.TOMLIN_STAND_INS === '1';
+const NEEDS_STAND_INS = /^(Mail:|Settings › AI: the owner saves a model|your own Claude key|Chat Agents:|Panel Mail)/;
 async function step(name, fn) {
+  if (!STAND_INS && NEEDS_STAND_INS.test(name)) {
+    console.log('  skip ' + name + '\n       (needs the stand-in servers: run it with tools/run-browser-tests.sh, or set TOMLIN_STAND_INS=1 with the server started the same way)');
+    return;
+  }
   try {
     await fn();
     passed++;

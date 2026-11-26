@@ -16,6 +16,13 @@ const CHROME = process.env.CHROME_PATH ?? 'C:/Program Files/Google/Chrome/Applic
 const PASS = 'orchard-lantern-harbour-58';
 let passed = 0;
 const failures = [];
+// Every step here makes the server talk to Anthropic: only against the stand-in (test/fake-anthropic.mjs), which
+// tools/run-browser-tests.sh starts the server with and says so (TOMLIN_STAND_INS=1). Run bare, it stops at once.
+if (process.env.TOMLIN_STAND_INS !== '1') {
+  console.log('Not run: needs the stand-in for Anthropic. Run it with tools/run-browser-tests.sh (SUITES=aichat), or set TOMLIN_STAND_INS=1 with the server started the same way.');
+  console.log('0 passed, 0 failed');
+  process.exit(0);
+}
 async function step(name, fn) {
   try {
     await fn();

@@ -47,7 +47,7 @@ for suite in ${SUITES:-desktop accounts vault features apps printer privacy aich
     apps) script=test/browser-apps.mjs; extra=() ;;
     *) script=test/browser-$suite.mjs; extra=() ;;
   esac
-  node "$script" "http://127.0.0.1:$PORT" "${extra[@]}" > "$LOGS/$suite.txt" 2>&1 || status=1
+  TOMLIN_STAND_INS=1 node "$script" "http://127.0.0.1:$PORT" "${extra[@]}" > "$LOGS/$suite.txt" 2>&1 || status=1
   kill "$server" 2>/dev/null
   wait "$server" 2>/dev/null
   summary=$(grep -E 'passed, ' "$LOGS/$suite.txt" | tail -1)
