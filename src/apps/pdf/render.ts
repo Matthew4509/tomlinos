@@ -1,5 +1,6 @@
 // Drawing one PDF page onto a canvas: paths, colours, text, pictures and nested "form" pieces. Our own code.
-// Not drawn: gradients and patterns (a flat grey stands in), soft masks, blend modes, annotations, form fields.
+// Not drawn: gradients and patterns (a flat grey stands in), soft masks, blend modes. Annotations and filled-in form
+// fields are drawn from their saved look (the appearance stream); one without a saved look is not drawn.
 // A page is stopped, with a note, if it is too complicated (operation or time limit) so a hostile file cannot hang the tab.
 import { Cmd, Dict, Lexer, Name, PStr, Stream, type Obj, type Page, type PdfDocument } from './objects.ts';
 import { loadFont, type PdfFont } from './fonts.ts';
@@ -31,6 +32,8 @@ interface GState {
   leading: number;
   rise: number;
   mode: number;
+  /** "0 w": the thinnest line the screen can show (one pixel), whatever the zoom. */
+  hair: boolean;
 }
 
 export interface RenderResult {
@@ -100,10 +103,11 @@ export async function renderPage(
   }
   try {
     await run.execute(all, page.resources, 0);
+    await run.annotations(page.dict);
   } catch (error) {
     if (!(error instanceof Stop)) throw error;
   }
-  ctx.restore();
+  if (!run.abandoned) ctx.restore();
   return { text: run.text.join('').slice(0, 300_000), note: run.note };
 }
 
@@ -116,8 +120,17 @@ class Run {
   private started = Date.now();
   private state: GState = {
     fill: '#000', stroke: '#000', fillSpace: 'gray', strokeSpace: 'gray', alpha: 1, strokeAlpha: 1,
-    font: null, size: 0, charSpace: 0, wordSpace: 0, hScale: 1, leading: 0, rise: 0, mode: 0,
+    font: null, size: 0, charSpace: 0, wordSpace: 0, hScale: 1, leading: 0, rise: 0, mode: 0, hair: false,
   };
+  /**
+   * A newer drawing of this canvas has started. This one stops without touching the canvas again: its restore() would
+   * pop the newer drawing's own saved state, and the rest of that page would be drawn unscaled and unflipped.
+   */
+  abandoned = false;
+  private gone(): boolean {
+    if (!this.isCurrent()) this.abandoned = true;
+    return this.abandoned;
+  }
   private stack: GState[] = [];
   private tm: Matrix = [1, 0, 0, 1, 0, 0];
   private tlm: Matrix = [1, 0, 0, 1, 0, 0];
@@ -147,6 +160,7 @@ class Run {
     let pathOpen = false;
     let clipRule: 'nonzero' | 'evenodd' | null = null;
     const baseStack = this.stack.length;
+    if (this.gone()) throw new Stop();
     const num = (i: number) => (typeof args[i] === 'number' ? (args[i] as number) : 0);
     const fonts = doc.dict(resources?.map.get('Font'));
     const xobjects = doc.dict(resources?.map.get('XObject'));
@@ -159,6 +173,10 @@ class Run {
         ctx.fill(rule);
       }
       if (stroke) {
+        if (s.hair && typeof ctx.getTransform === 'function') {
+          const m = ctx.getTransform();
+          ctx.lineWidth = 1 / (Math.sqrt(Math.abs(m.a * m.d - m.b * m.c)) || 1);
+        }
         ctx.globalAlpha = s.strokeAlpha;
         ctx.strokeStyle = s.stroke;
         ctx.stroke();
@@ -184,7 +202,7 @@ class Run {
         if (Date.now() - this.started > MAX_MS) this.stop('This page took too long to draw, so only part of it is shown.');
         if (this.ops % 4000 === 0) {
           await new Promise(r => setTimeout(r, 0));
-          if (!this.isCurrent()) throw new Stop();
+          if (this.gone()) throw new Stop();
         }
       }
       const s = this.state;
@@ -192,7 +210,7 @@ class Run {
         case 'q': this.stack.push({ ...s }); ctx.save(); break;
         case 'Q': if (this.stack.length > baseStack) { this.state = this.stack.pop()!; ctx.restore(); } break;
         case 'cm': ctx.transform(num(0), num(1), num(2), num(3), num(4), num(5)); break;
-        case 'w': ctx.lineWidth = Math.max(num(0), 0.01); break;
+        case 'w': s.hair = num(0) <= 0; ctx.lineWidth = Math.max(num(0), 0.01); break;
         case 'J': ctx.lineCap = (['butt', 'round', 'square'] as const)[num(0)] ?? 'butt'; break;
         case 'j': ctx.lineJoin = (['miter', 'round', 'bevel'] as const)[num(0)] ?? 'miter'; break;
         case 'M': ctx.miterLimit = Math.max(num(0), 1); break;
@@ -405,7 +423,55 @@ class Run {
       this.tm = savedTm;
       this.tlm = savedTlm;
       this.state = this.stack.pop() ?? this.state;
-      ctx.restore();
+      if (!this.abandoned) ctx.restore();
+    }
+  }
+
+  /** Each annotation's saved look (a filled-in field, a stamp, a signature, a highlight), drawn into its rectangle. */
+  async annotations(pageDict: Dict): Promise<void> {
+    const doc = this.doc;
+    const ctx = this.ctx;
+    const list = doc.resolve(pageDict.map.get('Annots'));
+    if (!Array.isArray(list)) return;
+    for (const item of list.slice(0, 2000)) {
+      const a = doc.dict(item as Obj);
+      if (!a) continue;
+      const flags = doc.num(a.map.get('F'), 0);
+      if (flags & (2 | 32)) continue; // Hidden, NoView
+      const ap = doc.dict(a.map.get('AP'));
+      let look = doc.resolve(ap?.map.get('N') ?? null);
+      if (look instanceof Dict) {
+        // A checkbox or radio button: one look per state, chosen by AS.
+        const state = doc.resolve(a.map.get('AS') ?? null);
+        look = state instanceof Name ? doc.resolve(look.map.get(state.name) ?? null) : null;
+      }
+      if (!(look instanceof Stream)) continue;
+      const rectObj = doc.resolve(a.map.get('Rect') ?? null);
+      const boxObj = doc.resolve(look.dict.map.get('BBox') ?? null);
+      if (!Array.isArray(rectObj) || rectObj.length < 4 || !Array.isArray(boxObj) || boxObj.length < 4) continue;
+      const r = rectObj.slice(0, 4).map(v => doc.num(v, 0));
+      const b = boxObj.slice(0, 4).map(v => doc.num(v, 0));
+      const mObj = doc.resolve(look.dict.map.get('Matrix') ?? null);
+      const m: Matrix = Array.isArray(mObj) && mObj.length >= 6 ? (mObj.slice(0, 6).map(v => doc.num(v, 0)) as Matrix) : [1, 0, 0, 1, 0, 0];
+      // The look's box, through its own matrix, is fitted to the annotation's rectangle (PDF 12.5.5).
+      const xs: number[] = [];
+      const ys: number[] = [];
+      for (const [x, y] of [[b[0], b[1]], [b[2], b[1]], [b[0], b[3]], [b[2], b[3]]]) {
+        xs.push(m[0] * x + m[2] * y + m[4]);
+        ys.push(m[1] * x + m[3] * y + m[5]);
+      }
+      const bx0 = Math.min(...xs), bx1 = Math.max(...xs), by0 = Math.min(...ys), by1 = Math.max(...ys);
+      const rx0 = Math.min(r[0], r[2]), rx1 = Math.max(r[0], r[2]), ry0 = Math.min(r[1], r[3]), ry1 = Math.max(r[1], r[3]);
+      if (bx1 - bx0 <= 0 || by1 - by0 <= 0) continue;
+      const sx = (rx1 - rx0) / (bx1 - bx0);
+      const sy = (ry1 - ry0) / (by1 - by0);
+      ctx.save();
+      try {
+        ctx.transform(sx, 0, 0, sy, rx0 - bx0 * sx, ry0 - by0 * sy);
+        await this.form(look, null, 0);
+      } finally {
+        if (!this.abandoned) ctx.restore();
+      }
     }
   }
 
@@ -429,6 +495,7 @@ class Run {
     } catch {
       source = null;
     }
+    if (this.gone()) throw new Stop();
     ctx.save();
     ctx.globalAlpha = this.state.alpha;
     ctx.transform(1, 0, 0, -1, 0, 1);
@@ -454,6 +521,12 @@ class Run {
     let palette: Uint8Array | null = null;
     let cmykSpace = false;
     const spaceName = (o: Obj): string => (o instanceof Name ? o.name : '');
+    // An Indexed colour table may be kept in a stream of its own: read it now (the space is worked out without waiting).
+    const tables = new Map<Stream, Uint8Array>();
+    if (Array.isArray(csObj) && ['Indexed', 'I'].includes(spaceName(doc.resolve(csObj[0])))) {
+      const lookup = doc.resolve(csObj[3]);
+      if (lookup instanceof Stream) tables.set(lookup, await doc.streamData(lookup));
+    }
     const resolveSpace = (o: Obj): void => {
       const named = spaceName(o);
       if (named === 'DeviceRGB' || named === 'RGB' || named === 'CalRGB') comps = 3;
@@ -477,8 +550,8 @@ class Run {
             const icc = doc.resolve(base[1]);
             baseComps = icc instanceof Stream ? doc.num(icc.dict.map.get('N'), 3) : 3;
           }
-          const table = lookup instanceof PStr ? lookup.bytes : lookup instanceof Stream ? new Uint8Array(0) : new Uint8Array(0);
-          const bytes = lookup instanceof Stream ? null : table;
+          const table = lookup instanceof PStr ? lookup.bytes : lookup instanceof Stream ? tables.get(lookup) ?? new Uint8Array(0) : new Uint8Array(0);
+          const bytes = table.length ? table : null;
           const size = (doc.num(o[2], 255) + 1) * baseComps;
           const raw = bytes ?? new Uint8Array(size);
           palette = new Uint8Array((raw.length / baseComps) * 4);
