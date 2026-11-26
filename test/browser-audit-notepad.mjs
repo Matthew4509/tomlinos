@@ -99,7 +99,8 @@ lines.push('the NEEDLE is here');
 const files = {
   'bom.txt': Buffer.from([0xef, 0xbb, 0xbf, ...Buffer.from('hello\r\nworld\r\n')]),
   'oldmac.txt': Buffer.from('one\rtwo\rthree\r'),
-  'latin.txt': Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a]),
+  // Not text (a NUL and control bytes): a Latin-1 file opens as Windows-1252 now, so this one is a real binary.
+  'latin.txt': Buffer.from([0x63, 0x61, 0x00, 0x01, 0xe9, 0x0a]),
   'plain.txt': Buffer.from('save me\n'),
   'long.txt': Buffer.from(lines.join('\n')),
 };

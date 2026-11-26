@@ -9,7 +9,10 @@ import { formatSize } from '../core/format.ts';
 import { baseName, nameKey, parentPath } from '../fs/names.ts';
 import { pickFile, pickSave, type FileTypeChoice } from '../shell/filepicker.ts';
 import type { AppDef } from '../shell/types.ts';
-import { detectEol, EOL_NAMES, fileBytes, fileSize, findNext, hasBom, lineCol, lineStart, replaceAll, toBox, type Eol } from './notepad/text.ts';
+import {
+  cannotHold, decodeFile, detectEol, encodedSize, encodeFile, ENCODING_NAMES, EOL_NAMES, fileSize, findNext, keptEndings, lineCol, lineEndings, lineStart,
+  replaceAll, sameMatch, toBox, toFile, withEndings, type Encoding, type Eol,
+} from './notepad/text.ts';
 import { APPS } from './catalog.ts';
 import { saveOver } from '../shell/savefile.ts';
 import { classicBar } from '../shell/menubar.ts';
@@ -29,7 +32,8 @@ const SAVE_TYPES: FileTypeChoice[] = [
   { label: 'CSV', ext: ['csv'] },
   { label: 'All files', ext: [] },
 ];
-const OPEN_TYPES: FileTypeChoice[] = [{ label: 'Text files', ext: ['txt', 'md', 'log', 'csv'] }, ...SAVE_TYPES];
+// Open starts on All files: Quick Notes opens any text, .json, .ini, .ics and files with no ending among them.
+const OPEN_TYPES: FileTypeChoice[] = [{ label: 'All files', ext: [] }, { label: 'Text files', ext: ['txt', 'md', 'log', 'csv'] }, ...SAVE_TYPES.slice(0, -1)];
 const ZOOMS = [50, 67, 80, 90, 100, 110, 125, 150, 175, 200, 250, 300];
 const EOL_SHORT: Record<Eol, string> = { '\r\n': 'CRLF', '\n': 'LF', '\r': 'CR' };
 
@@ -44,6 +48,14 @@ export const editorApp: AppDef = {
     let savedEol: Eol = '\n';
     /** The file began with the UTF-8 mark (a BOM): it goes back on saving. */
     let bom = false;
+    /** How the file stores its letters; it is saved back the same way. */
+    let encoding: Encoding = 'utf-8';
+    /**
+     * A file with mixed line endings: the text it was opened (or last saved) with and each of its lines' endings, so
+     * each line keeps its own on save. Null once the person picks one kind under Line endings (or the file has one kind).
+     */
+    let mixed: { text: string; ends: Eol[] } | null = null;
+    let savedMixed = false;
     let zoom = 100;
     app.root.classList.add('editor');
 
@@ -78,6 +90,7 @@ export const editorApp: AppDef = {
     };
     const setEol = (to: Eol) => {
       eol = to;
+      mixed = null;
       refresh();
       shell.toast(`Will save with ${EOL_NAMES[eol]} line endings.`);
     };
@@ -110,20 +123,23 @@ export const editorApp: AppDef = {
         { label: 'Format', items: [
           { label: 'Word wrap', checked: () => wrapOn, enabled: can, action: () => setWrap(!wrapOn) },
           { separator: true },
-          { label: 'Line endings when saving', enabled: can, submenu: () => EOLS.map(e => ({ label: `${EOL_NAMES[e]} (${EOL_SHORT[e]})`, checked: () => eol === e, action: () => setEol(e) })) },
+          { label: 'Line endings when saving', enabled: can, submenu: () => EOLS.map(e => ({ label: `${EOL_NAMES[e]} (${EOL_SHORT[e]})`, checked: () => !mixed && eol === e, action: () => setEol(e) })) },
         ] },
         helpMenu(shell),
       ],
     }, { layer: shell.menus, signal: app.signal, scope: app.root, doc: () => (findBar.contains(document.activeElement) ? null : area), label: 'Quick Notes menu bar' });
     app.root.append(bar.el, findBar, area, status);
 
-    const dirty = () => area.value !== saved || eol !== savedEol;
+    const dirty = () => area.value !== saved || eol !== savedEol || !!mixed !== savedMixed;
+    /** The text as the file will hold it: each line's ending in place. */
+    const fileText = (text: string) => (mixed ? withEndings(text, keptEndings(text, mixed.text, mixed.ends, eol), eol) : toFile(text, eol));
     const drawStatus = () => {
       const text = area.value;
       const { line, col } = lineCol(text, area.selectionStart);
       const lines = text.split('\n').length;
-      const size = fileSize(text, eol, bom);
-      status.textContent = `Ln ${line}, Col ${col}  ·  ${lines} line${lines === 1 ? '' : 's'}, ${formatSize(size)}  ·  ${EOL_NAMES[eol]}  ·  UTF-8  ·  ${zoom}%${dirty() ? '  ·  not saved' : ''}`;
+      const size = !mixed && encoding === 'utf-8' ? fileSize(text, eol, bom) : encodedSize(fileText(text), encoding, bom);
+      const ends = mixed ? 'Mixed line endings' : EOL_NAMES[eol];
+      status.textContent = `Ln ${line}, Col ${col}  ·  ${lines} line${lines === 1 ? '' : 's'}, ${formatSize(size)}  ·  ${ends}  ·  ${ENCODING_NAMES[encoding]}  ·  ${zoom}%${dirty() ? '  ·  not saved' : ''}`;
     };
     // Counting lines and bytes goes over the whole text, and even reading a long text box's text back costs the browser
     // milliseconds, so in a long file a key only marks the window changed (at once: the close guard needs it), and the
@@ -153,6 +169,8 @@ export const editorApp: AppDef = {
       if (i >= 0 && i < ZOOMS.length) setZoom(ZOOMS[i]);
     };
 
+    /** Why the file could not be opened; the window then keeps only Open, New and Close working. */
+    let refused = '';
     if (path) {
       // Nothing can be typed until the file is in: typing now would be thrown away when it arrives.
       area.readOnly = true;
@@ -161,43 +179,74 @@ export const editorApp: AppDef = {
         const entry = await shell.fs.stat(path);
         if (!entry || entry.kind !== 'file') throw new GoneError();
         if (entry.size > MAX_TEXT_BYTES) {
-          area.disabled = true;
-          usable = false;
-          bar.refresh();
-          status.textContent = `This file is ${formatSize(entry.size)}. Quick Notes opens text up to ${formatSize(MAX_TEXT_BYTES)}. It is safe where it is.`;
-          return;
+          refused = `This file is ${formatSize(entry.size)}. Quick Notes opens text up to ${formatSize(MAX_TEXT_BYTES)}. It is safe where it is.`;
+        } else {
+          const bytes = await shell.fs.readFile(path);
+          const file = decodeFile(bytes);
+          if (!file) {
+            refused = 'This file does not look like text, so it was not opened. It is safe where it is.';
+          } else {
+            bom = file.bom;
+            encoding = file.encoding;
+            eol = savedEol = detectEol(file.text, '\n');
+            const ends = lineEndings(file.text);
+            area.value = toBox(file.text);
+            saved = area.value;
+            if (ends) mixed = { text: saved, ends };
+            savedMixed = !!mixed;
+            loadedId = entry.id;
+            area.readOnly = false;
+            if (encoding === 'windows-1252') shell.toast('This file is not UTF-8, so it was opened as Windows-1252 (Western) text and is saved back that way.');
+          }
         }
-        const bytes = await shell.fs.readFile(path);
-        bom = hasBom(bytes);
-        const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-        eol = savedEol = detectEol(text, '\n');
-        area.value = toBox(text);
-        saved = area.value;
-        loadedId = entry.id;
-        area.readOnly = false;
       } catch (error) {
-        area.disabled = true;
-        // Every menu command that works on the text is off: there is no text to work on.
-        usable = false;
-        bar.refresh();
-        status.textContent = error instanceof TypeError
-          ? 'This file does not look like text, so it was not opened. It is safe where it is.'
-          : error instanceof GoneError
-            ? 'That file is not there any more. It may have been moved or deleted.'
-            : `The file could not be read just now, so it was not opened. It is safe where it is: close this window and open it again. (${describeError(error)})`;
-        return;
+        refused = error instanceof GoneError
+          ? 'That file is not there any more. It may have been moved or deleted.'
+          : `The file could not be read just now, so it was not opened. It is safe where it is: close this window and open it again. (${describeError(error)})`;
       }
     }
-    setZoom(100);
+    if (refused) {
+      area.disabled = true;
+      // Every menu command that works on the text is off: there is no text to work on. Open, New and Close still work.
+      usable = false;
+      bar.refresh();
+      if (path) app.setTitle(baseName(path));
+      status.textContent = refused;
+      // The keys (Ctrl+O, Alt+N) still reach the window: its inside takes the focus the disabled box cannot, also when clicked.
+      app.root.tabIndex = -1;
+      app.root.style.outline = 'none';
+      app.root.focus({ preventScroll: true });
+    } else setZoom(100);
 
     // What a save writes, taken when the save starts: typing while it is on its way stays unsaved (and marked so).
-    const snapshot = () => ({ text: area.value, eol, bytes: fileBytes(area.value, eol, bom) });
-    const markSaved = (id: string, snap: { text: string; eol: Eol }) => {
+    const snapshot = () => {
+      const text = area.value;
+      const ends = mixed ? keptEndings(text, mixed.text, mixed.ends, eol) : null;
+      return { text, eol, ends, bytes: encodeFile(ends ? withEndings(text, ends, eol) : toFile(text, eol), encoding, bom) };
+    };
+    const markSaved = (id: string, snap: { text: string; eol: Eol; ends: Eol[] | null }) => {
       loadedId = id;
       saved = snap.text;
       savedEol = snap.eol;
+      // The endings just written are the file's own now (a line typed in the middle has the main kind).
+      if (mixed && snap.ends) mixed = { text: snap.text, ends: snap.ends };
+      savedMixed = !!mixed;
       refresh();
     };
+    /** A Windows-1252 file that now holds a letter it cannot store: asks to save it as UTF-8 instead. */
+    async function encodingFits(): Promise<boolean> {
+      const odd = cannotHold(area.value, encoding);
+      if (odd === null) return true;
+      const yes = await shell.dialogs.confirm({
+        title: 'Save as UTF-8?',
+        text: `This file is stored as ${ENCODING_NAMES[encoding]} (Western) text, which cannot hold “${odd}” and maybe other letters in it. Save it as UTF-8 instead? Older programs may show its accents differently.`,
+        ok: 'Save as UTF-8',
+      });
+      if (!yes) return false;
+      encoding = 'utf-8';
+      bom = false;
+      return true;
+    }
 
     // One save at a time: a second Save while the first is on its way waits for it (so it replaces the copy the first one
     // made), and a second Save while the Save as box is up does nothing.
@@ -210,8 +259,9 @@ export const editorApp: AppDef = {
       void next.finally(() => busy === next && (busy = null));
       return next;
     };
-    const saveAs = () => once(saveAsNow);
-    const save = () => once(() => (path ? saveNow() : saveAsNow()));
+    // A window whose file was not opened has no text to save: saving would write an empty box over the file.
+    const saveAs = () => (usable ? once(saveAsNow) : Promise.resolve(false));
+    const save = () => (usable ? once(() => (path ? saveNow() : saveAsNow())) : Promise.resolve(false));
     app.onSave?.(save);
 
     /** Says so, before anything is written or a name asked for, when the text is more than Quick Notes opens. */
@@ -222,6 +272,7 @@ export const editorApp: AppDef = {
     }
 
     async function saveAsNow(): Promise<boolean> {
+      if (!(await encodingFits())) return false;
       if (await tooBig(snapshot().bytes.length)) return false;
       naming = true;
       const target = await pickSave(shell, {
@@ -251,6 +302,7 @@ export const editorApp: AppDef = {
 
     async function saveNow(): Promise<boolean> {
       if (!path) return saveAsNow();
+      if (!(await encodingFits())) return false;
       try {
         const snap = snapshot();
         if (await tooBig(snap.bytes.length)) return false;
@@ -293,20 +345,46 @@ export const editorApp: AppDef = {
      */
     const scrollToCaret = (at: number) => {
       const style = getComputedStyle(area);
-      const mirror = h('div', { 'aria-hidden': 'true' });
-      Object.assign(mirror.style, {
-        position: 'absolute', visibility: 'hidden', top: '0', left: '-99999px', boxSizing: style.boxSizing,
-        width: `${area.clientWidth}px`, padding: style.padding, font: style.font, lineHeight: style.lineHeight,
-        letterSpacing: style.letterSpacing, tabSize: style.tabSize,
-        whiteSpace: area.getAttribute('wrap') === 'off' ? 'pre' : 'pre-wrap', overflowWrap: 'break-word',
-      });
-      const mark = h('span', {}, '​');
-      mirror.append(document.createTextNode(area.value.slice(0, at)), mark);
-      document.body.append(mirror);
-      const top = mark.offsetTop;
-      const left = mark.offsetLeft;
-      mirror.remove();
       const lineHeight = parseFloat(style.lineHeight) || 20;
+      const wrapOff = area.getAttribute('wrap') === 'off';
+      const value = area.value;
+      /** Lays out `before`, a mark, then `after` in a hidden copy of the box: where the mark sits, and the copy's height. */
+      const measure = (before: string, after: string) => {
+        const mirror = h('div', { 'aria-hidden': 'true' });
+        Object.assign(mirror.style, {
+          position: 'absolute', visibility: 'hidden', top: '0', left: '-99999px', boxSizing: style.boxSizing,
+          width: `${area.clientWidth}px`, padding: style.padding, font: style.font, lineHeight: style.lineHeight,
+          letterSpacing: style.letterSpacing, tabSize: style.tabSize,
+          whiteSpace: wrapOff ? 'pre' : 'pre-wrap', overflowWrap: 'break-word',
+        });
+        const mark = h('span', {}, '​');
+        // A box shows an empty last line after a closing line break; a copy needs a letter there to do the same.
+        mirror.append(document.createTextNode(before), mark, document.createTextNode(after.endsWith('\n') ? `${after}​` : after));
+        document.body.append(mirror);
+        const spot = { top: mark.offsetTop, left: mark.offsetLeft, height: mirror.offsetHeight };
+        mirror.remove();
+        return spot;
+      };
+      // Laying out a long text costs the browser about a second per 5 MB, so only the shorter side of the caret is laid out.
+      let top: number;
+      let left = 0;
+      const lineAt = value.lastIndexOf('\n', at - 1) + 1;
+      if (wrapOff) {
+        // No wrapping: every line is one line high, so only the caret's own line is laid out (for how far across).
+        let lines = 0;
+        for (let i = value.indexOf('\n'); i >= 0 && i < at; i = value.indexOf('\n', i + 1)) lines++;
+        top = (parseFloat(style.paddingTop) || 0) + lines * lineHeight;
+        left = measure(value.slice(lineAt, at), '').left;
+      } else if (at <= value.length / 2) {
+        top = measure(value.slice(0, at), '').top;
+      } else {
+        // From the end: the copy holds the text after the caret (from its line's start when that is near, so the rows
+        // break as in the box; a very long line starting mid-way may be one row out, still in view), and the caret is
+        // that far above the bottom of the box's own text.
+        const from = at - lineAt <= 10_000 ? lineAt : at;
+        const spot = measure(value.slice(from, at), value.slice(at));
+        top = area.scrollHeight - spot.height + spot.top;
+      }
       if (top < area.scrollTop || top + lineHeight > area.scrollTop + area.clientHeight) area.scrollTop = Math.max(0, top - area.clientHeight / 2);
       if (area.getAttribute('wrap') === 'off' && (left < area.scrollLeft || left > area.scrollLeft + area.clientWidth - 20)) area.scrollLeft = Math.max(0, left - area.clientWidth / 2);
     };
@@ -334,7 +412,7 @@ export const editorApp: AppDef = {
     };
     const selectionMatches = () => {
       const chosen = area.value.slice(area.selectionStart, area.selectionEnd);
-      return findInput.value !== '' && (caseBox.checked ? chosen === findInput.value : chosen.toLowerCase() === findInput.value.toLowerCase());
+      return findInput.value !== '' && sameMatch(chosen, findInput.value, caseBox.checked);
     };
     const replaceOne = () => {
       if (selectionMatches()) typeOver(area.selectionStart, area.selectionEnd, replaceInput.value);
@@ -407,6 +485,8 @@ export const editorApp: AppDef = {
         event.preventDefault();
         run();
       };
+      // A window whose file was not opened still takes Open and New (and Close, from the window).
+      if (!usable && !(ctrl && key === 'o') && !(event.code === 'KeyN' || key === 'n')) return;
       if (ctrl && key === 's') act(() => void (event.shiftKey ? saveAs() : save()));
       else if (ctrl && !event.shiftKey && key === 'o') act(() => void openPicked());
       // Alt+N is the one shown: a browser keeps Ctrl+N, which still works where a browser passes it on.
