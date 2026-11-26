@@ -196,6 +196,23 @@ export const contactsApp: AppDef = {
       formDirty = () => JSON.stringify(read()) !== was;
       card.addEventListener('input', () => app.setDirty(isDirty()), { signal });
       nameIn.focus();
+      // Ctrl+S, or Enter in a one-line box, saves; Escape leaves the form (asking first if anything was changed).
+      card.addEventListener('keydown', (event: KeyboardEvent) => {
+        if (event.isComposing) return;
+        const plain = !event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey;
+        if (event.key.toLowerCase() === 's' && (event.ctrlKey || event.metaKey) && !event.altKey) {
+          event.preventDefault();
+          event.stopPropagation();
+          if (!saveBtn.disabled) saveBtn.click();
+        } else if (event.key === 'Enter' && plain && event.target instanceof HTMLInputElement && event.target.closest('.form-row')) {
+          event.preventDefault();
+          if (!saveBtn.disabled) saveBtn.click();
+        } else if (event.key === 'Escape' && plain) {
+          event.preventDefault();
+          event.stopPropagation();
+          void leaveForm().then(ok => ok && cancel.click());
+        }
+      }, { signal });
       saveBtn.addEventListener('click', async () => {
         const changes = formChanges(existing ? opened : null, read());
         if (typeof changes === 'string') return void (problem.textContent = changes);

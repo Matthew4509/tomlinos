@@ -165,7 +165,7 @@ await step('FAULT CON-P0-3: a card changed in another window is shown fresh, and
   ok(text.includes('020 7946 0000'), 'the other window\'s phone was lost (first window showed: ' + JSON.stringify(shown.slice(0, 80)) + ')');
 });
 
-await step('FAULT CON-P1: in the smallest window the edit form fits: no field is cut off sideways and Save can be reached', async () => {
+await step('FAULT CON-P1-13: in the smallest window the edit form fits: no field is cut off sideways and Save can be reached', async () => {
   const w = await openContacts();
   await w.evaluate(win => {
     win.style.width = '360px';
@@ -180,7 +180,7 @@ await step('FAULT CON-P1: in the smallest window the edit form fits: no field is
   ok(box.scroll <= box.client + 1 && name >= 120, `card ${Math.round(box.width)}px wide, scrolls to ${box.scroll}px; the Name field is ${Math.round(name)}px`);
 });
 
-await step('FAULT CON-P1: Escape leaves the edit form and Ctrl+S or Enter saves it', async () => {
+await step('FAULT CON-P1-14: Escape leaves the edit form (asking if changed) and Ctrl+S or Enter saves it', async () => {
   const w = await openContacts();
   await choose(w, 'Bob Builder');
   await w.getByRole('button', { name: 'Edit' }).click();
@@ -191,6 +191,19 @@ await step('FAULT CON-P1: Escape leaves the edit form and Ctrl+S or Enter saves 
   await w.getByRole('button', { name: 'Edit' }).click();
   await page.keyboard.press('Escape');
   ok(await w.getByRole('button', { name: 'Edit' }).count(), 'Escape did not leave the form');
+  // Ctrl+S saves from a many-line box too.
+  await w.getByRole('button', { name: 'Edit' }).click();
+  await w.getByLabel('Notes').fill('keyed save');
+  await page.keyboard.press('Control+s');
+  await w.locator('.person-facts', { hasText: 'keyed save' }).waitFor({ timeout: 3000 });
+  // Escape with something typed asks first; Keep editing keeps the typing.
+  await w.getByRole('button', { name: 'Edit' }).click();
+  await w.getByLabel('Notes').fill('not yet saved');
+  await page.keyboard.press('Escape');
+  const ask = page.locator('.dialog');
+  await ask.waitFor({ timeout: 3000 });
+  await ask.getByRole('button', { name: 'Keep editing' }).click();
+  ok((await w.getByLabel('Notes').inputValue()) === 'not yet saved', 'the typed notes were lost');
 });
 
 await browser.close();
