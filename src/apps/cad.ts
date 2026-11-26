@@ -5,7 +5,7 @@
 // bar with the layer and the pointer's X and Y. No ribbon. Shapes are kept as exact lines, arcs, circles, ellipses
 // and curves in millimetres or inches; the drawing is saved as a .tcad file (JSON).
 import { css, h, on } from '../core/dom.ts';
-import { baseName, parentPath, uniqueName } from '../fs/names.ts';
+import { baseName, joinPath, parentPath, uniqueName } from '../fs/names.ts';
 import type { MenuItem } from '../shell/menu.ts';
 import { pickFile, pickSave } from '../shell/filepicker.ts';
 import { heldInOtherTabs, holdCopy, releaseCopy } from '../shell/recovery.ts';
@@ -24,7 +24,8 @@ import { SNAP_NAMES, SNAP_ORDER, findSnaps, type Snap, type SnapMode } from './c
 import { PARTS_FOLDER, PART_EXT, layerFor, partList, partNameProblem, placePart, readPart, unitFactor, writePart, type Part } from './cad/parts.ts';
 import { COMMAND_WORDS, TOOLS, partPlaceTool, type PolarAnswer, type TextAnswer, type TextAsk, type Tool, type ToolCtx, type ToolId } from './cad/tools.ts';
 import { explode, join } from './cad/modify.ts';
-import { allFinite, decodeText, readDxf, writeDxf } from './cad/dxf.ts';
+import { DEFAULT_DXF_VERSION, DXF_VERSIONS, DXF_VERSION_LIST, allFinite, decodeText, isDxfVersion, readDxf, withExtension, writeDxf, type DxfVersion } from './cad/dxf.ts';
+import { writeSvg } from './cad/svg.ts';
 import type { Align } from './cad/font.ts';
 import { defaultStyle, dimParts, textShapeStrokes, type DimShape } from './cad/notes.ts';
 import { MAX_SCALE, MIN_SCALE, fitView, render, toWorld, type View } from './cad/view.ts';
@@ -50,6 +51,8 @@ interface Settings {
   dxfTextAsLines: boolean;
   dxfConstruction: boolean;
   dxfHidden: boolean;
+  /** What Output writes: a DXF release, or SVG. */
+  exportFormat: DxfVersion | 'svg';
   /** Drawings opened or saved lately, newest first. */
   recent: string[];
   /** How the last print was set up (the title is each drawing's own). */
@@ -129,11 +132,12 @@ export const cadApp: AppDef = {
     app.root.classList.add('cad');
 
     // ---- Settings kept between windows -----------------------------------------------------------------------------
-    const settings: Settings = { snaps: [...DEFAULT_SNAPS], arrows: false, white: false, large: false, layersPanel: true, ortho: false, gridOn: false, gridSnap: false, dxfTextAsLines: false, dxfConstruction: false, dxfHidden: false, recent: [], print: readPrintSettings(null), autosave: true };
+    const settings: Settings = { snaps: [...DEFAULT_SNAPS], arrows: false, white: false, large: false, layersPanel: true, ortho: false, gridOn: false, gridSnap: false, dxfTextAsLines: false, dxfConstruction: false, dxfHidden: false, exportFormat: DEFAULT_DXF_VERSION, recent: [], print: readPrintSettings(null), autosave: true };
     try {
       const saved = JSON.parse(await shell.fs.readText(SETTINGS)) as Partial<Settings>;
       if (Array.isArray(saved.snaps)) settings.snaps = saved.snaps.filter((s): s is SnapMode => SNAP_ORDER.includes(s as SnapMode));
       for (const k of ['arrows', 'white', 'large', 'layersPanel', 'ortho', 'gridOn', 'gridSnap', 'dxfTextAsLines', 'dxfConstruction', 'dxfHidden', 'autosave'] as const) if (typeof saved[k] === 'boolean') settings[k] = saved[k];
+      if (isDxfVersion(saved.exportFormat) || saved.exportFormat === 'svg') settings.exportFormat = saved.exportFormat;
       if (Array.isArray(saved.recent)) settings.recent = saved.recent.filter((r): r is string => typeof r === 'string').slice(0, RECENT_MAX);
       settings.print = readPrintSettings(saved.print);
     } catch {
@@ -948,30 +952,58 @@ export const cadApp: AppDef = {
       });
       say('New text and dimensions take these sizes (Undo takes them back).');
     }
+    /** File > Output: a DXF of the release chosen (remembered for next time), or an SVG. */
     async function outputDxf(): Promise<void> {
+      const format = h('select', { class: 'field', 'aria-label': 'Write as' },
+        ...DXF_VERSION_LIST.map(v => h('option', { value: v }, `${DXF_VERSIONS[v].label}${v === 'R12' ? ' (the oldest CAM programs)' : v === DEFAULT_DXF_VERSION ? ' (most CAM programs)' : ''}`)),
+        h('option', { value: 'svg' }, 'SVG (laser and vinyl cutters, Inkscape, the web)'));
+      format.value = settings.exportFormat;
       const asLines = h('input', { type: 'checkbox', checked: settings.dxfTextAsLines });
       const xlines = h('input', { type: 'checkbox', checked: settings.dxfConstruction });
       const hidden = h('input', { type: 'checkbox', checked: settings.dxfHidden });
+      const sheet = h('input', { type: 'checkbox', checked: false });
+      const about = h('p', {});
+      const hiddenRow = h('label', { class: 'cad-check' }, hidden, ' Items on hidden layers');
+      const sheetRow = h('label', { class: 'cad-check' }, sheet, ' A white sheet behind the drawing (off: see-through)');
+      const explain = () => {
+        const v = format.value;
+        about.textContent = v === 'svg'
+          ? 'Writes an SVG at full size (1 in the file is 1 mm or 1 inch), each layer a group in the colour it prints in. Arcs, circles, ellipses and curves stay exact; hidden layers are left out; text is in the viewer’s own letters unless written as lines. Your drawing is not changed (Save keeps everything as .tcad).'
+          : v === 'R12'
+            ? 'Writes an AutoCAD R12 DXF: the plainest kind, which CAM programs old and new read. Ellipses and curves go as polylines of arcs; dimensions as plain lines and text. Your drawing is not changed (Save keeps everything as .tcad).'
+            : `Writes an AutoCAD ${v} DXF: true ellipses and curves, light polylines and paragraph text${Number(v) >= 2007 ? ', letters in UTF-8' : ''}; dimensions as plain lines and text. Your drawing is not changed (Save keeps everything as .tcad).`;
+        hiddenRow.hidden = v === 'svg';
+        sheetRow.hidden = v !== 'svg';
+      };
+      explain();
+      on(format, 'change', explain, signal);
       const body = h('div', { class: 'cad-dialog' },
-        h('p', {}, 'Writes an AutoCAD R12 DXF: the plainest kind, which CAM programs old and new read. Ellipses and curves go as polylines of arcs; dimensions as plain lines and text. Your drawing is not changed (Save keeps everything as .tcad).'),
+        h('label', { class: 'cad-row' }, h('span', {}, 'Write as'), format),
+        about,
         h('label', { class: 'cad-check' }, asLines, ' Text as lines in CAD Draft’s letters (exactly as on screen; for engraving). Off: as text the other program draws in its own letters.'),
         h('label', { class: 'cad-check' }, xlines, ' Construction lines (as long lines across the drawing)'),
-        h('label', { class: 'cad-check' }, hidden, ' Items on hidden layers'));
-      const ok = await shell.dialogs.ask<boolean>({ title: 'Output a DXF', body, buttons: [{ label: 'Choose where...', value: true, primary: true }, { label: 'Cancel', value: false }], cancel: false });
+        hiddenRow,
+        sheetRow);
+      const ok = await shell.dialogs.ask<boolean>({ title: 'Output a DXF or SVG', body, buttons: [{ label: 'Choose where...', value: true, primary: true }, { label: 'Cancel', value: false }], cancel: false, focus: () => format });
       setTimeout(keyboardBack, 0);
       if (!ok) return;
+      const chosenFormat: DxfVersion | 'svg' = format.value === 'svg' || isDxfVersion(format.value) ? format.value : DEFAULT_DXF_VERSION;
+      const ext = chosenFormat === 'svg' ? 'svg' : 'dxf';
+      settings.exportFormat = chosenFormat;
       settings.dxfTextAsLines = asLines.checked;
       settings.dxfConstruction = xlines.checked;
       settings.dxfHidden = hidden.checked;
       keepSettings();
-      let out: ReturnType<typeof writeDxf>;
+      let out: { bytes: Uint8Array; notes: string[]; count: number };
       try {
-        out = writeDxf(drawing, { textAsLines: asLines.checked, construction: xlines.checked, hidden: hidden.checked });
+        out = chosenFormat === 'svg'
+          ? writeSvg(drawing, { white: sheet.checked, textAsLines: asLines.checked, construction: xlines.checked, title: label.replace(/\.(tcad|dxf|svg)$/i, '') })
+          : writeDxf(drawing, { textAsLines: asLines.checked, construction: xlines.checked, hidden: hidden.checked, version: chosenFormat });
       } catch (error) {
         if (error instanceof CadProblem) return problem(error.message);
         throw error;
       }
-      if (!out.count) return problem('There is nothing to write: draw something first (or tick hidden layers or construction lines if that is all there is).');
+      if (!out.count) return problem(`There is nothing to write: draw something first (or tick ${ext === 'svg' ? 'construction lines' : 'hidden layers or construction lines'} if that is all there is).`);
       const folder = path ? parentPath(path) : folderHint ?? '/Documents';
       let taken: string[] = [];
       try {
@@ -979,12 +1011,12 @@ export const cadApp: AppDef = {
       } catch {
         // Saving will say the folder is gone.
       }
-      const stem = label.replace(/\.(tcad|dxf)$/i, '');
-      const chosen = await pickSave(shell, { title: 'Output a DXF', folder, name: uniqueName(`${stem}.dxf`, taken), accept: ['dxf'], ok: 'Save' });
+      const stem = label.replace(/\.(tcad|dxf|svg)$/i, '');
+      const chosen = await pickSave(shell, { title: ext === 'svg' ? 'Output an SVG' : 'Output a DXF', folder, name: uniqueName(`${stem}.${ext}`, taken), accept: [ext], ok: 'Save' });
       setTimeout(keyboardBack, 0);
       if (!chosen) return;
-      let target = chosen.path;
-      if (!/\.dxf$/i.test(target)) target += '.dxf';
+      // The output's extension: added when missing; a .dxf, .svg or .tcad typed for the other kind is changed, never doubled.
+      const target = joinPath(parentPath(chosen.path), withExtension(baseName(chosen.path), ext));
       try {
         let replacing = chosen.replace;
         if (target !== chosen.path) {
@@ -1003,7 +1035,7 @@ export const cadApp: AppDef = {
         for (const n of out.notes) say(n);
         shell.toast(`Saved “${entry.name}”.`);
       } catch (error) {
-        await shell.report('Could not save the DXF', error);
+        await shell.report(ext === 'svg' ? 'Could not save the SVG' : 'Could not save the DXF', error);
       }
     }
     // ---- The photo to trace -----------------------------------------------------------------------------------------
@@ -1711,7 +1743,7 @@ export const cadApp: AppDef = {
         'Layers: show, hide, lock, rename, colour, line type, delete, move items onto a layer. Utils: measure a distance or an angle, area and perimeter, list an item, information about the drawing.',
         'Text (Geometry > Text): words in CAD Draft’s own single-line letters, any height and angle, lined up left, middle or right, several lines, or round an arc or circle. CAD > Explode turns text into lines a cutter can follow.',
         'Dimensions (Utils > Dimensions): linear (across or up), horizontal, vertical, aligned, radius, diameter, angle and leader notes, on the Dimensions layer. They measure their own points: move or scale one and its number follows (they are not tied to the shapes they measure). Double-click text or a dimension to change it.',
-        'DXF: File > Open reads DXF of any release saved as text (from CAM programs, AutoCAD and others); File > Output > CAD > DXF writes AutoCAD R12 DXF for the CAM program. What a DXF holds that CAD Draft does not draw (hatches, pictures, 3D) is listed when it opens.',
+        'DXF: File > Open reads DXF of any release saved as text (from CAM programs, AutoCAD and others); File > Output > CAD > DXF writes a DXF for the CAM program (R12, 2000, 2004, 2007, 2010, 2013 or 2018; the last one chosen is offered next time) or an SVG at full size, a group per layer, for laser and vinyl cutters and Inkscape. What a DXF holds that CAD Draft does not draw (hatches, pictures, 3D) is listed when it opens.',
         'Photo to trace (View > Photo to trace, or the photo button): open a phone photo under the drawing, scale it by clicking two marks a known distance apart (a tape measure in the photo) and typing that distance, line up an edge that should run straight, move it, and draw over it. It stays in the .tcad, can be hidden or made fainter, and never goes into a DXF. A photo taken at a slant: Straighten a slanted photo, then click the four corners of something rectangular lying flat in it (a benchtop, a door, a sheet of A4 at 297 x 210 mm) in order round its edge and type its real width and height; it is redrawn square and to scale. Only what lies flat on that surface comes out true: anything standing up from it (a splashback, a tap) leans.',
         'Parts (Geometry > Parts): choose items and save them as a named part with a base point (a hinge-hole pattern, a sink cut-out); insert a part at a point and a turn, as many times as needed. A few common ones come with CAD Draft (a 35 mm hinge cup, a 32 mm shelf-pin row, handle holes): their sizes are the usual ones, and the hardware maker’s drilling sheet decides. Placed parts are plain items, so the DXF needs nothing new. Your parts are drawings in /Documents/CAD parts.',
         'Print to scale (File > Print to scale, Ctrl+P): A4 to A1, Letter and Tabloid; Fit, 1:1, 1:2, 1:5, 1:10 and more, or any 1:n; too big for one sheet, it prints across several to tape together. A title block carries the title, scale, date, page and a 50 mm bar to check with a ruler. Print at actual size (100%). The same pages save as a PDF.',

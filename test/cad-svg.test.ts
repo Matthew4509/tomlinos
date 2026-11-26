@@ -2,7 +2,7 @@
 // text, hidden layers left out, nothing that runs or points outside the file. Run: npm test
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { P, at, curveThrough, type Pt } from '../src/apps/cad/geom.ts';
+import { P, at, bulgeArc, curveThrough, type Pt } from '../src/apps/cad/geom.ts';
 import { newDrawing, type Ent } from '../src/apps/cad/model.ts';
 import { paperInk } from '../src/apps/cad/print.ts';
 import { CAP_SHARE, svgNum, writeSvg, xmlEscape } from '../src/apps/cad/svg.ts';
@@ -143,6 +143,29 @@ test('shapes are exact: lines, SVG arcs (not segments), native circles and ellip
   assert.match(geo[3].attrs.d, /^M 0 -400 L 200 -400 A \S+ \S+ 0 0 0 200 -500 L 0 -500 A \S+ \S+ 0 0 1 0 -400 Z$/);
   const r = numbers(geo[3].attrs.d)[4];
   near(r, 100 / (2 * Math.sin(2 * Math.atan(0.5))));
+  // Each SVG arc's centre (worked out from its ends and flags, as the SVG rules do) is the drawing's, turned over.
+  const centre = (x1: number, y1: number, rr: number, large: number, sweep: number, x2: number, y2: number) => {
+    const hx = (x1 - x2) / 2;
+    const hy = (y1 - y2) / 2;
+    const k = (large !== sweep ? 1 : -1) * Math.sqrt(Math.max(0, (rr * rr - hx * hx - hy * hy) / (hx * hx + hy * hy)));
+    return { x: k * hy + (x1 + x2) / 2, y: -k * hx + (y1 + y2) / 2 };
+  };
+  const c1 = centre(arc[0], arc[1], 50, arc[5], arc[6], arc[7], arc[8]);
+  nearPt(c1.x, c1.y, P(300, 200));
+  const poly = d.ents[5];
+  assert.equal(poly.type, 'poly');
+  if (poly.type === 'poly') {
+    let arcs = 0;
+    poly.pts.forEach((a, i) => {
+      const b = poly.pts[(i + 1) % poly.pts.length];
+      if (!poly.bulges[i]) return;
+      const m = geo[3].attrs.d.match(new RegExp(`A (\\S+) \\S+ 0 (\\d) (\\d) ${svgNum(b.x)} ${svgNum(-b.y)}`))!;
+      const c = centre(a.x, -a.y, Number(m[1]), Number(m[2]), Number(m[3]), b.x, -b.y);
+      nearPt(c.x, c.y, bulgeArc(a, b, poly.bulges[i]).c);
+      arcs++;
+    });
+    assert.equal(arcs, 2, 'both bulged spans, one bulging each way');
+  }
   // Curves: one C per piece, the control points CAD Draft draws with.
   for (const [i, ent] of [[2, d.ents[7]], [3, d.ents[8]]] as const) {
     assert.equal(ent.type, 'spline');

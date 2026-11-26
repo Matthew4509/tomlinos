@@ -515,6 +515,8 @@ await step('session 8: File > Output > CAD > DXF, then the DXF opened again (lay
   await page.locator('.menu').getByText('Output', { exact: true }).click();
   await page.locator('.menu').getByText('CAD', { exact: true }).click();
   await page.locator('.menu').getByText('DXF...', { exact: true }).click();
+  eq(await D().locator('select[aria-label="Write as"]').inputValue(), '2000', 'DXF 2000 is offered first');
+  await D().locator('select[aria-label="Write as"]').selectOption('R12');
   await D().getByRole('button', { name: 'Choose where...' }).click();
   await D().locator('input[aria-label="File name"]').fill('panel.dxf');
   await D().getByRole('button', { name: 'Save' }).click();
@@ -538,6 +540,43 @@ await step('session 8: File > Output > CAD > DXF, then the DXF opened again (lay
   await cmd('measure', '0,0', '600,400');
   ok((await said(1)).includes('Distance 721.11'), 'the corners are where they were: ' + (await said(1)));
   await page.keyboard.press('Escape');
+});
+
+await step('session 8b: Output as DXF 2000 (the release remembered, the extension added) and opened again; Output as SVG (a .dxf typed is changed to .svg, not doubled)', async () => {
+  const output = async () => {
+    await W().getByRole('menuitem', { name: 'File' }).click();
+    await page.locator('.menu').getByText('Output', { exact: true }).click();
+    await page.locator('.menu').getByText('CAD', { exact: true }).click();
+    await page.locator('.menu').getByText('DXF...', { exact: true }).click();
+  };
+  await output();
+  eq(await D().locator('select[aria-label="Write as"]').inputValue(), 'R12', 'the release chosen last time is offered');
+  await D().locator('select[aria-label="Write as"]').selectOption('2000');
+  ok((await D().innerText()).includes('AutoCAD 2000 DXF: true ellipses and curves'), 'the words follow the choice');
+  await D().getByRole('button', { name: 'Choose where...' }).click();
+  await D().locator('input[aria-label="File name"]').fill('panel2000');
+  await D().getByRole('button', { name: 'Save' }).click();
+  await page.locator('.toast', { hasText: 'Saved “panel2000.dxf”' }).first().waitFor();
+  ok((await said(6)).includes('written (AutoCAD 2000 DXF'), 'the notes: ' + (await said(6)));
+  await W().getByRole('menuitem', { name: 'File' }).click();
+  await page.locator('.menu').getByText('Open...', { exact: true }).click();
+  await D().locator('.pick-row', { hasText: 'panel2000.dxf' }).first().dblclick();
+  await page.locator('.win .win-bar', { hasText: 'panel2000.dxf' }).waitFor();
+  const names = await W().locator('.cad-layer-name').allInnerTexts().then(t => t.map(s => s.replace(' ✎', '')));
+  eq(names.filter(n => n !== '0'), ['Geometry', 'Construction', 'Dimensions', 'Text'], 'layers, in their own spelling (2000 keeps small letters)');
+  eq(await count('Geometry'), 2, 'the rectangle and the circle');
+  ok(!(await page.locator('.dialog').count()), 'nothing left out or changed, so no report box');
+  await output();
+  eq(await D().locator('select[aria-label="Write as"]').inputValue(), '2000', 'remembered again');
+  await D().locator('select[aria-label="Write as"]').selectOption('svg');
+  ok(await D().getByText('A white sheet behind the drawing').isVisible(), 'SVG offers a white sheet');
+  ok(!(await D().getByText('Items on hidden layers').isVisible()), 'and leaves hidden layers out (no box for them)');
+  await D().getByRole('button', { name: 'Choose where...' }).click();
+  eq(await D().locator('input[aria-label="File name"]').inputValue(), 'panel2000.svg', 'the name offered ends in .svg');
+  await D().locator('input[aria-label="File name"]').fill('panel-cut.dxf');
+  await D().getByRole('button', { name: 'Save' }).click();
+  await page.locator('.toast', { hasText: 'Saved “panel-cut.svg”' }).first().waitFor();
+  ok((await said(6)).includes('written (SVG at full size, millimetres'), 'the notes: ' + (await said(6)));
 });
 
 /** A file from this computer into a folder of the desktop, through File Explorer's Upload. */
@@ -1250,6 +1289,7 @@ await step('a DXF with items at a height and a dashed line of its own says so; o
   await page.locator('.menu').getByText('Output', { exact: true }).click();
   await page.locator('.menu').getByText('CAD', { exact: true }).click();
   await page.locator('.menu').getByText('DXF...', { exact: true }).click();
+  await D().locator('select[aria-label="Write as"]').selectOption('R12');
   await D().getByRole('button', { name: 'Choose where...' }).click();
   await D().locator('input[aria-label="File name"]').fill('heights.dxf');
   await D().getByRole('button', { name: 'Save' }).click();

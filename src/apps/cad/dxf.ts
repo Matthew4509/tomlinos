@@ -257,10 +257,17 @@ export const DXF_VERSIONS = {
   '2018': { acad: 'AC1032', label: 'DXF 2018' },
 } as const;
 export type DxfVersion = keyof typeof DXF_VERSIONS;
-export const DXF_VERSION_LIST = Object.keys(DXF_VERSIONS) as DxfVersion[];
+/** Oldest first (Object.keys would put the number-like names before R12). */
+export const DXF_VERSION_LIST: DxfVersion[] = ['R12', '2000', '2004', '2007', '2010', '2013', '2018'];
 /** What Output offers first: 2000 is the oldest release with handles, light polylines, ellipses and curves, and every CAM program of the last twenty years reads it. */
 export const DEFAULT_DXF_VERSION: DxfVersion = '2000';
 export const isDxfVersion = (v: unknown): v is DxfVersion => typeof v === 'string' && Object.hasOwn(DXF_VERSIONS, v);
+
+/** A file name with the extension an output takes: one already typed is kept, a .dxf, .svg or .tcad is changed to it (never doubled). */
+export function withExtension(name: string, ext: 'dxf' | 'svg'): string {
+  if (name.toLowerCase().endsWith(`.${ext}`)) return name;
+  return `${name.replace(/\.(dxf|svg|tcad)$/i, '')}.${ext}`;
+}
 
 /** A name a 2000 or later DXF accepts as a layer: none of < > / \ " : ; ? * | = , ` or control signs, at most 255 long. */
 export function modernName(name: string): string {
