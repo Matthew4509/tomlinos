@@ -514,7 +514,7 @@ await step('session 8: File > Output > CAD > DXF, then the DXF opened again (lay
   await W().getByRole('menuitem', { name: 'File' }).click();
   await page.locator('.menu').getByText('Output', { exact: true }).click();
   await page.locator('.menu').getByText('CAD', { exact: true }).click();
-  await page.locator('.menu').getByText('DXF...', { exact: true }).click();
+  await page.locator('.menu').getByText('DXF or SVG...', { exact: true }).click();
   eq(await D().locator('select[aria-label="Write as"]').inputValue(), '2000', 'DXF 2000 is offered first');
   await D().locator('select[aria-label="Write as"]').selectOption('R12');
   await D().getByRole('button', { name: 'Choose where...' }).click();
@@ -547,7 +547,7 @@ await step('session 8b: Output as DXF 2000 (the release remembered, the extensio
     await W().getByRole('menuitem', { name: 'File' }).click();
     await page.locator('.menu').getByText('Output', { exact: true }).click();
     await page.locator('.menu').getByText('CAD', { exact: true }).click();
-    await page.locator('.menu').getByText('DXF...', { exact: true }).click();
+    await page.locator('.menu').getByText('DXF or SVG...', { exact: true }).click();
   };
   await output();
   eq(await D().locator('select[aria-label="Write as"]').inputValue(), 'R12', 'the release chosen last time is offered');
@@ -1289,7 +1289,7 @@ await step('a DXF with items at a height and a dashed line of its own says so; o
   await W().getByRole('menuitem', { name: 'File' }).click();
   await page.locator('.menu').getByText('Output', { exact: true }).click();
   await page.locator('.menu').getByText('CAD', { exact: true }).click();
-  await page.locator('.menu').getByText('DXF...', { exact: true }).click();
+  await page.locator('.menu').getByText('DXF or SVG...', { exact: true }).click();
   await D().locator('select[aria-label="Write as"]').selectOption('R12');
   await D().getByRole('button', { name: 'Choose where...' }).click();
   await D().locator('input[aria-label="File name"]').fill('heights.dxf');

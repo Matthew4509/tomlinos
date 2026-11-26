@@ -2512,7 +2512,7 @@ export const cadApp: AppDef = {
       { label: 'Save as...', hint: 'Ctrl+Shift+S', action: () => void saveAs() },
       { separator: true },
       { label: 'Print to scale...', hint: 'Ctrl+P', action: () => void printDialog() },
-      sub_('Output', [sub_('CAD', [{ label: 'DXF...', action: () => void outputDxf() }]), { label: 'PDF to scale...', action: () => void printDialog() }]),
+      sub_('Output', [sub_('CAD', [{ label: 'DXF or SVG...', action: () => void outputDxf() }]), { label: 'PDF to scale...', action: () => void printDialog() }]),
       { separator: true },
       { label: 'Keep a recovery copy every 2 minutes', checked: settings.autosave, action: () => setAutosave(!settings.autosave) },
       { label: 'Drawings not saved...', action: () => void offerRecovery(true) },
