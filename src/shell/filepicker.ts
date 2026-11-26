@@ -8,6 +8,7 @@ import { css, h, on, svg } from '../core/dom.ts';
 import { formatDate, formatSize, plural } from '../core/format.ts';
 import type { Entry } from '../fs/fs.ts';
 import { baseName, joinPath, nameKey, nameProblem, parentPath, splitPath, uniqueName } from '../fs/names.ts';
+import { protectedReason } from './actions.ts';
 import { describeError } from './dialogs.ts';
 import { extensionOf, fileTypeOf } from './filetypes.ts';
 import { icon, STANDARD_FOLDERS, type IconName } from './icons.ts';
@@ -566,6 +567,12 @@ function picker(shell: Shell, options: PickOptions, save: SaveOptions | null, fo
   }
 
   async function renameEntry(parent: string, oldName: string, newName: string, isFolder: boolean): Promise<boolean> {
+    // The standard folders (Desktop, Documents...) keep their names here too, as in File Explorer.
+    const reason = protectedReason(joinPath(parent, oldName));
+    if (reason) {
+      problem.textContent = reason;
+      return false;
+    }
     try {
       await shell.fs.rename(joinPath(parent, oldName), newName);
     } catch (error) {
@@ -627,28 +634,38 @@ function picker(shell: Shell, options: PickOptions, save: SaveOptions | null, fo
   }
 
   function rename() {
+    // Rename acts on the chosen item; in the tree, on the folder chosen there. With nothing chosen in the list it does
+    // nothing, rather than renaming the folder being shown.
     if (selected !== null && (lastPane === 'list' || folder === '/')) void renameInList(selected);
-    else if (folder !== '/') void renameInTree(folder);
+    else if (lastPane === 'tree' && folder !== '/') void renameInTree(folder);
+    else problem.textContent = 'Choose a file or folder to rename.';
   }
 
   // ---- Wiring ----
+  /** A button that turned itself off would drop the keyboard out of the window (Escape would stop working): the list takes it. */
+  const keepFocus = () => {
+    if (document.activeElement === backBtn || document.activeElement === forwardBtn || document.activeElement === document.body) {
+      if ((document.activeElement as HTMLButtonElement | null)?.disabled || document.activeElement === document.body) list.focus();
+    }
+  };
   on(backBtn, 'click', async () => {
     const to = back.pop();
     if (to === undefined) return;
     const from = folder;
+    // A folder that cannot be opened any more (deleted elsewhere) drops out of the history: the message shows once.
     if (await go(to, false)) forward.push(from);
-    else back.push(to);
     backBtn.disabled = back.length === 0;
     forwardBtn.disabled = forward.length === 0;
+    keepFocus();
   }, signal);
   on(forwardBtn, 'click', async () => {
     const to = forward.pop();
     if (to === undefined) return;
     const from = folder;
     if (await go(to, false)) back.push(from);
-    else forward.push(to);
     backBtn.disabled = back.length === 0;
     forwardBtn.disabled = forward.length === 0;
+    keepFocus();
   }, signal);
   on(upBtn, 'click', () => void go(parentPath(folder), true, baseName(folder)), signal);
   on(newFolderBtn, 'click', () => void newFolder(), signal);
@@ -696,6 +713,8 @@ function picker(shell: Shell, options: PickOptions, save: SaveOptions | null, fo
     renderList();
   }, signal);
 
+  // A name the desktop cannot use greys out Save: the reason shows under it as it is typed.
+  if (nameInput) on(nameInput, 'input', () => { problem.textContent = nameInput.value.trim() === '' ? '' : nameProblem(nameInput.value) ?? ''; }, signal);
   if (nameInput) on(nameInput, 'keydown', (event: KeyboardEvent) => {
     if (event.key !== 'Enter') return;
     // A folder's name typed in the box opens that folder, as in other desktops.
