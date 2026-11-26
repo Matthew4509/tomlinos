@@ -21,6 +21,7 @@ import { DocxProblem, headingsOf, readDocx, writeDocx, type DocxSource } from '.
 import { CONTACT_COLUMNS, contactsList, fieldsIn, mergeAll, rowsList, tableList, TEMPLATES, type MergeList } from './write/merge.ts';
 import { pageAt } from './write/layout.ts';
 import { findAll, findPlugin, replaceAll, type FindOptions, type Hit } from './write/find.ts';
+import { pdfCannotShow } from './sheet/pdf.ts';
 import { markdownLoses, readMarkdown, writeMarkdown } from './write/markdown.ts';
 import { OdtProblem, readOdt } from './write/odt.ts';
 import { readRtf, RtfProblem } from './write/rtf.ts';
@@ -1369,10 +1370,26 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
   /** The folder Save as and Save PDF as start in: the document's own, else where it came from, else Documents. */
   const docFolder = (): string => (path ? parentPath(path) : folderHint ?? '/Documents');
   /** File > Save PDF as...: the pages as they are on screen, saved where the person chooses. */
+  /**
+   * The PDF's letters are Helvetica, Times and Courier, which show anything outside Western European alphabets as "?":
+   * says which before the PDF is made (Print and PDF says it in its window; these paths had no window to say it in).
+   */
+  const pdfLettersOk = async (snap: ReturnType<typeof takeSnapshot>): Promise<boolean> => {
+    const missing = pdfCannotShow(snap.pages.flat().map(it => (it.k === 'text' ? it.text : '')).join(''));
+    if (!missing.length) return true;
+    return shell.dialogs.confirm({
+      title: 'Some letters will show as "?"',
+      text: `The PDF uses Helvetica, Times or Courier, which do not have these letters, so they show as "?" in it: ${missing.slice(0, 12).join(' ')}${missing.length > 12 ? ' and more' : ''}. Print keeps them.`,
+      ok: 'Make the PDF anyway',
+      cancel: 'Cancel',
+    });
+  };
   const savePdf = async (): Promise<void> => {
     settle();
     try {
-      await savePdfAs(shell, { folder: docFolder(), name: `${baseLabel()}.pdf` }, () => pdfOf(takeSnapshot(), baseLabel()));
+      const snap = takeSnapshot();
+      if (!(await pdfLettersOk(snap))) return;
+      await savePdfAs(shell, { folder: docFolder(), name: `${baseLabel()}.pdf` }, () => pdfOf(snap, baseLabel()));
     } catch (error) {
       await shell.report('Could not make the PDF', error);
     }
@@ -1572,7 +1589,9 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
       }
       // The PDF: the letters are laid out on a sheet of their own, out of sight, and read from there. The letter on screen
       // stays as it is, so typing while the PDF is made goes into it.
-      const bytes = await pdfOf(lettersSnapshot(merged), name);
+      const lettersSnap = lettersSnapshot(merged);
+      if (!(await pdfLettersOk(lettersSnap))) return;
+      const bytes = await pdfOf(lettersSnap, name);
       await savePdfAs(shell, { title: `Save ${mergeList.rows.length} letters as a PDF`, folder: docFolder(), name: `${name}.pdf` }, () => bytes);
     } catch (error) {
       await shell.report('Could not make the letters', error);
