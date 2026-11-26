@@ -16,6 +16,8 @@ export const recycleBinApp: AppDef = {
     let items: BinItem[] = [];
     const selected = new Set<string>();
     let anchor: string | null = null;
+    /** The row the keyboard is on: moves with every pick, while a Shift range keeps its anchor. */
+    let cursor: string | null = null;
     let generation = 0;
 
     const restoreBtn = h('button', { type: 'button', class: 'btn' }, 'Restore');
@@ -65,6 +67,7 @@ export const recycleBinApp: AppDef = {
     const slotOf = (target: EventTarget | null) => (target instanceof Element ? target.closest<HTMLElement>('.bin-row')?.dataset.slot : undefined) ?? null;
 
     function pick(slot: string, event: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }): void {
+      cursor = slot;
       if (event.shiftKey && anchor) {
         const a = items.findIndex(i => i.slot === anchor);
         const b = items.findIndex(i => i.slot === slot);
@@ -146,7 +149,7 @@ export const recycleBinApp: AppDef = {
       if (slot) void restore([slot]);
     }, app.signal);
     on(list, 'keydown', (event: KeyboardEvent) => {
-      const at = items.findIndex(i => i.slot === anchor);
+      const at = items.findIndex(i => i.slot === (cursor ?? anchor));
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         event.preventDefault();
         const next = items[Math.max(0, Math.min(items.length - 1, at + (event.key === 'ArrowDown' ? 1 : -1)))];
