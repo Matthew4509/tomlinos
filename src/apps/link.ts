@@ -52,7 +52,7 @@ export const linkApp: AppDef = {
     app.setTitle(baseName(arg));
     if (!url) {
       app.root.append(h('div', { class: 'pad' },
-        h('p', {}, 'This link does not hold a web address that starts with https:// or http://, so it is not followed.'),
+        h('p', {}, 'This link is not followed: its address does not start with https:// or http://.'),
         h('p', { class: 'hint' }, 'You can open it in Notepad to see or fix what is inside.')));
       return;
     }
@@ -63,7 +63,7 @@ export const linkApp: AppDef = {
       h('p', {}, 'This link goes to:'),
       h('p', { class: 'link-host' }, target.hostname),
       h('p', { class: 'link-full' }, target.href),
-      h('p', { class: 'hint' }, 'It opens in a new tab of your browser, where your own sign-ins work. The desktop stays open in this tab.'),
+      h('p', { class: 'hint' }, 'It opens in a new browser tab; the desktop stays open in this one.'),
       h('div', { class: 'row-buttons' }, openBtn, copyBtn)));
     on(openBtn, 'click', () => {
       openInNewTab(target);

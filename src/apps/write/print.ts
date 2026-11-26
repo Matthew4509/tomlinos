@@ -350,7 +350,7 @@ export async function printPreview(shell: Shell, take: () => Snapshot, page: Pag
   const body = h('div', { class: 'pp-dialog' },
     h('div', { class: 'pp-side' },
       h('p', { class: 'dialog-detail' }, `${page.paper === 'letter' ? 'Letter' : page.paper.toUpperCase()}, ${page.orient}. Paper, margins and the header and footer are on the Layout tab.`),
-      h('p', { class: 'dialog-detail' }, 'The PDF uses Helvetica, Times or Courier in place of each typeface (every PDF reader has them), so words keep their places but may look a little different. Letters outside Western European alphabets show as "?" in the PDF; Print keeps them.'),
+      h('p', { class: 'dialog-detail' }, 'The PDF uses Helvetica, Times or Courier, so text may look a little different. Letters outside Western European alphabets show as "?" in the PDF; Print keeps them.'),
       unshowable.length ? h('p', { class: 'dialog-detail', role: 'alert' }, `This document has letters the PDF will show as "?": ${unshowable.slice(0, 12).join(' ')}${unshowable.length > 12 ? ' and more' : ''}. Choose Print to keep them.`) : null),
     h('div', { class: 'pp-main' }, view, h('div', { class: 'pp-nav' }, prev, count, next)));
   const answer = await shell.dialogs.ask<'print' | 'pdf' | 'save' | null>({

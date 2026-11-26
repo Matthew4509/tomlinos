@@ -6,6 +6,7 @@
 // (server/lib/updater.php); only the owner installs one. Opened with "updates" it starts there.
 import { askIdentity } from '../auth/identity.ts';
 import { h, on } from '../core/dom.ts';
+import { infoTip } from '../shell/infotip.ts';
 import { formatSize } from '../core/format.ts';
 import { ServiceApi } from '../net/service.ts';
 import { HIDDEN_APPS } from '../release.ts';
@@ -189,7 +190,7 @@ export const appManagerApp: AppDef = {
         h('div', { class: 'ast-grid', role: 'list' }, ...tiles),
         ...(tiles.length ? [] : [h('p', { class: 'hint' }, 'None on this shelf yet.')]),
         ...(storeNote ? [h('p', { class: 'hint', role: 'status' }, storeNote)] : []),
-        h('p', { class: 'hint' }, 'Games and other add-ons come from the TOMLIN OS app store: only apps signed by TOMLIN OS can be downloaded, and each runs shut off from your files.'),
+        h('p', { class: 'hint' }, 'Games and other add-ons come from the TOMLIN OS app store. ', infoTip('the app store', 'Only apps signed by TOMLIN OS can be downloaded, and each runs shut off from your files.')),
         more,
       );
     }

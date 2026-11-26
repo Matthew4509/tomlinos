@@ -72,7 +72,7 @@ function showSetup(app: AppHandle, saved: Game | null): void {
     const choices = trade ? [50, 100, 150, 200] : [0, 50, 100];
     limit.replaceChildren(...choices.map(n => h('option', { value: n }, n ? `${n} turns` : 'None')));
     limit.value = choices.map(String).includes(was) ? was : String(trade ? 150 : 0);
-    limitNote.textContent = trade ? 'Trade & Trust always has a turn limit: two equal alliances can hold each other off for ever. At the limit, the side with the most planets wins.' : '';
+    limitNote.textContent = trade ? 'Trade & Trust always has a turn limit, so two equal alliances cannot hold each other off for ever: then the side with the most planets wins.' : '';
     limitNote.hidden = !trade;
   }
   showRules();

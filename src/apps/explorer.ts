@@ -290,7 +290,7 @@ export const explorerApp: AppDef = {
       });
       if (abort.signal.aborted) return;
       searching = null;
-      if (!count) results.append(h('p', { class: 'hint search-none' }, `Nothing called “${query}”${inside.checked ? ' or containing it' : ''} in ${where}. Search looks in this folder and every folder inside it; to look everywhere, go to This desktop first.`));
+      if (!count) results.append(h('p', { class: 'hint search-none' }, `Nothing called “${query}”${inside.checked ? ' or containing it' : ''} in ${where}. To search everywhere, start from This desktop.`));
       statusEl.textContent = outcome.capped ? `The first ${MAX_HITS} results. Add a word to narrow it down.` : `${count} found in ${where}.`;
     }
     let typing = 0;

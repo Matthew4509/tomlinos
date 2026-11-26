@@ -9,6 +9,7 @@
 // (no invented priorities, nothing answers on your behalf).
 import { AuthFailure } from '../auth/api.ts';
 import { h, on } from '../core/dom.ts';
+import { infoTip } from '../shell/infotip.ts';
 import { formatSize, plural } from '../core/format.ts';
 import { pickSave } from '../shell/filepicker.ts';
 import type { AppDef, AppHandle } from '../shell/types.ts';
@@ -49,7 +50,7 @@ export const mailApp: AppDef = {
       app.root.classList.add('ticket');
     }
     if (!app.shell.account) {
-      app.root.append(h('p', { class: 'app-message' }, 'Mail works when the desktop runs on its server (it fetches your mail there). This copy keeps its files in the browser only.'));
+      app.root.append(h('p', { class: 'app-message' }, 'Mail needs the desktop running on its server, which fetches your mail; this copy keeps its files in this browser only.'));
       return;
     }
     const acct = await loadAccount(app.shell);
@@ -140,7 +141,7 @@ function setup(app: AppHandle, existing: MailAccount | null): void {
 
   const form = h('div', { class: 'mail-setup' },
     h('h2', {}, existing ? 'Mail settings' : 'Set up your mailbox'),
-    h('p', { class: 'hint' }, 'TOMLIN OS Mail reads your existing mailbox (IMAP) and sends through it (SMTP). Your mail stays with your provider; nothing is copied into your files.'),
+    h('p', { class: 'hint' }, 'Mail reads and sends through your existing mailbox; your mail stays with your provider. ', infoTip('Mail', 'It reads with IMAP and sends with SMTP. Nothing is copied into your files.')),
     field('Your name (shown to people you write to)', name),
     field('Email address', email),
     field('Provider', preset),

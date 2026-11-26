@@ -13,7 +13,7 @@ export const shortcutsApp: AppDef = {
         h('h2', { class: 'set-h' }, group),
         h('dl', { class: 'keys' }, ...rows.flatMap(([keys, what]) => [h('dt', {}, keys), h('dd', {}, what)])),
       ]),
-      h('p', { class: 'hint' }, 'Alt+Tab, the Windows key and Alt+F4 belong to your computer, not the page, so the desktop uses the keys above instead.'),
+      h('p', { class: 'hint' }, 'Alt+Tab, the Windows key and Alt+F4 belong to your computer, so the desktop uses the keys above instead.'),
     );
   },
 };

@@ -1200,7 +1200,7 @@ export const sheetApp: AppDef = {
       const done = new AbortController();
       const answer = await shell.dialogs.ask<boolean>({
         title: `${old ? 'Edit the note on' : 'New note on'} ${addressOf(col, row)}`,
-        body: h('div', {}, box, h('p', { class: 'dialog-detail' }, 'The note shows when the pointer is over the cell; a red corner marks the cell. Leave it empty to take the note off.')),
+        body: h('div', {}, box, h('p', { class: 'dialog-detail' }, 'A red corner marks the cell, and the note shows when the pointer is over it. Leave it empty to take the note off.')),
         buttons: [{ label: 'OK', value: true, primary: true }, { label: 'Cancel', value: false }],
         cancel: false,
         focus: () => box,
