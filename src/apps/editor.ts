@@ -13,9 +13,13 @@ import { detectEol, EOL_NAMES, fileBytes, fileSize, findNext, hasBom, lineCol, l
 import { APPS } from './catalog.ts';
 import { saveOver } from '../shell/savefile.ts';
 import { classicBar } from '../shell/menubar.ts';
+import { describeError } from '../shell/dialogs.ts';
 import { helpMenu, textBoxEdits } from './classic-menus.ts';
 
 // One limit for opening and saving (the same as Notepad Pro's), so Quick Notes never saves a file it then refuses to open.
+/** The file was not there (as against a read that failed). */
+class GoneError extends Error {}
+
 const MAX_TEXT_BYTES = 5 * 1024 * 1024;
 /** What the Save as window offers; the path it gives back already ends in the chosen kind's extension. */
 const SAVE_TYPES: FileTypeChoice[] = [
@@ -150,9 +154,12 @@ export const editorApp: AppDef = {
     };
 
     if (path) {
+      // Nothing can be typed until the file is in: typing now would be thrown away when it arrives.
+      area.readOnly = true;
+      status.textContent = 'Opening...';
       try {
         const entry = await shell.fs.stat(path);
-        if (!entry || entry.kind !== 'file') throw new Error('gone');
+        if (!entry || entry.kind !== 'file') throw new GoneError();
         if (entry.size > MAX_TEXT_BYTES) {
           area.disabled = true;
           usable = false;
@@ -167,6 +174,7 @@ export const editorApp: AppDef = {
         area.value = toBox(text);
         saved = area.value;
         loadedId = entry.id;
+        area.readOnly = false;
       } catch (error) {
         area.disabled = true;
         // Every menu command that works on the text is off: there is no text to work on.
@@ -174,7 +182,9 @@ export const editorApp: AppDef = {
         bar.refresh();
         status.textContent = error instanceof TypeError
           ? 'This file does not look like text, so it was not opened. It is safe where it is.'
-          : 'That file is not there any more. It may have been moved or deleted.';
+          : error instanceof GoneError
+            ? 'That file is not there any more. It may have been moved or deleted.'
+            : `The file could not be read just now, so it was not opened. It is safe where it is: close this window and open it again. (${describeError(error)})`;
         return;
       }
     }
@@ -227,6 +237,7 @@ export const editorApp: AppDef = {
         if (await tooBig(snap.bytes.length)) return false;
         const entry = await shell.fs.writeFile(target.path, snap.bytes, target.replace ? {} : { mustBeNew: true });
         path = target.path;
+        app.setPath?.(path);
         markSaved(entry.id, snap);
         shell.toast(`Saved “${entry.name}”.`);
         return true;

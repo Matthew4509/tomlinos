@@ -463,6 +463,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     preview = null;
     doc.reset(w, hgt, [layer]);
     path = null;
+    app.setPath?.(path);
     loadedId = '';
     dirty = false;
     clean = doc.history.mark();
@@ -584,6 +585,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
         doc.reset(w, hgt, [layer]);
       }
       path = p;
+      app.setPath?.(path);
       loadedId = entry.id;
       dirty = false;
       clean = doc.history.mark();
@@ -772,6 +774,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
         : await shell.fs.writeFile(dest, data, how === 'new' ? { mustBeNew: true } : {});
       if (!entry) return false;
       path = dest;
+      app.setPath?.(path);
       loadedId = entry.id;
       if (opened?.path === dest) opened = null;
       if (edits === before && !flatLayers) {
@@ -2073,6 +2076,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       xf = null;
       doc.reset(w, hgt, [layer]);
       path = null;
+      app.setPath?.(path);
       loadedId = '';
       dirty = true;
       clean = null;

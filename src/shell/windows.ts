@@ -25,7 +25,8 @@ const EDGES = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'] as const;
 
 export class Win {
   readonly id = crypto.randomUUID();
-  readonly key: string;
+  /** Which file the window shows (app id and path): Open finds it by this. Save as moves it to the new name. */
+  key: string;
   readonly appId: string;
   readonly el: HTMLElement;
   readonly body: HTMLElement;

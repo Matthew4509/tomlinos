@@ -79,6 +79,9 @@ export function finalSaveName(typed: string, choices: FileTypeChoice[], index: n
   if (ext) {
     const other = choices.findIndex(t => t.ext.includes(ext));
     if (other >= 0) return { name: typed, index: other };
+    // An ending none of the entries names (conf.json in a text editor) is kept when "All files" is on offer.
+    const any = choices.findIndex(t => t.ext.length === 0);
+    if (any >= 0) return { name: typed, index: any };
   }
   return { name: `${typed}.${current.ext[0]}`, index };
 }

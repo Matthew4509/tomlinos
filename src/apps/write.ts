@@ -1293,6 +1293,7 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
       } else replacing = chosen.replace;
       const entry = await shell.fs.writeFile(target, await fileBytes(as), replacing ? {} : { mustBeNew: true });
       path = target;
+      app.setPath?.(path);
       label = entry.name;
       loadedId = entry.id;
       kind = as;

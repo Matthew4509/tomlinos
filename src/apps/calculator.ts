@@ -365,6 +365,7 @@ export const calculatorApp: AppDef = {
         if (replace && target !== chosen.path && !(await shell.dialogs.confirm({ title: 'Replace it?', text: `“${baseName(target)}” already exists. Replace it with this one?`, ok: 'Replace', danger: true, cancel: 'Cancel' }))) return false;
         const entry = await shell.fs.writeFile(target, snap.bytes, replace ? {} : { mustBeNew: true });
         path = target;
+        app.setPath?.(path);
         markSaved(entry.id, snap);
         shell.toast(`Saved “${entry.name}”.`);
         return true;

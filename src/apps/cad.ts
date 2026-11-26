@@ -2034,6 +2034,7 @@ export const cadApp: AppDef = {
         const v = version;
         const entry = await shell.fs.writeFile(target, bytes(), replacing ? {} : { mustBeNew: true });
         path = target;
+        app.setPath?.(path);
         label = entry.name;
         loadedId = entry.id;
         folderHint = null;

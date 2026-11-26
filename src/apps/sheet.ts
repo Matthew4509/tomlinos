@@ -1587,6 +1587,7 @@ export const sheetApp: AppDef = {
         const version = wb.version;
         const entry = await write(await fileBytes(as));
         path = to;
+        app.setPath?.(path);
         label = entry.name;
         loadedId = entry.id;
         savedVersion = version;
@@ -1618,6 +1619,7 @@ export const sheetApp: AppDef = {
         const version = wb.version;
         const entry = await shell.fs.writeFile(chosen, await fileBytes(as));
         path = chosen;
+        app.setPath?.(path);
         label = entry.name;
         loadedId = entry.id;
         savedVersion = version;

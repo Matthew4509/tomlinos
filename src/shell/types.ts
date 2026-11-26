@@ -23,6 +23,11 @@ export interface AppHandle {
   readonly signal: AbortSignal;
   readonly shell: Shell;
   setTitle(title: string): void;
+  /**
+   * The file this window now shows (after Save as, or Open in the same window): opening that file again comes back to
+   * this window, and opening the old one opens it afresh. Optional: not every host has it.
+   */
+  setPath?(path: string | null): void;
   setIcon(icon: IconName): void;
   /** Asks for a new window width in pixels; ignored when maximised or snapped. */
   setWidth(width: number): void;

@@ -447,6 +447,7 @@ class Studio {
     this.example = path === null && asSaved;
     this.area.value = text;
     this.path = path;
+    this.app.setPath?.(this.path);
     this.name = name;
     this.saved = asSaved ? text : '';
     this.keysNote = keys;
@@ -564,6 +565,7 @@ class Studio {
       const text = this.area.value;
       const entry = await shell.fs.writeFile(path, new TextEncoder().encode(text), chosen.replace ? {} : { mustBeNew: true });
       this.path = joinPath(parentPath(path), entry.name);
+      this.app.setPath?.(this.path);
       this.name = entry.name;
       this.example = false;
       this.folder = parentPath(path);

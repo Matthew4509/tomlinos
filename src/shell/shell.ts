@@ -176,7 +176,9 @@ class DesktopShell implements Shell {
       await this.dialogs.alert('That app is not installed', 'This desktop has no app by that name yet.');
       return;
     }
-    const key = app.single ? id : `${id}:${arg ?? ''}`;
+    // With no file, every call is a new window (File > New, the Start menu): an empty key would find a window that
+    // began empty and has since been typed in or saved under a name.
+    const key = app.single ? id : arg === undefined || arg === '' ? `${id}:new:${crypto.randomUUID()}` : `${id}:${arg}`;
     const existing = this.windows.find(key);
     if (existing) {
       this.windows.focus(existing);
@@ -193,6 +195,9 @@ class DesktopShell implements Shell {
       setTitle: t => {
         win.setTitle(t);
         this.windows.changed.emit();
+      },
+      setPath: path => {
+        if (!app.single) win.key = path ? `${id}:${path}` : `${id}:new:${crypto.randomUUID()}`;
       },
       setIcon: i => {
         win.setIcon(i);
