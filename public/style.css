@@ -448,6 +448,9 @@ body.is-dragging .win-body { pointer-events: none; }
 .bin-tile-lines > p { margin: 0; }
 .bin-tile-lines > .hint[role="status"]:empty { display: none; }
 .bin-tile.tall { align-items: flex-start; }
+/* A label with its list box, inside a tile line: both may shrink, so a long choice never pushes past a narrow window. */
+.bin-tile-lines label.bin-line, .bin-tile-lines .bin-line > label { min-width: 0; max-width: 100%; flex-wrap: nowrap; }
+.bin-tile-lines label.bin-line select.field, .bin-tile-lines .bin-line > label select.field { flex: 0 1 auto; min-width: 0; }
 .bin-tile .set-ai .field { width: 100%; }
 @media (max-width: 480px) { .bin-tile { align-items: flex-start; } .bin-tile-pic svg { width: 32px; height: 32px; } }
 .bin-set select { width: auto; flex: 1; min-width: 0; max-width: 100%; }
