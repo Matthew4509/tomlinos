@@ -55,6 +55,14 @@ export const CREDITS: Credit[] = [
     packages: 'vendor/claude-php-packages.json',
     texts: 'vendor/claude-php-LICENSES.txt',
   },
+  {
+    name: 'ACadSharp (design reference)',
+    what: "CAD Draft's DWG reading and writing is its own code, but parts of it (the 2007-format decompression and page layout, a new layout's plot settings) follow this library's design. None of its code ships.",
+    author: 'Albert Domenech and contributors',
+    licence: 'MIT',
+    home: 'https://github.com/DomCR/ACadSharp',
+    texts: 'vendor/acadsharp-LICENSE.txt',
+  },
 ];
 
 /** The built-in AI models' own licences (checked on Hugging Face, September 2026). */

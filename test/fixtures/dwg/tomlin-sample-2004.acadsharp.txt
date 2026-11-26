@@ -1,0 +1,48 @@
+VERSION AC1018
+INSUNITS 4
+LTYPE ByBlock segments=0 length=0
+LTYPE ByLayer segments=0 length=0
+LTYPE CENTER segments=4 length=50.8
+LTYPE Continuous segments=0 length=0
+LTYPE DASHED segments=2 length=19.05
+LTYPE DOT segments=2 length=6.35
+LTYPE HIDDEN segments=2 length=9.525
+LAYER 0 colour=7 on=True locked=False ltype=Continuous
+LAYER Construction colour=6 on=True locked=False ltype=DASHED
+LAYER Cut lines colour=1 on=True locked=True ltype=CENTER
+LAYER Dimensions colour=3 on=True locked=False ltype=Continuous
+LAYER Geometry colour=7 on=True locked=False ltype=Continuous
+LAYER Off one colour=5 on=False locked=False ltype=HIDDEN
+LAYER Text colour=2 on=True locked=False ltype=Continuous
+STYLE Standard
+DIMSTYLE Standard
+APPID ACAD
+VPORT *Active centre=(60.156944,42.53924) height=170.586329
+LAYOUT Layout1 block=*Paper_Space
+LAYOUT Model block=*Model_Space
+BLOCK *Paper_Space entities=0 base=(0,0)
+ENTITIES 24
+LINE layer=Geometry (0,0)-(100,50)
+CIRCLE layer=Cut lines c=(20,30) r=7.5
+ARC layer=Geometry c=(50,50) r=10 a0=0 a1=1.570796
+ELLIPSE layer=Geometry c=(10,-20) m=(30,0) ratio=0.5 t0=0 t1=3.141593
+ELLIPSE layer=Geometry c=(80,-20) m=(0,15) ratio=0.4 t0=0 t1=6.283185
+LWPOLYLINE layer=Geometry closed=True n=8 (3,0)b0 (37,0)b0.414214 (40,3)b0 (40,17)b0.414214 (37,20)b0 (3,20)b0.414214 (0,17)b0 (0,3)b0.414214
+LWPOLYLINE layer=Construction closed=False n=3 (60,0)b0 (80,0)b1 (80,20)b0
+SPLINE layer=Geometry deg=3 closed=False ctrl=10 fit=0 knots=14 (0,100) (3.333333,106.666667) (6.172178,121.275941) (10,120) (16.172178,117.942607) (22.528104,91.867974) (30,90) (35.861437,88.534641) (43.333333,103.333333) (50,110)
+SPLINE layer=Off one deg=3 closed=False ctrl=10 fit=0 knots=14 (100,100) (97.238576,102.761424) (113.333333,120) (120,120) (126.666667,120) (142.761424,102.761424) (140,100) (136.094757,96.094757) (103.905243,96.094757) (100,100)
+POINT layer=Geometry (5,5)
+XLINE layer=Construction
+TEXT layer=Text at=(0,60) h=5 rot=0 h72=0 align=(0,0) "Hello DWG ° Ø ± €"
+TEXT layer=Text at=(0,70) h=3 rot=0.523599 h72=1 align=(0,70) "Two"
+TEXT layer=Text at=(2.4,65.843078) h=3 rot=0.523599 h72=1 align=(2.4,65.843078) "lines \U+4E2D"
+LINE layer=Dimensions (0,-1)-(0,-11.5)
+LINE layer=Dimensions (40,-1)-(40,-11.5)
+LINE layer=Dimensions (0,-10)-(40,-10)
+LINE layer=Dimensions (0,-10)-(2.5,-10.416667)
+LINE layer=Dimensions (2.5,-10.416667)-(2.5,-9.583333)
+LINE layer=Dimensions (2.5,-9.583333)-(0,-10)
+LINE layer=Dimensions (40,-10)-(37.5,-9.583333)
+LINE layer=Dimensions (37.5,-9.583333)-(37.5,-10.416667)
+LINE layer=Dimensions (37.5,-10.416667)-(40,-10)
+TEXT layer=Dimensions at=(20,-8.75) h=2.5 rot=0 h72=1 align=(20,-8.75) "40"
