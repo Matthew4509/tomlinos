@@ -160,7 +160,7 @@ async function run(app: AppHandle, cm: Bundle, arg: string | undefined): Promise
 
   // ---- The window ----
   const tool = (label: string, title: string, extra: Record<string, string> = {}) => h('button', { type: 'button', class: 'tool wide', title, ...extra }, label);
-  const newBtn = tool('New', 'New tab (Ctrl+N)');
+  const newBtn = tool('New', 'New tab (Alt+N)');
   const openBtn = tool('Open...', 'Open a file (Ctrl+O)');
   const saveBtn = tool('Save', 'Save (Ctrl+S)');
   const saveAsBtn = tool('Save as...', 'Save under another name (Ctrl+Shift+S)');
@@ -207,6 +207,10 @@ async function run(app: AppHandle, cm: Bundle, arg: string | undefined): Promise
     { key: 'Mod-s', run: () => (void save(), true) },
     { key: 'Mod-Shift-s', run: () => (void saveAs(), true) },
     { key: 'Mod-o', run: () => (void openPicked(), true) },
+    // Alt+N and Alt+W are the ones shown: a browser keeps Ctrl+N and Ctrl+W (Ctrl+W would close the whole desktop's
+    // page). Ctrl+N and Ctrl+W still work where a browser passes them on.
+    { key: 'Alt-n', run: () => (newTab(), true) },
+    { key: 'Alt-w', run: () => (active && void closeTab(active), true) },
     { key: 'Mod-n', run: () => (newTab(), true) },
     { key: 'Mod-w', run: () => (active && void closeTab(active), true) },
     { key: 'Mod-h', run: cm.openSearchPanel },
@@ -294,7 +298,7 @@ async function run(app: AppHandle, cm: Bundle, arg: string | undefined): Promise
 
   // ---- Tabs ----
   function makeTab(d: Doc): HTMLElement {
-    const close = h('button', { type: 'button', class: 'npp-tab-x', title: 'Close (Ctrl+W)', 'aria-label': `Close ${d.name}` }, '×');
+    const close = h('button', { type: 'button', class: 'npp-tab-x', title: 'Close (Alt+W)', tabindex: '-1', 'aria-label': `Close ${d.name}` }, '×');
     const label = h('span', { class: 'npp-tab-name' }, d.name);
     const tab = h('div', { class: 'npp-tab', role: 'tab', tabindex: '-1', title: d.path ?? d.name }, label, close);
     on(tab, 'mousedown', (e: MouseEvent) => {
@@ -699,6 +703,8 @@ async function run(app: AppHandle, cm: Bundle, arg: string | undefined): Promise
     if (ctrl && k === 's') act(() => void (e.shiftKey ? saveAs() : save()));
     else if (ctrl && k === 'o') act(() => void openPicked());
     else if (ctrl && k === 'n') act(newTab);
+    else if (e.altKey && !ctrl && !e.shiftKey && e.code === 'KeyN') act(newTab);
+    else if (e.altKey && !ctrl && !e.shiftKey && e.code === 'KeyW' && active) act(() => void closeTab(active!));
     else if (ctrl && (k === 'f' || k === 'h') && active) act(() => (view.focus(), cm.openSearchPanel(view)));
   }, app.signal);
   on(app.root, 'keydown', (e: KeyboardEvent) => {
