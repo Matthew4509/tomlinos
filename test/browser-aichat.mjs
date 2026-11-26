@@ -101,6 +101,11 @@ async function openAgents() {
   return w;
 }
 const settingsWin = () => page.locator('.win', { has: page.locator('.set-ai') });
+// Find AI models is not in the Start menu (it is only of use for the chat): it opens from Settings › AI.
+const openFindModels = async () => {
+  await openApp('settings');
+  await settingsWin().getByRole('button', { name: 'Find AI models...' }).click();
+};
 
 console.log('Chat and AI upgrades, against ' + BASE);
 await page.goto(BASE);
@@ -234,7 +239,7 @@ await step('Settings › AI > Your model list: untick "Show in Chat" and the mod
 
 await step('Find AI models: Good places to start, by kind of computer; built-in ones marked; Add puts one in the chat list', async () => {
   await closeAll();
-  await openApp('find ai models');
+  await openFindModels();
   const w = page.locator('.win', { has: page.locator('.aim') });
   await w.locator('.aim-group-head', { hasText: 'Older or basic computers' }).waitFor({ timeout: 10000 });
   eq(await w.locator('.aim-group').count(), 3, 'three kinds of computer');

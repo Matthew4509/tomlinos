@@ -25,7 +25,7 @@ export const APPS = {
   panel: { id: 'panel', title: 'Panel', icon: 'panel', size: [1180, 720], minSize: [640, 420], start: true, single: true },
   reader: { id: 'reader', title: 'Reader', icon: 'book', size: [1100, 720], minSize: [360, 380], start: true, single: true },
   appmanager: { id: 'appmanager', title: 'Application manager', icon: 'app', size: [860, 580], minSize: [380, 340], start: true, single: true },
-  aimodels: { id: 'aimodels', title: 'Find AI models', icon: 'modelsearch', size: [900, 640], minSize: [380, 360], start: true, single: true },
+  aimodels: { id: 'aimodels', title: 'Find AI models', icon: 'modelsearch', size: [900, 640], minSize: [380, 360], start: false, single: true },
   archive: { id: 'archive', title: 'Archive Opener', icon: 'archive', size: [620, 440] },
   riscv: { id: 'riscv', title: 'RISC-V Studio', icon: 'chip', size: [1120, 680], minSize: [520, 360], start: true },
   planetziods: { id: 'planetziods', title: 'Planetziods', icon: 'planet', size: [1000, 660], minSize: [560, 420], start: true, single: true },

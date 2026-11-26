@@ -119,6 +119,11 @@ const api = (op, body) => page.evaluate(async ([op, body]) => {
 }, [op, body]);
 const list = async () => (await api('list')).body;
 const settingsWin = () => page.locator('.win', { has: page.locator('.set-ai') });
+// Find AI models is not in the Start menu (it is only of use for the chat): it opens from Settings › AI.
+const openFindModels = async () => {
+  await openApp('settings');
+  await settingsWin().getByRole('button', { name: 'Find AI models...' }).click();
+};
 const aimWin = () => page.locator('.win', { has: page.locator('.aim') });
 const sha = b => createHash('sha256').update(b).digest('hex');
 /** Every file under a folder, with sizes (for leftovers). */
@@ -264,7 +269,7 @@ await closeAll();
 
 // ---- Find AI models ----
 await step('Find AI models: a search lists a runnable model with Add, one with no program with the reason, a built-in one as Built in', async () => {
-  await openApp('find ai models');
+  await openFindModels();
   const w = aimWin();
   await w.locator('.aim-query').waitFor();
   await w.locator('.aim-query').fill('llama');
@@ -328,7 +333,7 @@ await step('small window: Find AI models at its smallest size (380 x 360) has no
   await closeAll();
   await page.setViewportSize({ width: 400, height: 640 });
   await settle(300);
-  await openApp('find ai models');
+  await openFindModels();
   const w = aimWin();
   await w.locator('.aim-query').waitFor();
   const r = await w.evaluate(win => {
