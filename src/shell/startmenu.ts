@@ -253,7 +253,7 @@ export class StartMenu {
     });
     on(reload, 'click', () => location.reload(), signal);
     on(lockBtn, 'click', launch(() => void shell.lock.show(true)), signal);
-    on(signOutBtn, 'click', launch(() => void account?.signOut()), signal);
+    on(signOutBtn, 'click', launch(() => void shell.signOutAsking()), signal);
 
     const panel = h(
       'div',

@@ -96,7 +96,7 @@ export const panelApp: AppDef = {
     const lockBtn = h('button', { type: 'button', class: 'panel-quick', title: 'Lock the screen (Alt+L)', hidden: !shell.lock.canLock }, icon('lock', 14), 'Lock screen');
     const outBtn = h('button', { type: 'button', class: 'panel-quick', title: 'Sign out and show the book (Alt+Shift+L)', hidden: !shell.account }, 'Sign out');
     on(lockBtn, 'click', () => void shell.lock.show(true), signal);
-    on(outBtn, 'click', () => void shell.account?.signOut(), signal);
+    on(outBtn, 'click', () => void shell.signOutAsking(), signal);
     const bar = h('header', { class: 'panel-bar' }, brand, barTitle, lockBtn, outBtn, h('span', { class: 'panel-clock' }, clockTime, clockZone));
 
     const nav = h('nav', { class: 'panel-nav', role: 'tablist', 'aria-label': 'Panel sections', 'aria-orientation': 'vertical' });

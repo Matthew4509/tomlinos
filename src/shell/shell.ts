@@ -319,6 +319,28 @@ class DesktopShell implements Shell {
     document.querySelector('.start-btn')?.setAttribute('aria-label', word);
   }
 
+  /**
+   * Sign out from a button (Start, the tray, My account, the Panel): windows with unsaved changes are named first,
+   * since if someone else signs in next the page starts afresh and that work is gone. Alt+Shift+L stays instant: it is
+   * the quick way to hide the desktop, and the same person signing back in finds the work where it was.
+   */
+  async signOutAsking(): Promise<void> {
+    if (!this.account) return;
+    const unsaved = this.windows.list().filter(w => w.dirty).map(w => w.title);
+    if (unsaved.length) {
+      const names = unsaved.slice(0, 5).map(t => `“${t}”`).join(', ') + (unsaved.length > 5 ? ` and ${unsaved.length - 5} more` : '');
+      const ok = await this.dialogs.confirm({
+        title: 'Sign out with unsaved changes?',
+        text: `${unsaved.length === 1 ? 'This window has' : 'These windows have'} changes that are not saved: ${names}. If you sign back in, ${unsaved.length === 1 ? 'it is' : 'they are'} still there; if someone else signs in, ${unsaved.length === 1 ? 'it is' : 'they are'} lost.`,
+        ok: 'Sign out anyway',
+        cancel: 'Cancel',
+        danger: true,
+      });
+      if (!ok) return;
+    }
+    await this.account.signOut();
+  }
+
   async report(title: string, error: unknown): Promise<void> {
     // Signed out: the sign-in screen says so, and a box waiting behind it would greet the person after signing in.
     if (isSignedOutRefusal(error)) return;
@@ -467,7 +489,7 @@ export async function startDesktop(root: HTMLElement, store: Store, account: Acc
   const { startButton } = buildTaskbar(layers.taskbar, shell.windows, shell.menus, signal, layers.start, {
     canLock: () => shell.lock.canLock,
     lock: () => void shell.lock.show(true),
-    signOut: shell.account ? () => void shell.account?.signOut() : null,
+    signOut: shell.account ? () => void shell.signOutAsking() : null,
   });
   shell.applyLockHint();
   const start = new StartMenu(shell, layers.start, startButton);

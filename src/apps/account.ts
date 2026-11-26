@@ -78,7 +78,7 @@ class AccountView {
     }
     const user = account.user();
     const signOut = h('button', { type: 'button', class: 'btn' }, 'Sign out');
-    on(signOut, 'click', () => void account.signOut(), this.app.signal);
+    on(signOut, 'click', () => void this.app.shell.signOutAsking(), this.app.signal);
     // Laid out the way Windows lays out Accounts: pages listed on the left, one page shown on the right.
     const pages: Array<[AccountPage, string, () => Node[]]> = [
       ['signin', 'Sign-in options', () => [this.passwordSection(user), this.pinSection(user), this.twoStepSection(user), this.recoverySection(user), this.unlockEmailSection(user)]],

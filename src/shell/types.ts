@@ -122,6 +122,8 @@ export interface Shell {
   /** Changes the colour scheme of the title bars, taskbar and windows, and remembers it. */
   setTheme(theme: import('./session.ts').Theme): void;
   report(title: string, error: unknown): Promise<void>;
+  /** Sign out from a button: names the windows with unsaved changes first, and signs out only if the person says so. */
+  signOutAsking(): Promise<void>;
   setWallpaper(wallpaper: import('./session.ts').Wallpaper): Promise<void>;
   /** Shows or hides the lock keys on the desktop background, as Settings says. */
   applyLockHint(): void;
