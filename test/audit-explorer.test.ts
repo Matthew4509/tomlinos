@@ -117,3 +117,29 @@ test('E-P1-9: a standard folder (Documents) can be copied, since copying does no
   new FileActions(shell).setClipboard('copy', ['/Documents']);
   assert.deepEqual(shell.clipboard?.paths, ['/Documents'], 'Copy on Documents says "cannot be deleted, moved or renamed" and copies nothing');
 });
+
+// E-P1-6 and E-P1-10 are in src/shell/actions.ts (paste, moveInto): marked todo until that file is changed.
+
+test('E-P1-10: cut then paste keeps on the clipboard what could not be moved', { todo: 'P1, needs src/shell/actions.ts' }, async () => {
+  const fs = new FileSystem(new MemoryStore());
+  await fs.writeText('/Documents/a.txt', 'a');
+  await fs.mkdir('/Documents/Into');
+  const { shell } = fakeShell(fs);
+  const actions = new FileActions(shell);
+  actions.setClipboard('cut', ['/Documents/a.txt', '/Documents/gone.txt']);
+  await actions.paste('/Documents/Into');
+  assert.deepEqual(await names(fs, '/Documents/Into'), ['a.txt']);
+  assert.deepEqual(shell.clipboard?.paths, ['/Documents/gone.txt'], 'the clipboard is emptied though "gone.txt" was not moved');
+});
+
+test('E-P1-6: a name clash on move asks Replace / Keep both / Skip instead of adding " (2)" unasked', { todo: 'P1, needs src/shell/actions.ts' }, async () => {
+  const fs = new FileSystem(new MemoryStore());
+  await fs.writeText('/Documents/a.txt', 'new');
+  await fs.mkdir('/Documents/Into');
+  await fs.writeText('/Documents/Into/a.txt', 'old');
+  const { shell } = fakeShell(fs);
+  const asked: string[] = [];
+  (shell as unknown as { dialogs: Record<string, unknown> }).dialogs.ask = async (o: { title: string }) => (asked.push(o.title), null);
+  await new FileActions(shell).moveInto(['/Documents/a.txt'], '/Documents/Into');
+  assert.ok(asked.length > 0, `nothing was asked; Into now holds ${JSON.stringify(await names(fs, '/Documents/Into'))}`);
+});
