@@ -38,6 +38,13 @@ export function isLockRefusal(error: unknown): boolean {
   return error instanceof Error && (error as { status?: unknown }).status === 423;
 }
 
+/** The server turned the request down because the session has ended (401: signed out here or elsewhere, timed out,
+ *  too many tries). The sign-in screen already says so, so no error box is shown for it. */
+export function isSignedOutRefusal(error: unknown): boolean {
+  if (error instanceof AuthFailure) return error.signedOut;
+  return error instanceof StoreError && error.status === 401;
+}
+
 export class DialogLayer {
   private host: HTMLElement;
   private depth = 0;

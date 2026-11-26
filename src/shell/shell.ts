@@ -12,7 +12,7 @@ import { css, h, on } from '../core/dom.ts';
 import { FileSystem } from '../fs/fs.ts';
 import type { Store } from '../store/store.ts';
 import { FileActions } from './actions.ts';
-import { DialogLayer, isLockRefusal } from './dialogs.ts';
+import { DialogLayer, isLockRefusal, isSignedOutRefusal } from './dialogs.ts';
 import { createFolderView } from './foldview.ts';
 import { fileTypeOf } from './filetypes.ts';
 import { isAppShortcut, openShortcut } from './appshortcut.ts';
@@ -117,10 +117,11 @@ class DesktopShell implements Shell {
         })
         : (await this.dialogs.confirm({ title: 'Close without saving?', text: `“${title}” has changes that are not saved. If you close it they will be lost.`, ok: 'Close without saving', danger: true, cancel: 'Keep it open' })) ? 'discard' : 'keep',
     });
-    // A save the lock turned down is made again once the screen is unlocked.
+    // A save the lock turned down is made again once the screen is unlocked; one turned down because the session ended,
+    // once the same person has signed in again (someone else gets a fresh page, and it is never written for them).
     let saveWaiting = false;
     this.session.onSaveError = error => {
-      if (isLockRefusal(error)) saveWaiting = true;
+      if (isLockRefusal(error) || isSignedOutRefusal(error)) saveWaiting = true;
       else void this.report('Could not remember your desktop settings', error);
     };
     this.lockChanged.on(locked => {
@@ -314,6 +315,8 @@ class DesktopShell implements Shell {
   }
 
   async report(title: string, error: unknown): Promise<void> {
+    // Signed out: the sign-in screen says so, and a box waiting behind it would greet the person after signing in.
+    if (isSignedOutRefusal(error)) return;
     await this.dialogs.error(title, error);
   }
 
@@ -409,6 +412,8 @@ export async function startDesktop(root: HTMLElement, store: Store, account: Acc
   const lifetime = new AbortController();
   const signal = lifetime.signal;
   shell.account = account;
+  // Housekeeping turned down while signed out is run again when the same person signs back in.
+  let tidyAgain = () => {};
   shell.lock = new LockScreen({
     root,
     shell,
@@ -416,6 +421,10 @@ export async function startDesktop(root: HTMLElement, store: Store, account: Acc
     user: () => shell.account?.user() ?? null,
     settings: () => shell.session.data.lock,
     signedOut: message => void shell.account?.signOut(message),
+    sessionEnded: ended => {
+      shell.session.hold(ended);
+      if (!ended) tidyAgain();
+    },
   });
 
   // Every app from the catalog; its code loads the first time it opens (the window shows at once, then fills).
@@ -511,6 +520,7 @@ export async function startDesktop(root: HTMLElement, store: Store, account: Acc
     void clearOldThreads(shell.fs, shell.session.data.aiHistoryDays).catch(() => undefined);
   };
   void tidy();
+  tidyAgain = () => void tidy();
   const housekeeping = window.setInterval(() => void tidy(), 3600000);
   signal.addEventListener('abort', () => clearInterval(housekeeping), { once: true });
   on(document, 'visibilitychange', () => {

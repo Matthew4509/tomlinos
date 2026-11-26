@@ -220,6 +220,8 @@ export class Session {
   /** Why the settings kept could not be read at the start (not "none yet"): nothing is then saved over them. */
   private unread: unknown = null;
   private saving: Promise<void> = Promise.resolve();
+  /** The session has ended (the sign-in screen shows): changes wait, and are written only if the same person comes back. */
+  private held = false;
   /** Called with the reason when saving fails, so the person is told once instead of every attempt. */
   onSaveError: (error: unknown) => void = () => {};
 
@@ -273,8 +275,21 @@ export class Session {
     return this.waiting ? this.flush() : this.saving;
   }
 
+  /**
+   * On while the session has ended: nothing is written, so a change made just before is not lost to the refusal and is
+   * never written into the account of someone else who signs in on this page. Off again writes what is waiting.
+   */
+  hold(on: boolean): void {
+    this.held = on;
+    if (!on && this.waiting) void this.flush();
+  }
+
   flush(): Promise<void> {
     clearTimeout(this.timer);
+    if (this.held) {
+      this.waiting = this.loaded;
+      return this.saving;
+    }
     this.waiting = false;
     if (!this.loaded) return this.saving;
     if (this.unread) {

@@ -812,6 +812,10 @@ export function createFolderView(o: ViewOptions): FolderView {
     if (paths.some(p => nameKey(joinPath(p)) === mine || watched.includes(nameKey(joinPath(p))))) void refresh();
   }, signal);
   shell.clipboardChanged.on(paintSelection, signal);
+  // A folder that could not be read while the session was signed out or locked is read again once the desktop shows.
+  shell.lockChanged.on(locked => {
+    if (!locked && failure) void refresh();
+  }, signal);
 
   if (desktop) {
     let frame = 0;

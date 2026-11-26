@@ -39,6 +39,8 @@ export interface LockOptions {
   settings: () => LockSettings;
   /** Called when the server says this session has ended (5 wrong tries, signed out elsewhere). */
   signedOut: (message: string) => void;
+  /** Told true when the desktop is covered for the sign-in screen, and false when the same person is back. */
+  sessionEnded?: (ended: boolean) => void;
 }
 
 export class LockScreen {
@@ -54,6 +56,8 @@ export class LockScreen {
   private title = '';
   /** A preview from the setup guide: nothing is locked, and every way back only ends the preview. */
   private previewing = false;
+  /** Covered for the sign-in screen (the session ended), until reset() shows the desktop again. */
+  private covered = false;
 
   constructor(options: LockOptions) {
     this.o = options;
@@ -249,6 +253,10 @@ export class LockScreen {
       this.o.shell.lockChanged.emit(true);
     }
     this.phase = 'saver';
+    if (!this.covered) {
+      this.covered = true;
+      this.o.sessionEnded?.(true);
+    }
   }
 
   /** Takes the screensaver and lock away without unlocking anything (used when the session ends). */
@@ -257,6 +265,10 @@ export class LockScreen {
     this.view = null;
     this.layer.replaceChildren();
     this.layer.hidden = true;
+    if (this.covered) {
+      this.covered = false;
+      this.o.sessionEnded?.(false);
+    }
     if (this.phase !== 'open') {
       this.hideDesktop(false);
       this.o.shell.lockChanged.emit(false);
