@@ -21,7 +21,17 @@ type View = { kind: 'list' } | { kind: 'finished' } | { kind: 'project'; uid: st
 
 /** "Today", "Tomorrow" or "Sat 17 Oct". */
 function dayWord(day: string, today: string): string {
-  return day === today ? 'Today' : day === addDays(today, 1) ? 'Tomorrow' : dayLabel(day);
+  return day === today ? 'Today' : day === addDays(today, 1) ? 'Tomorrow' : shortDay(day);
+}
+/** dayLabel, remembered: a long list names the same few days on many rows, and each naming is slow. */
+const dayNames = new Map<string, string>();
+function shortDay(day: string): string {
+  let name = dayNames.get(day);
+  if (name === undefined) {
+    if (dayNames.size > 2000) dayNames.clear();
+    dayNames.set(day, (name = dayLabel(day)));
+  }
+  return name;
 }
 
 export const projectsApp: AppDef = {
@@ -65,6 +75,8 @@ export const projectsApp: AppDef = {
     app.root.append(h('div', { class: 'toolbar' }, addBtn, apptBtn, h('span', { class: 'proj-spacer' }), finishedBtn, gearBtn), body);
 
     const today = () => dateKey(new Date());
+    /** The day the open view was last drawn on. */
+    let drawnDay = '';
     const find = (uid: string) => projects.find(p => p.uid === uid);
 
     /** The projects must load; a calendar that cannot be read is said once and the list still opens. */
@@ -106,6 +118,7 @@ export const projectsApp: AppDef = {
     // ---- Drawing ---------------------------------------------------------------------------------------------------
     /** Redraws the current view, putting the keyboard back on the same control (a rebuilt list drops it otherwise). */
     function draw(): void {
+      drawnDay = today();
       const active = document.activeElement instanceof HTMLElement && app.root.contains(document.activeElement) ? document.activeElement.dataset.key : undefined;
       finishedBtn.setAttribute('aria-pressed', String(view.kind === 'finished'));
       gearBtn.setAttribute('aria-pressed', String(view.kind === 'settings'));
@@ -134,8 +147,28 @@ export const projectsApp: AppDef = {
         'aria-label': `Focus: ${p.name}`, title: p.focus ? 'Starred: listed first and on the Panel. Click to unstar.' : 'Star it: listed first and on the Panel',
       }, p.focus ? '★' : '☆');
       // Each click turns the star over as the file holds it then, so two quick clicks leave it as it was.
-      on(b, 'click', () => void changeProjects(list => list.map(x => (x.uid === p.uid ? { ...x, focus: !x.focus } : x))).then(ok => ok && draw()), signal);
+      on(b, 'click', () => void changeProjects(list => list.map(x => (x.uid === p.uid ? { ...x, focus: !x.focus } : x))).then(ok => ok && redrawRow(p.uid)), signal);
       return b;
+    }
+
+    /** The open list's row for each project, so one change redraws one row rather than the whole list. */
+    const rowEls = new Map<string, HTMLElement>();
+    /** Redraws one project's row in the open list (moved to its place: starred ones first); any other view in full. */
+    function redrawRow(uid: string): void {
+      const p = find(uid);
+      const old = rowEls.get(uid);
+      if (view.kind !== 'list' || !p || p.finished || !old?.isConnected) return draw();
+      const focused = document.activeElement instanceof HTMLElement && old.contains(document.activeElement) ? document.activeElement.dataset.key : undefined;
+      const list = old.parentElement;
+      if (!list) return draw();
+      const fresh = listRow(p, false);
+      const shown = sortProjects(projects.filter(x => !x.finished));
+      const after = shown[shown.findIndex(x => x.uid === uid) + 1];
+      old.remove();
+      const before = after ? rowEls.get(after.uid) : undefined;
+      list.insertBefore(fresh, before?.parentElement === list ? before : null);
+      rowEls.set(uid, fresh);
+      if (focused) fresh.querySelector<HTMLElement>(`[data-key="${CSS.escape(focused)}"]`)?.focus();
     }
 
     function siteLink(p: Project): HTMLElement | null {
@@ -144,8 +177,19 @@ export const projectsApp: AppDef = {
       return h('a', { class: 'proj-site', href, target: '_blank', rel: 'noopener noreferrer', title: `Open ${href} in a new tab` }, p.site);
     }
 
+    /** The calendar's entries by project, worked out once for each copy of the calendar (not once for each row). */
+    let byProject: { from: CalEvent[]; map: Map<string, CalEvent[]> } | null = null;
+    function eventsOf(uid: string): CalEvent[] {
+      if (byProject?.from !== events) {
+        const map = new Map<string, CalEvent[]>();
+        for (const e of events) if (e.project) (map.get(e.project) ?? map.set(e.project, []).get(e.project)!).push(e);
+        byProject = { from: events, map };
+      }
+      return byProject.map.get(uid) ?? [];
+    }
+
     function nextLine(p: Project): HTMLElement {
-      const n = nextFor(events, p.uid, today());
+      const n = nextFor(eventsOf(p.uid), p.uid, today());
       if (!n) return h('span', { class: 'proj-next none' }, 'Nothing booked');
       const what = shortTitle(n.event, p);
       return h('span', { class: 'proj-next' }, `Next: ${dayWord(n.next, today())} ${n.event.start || 'all day'}${what ? ' · ' + what : ''}`);
@@ -164,19 +208,26 @@ export const projectsApp: AppDef = {
       return row;
     }
 
+    function listRow(p: Project, finished: boolean): HTMLElement {
+      const open = h('button', { type: 'button', class: 'proj-name', 'data-key': `open-${p.uid}` }, p.name);
+      on(open, 'click', () => go({ kind: 'project', uid: p.uid, from: finished ? 'finished' : 'list' }), signal);
+      const firstLine = p.notes.split('\n').find(l => l.trim()) ?? '';
+      const back = finished ? h('button', { type: 'button', class: 'btn', 'data-key': `back-${p.uid}` }, 'Bring back') : null;
+      if (back) on(back, 'click', () => void patch(p.uid, { finished: false }).then(ok => ok && (shell.toast(`“${p.name}” is back on your projects.`), draw())), signal);
+      return h('li', { class: `proj-row${p.focus ? ' focus' : ''}` },
+        h('div', { class: 'proj-line' }, finished ? null : star(p), open, siteLink(p)),
+        firstLine ? h('p', { class: 'proj-notes' }, firstLine) : null,
+        finished ? null : nextLine(p),
+        finished ? back : actionButtons(p));
+    }
+
     function drawList(finished: boolean): void {
       const list = sortProjects(projects.filter(p => p.finished === finished));
+      rowEls.clear();
       const rows = list.map(p => {
-        const open = h('button', { type: 'button', class: 'proj-name', 'data-key': `open-${p.uid}` }, p.name);
-        on(open, 'click', () => go({ kind: 'project', uid: p.uid, from: finished ? 'finished' : 'list' }), signal);
-        const firstLine = p.notes.split('\n').find(l => l.trim()) ?? '';
-        const back = finished ? h('button', { type: 'button', class: 'btn', 'data-key': `back-${p.uid}` }, 'Bring back') : null;
-        if (back) on(back, 'click', () => void patch(p.uid, { finished: false }).then(ok => ok && (shell.toast(`“${p.name}” is back on your projects.`), draw())), signal);
-        return h('li', { class: `proj-row${p.focus ? ' focus' : ''}` },
-          h('div', { class: 'proj-line' }, finished ? null : star(p), open, siteLink(p)),
-          firstLine ? h('p', { class: 'proj-notes' }, firstLine) : null,
-          finished ? null : nextLine(p),
-          finished ? back : actionButtons(p));
+        const row = listRow(p, finished);
+        if (!finished) rowEls.set(p.uid, row);
+        return row;
       });
       const empty = finished
         ? h('p', { class: 'proj-empty' }, 'No finished projects. Finish one from its page; it moves here and can be brought back any time.')
@@ -459,12 +510,18 @@ export const projectsApp: AppDef = {
     on(gearBtn, 'click', () => go({ kind: view.kind === 'settings' ? 'list' : 'settings' }), signal);
 
     // Another window or device changed the projects or the calendar (both are in Documents).
+    // A file that reads as what is shown already (this window's own save, the other file in Documents changing) is not
+    // drawn again: with a long list that would rebuild every row.
+    // Once the day has turned, though, it is drawn again, so "Tomorrow" becomes "Today".
+    const same = (a: unknown, b: unknown) => drawnDay === today() && JSON.stringify(a) === JSON.stringify(b);
     const refresh = (apply: () => void) => {
       apply();
       if (!busyForm) draw();
     };
-    file.watch(shell.changes, signal, list => refresh(() => (projects = list)));
-    calendar.watch(shell.changes, signal, list => refresh(() => (events = list)));
+    const dayTurn = window.setInterval(() => drawnDay !== today() && !busyForm && draw(), 60000);
+    signal.addEventListener('abort', () => clearInterval(dayTurn), { once: true });
+    file.watch(shell.changes, signal, list => !same(list, projects) && refresh(() => (projects = list)));
+    calendar.watch(shell.changes, signal, list => !same(list, events) && refresh(() => (events = list)));
 
     /** "project:<uid>" (from the Panel's Focus tile) opens that project's page. */
     const openArg = (a: string | undefined) => {
