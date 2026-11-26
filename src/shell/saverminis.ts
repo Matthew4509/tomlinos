@@ -22,23 +22,23 @@ export function lockMini(look: LockSettings['look'], words: LockWords, user: Pub
   const w = look === 'custom' ? words : null;
   const withPin = !!user?.pin;
   const secret = look === 'default' ? { pin: 'PIN', pass: 'Password' } : { pin: w ? w.pass : 'Code', pass: w ? w.pass : 'Password' };
-  const form = h('div', { class: 'gate-form' });
-  if (withPin) form.append(h('span', { class: 'gate-row' }, fake('gate-label', secret.pin), fake('field gate-input lock-pin mini-field')));
+  const form = h('div', { class: 'mgate-form' });
+  if (withPin) form.append(h('span', { class: 'mgate-row' }, fake('mgate-label', secret.pin), fake('field mgate-input mlock-pin mini-field')));
   else {
-    form.append(h('span', { class: 'gate-row' }, fake('gate-label', secret.pass), h('span', { class: 'gate-pass' }, fake('field gate-input mini-field'), fake('btn gate-show', 'Show'))));
-    if (user?.totp) form.append(h('span', { class: 'gate-row' }, fake('gate-label', 'Two-step code (or a recovery code)'), fake('field gate-input mini-field')));
+    form.append(h('span', { class: 'mgate-row' }, fake('mgate-label', secret.pass), h('span', { class: 'mgate-pass' }, fake('field mgate-input mini-field'), fake('btn mgate-show', 'Show'))));
+    if (user?.totp) form.append(h('span', { class: 'mgate-row' }, fake('mgate-label', 'Two-step code (or a recovery code)'), fake('field mgate-input mini-field')));
   }
   const go = look === 'default' ? 'Unlock' : w ? w.button : 'Continue';
   const other = withPin ? `Use my ${look === 'default' ? 'password' : 'password instead'}` : '';
-  form.append(h('div', { class: 'gate-buttons' }, other ? fake('btn', other) : null, fake('btn', 'Sign out'), fake('btn primary gate-go', go)));
+  form.append(h('div', { class: 'mgate-buttons' }, other ? fake('btn', other) : null, fake('btn', 'Sign out'), fake('btn primary mgate-go', go)));
   const intro = look === 'default'
     ? (user ? `${user.display} is signed in. ${withPin ? 'Type your PIN to unlock.' : 'Type your password to unlock.'}` : 'Type your password to unlock.')
     : look === 'plain' ? `Enter your ${withPin ? 'code' : 'password'} to continue.` : '';
-  return h('div', { class: `gate lock-gate lock-look-${look}` },
-    h('div', { class: 'gate-panel' },
-      look === 'default' ? h('div', { class: 'gate-brand' }, icon('logo', 40), h('span', {}, 'TOMLIN OS')) : null,
+  return h('div', { class: `mini-gate lock-gate lock-look-${look}` },
+    h('div', { class: 'mgate-panel' },
+      look === 'default' ? h('div', { class: 'mgate-brand' }, icon('logo', 40), h('span', {}, 'TOMLIN OS')) : null,
       h('h1', {}, look === 'default' ? 'Locked' : w ? w.title : 'Session timed out'),
-      intro ? h('p', { class: 'gate-intro' }, intro) : null,
+      intro ? h('p', { class: 'mgate-intro' }, intro) : null,
       form));
 }
 

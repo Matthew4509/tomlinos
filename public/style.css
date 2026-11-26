@@ -868,19 +868,19 @@ body.is-dragging .win-body { pointer-events: none; }
 .studio.narrow .studio-side { flex: none; }
 
 /* ---- Sign-in, lock screen and screensavers ----------------------------------------------------------------------- */
-.gate {
+.gate, .mini-gate {
   position: fixed; inset: 0; z-index: 9500; display: flex; align-items: center; justify-content: center; padding: 16px;
   background: linear-gradient(to bottom, #5a8fd6 0%, #3a6ea5 55%, #2d5a8a 100%); overflow: auto;
 }
-.gate-panel {
+.gate-panel, .mgate-panel {
   width: min(420px, 100%); background: var(--paper); border-radius: 10px; padding: 22px 24px 20px;
   border: 1px solid #1748b8; box-shadow: 0 10px 40px rgba(0, 0, 0, .35);
 }
 /* The front page: the reader fills the screen, the sign-in card sits over it only when asked for (auth/gate.ts). */
 .gate.gate-front { background: #fbf8f1; }
 .front-reader { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
-.gate-front .gate-panel { position: relative; z-index: 1; width: min(360px, 100%); border-color: #d8d0c2; background: #fffdf8; box-shadow: 0 12px 40px rgba(40, 30, 10, .25); }
-.gate-front .gate-panel[hidden] { display: none; }
+.gate-front .gate-panel, .gate-front .mgate-panel { position: relative; z-index: 1; width: min(360px, 100%); border-color: #d8d0c2; background: #fffdf8; box-shadow: 0 12px 40px rgba(40, 30, 10, .25); }
+.gate-front .gate-panel[hidden], .gate-front .mgate-panel[hidden] { display: none; }
 .front-login { z-index: 1; }
 .front-back { margin-top: 10px; }
 /* The picture check on the sign-in card (auth/gate.ts) */
@@ -890,25 +890,25 @@ body.is-dragging .win-body { pointer-events: none; }
 .gate-captcha { max-width: 140px; letter-spacing: 2px; }
 .gate-unlock-mail { display: block; margin: 4px 0; }
 .gate-unlock-mail[hidden] { display: none; }
-.gate-brand { display: flex; align-items: center; gap: 10px; font-size: 20px; font-weight: 700; color: #1748b8; margin-bottom: 6px; }
-.gate h1 { font-size: 18px; margin: 8px 0 6px; }
-.gate-intro { margin: 0 0 10px; color: var(--ink-soft); }
+.gate-brand, .mgate-brand { display: flex; align-items: center; gap: 10px; font-size: 20px; font-weight: 700; color: #1748b8; margin-bottom: 6px; }
+.gate h1, .mini-gate h1 { font-size: 18px; margin: 8px 0 6px; }
+.gate-intro, .mgate-intro { margin: 0 0 10px; color: var(--ink-soft); }
 .gate-note { margin: 0 0 10px; padding: 8px 10px; background: #fff6d6; border: 1px solid #e3c65a; border-radius: 4px; }
-.gate-form { display: flex; flex-direction: column; gap: 10px; }
-.gate-row { display: flex; flex-direction: column; gap: 4px; }
-.gate-label { font-weight: 600; }
-.gate-pass { display: flex; gap: 6px; }
-.gate-pass .field { flex: 1; min-width: 0; }
-.gate-show, .gate-suggest { flex: none; }
-.gate-input { font-size: 15px; min-height: 34px; }
-.gate-code, .lock-pin { letter-spacing: .3em; font-family: Consolas, "Lucida Console", monospace; }
+.gate-form, .mgate-form { display: flex; flex-direction: column; gap: 10px; }
+.gate-row, .mgate-row { display: flex; flex-direction: column; gap: 4px; }
+.gate-label, .mgate-label { font-weight: 600; }
+.gate-pass, .mgate-pass { display: flex; gap: 6px; }
+.gate-pass .field, .mgate-pass .field { flex: 1; min-width: 0; }
+.gate-show, .gate-suggest, .mgate-show { flex: none; }
+.gate-input, .mgate-input { font-size: 15px; min-height: 34px; }
+.gate-code, .lock-pin, .mlock-pin { letter-spacing: .3em; font-family: Consolas, "Lucida Console", monospace; }
 .gate-verdict { font-size: 12px; min-height: 1.2em; color: var(--ink-soft); }
 .gate-verdict[data-level="0"] { color: var(--danger); }
 .gate-verdict[data-level="3"] { color: #1e7a45; font-weight: 600; }
 .gate-problem { margin: 0; color: var(--danger); min-height: 0; }
 .gate-problem:empty { display: none; }
-.gate-go { align-self: flex-end; min-width: 120px; min-height: 34px; }
-.gate-buttons { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.gate-go, .mgate-go { align-self: flex-end; min-width: 120px; min-height: 34px; }
+.gate-buttons, .mgate-buttons { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .lock-hidden { visibility: hidden !important; }
 #layer-lock { position: fixed; inset: 0; z-index: 9400; }
 #layer-lock[hidden] { display: none; }
@@ -1283,13 +1283,13 @@ textarea.field { resize: vertical; font: inherit; }
 .mini-saved { font-size: 12px; }
 @media (max-width: 480px) { .mini-tile { width: 100%; max-width: 208px; } }
 /* Inside a picture the real classes draw it; only what fills the whole screen there is set down to the small screen. */
-.mini-screen .gate { position: absolute; z-index: auto; overflow: hidden; }
+.mini-screen .mini-gate { position: absolute; z-index: auto; overflow: hidden; }
 .mini-screen .saver-time { font-size: 90px; }
 .mini-screen .saver-date { font-size: 22px; }
 .mini-screen .clock-box { transition: none; }
 .mini-screen .mini-field { display: block; }
-.mini-screen .lock-pin.mini-field { width: 100%; }
-.mini-screen .gate-show, .mini-screen .gate-buttons .btn { display: inline-flex; align-items: center; }
+.mini-screen .lock-pin.mini-field, .mini-screen .mlock-pin.mini-field { width: 100%; }
+.mini-screen .gate-show, .mini-screen .gate-buttons .btn, .mini-screen .mgate-show, .mini-screen .mgate-buttons .btn { display: inline-flex; align-items: center; }
 .mini-screen .fake-sheet { display: flex; flex-direction: column; }
 .mini-screen .mini-box { display: inline-block; flex: none; height: 24px; line-height: 20px; }
 .mini-screen .formula-input.mini-box { flex: 1; }

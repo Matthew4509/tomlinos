@@ -269,6 +269,8 @@ const OUTSIDE: Array<[string, RegExp, string]> = [
   ['https://prosemirror.net/', /apps[\\/]about\.ts$/, 'a link on the Credits page, opened only when clicked'],
   ['https://github.com/mlc-ai/web-llm', /apps[\\/]about\.ts$/, 'a link on the Credits page, opened only when clicked'],
   ['https://github.com/anthropics/anthropic-sdk-php', /apps[\\/]about\.ts$/, 'a link on the Credits page, opened only when clicked'],
+  ['https://github.com/DomCR/ACadSharp', /apps[\\/]about\.ts$/, 'a link on the Credits page (the DWG design reference), opened only when clicked'],
+  ['http://www.inkscape.org/namespaces/inkscape', /cad[\/]svg\.ts$/, 'the namespace name that lets Inkscape read layer names in an exported SVG; never fetched'],
   ['https://${raw}', /notepadpro[\\/]markdown\.ts$/, 'a "www." autolink in a Markdown preview becomes https (then checked by safeHref)'],
   ['https://${s}', /apps[\\/]projects[\\/]data\.ts$/, 'a project\'s site typed without https:// becomes a link (http and https only; opened only when clicked)'],
   ['http://,', /apps[\\/]link\.ts$/, 'words in a message ("starts with https:// or http://"), not an address'],

@@ -331,7 +331,7 @@ await step('Notepad Pro: Save as through the picker, tabs, bookmarks, Find in fi
   await page.locator('.toast', { hasText: 'Saved “plan.md”' }).waitFor();
   eq(await w.locator('.npp-tab.active .npp-tab-name').innerText(), 'plan.md', 'tab renamed');
   // A second tab, with a bookmark.
-  await w.getByRole('button', { name: 'New', exact: true }).click();
+  await w.getByRole('button', { name: 'New tab', exact: true }).click();
   await w.locator('.cm-content').click();
   await page.keyboard.type('one Plan\ntwo\nthree plan');
   await page.keyboard.press('Control+F2');

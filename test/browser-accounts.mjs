@@ -251,7 +251,7 @@ await step('My own words: the picture follows the words as they are typed; they 
   await s.getByLabel('Heading').fill('Budget portal');
   await s.getByLabel('Button').fill('Enter');
   eq(await tileIn(s, 'custom').locator('h1').innerText(), 'Budget portal', 'live heading');
-  eq(await tileIn(s, 'custom').locator('.gate-go').innerText(), 'Enter', 'live button');
+  eq(await tileIn(s, 'custom').locator('.mgate-go').innerText(), 'Enter', 'live button');
   let posts = 0;
   const count = r => r.url().includes('store.php') && r.request().method() === 'POST' && posts++;
   page.on('response', count);
