@@ -218,6 +218,31 @@ await step('PE-P1-1 Save flat of a picture with layers: still "not saved", and c
   await W().locator('.pe-status:not(:has-text("not saved"))', { hasText: 'one-layer.png' }).waitFor({ timeout: 3000 });
 });
 
+// PE-P1-7: Delete with nothing selected, or with the Layers list focused, cleared the whole layer.
+await step('PE-P1-7 Delete with nothing selected, or on a layer row, leaves the pixels; with a selection it clears it', async () => {
+  await closeAllPe();
+  await openPe();
+  await freshPicture(60, 40);
+  eq(await pixel(10, 10), [255, 255, 255, 255], 'white to start');
+  await W().locator('.pe-stage').focus();
+  await page.keyboard.press('Delete');
+  await page.keyboard.press('Backspace');
+  await page.waitForTimeout(200);
+  eq(await pixel(10, 10), [255, 255, 255, 255], 'after Delete with nothing selected');
+  await W().locator('.pe-layer.on').focus();
+  await page.keyboard.press('Delete');
+  await page.waitForTimeout(200);
+  eq(await pixel(10, 10), [255, 255, 255, 255], 'after Delete on the layer row');
+  ok(!(await status()).includes('not saved'), 'nothing changed: ' + (await status()));
+  await tool('Select a rectangle');
+  await dragPic([5, 5], [20, 20]);
+  await W().locator('.pe-stage').focus();
+  await page.keyboard.press('Delete');
+  await page.waitForTimeout(200);
+  eq((await pixel(10, 10))[3], 0, 'the selected part is cleared');
+  eq(await pixel(40, 30), [255, 255, 255, 255], 'outside the selection');
+});
+
 await step('no errors in the page', async () => {
   eq(problems.filter(p => !/status of 404/.test(p)), [], 'problems');
 });

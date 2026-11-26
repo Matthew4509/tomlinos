@@ -2280,7 +2280,13 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       if (xf) return act(cancelTransform);
       if (lasso) return act(endLasso);
     }
-    if ((e.key === 'Delete' || e.key === 'Backspace') && !control) return act(clearSelected);
+    // The Delete key clears a selection only. With nothing selected (or in the Layers list) it leaves the pixels alone:
+    // clearing the whole layer is Edit > Clear the layer.
+    if ((e.key === 'Delete' || e.key === 'Backspace') && !control) {
+      if (t instanceof Element && t.closest('.pe-layers')) return act(() => undefined);
+      if (!doc.selection) return act(() => note('Nothing is selected: Delete clears a selection. To clear the whole layer, use Edit > Clear the layer.'));
+      return act(clearSelected);
+    }
     if (e.key === ' ' && !spaceHeld && !control) {
       spaceHeld = true;
       stage.dataset.tool = 'hand';
