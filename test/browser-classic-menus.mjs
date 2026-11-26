@@ -1,5 +1,5 @@
-// The classic menu bar in the apps that have it (Write, Spreadsheet, Notepad, Notepad Pro, File Explorer, Calculator), in
-// a real Chrome: each opens in the Classic look with the shared menu bar, every menu opens, and checkShortcuts() finds no
+// The classic menu bar in the apps that have it (Write, Spreadsheet, Notepad, Notepad Pro, File Explorer, Calculator,
+// Photo Editor), in a real Chrome: each opens in the Classic look with the shared menu bar, every menu opens, and checkShortcuts() finds no
 // item showing a key the browser keeps for itself (Ctrl+N, Ctrl+W, Ctrl+T...), submenus included.
 // Needs the dev server on a FRESH, EMPTY data folder (the first step sets up the owner), and `npm run build` done.
 //   node test/browser-classic-menus.mjs [http://127.0.0.1:3101]
@@ -73,6 +73,8 @@ const APPS = [
   { label: 'notepad pro', name: 'Notepad Pro', root: '.npp', menus: ['File', 'Edit', 'View', 'Search', 'Format', 'Help'], toolbar: true },
   { label: 'file explorer', name: 'File Explorer', root: '.explorer', menus: ['File', 'Edit', 'View', 'Go', 'Help'], toolbar: true },
   { label: 'calculator', name: 'Calculator', root: '.calc-app', menus: ['Edit', 'View', 'Help'], toolbar: false },
+  // Named toolbars that can be moved and docked (shell/toolbars.ts) rather than the one row.
+  { label: 'photo editor', name: 'Photo Editor', root: '.pe', menus: ['File', 'Edit', 'View', 'Image', 'Layer', 'Select', 'Tools', 'Colours', 'Filters', 'Help'], toolbar: false, toolbars: ['standard', 'options', 'tools'] },
 ];
 
 for (const a of APPS) {
@@ -83,6 +85,7 @@ for (const a of APPS) {
     await win.locator('.cbar').waitFor({ timeout: 20000 });
     eq(await win.locator('.cbar-title:visible').allInnerTexts(), a.menus, 'menus on the bar');
     eq(await win.locator('.cbar-tools').count(), a.toolbar ? 1 : 0, 'the shared toolbar');
+    if (a.toolbars) eq(await win.locator('.cbar-band').evaluateAll(els => els.map(e => e.dataset.toolbar)), a.toolbars, 'the named toolbars');
     // Every menu opens (its items are made then), with at least one item.
     for (const m of a.menus) {
       await win.locator(`.cbar-title[data-menu="${m}"]`).click();

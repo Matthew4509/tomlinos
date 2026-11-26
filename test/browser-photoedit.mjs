@@ -692,6 +692,64 @@ await step('phone width: the editor fits 390 pixels with no sideways scroll of t
   await page.setViewportSize({ width: 1400, height: 900 });
 });
 
+await step('the menu bar (File, Edit, View first, Help last) and toolbars: Tools down the left, a drawn picture on each; View > Toolbars hides and shows one', async () => {
+  // The window as large as the screen again after the narrow step (a side toolbar goes to the top when there is no room).
+  if ((await W().boundingBox()).width < 1000) await W().locator('.win-max, [aria-label="Maximise"], [aria-label="Maximize"]').first().click().catch(() => {});
+  // The menus as the bar has them (in a narrow window the last ones wait in »).
+  const menus = await W().locator('.cbar').evaluate(async el => (await import('/app/shell/menubar.js')).barSpecOf(el).menus.map(m => m.label));
+  eq(menus, ['File', 'Edit', 'View', 'Image', 'Layer', 'Select', 'Tools', 'Colours', 'Filters', 'Help'], 'menus');
+  eq(await W().locator('.cbar-dock[data-side="left"] > .cbar-band').evaluateAll(els => els.map(e => e.dataset.toolbar)), ['tools'], 'Tools on the left');
+  eq(await W().locator('[data-toolbar="tools"] .cbar-tool:not(.cbar-more):not(:has(svg.ti))').count(), 0, 'every tool has a drawn picture');
+  await W().locator('.cbar-title[data-menu="View"]').click();
+  await page.locator('.menu .menu-item', { hasText: 'Toolbars' }).first().click();
+  await page.locator('.menu').last().locator('.menu-item', { hasText: 'Tool options' }).click();
+  ok(await W().locator('[data-toolbar="options"]').isHidden(), 'Tool options hidden');
+  await W().locator('.cbar-title[data-menu="View"]').click();
+  await page.locator('.menu .menu-item', { hasText: 'Toolbars' }).first().click();
+  await page.locator('.menu').last().locator('.menu-item', { hasText: 'Tool options' }).click();
+  ok(await W().locator('[data-toolbar="options"]').isVisible(), 'Tool options back');
+});
+
+await step('text with an outline (white letters, black edge) and Meme bars that add to the picture, which Undo takes back', async () => {
+  await W().getByRole('button', { name: 'New...' }).click();
+  await page.locator('.dialog', { hasText: 'Not saved' }).getByRole('button', { name: 'Lose the changes' }).click().catch(() => {});
+  await page.locator('.dialog input[aria-label="Width"]').fill('300');
+  await page.locator('.dialog input[aria-label="Height"]').fill('200');
+  await page.locator('.dialog').getByRole('button', { name: 'Create' }).click();
+  await tool('Fill (paint bucket)');
+  await W().locator('input[aria-label="Colour"]').evaluate(el => {
+    el.value = '#808080';
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await clickPic(5, 5);
+  await tool('Text');
+  await W().getByRole('button', { name: 'White with black outline' }).click();
+  await clickPic(20, 40);
+  await page.locator('.dialog textarea[aria-label="Words"]').fill('OK');
+  await page.locator('.dialog input[aria-label="Text size"]').fill('80');
+  await page.locator('.dialog').getByRole('button', { name: 'Add' }).click();
+  const counts = await page.evaluate(() => {
+    const d = document.querySelector('.pe-doc').getContext('2d').getImageData(0, 0, 300, 200).data;
+    let white = 0, black = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i] > 235 && d[i + 1] > 235 && d[i + 2] > 235) white++;
+      else if (d[i] < 30 && d[i + 1] < 30 && d[i + 2] < 30) black++;
+    }
+    return { white, black };
+  });
+  ok(counts.white > 500 && counts.black > 300, 'white letters with a black outline: ' + JSON.stringify(counts));
+  await W().locator('.cbar-title[data-menu="Image"]').click();
+  await page.locator('.menu').last().getByText('Meme...', { exact: true }).click();
+  await W().locator('.pe-meme select[aria-label="Bars"]').selectOption('both');
+  ok((await W().locator('.pe-status').innerText()).includes('300 × 272'), '36 px added above and below');
+  await W().locator('.pe-stage').focus();
+  await page.keyboard.press('Control+z');
+  ok((await W().locator('.pe-status').innerText()).includes('300 × 200'), 'Undo: the size before');
+  await W().locator('.pe-meme').getByRole('button', { name: 'Done' }).click();
+  ok(await W().locator('.pe-meme').isHidden(), 'Done closes the panel');
+  eq((await layerNames()).length, 2, 'the empty boxes went; the text and the Background stay');
+});
+
 await step('a big picture: the 13th layer at 4000 × 3000 is refused with the reason', async () => {
   await W().getByRole('button', { name: 'New...' }).click();
   await page.locator('.dialog', { hasText: 'Not saved' }).getByRole('button', { name: 'Lose the changes' }).click().catch(() => {});
