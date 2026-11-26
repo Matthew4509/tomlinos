@@ -100,21 +100,36 @@ function setup(app: AppHandle, existing: MailAccount | null): void {
   let savesSent = existing?.providerSavesSent ?? false;
   let userTouched = !!existing;
 
+  /** The six server fields a preset fills in, for an address on the given domain. */
+  const presetServers = (id: string, domain: string) => {
+    const p = PRESETS.find(x => x.id === id)!;
+    return [p.imap.host === 'mail.' ? `mail.${domain}` : p.imap.host, String(p.imap.port), p.imap.security,
+      p.smtp.host === 'mail.' ? `mail.${domain}` : p.smtp.host, String(p.smtp.port), p.smtp.security];
+  };
+  const serverFields = () => [iHost.value.trim(), iPort.value, iSec.value, sHost.value.trim(), sPort.value, sSec.value];
+  // A saved account shows the preset its servers came from, if any (otherwise Other).
+  if (existing) {
+    const d = existing.email.split('@')[1] ?? '';
+    const now = JSON.stringify(serverFields());
+    preset.value = PRESETS.find(p => JSON.stringify(presetServers(p.id, d)) === now)?.id ?? 'other';
+  }
+  /** The domain the server fields were last filled in for: they still hold a preset's values only if they match it. */
+  let presetDomain = (existing?.email ?? '').split('@')[1] ?? '';
+  const serversArePreset = () => (!iHost.value.trim() && !sHost.value.trim()) || JSON.stringify(serverFields()) === JSON.stringify(presetServers(preset.value, presetDomain));
+
   const applyPreset = () => {
     const p = PRESETS.find(x => x.id === preset.value)!;
     const domain = email.value.split('@')[1] ?? '';
-    iHost.value = p.imap.host === 'mail.' ? `mail.${domain}` : p.imap.host;
-    sHost.value = p.smtp.host === 'mail.' ? `mail.${domain}` : p.smtp.host;
-    iPort.value = String(p.imap.port);
-    sPort.value = String(p.smtp.port);
-    iSec.value = p.imap.security;
-    sSec.value = p.smtp.security;
+    presetDomain = domain;
+    [iHost.value, iPort.value, iSec.value, sHost.value, sPort.value, sSec.value] = presetServers(p.id, domain);
     savesSent = !!p.providerSavesSent;
     note.textContent = p.note;
     note.classList.toggle('warn', !!p.blocked);
     testBtn.disabled = !!p.blocked;
   };
   const guessPreset = () => {
+    // Servers typed in by hand (or saved that way) are kept: a new address does not replace them.
+    if (!serversArePreset()) return;
     const d = (email.value.split('@')[1] ?? '').toLowerCase();
     const id = /gmail|googlemail/.test(d) ? 'gmail' : /yahoo|ymail/.test(d) ? 'yahoo' : /icloud|me\.com|mac\.com/.test(d) ? 'icloud' : /outlook|hotmail|live\.|msn\./.test(d) ? 'outlook' : 'own';
     if (preset.value !== id) {
