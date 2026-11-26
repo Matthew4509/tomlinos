@@ -5,6 +5,7 @@
 // Holmes (public/reader/) and a small "Log in for more" in its corner, so someone who finds the site, or a bot, finds
 // only old books. Log in opens the same sign-in in plain words, without the TOMLIN OS name.
 import { h, on } from '../core/dom.ts';
+import { infoTip } from '../shell/infotip.ts';
 import { icon, iconDefs } from '../shell/icons.ts';
 import { AuthFailure, type AuthApi, type AuthStatus, type PublicUser } from './api.ts';
 import type { FilesVault } from './files.ts';
@@ -121,7 +122,7 @@ export function signIn(host: HTMLElement, api: AuthApi, start: AuthStatus, note 
         h('label', { class: 'gate-row' }, h('span', { class: 'gate-label' }, 'User name (for signing in)'), name),
         pass.row,
         h('label', { class: 'check-row' }, encrypt, ' Encrypt my files'),
-        h('p', { class: 'gate-small' }, ENCRYPT_WHY),
+        h('p', { class: 'gate-small' }, ENCRYPT_WHY, ' ', infoTip('encryption', ENCRYPT_MORE)),
         problem, go);
       on(display, 'input', () => {
         if (!name.dataset.touched) name.value = display.value.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, '').slice(0, 32);
@@ -411,7 +412,8 @@ function stepScreen(host: HTMLElement, title: string): { panel: HTMLElement; clo
   };
 }
 
-const ENCRYPT_WHY = 'Encrypted: files are locked in your browser before they are stored, so the owner of this desktop, or anyone who copies the stored files, cannot read them. Your password or your recovery key opens them; lose both and they cannot be opened. (Whoever runs the server could change its code to catch your password, so use a server you trust.) You can change this later in My account.';
+const ENCRYPT_WHY = 'Encrypted: files are locked in your browser before they are stored, so nobody else can read them, not even the owner of this desktop. Your password or your recovery key opens them; lose both and they cannot be opened. Use a server you trust.';
+const ENCRYPT_MORE = 'Whoever runs the server could change its code to catch your password. You can change this choice later in My account.';
 
 /**
  * The first sign-in of someone the owner added: the same choice the owner had at set-up, ticked unless they untick it.
@@ -431,7 +433,7 @@ export function chooseEncryption(host: HTMLElement, display: string): Promise<bo
       h('h1', { id: 'gate-title' }, 'Your files'),
       h('p', { class: 'gate-intro' }, `Welcome, ${display}. Before your desktop opens, choose how your files are kept.`),
       h('label', { class: 'check-row' }, encrypt, ' Encrypt my files'),
-      h('p', { class: 'gate-small' }, ENCRYPT_WHY),
+      h('p', { class: 'gate-small' }, ENCRYPT_WHY, ' ', infoTip('encryption', ENCRYPT_MORE)),
       h('div', { class: 'gate-buttons' }, go),
     );
     go.focus();
@@ -459,7 +461,7 @@ export function showRecoveryKey(host: HTMLElement, key: string, intro: string): 
       h('h1', { id: 'gate-title' }, 'Your recovery key'),
       h('p', { class: 'gate-intro' }, intro),
       h('p', { class: 'gate-rkey-show' }, key),
-      h('p', { class: 'gate-small' }, 'Write it down or print it, and keep it away from this computer (a password manager is fine). This is the only time it is shown. You can make a new one in My account; the old one then stops working.'),
+      h('p', { class: 'gate-small' }, 'Write it down or print it, and keep it away from this computer. This is the only time it is shown. ', infoTip('the recovery key', 'A password manager is fine. You can make a new one in My account; the old one then stops working.')),
       h('div', { class: 'gate-buttons' }, copy),
       note,
       h('label', { class: 'check-row' }, kept, ' I have kept my recovery key somewhere safe'),
