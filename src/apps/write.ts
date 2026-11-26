@@ -18,7 +18,7 @@ import type { AppDef, AppHandle } from '../shell/types.ts';
 import { APPS } from './catalog.ts';
 import { FONT_FACES, FONT_SIZES } from './sheet/fonts.ts';
 import { DocxProblem, headingsOf, readDocx, writeDocx, type DocxSource } from './write/docx.ts';
-import { CONTACT_COLUMNS, contactsList, fieldsIn, mergeAll, tableList, TEMPLATES, type MergeList } from './write/merge.ts';
+import { CONTACT_COLUMNS, contactsList, fieldsIn, mergeAll, rowsList, tableList, TEMPLATES, type MergeList } from './write/merge.ts';
 import { pageAt } from './write/layout.ts';
 import { findAll, findPlugin, replaceAll, type FindOptions, type Hit } from './write/find.ts';
 import { markdownLoses, readMarkdown, writeMarkdown } from './write/markdown.ts';
@@ -1189,11 +1189,14 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
         : writeDocx(view.state.doc.toJSON(), page, baseLabel(), source, { headingPages });
   /** Asks before a save to .txt or .md that leaves things out; false when the person says no. */
   const okToSaveAs = async (as: 'docx' | 'txt' | 'md', name: string): Promise<boolean> => {
-    if (as === 'txt' && textLoses(view.state.doc.toJSON())) {
-      return shell.dialogs.confirm({ title: 'Save as plain text?', text: `“${name}” is plain text, which keeps only the words: the formatting, tables, pictures, footnotes, merge fields, contents page and grey kept parts are left out. Save as a Word document (.docx) instead to keep them.`, ok: 'Save the words only', cancel: 'Cancel' });
+    // The header and footer are part of the page setup, not the text: neither kind keeps them.
+    const headerFooter = [page.header, page.footer].some(line => !!(line.l || line.c || line.r));
+    if (as === 'txt' && (textLoses(view.state.doc.toJSON()) || headerFooter)) {
+      return shell.dialogs.confirm({ title: 'Save as plain text?', text: `“${name}” is plain text, which keeps only the words: the formatting, tables, pictures, footnotes, merge fields, contents page, grey kept parts, header and footer are left out. Save as a Word document (.docx) instead to keep them.`, ok: 'Save the words only', cancel: 'Cancel' });
     }
     if (as === 'md') {
       const loses = markdownLoses(view.state.doc.toJSON());
+      if (headerFooter) loses.push('the header and footer');
       if (loses.length) return shell.dialogs.confirm({ title: 'Save as Markdown?', text: `Markdown keeps headings, bold, italic, lists and tables. These are left out of “${name}”: ${loses.join('; ')}. Save as a Word document (.docx) to keep them.`, ok: 'Save as Markdown', cancel: 'Cancel' });
     }
     return true;
@@ -1460,15 +1463,21 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
       return;
     }
     try {
-      const { Workbook } = await import('./sheet/workbook.ts');
+      const { Workbook, parseDelimited } = await import('./sheet/workbook.ts');
       const wb = new Workbook();
       const bytes = await shell.fs.readFile(chosen);
-      if (/\.xlsx$/i.test(chosen)) {
-        const { openXlsx } = await import('./sheet/xlsx.ts');
-        await openXlsx(wb, bytes);
-      } else if (/\.(csv|tsv)$/i.test(chosen)) wb.importText(0, 0, 0, decodeText(bytes).text);
-      else wb.load(JSON.parse(new TextDecoder('utf-8').decode(bytes)));
-      const list = tableList(wb.exportText(0, wb.usedRange(0), '\t'), baseName(chosen));
+      // A CSV or TSV is read as text: going through a spreadsheet would make 02134 into 2134, 1,234.50 into 1234.5, a
+      // date into another form, and work out a value that starts with "=".
+      let list: MergeList;
+      if (/\.(csv|tsv)$/i.test(chosen)) {
+        list = rowsList(parseDelimited(decodeText(bytes).text, /\.tsv$/i.test(chosen) ? '\t' : undefined), baseName(chosen));
+      } else {
+        if (/\.xlsx$/i.test(chosen)) {
+          const { openXlsx } = await import('./sheet/xlsx.ts');
+          await openXlsx(wb, bytes);
+        } else wb.load(JSON.parse(new TextDecoder('utf-8').decode(bytes)));
+        list = tableList(wb.exportText(0, wb.usedRange(0), '\t'), baseName(chosen));
+      }
       if (!list.rows.length) {
         await shell.dialogs.alert('That list is empty', `“${baseName(chosen)}” has no rows under its first row (the first row names the columns).`);
         return;

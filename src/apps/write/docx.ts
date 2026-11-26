@@ -17,6 +17,9 @@ import {
 
 export class DocxProblem extends Error {}
 
+const MAX_TABLE_COLUMNS = 63;
+const MAX_TABLE_CELLS = 40000;
+
 /** A .docx bigger than this once unpacked is refused (a small zip can unpack to gigabytes). */
 const MAX_UNPACKED = 200 * 1024 * 1024;
 
@@ -633,7 +636,7 @@ export async function writeDocx(doc: NodeJSON, page: PageSetup, title = '', sour
   const core = `${XML_HEAD}<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">`
     + `${title ? `<dc:title>${escapeXml(xmlSafe(title.slice(0, 200)))}</dc:title>` : ''}<dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified></cp:coreProperties>`;
   const app = `${XML_HEAD}<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>Write</Application></Properties>`;
-  const settings = `${XML_HEAD}<w:settings xmlns:w="${NS.w}"><w:defaultTabStop w:val="720"/>${hasNotes ? '<w:footnotePr><w:footnote w:id="-1"/><w:footnote w:id="0"/></w:footnotePr>' : ''}<w:characterSpacingControl w:val="doNotCompress"/><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat></w:settings>`;
+  const settings = `${XML_HEAD}<w:settings xmlns:w="${NS.w}"><w:defaultTabStop w:val="720"/><w:characterSpacingControl w:val="doNotCompress"/>${hasNotes ? '<w:footnotePr><w:footnote w:id="-1"/><w:footnote w:id="0"/></w:footnotePr>' : ''}<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat></w:settings>`;
 
   const enc = new TextEncoder();
   const at = Date.now();
@@ -760,7 +763,11 @@ function writeKept(source: DocxSource, ctx: WriteCtx, body: string, pageXml: str
   if (numberingText && /<\/w:numbering>\s*$/.test(numberingText)) {
     const firstNum = numberingText.search(/<w:num\b/);
     numberingText = firstNum >= 0 ? numberingText.slice(0, firstNum) + numbering.abstracts + numberingText.slice(firstNum) : numberingText.replace(/<\/w:numbering>\s*$/, `${numbering.abstracts}</w:numbering>`);
-    numberingText = numberingText.replace(/<\/w:numbering>\s*$/, `${numbering.nums}</w:numbering>`);
+    // The nums go after the file's own and before numIdMacAtCleanup, which the file format puts last.
+    const cleanup = numberingText.search(/<w:numIdMacAtCleanup\b/);
+    numberingText = cleanup >= 0
+      ? numberingText.slice(0, cleanup) + numbering.nums + numberingText.slice(cleanup)
+      : numberingText.replace(/<\/w:numbering>\s*$/, `${numbering.nums}</w:numbering>`);
   } else {
     numberingText = `${XML_HEAD}<w:numbering xmlns:w="${NS.w}">${numbering.abstracts}${numbering.nums}</w:numbering>`;
     if (!source.numbering) {
@@ -1768,7 +1775,12 @@ function fillTable(table: NodeJSON): NodeJSON {
       if (down < Number(cell.attrs?.rowspan ?? 1)) cell.attrs = { ...cell.attrs, rowspan: down };
     }
   });
-  const most = Math.max(...width);
+  const most = Math.max(0, ...width);
+  // Padding every row to the widest one could turn a tiny file into millions of cells and stop the page: a table past
+  // Word's own 63 columns, or past 40,000 cells, is refused in words instead.
+  if (most > MAX_TABLE_COLUMNS || rows.length * most > MAX_TABLE_CELLS) {
+    throw new DocxProblem(`This document has a table bigger than Write opens (more than ${MAX_TABLE_COLUMNS} columns or ${MAX_TABLE_CELLS.toLocaleString('en-GB')} cells). Nothing was changed.`);
+  }
   rows.forEach((row, r) => {
     for (let k = width[r]; k < most; k++) row.content!.push({ type: 'table_cell', attrs: { colspan: 1, rowspan: 1, colwidth: null, background: null }, content: [{ type: 'paragraph' }] });
   });

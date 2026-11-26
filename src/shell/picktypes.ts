@@ -82,6 +82,9 @@ export function finalSaveName(typed: string, choices: FileTypeChoice[], index: n
     // An ending none of the entries names (conf.json in a text editor) is kept when "All files" is on offer.
     const any = choices.findIndex(t => t.ext.length === 0);
     if (any >= 0) return { name: typed, index: any };
+    // The ending of another kind of file this app does not save (notes.rtf in Write) is swapped, never stacked into
+    // "notes.rtf.docx". An ending that is no kind of file at all ("v1.2") stays part of the name.
+    if (fileTypeOf(typed).apps.length > 0) return { name: `${typed.slice(0, -ext.length - 1)}.${current.ext[0]}`, index };
   }
   return { name: `${typed}.${current.ext[0]}`, index };
 }

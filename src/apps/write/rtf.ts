@@ -166,7 +166,9 @@ export function readRtf(bytes: Uint8Array): RtfRead {
   /** Closes a table that has rows when a paragraph outside it starts. */
   const closeTable = (): void => {
     if (!tableRows.length) return;
-    const widest = Math.max(...tableRows.map(r => r.content!.length));
+    const widest = Math.max(0, ...tableRows.map(r => r.content!.length));
+    // As for Word files: padding rows to the widest could make millions of cells from a small file.
+    if (widest > 63 || tableRows.length * widest > 40000) throw new RtfProblem('This RTF file has a table bigger than Write opens (more than 63 columns or 40,000 cells). Nothing was changed.');
     for (const r of tableRows) while (r.content!.length < widest) r.content!.push({ type: 'table_cell', attrs: { colspan: 1, rowspan: 1, colwidth: null, background: null }, content: [{ type: 'paragraph' }] });
     blocks.push({ type: 'table', attrs: { borders: true }, content: tableRows });
     tableRows = [];

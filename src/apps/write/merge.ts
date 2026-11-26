@@ -62,7 +62,12 @@ function readTable(tsv: string): string[][] {
 
 /** A table of text (tab between columns, a line a row; the first row names the columns) as a list. Empty rows go. */
 export function tableList(tsv: string, from: string): MergeList {
-  const lines = readTable(tsv);
+  return rowsList(readTable(tsv), from);
+}
+
+/** Rows of text (the first names the columns) as a list, each value exactly as written. Empty rows go. */
+export function rowsList(table: string[][], from: string): MergeList {
+  const lines = table.map(r => [...r]);
   const head = (lines.shift() ?? []).map(h => h.trim());
   // Columns with no name get one ("Column 3"); a name used twice gets a number.
   // Every final name is unique, whatever the others are called ("Name", "Name", "Name 2" gives Name, Name 2, Name 2 2).
