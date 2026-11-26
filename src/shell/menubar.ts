@@ -30,9 +30,22 @@
 //   the document, so a selection stays selected. A button with `pressed` is a toggle (Bold) and shows as pressed.
 // - In a narrow window the menus and buttons that do not fit move into a » menu at the end of their row. On a touch
 //   screen the titles and buttons grow to finger size. Colours come from the theme, so the dark theme works.
+// - Several named toolbars instead of the one row: pass `toolbars` (and leave out `tools`), and wrap the app's work
+//   area in bar.dock(work) so toolbars can be docked to its left and right as well as across the top:
+//     const bar = classicBar({ menus, toolbars: [
+//       { id: 'standard', name: 'Standard', tools: [...] },
+//       { id: 'snaps', name: 'Snaps', side: 'right', tools: [...] },
+//     ] }, { ..., layout: { saved: settings.toolbars, save: v => { settings.toolbars = v; keep(); } } });
+//     app.root.append(bar.el, bar.dock(workArea), statusBar);
+//   Each toolbar has a grip (the three dots at its start): drag it to another place in the rows, or to the left or
+//   right edge of the work area; with the grip focused the arrow keys move it. View > Toolbars (put at the top of the
+//   app's View menu by the bar) shows or hides each one, docks it Top, Left or Right, and resets them. Keep
+//   `layout.saved` per person where the app keeps its other settings (/System/<app>.json); what was saved is checked,
+//   and anything broken gives the usual layout. See toolbars.ts.
 import { h, on } from '../core/dom.ts';
 import type { MenuItem, MenuLayer } from './menu.ts';
 import { toolIcon, type ToolIconId } from './toolicons.ts';
+import { docking, type Docking, type ToolbarSpec, type ToolbarStore } from './toolbars.ts';
 
 export interface BarItem {
   label?: string;
@@ -62,7 +75,9 @@ export interface ToolButton {
   /** For finding the button later (data-tool on the element). */
   id?: string;
   label: string;
-  icon: ToolIconId;
+  /** Its picture from toolicons.ts; or `picture`, an app's own 16 px picture, when none of those fits. */
+  icon?: ToolIconId;
+  picture?: () => Element;
   shortcut?: string;
   enabled?: () => boolean;
   /** Makes it a toggle button showing whether the thing is on. */
@@ -82,6 +97,8 @@ export type ToolEntry = ToolButton | ToolWidget | '|';
 export interface BarSpec {
   menus: BarMenu[];
   tools?: ToolEntry[];
+  /** Named toolbars that can be moved, docked and hidden (toolbars.ts); used instead of `tools`. */
+  toolbars?: ToolbarSpec[];
 }
 
 export interface BarOptions {
@@ -98,6 +115,8 @@ export interface BarOptions {
   label?: string;
   /** Run an item's action when its shortcut is pressed in `scope`. */
   bindShortcuts?: boolean;
+  /** Where the toolbars' places are kept per person (with `toolbars`). */
+  layout?: ToolbarStore;
 }
 
 export interface ClassicBar {
@@ -113,6 +132,15 @@ export interface ClassicBar {
   /** Closes any open menu and gives the keyboard back. */
   close(): void;
   readonly isOpen: boolean;
+  /**
+   * With `toolbars`: puts the left and right docks round the app's work area and returns the frame to put in its place
+   * (without toolbars, the work area itself).
+   */
+  dock(work: HTMLElement): HTMLElement;
+  /** The named toolbar's element (null when there is no such toolbar). */
+  toolbarEl(id: string): HTMLElement | null;
+  /** The toolbars' docking (null without `toolbars`). */
+  readonly toolbars: Docking | null;
 }
 
 // ---- The model: plain functions, no page needed (test/menubar.test.ts) --------------------------------------------
@@ -432,28 +460,7 @@ export function classicBar(spec: BarSpec, opts: BarOptions): ClassicBar {
   const toolEls: Array<{ entry: ToolEntry; el: HTMLElement }> = tools.map(entry => {
     if (entry === '|') return { entry, el: h('span', { class: 'cbar-tsep', role: 'separator', 'aria-orientation': 'vertical' }) };
     if (isWidget(entry)) return { entry, el: h('span', { class: 'cbar-widget' }, entry.widget) };
-    const b = h(
-      'button',
-      {
-        type: 'button',
-        class: 'cbar-tool',
-        tabindex: -1,
-        'aria-label': entry.label,
-        title: toolTip(entry.label, entry.shortcut),
-        'aria-keyshortcuts': entry.shortcut ? ariaShortcut(entry.shortcut) : null,
-        'aria-pressed': entry.pressed ? 'false' : null,
-        'data-tool': entry.id ?? entry.icon,
-      },
-      toolIcon(entry.icon),
-    );
-    on(b, 'pointerdown', (event: PointerEvent) => {
-      if (event.pointerType === 'mouse') event.preventDefault();
-    }, signal);
-    on(b, 'click', () => {
-      if (b.getAttribute('aria-disabled') === 'true') return;
-      wrap(entry.action)();
-    }, signal);
-    return { entry, el: b };
+    return { entry, el: toolButtonEl(entry, signal, wrap) };
   });
   const moreTools = h('button', { type: 'button', class: 'cbar-tool cbar-more', tabindex: -1, 'aria-label': 'More buttons', title: 'More buttons', 'aria-haspopup': 'menu', hidden: true }, '»');
   const toolbar = tools.length ? h('div', { class: 'cbar-tools', role: 'toolbar', 'aria-label': 'Toolbar' }, ...toolEls.map(t => t.el), moreTools) : null;
@@ -504,7 +511,7 @@ export function classicBar(spec: BarSpec, opts: BarOptions): ClassicBar {
         if (entry === '|') {
           items.push({ separator: true });
         } else if (isButton(entry)) {
-          icons.set(entry.label, entry.icon);
+          if (entry.icon) icons.set(entry.label, entry.icon);
           items.push({ label: entry.label, hint: entry.shortcut, disabled: !isOn(entry.enabled), checked: entry.pressed ? entry.pressed() : undefined, action: wrap(entry.action) });
         }
       }
@@ -514,7 +521,18 @@ export function classicBar(spec: BarSpec, opts: BarOptions): ClassicBar {
     }, signal);
   }
 
-  const bar = h('div', { class: 'cbar' }, menubar, toolbar);
+  const docks: Docking | null = spec.toolbars?.length
+    ? docking(spec.toolbars, { signal, layer, wrap, home: () => home(), store: opts.layout })
+    : null;
+  if (docks) {
+    // View > Toolbars, at the top of the app's View menu.
+    const view = spec.menus.find(m => m.label === 'View');
+    if (view) {
+      const own = view.items;
+      view.items = () => [docks.menuItem(), { separator: true }, ...list(own)];
+    }
+  }
+  const bar = h('div', { class: 'cbar' }, menubar, toolbar, docks?.topDock ?? null);
   specs.set(bar, spec);
 
   // ---- Pictures in the open menu ----
@@ -597,15 +615,10 @@ export function classicBar(spec: BarSpec, opts: BarOptions): ClassicBar {
       if (m.shown && !m.shown()) absent.add(i);
       else absent.delete(i);
     });
-    for (const { entry, el } of toolEls) {
-      if (!isButton(entry)) continue;
-      const enabled = isOn(entry.enabled);
-      el.setAttribute('aria-disabled', enabled ? 'false' : 'true');
-      el.classList.toggle('off', !enabled);
-      if (entry.pressed) el.setAttribute('aria-pressed', String(entry.pressed()));
-    }
+    for (const { entry, el } of toolEls) if (isButton(entry)) syncToolButton(entry, el);
     fit();
     if (toolbar && (!toolStop || toolStop.hidden || toolStop.getAttribute('aria-disabled') === 'true')) setToolStop(null);
+    docks?.refresh();
   }
 
   // ---- Keys heard anywhere in the app ----
@@ -709,7 +722,48 @@ export function classicBar(spec: BarSpec, opts: BarOptions): ClassicBar {
     get isOpen() {
       return openAt >= 0 && layer.isOpen;
     },
+    dock(work) {
+      return docks ? docks.frame(work) : work;
+    },
+    toolbarEl(id) {
+      return docks?.band(id) ?? null;
+    },
+    toolbars: docks,
   };
+}
+
+/** A toolbar button: a press with the mouse leaves the keyboard where it is; a disabled one does nothing. */
+export function toolButtonEl(entry: ToolButton, signal: AbortSignal, wrap: (action: () => void) => () => void): HTMLButtonElement {
+  const b = h(
+    'button',
+    {
+      type: 'button',
+      class: 'cbar-tool',
+      tabindex: -1,
+      'aria-label': entry.label,
+      title: toolTip(entry.label, entry.shortcut),
+      'aria-keyshortcuts': entry.shortcut ? ariaShortcut(entry.shortcut) : null,
+      'aria-pressed': entry.pressed ? 'false' : null,
+      'data-tool': entry.id ?? entry.icon ?? null,
+    },
+    entry.picture ? entry.picture() : entry.icon ? toolIcon(entry.icon) : null,
+  );
+  on(b, 'pointerdown', (event: PointerEvent) => {
+    if (event.pointerType === 'mouse') event.preventDefault();
+  }, signal);
+  on(b, 'click', () => {
+    if (b.getAttribute('aria-disabled') === 'true') return;
+    wrap(entry.action)();
+  }, signal);
+  return b;
+}
+
+/** Sets a button's disabled look and pressed state from its getters. */
+export function syncToolButton(entry: ToolButton, el: HTMLElement): void {
+  const enabled = isOn(entry.enabled);
+  el.setAttribute('aria-disabled', enabled ? 'false' : 'true');
+  el.classList.toggle('off', !enabled);
+  if (entry.pressed) el.setAttribute('aria-pressed', String(entry.pressed()));
 }
 
 /** The enabled, shown item whose shortcut this key is, searched through submenus. */
