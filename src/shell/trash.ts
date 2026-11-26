@@ -122,6 +122,8 @@ export class RecycleBin {
   /** What is in the bin, newest first. */
   /** Slots made by put() whose item is still on its way in: empty for a moment, and never to be tidied away. */
   private filling = new Set<string>();
+  /** Item names by slot, as last seen here: a failure names the item even once its slot and line are gone. */
+  private known = new Map<string, string>();
 
   async list(): Promise<BinItem[]> {
     const slots = await this.slotFolders();
@@ -138,6 +140,7 @@ export class RecycleBin {
         continue;
       }
       const info = meta.items.find(i => i.slot === slot.name);
+      this.known.set(slot.name, inside.name);
       items.push({
         slot: slot.name,
         name: inside.name,
@@ -175,6 +178,7 @@ export class RecycleBin {
           throw error;
         }
         slots.push(slot);
+        this.known.set(slot, name);
         added.push({ slot, name, from: joinPath(path), deleted: now });
       } catch (error) {
         failures.push({ name, reason: error instanceof Error ? error.message : String(error) });
@@ -201,10 +205,12 @@ export class RecycleBin {
     const depth = (slot: string) => splitPath(fromOf(slot)).length;
     for (const slot of [...slots].sort((a, b) => depth(a) - depth(b))) {
       const slotPath = `${TRASH_DIR}/${slot}`;
-      let name = slot;
+      // Shown to the person: the item's own name, never the slot id (which means nothing to them).
+      let name = meta.items.find(i => i.slot === slot)?.name ?? this.known.get(slot) ?? 'An item';
       try {
-        const inside = (await this.fs.list(slotPath, true))[0];
-        if (!inside) throw new FsError('This item is not in the Recycle Bin any more.');
+        const slotEntry = await this.fs.stat(slotPath);
+        const inside = slotEntry?.kind === 'folder' ? (await this.fs.list(slotPath, true))[0] : undefined;
+        if (!inside) throw new FsError('It is not in the Recycle Bin any more.');
         name = inside.name;
         const from = fromOf(slot);
         let dest = from ? parentPath(from) : FALLBACK_FOLDER;
@@ -238,7 +244,7 @@ export class RecycleBin {
         await this.fs.remove([`${TRASH_DIR}/${slot}`]);
         gone.push(slot);
       } catch (error) {
-        failures.push({ name: slot, reason: error instanceof Error ? error.message : String(error) });
+        failures.push({ name: this.known.get(slot) ?? 'An item', reason: error instanceof Error ? error.message : String(error) });
       }
     }
     if (gone.length) await this.changeMeta(m => void (m.items = m.items.filter(i => !gone.includes(i.slot))));

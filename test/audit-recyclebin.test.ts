@@ -52,7 +52,7 @@ test('RB-P0-1: a file deleted while the Recycle Bin window is listing the bin is
   assert.ok(items.some(i => i.name === 'precious.txt') || inDocuments, 'the file is in neither the bin nor Documents: list() removed its slot as "empty" just as it was moved in');
 });
 
-test('RB-P1-3: a restore that fails names the item, not its slot id', { todo: 'P1' }, async () => {
+test('RB-P1-3: a restore that fails names the item, not its slot id', async () => {
   const fs = new FileSystem(new MemoryStore());
   const bin = new RecycleBin(fs);
   await fs.ensureFolder('/Documents');
