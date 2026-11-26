@@ -100,11 +100,11 @@ const signInAgain = async () => {
   await page.locator('#desktop .item').first().waitFor({ timeout: 20000 });
 };
 
-await step('Start menu (Xfce by default): 2 pinned apps, then the groups and Places; a group opens its apps in a column to the right, level with it; About sits in the bottom row', async () => {
+await step('Start menu (Xfce by default): 2 pinned apps, then the groups (no Places: File Explorer has the folders); a group opens its apps in a column to the right, level with it; About sits in the bottom row', async () => {
   eq(await page.evaluate(() => document.documentElement.dataset.theme), 'xfce', 'a new desktop starts in the Xfce colours');
   await page.locator('.start-btn').click();
   eq((await pinnedNames()).map(t => t.trim()), PINNED, 'pinned');
-  eq((await page.locator('.start-list > .start-group .start-group-name').allInnerTexts()).map(t => t.trim()), [...GROUPS, 'Places'], 'groups (no "Other": every app is filed), then Places');
+  eq((await page.locator('.start-list > .start-group .start-group-name').allInnerTexts()).map(t => t.trim()), GROUPS, 'groups (no "Other": every app is filed), and no Places');
   eq(await page.locator('.start-fly').count(), 0, 'no column until a group is chosen');
   const menuBox = await page.locator('.start-menu').boundingBox();
   const dev = page.locator('.start-list > .start-group', { hasText: 'Development' });
@@ -136,9 +136,8 @@ await step('Start menu (Xfce by default): 2 pinned apps, then the groups and Pla
   await page.locator('.start-list > .start-item', { hasText: 'Panel' }).hover();
   await page.waitForTimeout(500);
   eq(await page.locator('.start-fly').count(), 0, 'resting on a pinned app closed the column');
-  // Places opens its folders the same way.
-  await page.locator('.start-list > .start-group', { hasText: 'Places' }).click();
-  ok(await page.locator('.start-fly .start-item', { hasText: 'Documents' }).isVisible(), 'Places');
+  // No Places row: File Explorer has the folders (typing a folder's name in the search still finds it).
+  eq(await page.locator('.start-list > .start-group', { hasText: 'Places' }).count(), 0, 'no Places row');
   // Search looks through everything, in the menu's own column.
   await page.locator('.start-filter').fill('note');
   eq((await pinnedNames()).map(t => t.trim()), ['Notepad', 'Notepad Pro'], 'search finds across groups');
@@ -387,7 +386,7 @@ await step('Classic blue colours: the same Start menu (groups, a column to the r
   await openApp('settings');
   await front().locator('[data-theme-sample="blue"]').click();
   await page.locator('.start-btn').click();
-  eq((await page.locator('.start-list > .start-group .start-group-name').allInnerTexts()).map(t => t.trim()), [...GROUPS, 'Places'], 'the same groups');
+  eq((await page.locator('.start-list > .start-group .start-group-name').allInnerTexts()).map(t => t.trim()), GROUPS, 'the same groups');
   await page.locator('.start-list > .start-group', { hasText: 'Development' }).click();
   ok(await page.locator('.start-fly .start-item', { hasText: 'Terminal' }).isVisible(), 'a column to the right');
   await page.locator('.start-list > .start-item', { hasText: 'Panel' }).click({ button: 'right' });

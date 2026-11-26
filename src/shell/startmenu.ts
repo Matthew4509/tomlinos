@@ -1,7 +1,7 @@
 // The Start menu: pinned apps, every app filed in groups (startgroups.ts), the standard folders, a search box, and
 // Lock, Sign out, Reload and About at the foot. "Reload" only reloads the page; nothing here erases files.
 // One arrangement whatever the colour scheme, the classic Xfce and MATE menu: one column (the pinned apps, then each
-// group and Places), and a group opens its apps in a column to the right of the menu, level with the group; a column
+// group), and a group opens its apps in a column to the right of the menu, level with the group; a column
 // can open another to its right the same way. A click opens a column (so a keyboard and a finger can use it: Right
 // opens, Left and Escape close); a mouse resting on a group opens it too, as Xfce's menu does. A screen too narrow for
 // a column beside the menu (a phone) opens the group in place, with a Back button.
@@ -92,7 +92,6 @@ export class StartMenu {
 
     const branches: Branch[] = [
       ...groups.map(g => ({ id: g.id, name: g.name, iconName: GROUP_ICON, items: () => g.apps.map(id => appEntry(byId.get(id)!)) })),
-      { id: 'places', name: 'Places', iconName: 'folder' as IconName, items: () => PLACES.map(placeEntry) },
     ];
 
     // ---- What the menu's column shows: the main list, or (no room for columns) one branch in place ----

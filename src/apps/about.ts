@@ -78,7 +78,7 @@ export const aboutApp: AppDef = {
     const list = h('div', { class: 'about-credits' });
     app.root.append(
       h('div', { class: 'about-head' }, h('h1', {}, 'TOMLIN OS'), h('p', {}, version ? `Version ${version}` : 'Version not known')),
-      h('p', { class: 'about-lead' }, 'A private desktop in the browser. The desktop and its apps are this project\'s own code. These outside pieces ship with it, with thanks:'),
+      h('p', { class: 'about-lead' }, 'A private desktop that you can self host on cPanel or other hosting platforms. Access your files and tools from anywhere. See below for licences for software used in development.'),
       list,
     );
     // The built-in AI models, each with its maker and licence: always listed, since a browser fetches one from Hugging
