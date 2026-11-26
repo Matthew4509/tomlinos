@@ -25,6 +25,10 @@ export function imageSize(b: Uint8Array): ImageSize | null {
     return { width: u16le(b, 6), height: u16le(b, 8) };
   }
   if (b.length >= 26 && b[0] === 0x42 && b[1] === 0x4d) {
+    // The header's own length at 14 says which layout follows: 12 is the old OS/2 one with 16-bit sizes at 18 and
+    // 20; 40 or more has 32-bit sizes at 18 and 22 (a negative height means the rows run top-down).
+    const header = i32le(b, 14);
+    if (header === 12) return { width: u16le(b, 18), height: u16le(b, 20) };
     return { width: Math.abs(i32le(b, 18)), height: Math.abs(i32le(b, 22)) };
   }
   if (b.length >= 30 && b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50) {

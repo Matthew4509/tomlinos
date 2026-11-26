@@ -12,24 +12,9 @@ import { APPS } from './catalog.ts';
 
 const MAX_IMAGE_BYTES = 60 * 1024 * 1024;
 
-/** An SVG drawn once into a canvas and kept as a PNG: the picture without anything that could run. */
-async function svgAsPng(bytes: Uint8Array): Promise<string> {
-  const svgUrl = blobUrl(bytes, 'image/svg+xml');
-  try {
-    const pic = new Image();
-    pic.src = svgUrl;
-    await pic.decode();
-    const scale = Math.min(1, 4096 / Math.max(pic.naturalWidth || 1, pic.naturalHeight || 1));
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.max(1, Math.round((pic.naturalWidth || 300) * scale));
-    canvas.height = Math.max(1, Math.round((pic.naturalHeight || 150) * scale));
-    canvas.getContext('2d')!.drawImage(pic, 0, 0, canvas.width, canvas.height);
-    const png = await new Promise<Blob>((resolve, reject) => canvas.toBlob(b => (b ? resolve(b) : reject(new Error('The browser could not draw this picture.'))), 'image/png'));
-    return URL.createObjectURL(png);
-  } finally {
-    URL.revokeObjectURL(svgUrl);
-  }
-}
+const drop = (u: string | null) => {
+  if (u) URL.revokeObjectURL(u);
+};
 export const photosApp: AppDef = {
   ...APPS.photos,
   async launch(app, arg) {
@@ -85,17 +70,23 @@ export const photosApp: AppDef = {
         if (mine !== generation) return;
         const tooBig = pictureTooBig(bytes);
         if (tooBig) throw new Error(tooBig);
+        // An SVG is shown from its own bytes in an <img>, where the browser treats it as a picture only: no script
+        // runs and nothing outside is fetched. Opened on its own in a tab it keeps this page's policy, which lets no
+        // script written inside a file run.
+        const fresh = blobUrl(bytes, type);
         const old = url;
-        // An SVG is shown as a drawn copy (PNG): the file itself, opened on its own from the page, could carry script.
-        url = type === 'image/svg+xml' ? await svgAsPng(bytes) : blobUrl(bytes, type);
+        url = fresh;
         img.alt = name;
         img.src = url;
-        if (old) URL.revokeObjectURL(old);
+        drop(old);
         css(img, { display: null });
         await img.decode().catch(() => {
           throw new Error('The browser could not read this picture. The file may be damaged.');
         });
-        if (mine === generation) status.textContent = `${img.naturalWidth} × ${img.naturalHeight} pixels, ${formatSize(entry.size)}`;
+        if (mine !== generation) return;
+        // A drawing without its own width and height is drawn to fit whatever room it gets.
+        const size = img.naturalWidth && img.naturalHeight ? `${img.naturalWidth} × ${img.naturalHeight} pixels` : 'Drawing with no fixed size';
+        status.textContent = `${size}, ${formatSize(entry.size)}`;
       } catch (error) {
         if (mine !== generation) return;
         css(img, { display: 'none' });
@@ -129,7 +120,8 @@ export const photosApp: AppDef = {
     }, app.signal);
     app.signal.addEventListener('abort', () => {
       generation++;
-      if (url) URL.revokeObjectURL(url);
+      drop(url);
+      url = null;
     }, { once: true });
     layout();
     await show();
