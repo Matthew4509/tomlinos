@@ -77,10 +77,14 @@ export const projectsApp: AppDef = {
       }
     }
 
+    /** The last change to the projects still being saved: the next waits for it, so each is made on top of the one before. */
+    let saving: Promise<unknown> = Promise.resolve();
     /** Saves one change to the projects; false (after saying why) when it could not be saved. */
     async function changeProjects(apply: (list: Project[]) => Project[]): Promise<boolean> {
+      const run = saving.then(() => file.change(apply));
+      saving = run.catch(() => {});
       try {
-        projects = await file.change(apply);
+        projects = await run;
         return true;
       } catch (error) {
         await shell.report('Could not save your projects', error);
@@ -129,7 +133,8 @@ export const projectsApp: AppDef = {
         type: 'button', class: `proj-star${p.focus ? ' on' : ''}`, 'aria-pressed': String(p.focus), 'data-key': `star-${p.uid}`,
         'aria-label': `Focus: ${p.name}`, title: p.focus ? 'Starred: listed first and on the Panel. Click to unstar.' : 'Star it: listed first and on the Panel',
       }, p.focus ? '★' : '☆');
-      on(b, 'click', () => void patch(p.uid, { focus: !p.focus }).then(ok => ok && draw()), signal);
+      // Each click turns the star over as the file holds it then, so two quick clicks leave it as it was.
+      on(b, 'click', () => void changeProjects(list => list.map(x => (x.uid === p.uid ? { ...x, focus: !x.focus } : x))).then(ok => ok && draw()), signal);
       return b;
     }
 
