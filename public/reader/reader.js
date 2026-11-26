@@ -61,7 +61,17 @@ let chapter = 0;
 let page = 0;
 let pages = 1;
 let step = 1;
+/**
+ * A long chapter is laid out a piece at a time (a whole long chapter in one block of columns takes seconds to lay out,
+ * at every page turn and resize): each piece is a run of lines (from, to), with the letters before it in the chapter.
+ */
+let pieces = [{ from: 0, to: 0, before: 0, chars: 0 }];
+let piece = 0;
+let chapterChars = 0;
+let prose = false;
 const ui = {};
+/** About how many letters a piece of a chapter holds (some 20 pages); a piece ends at a paragraph when it can. */
+const PIECE_CHARS = 50000;
 
 // ---------- The chapter's text as paragraphs ----------
 
@@ -72,7 +82,7 @@ function inline(text) {
   return text.split(/(_[^_]+_)/).filter(Boolean).map(part => (/^_[^_]+_$/.test(part) ? h('em', { text: part.slice(1, -1) }) : part));
 }
 
-function paragraphs(from, to, prose) {
+function paragraphs(from, to) {
   const out = [];
   let block = [];
   const flush = () => {
@@ -97,16 +107,63 @@ function paragraphs(from, to, prose) {
 
 // ---------- Pages ----------
 
-/** Lays the chapter out in page-wide columns; one column is one page. */
+/** Lays the piece being read out in page-wide columns, one column a page, keeping the place in it. */
 function paginate(keepRatio) {
   const ratio = pages > 1 ? page / (pages - 1) : 0;
+  measure();
+  go(keepRatio ? Math.round(ratio * (pages - 1)) : Math.min(page, pages - 1), false);
+}
+
+function measure() {
   const vw = ui.viewport.clientWidth;
   const margin = vw < 520 ? 20 : 40;
   const width = Math.max(200, vw - 2 * margin);
   Object.assign(ui.flow.style, { left: `${margin}px`, width: `${width}px`, columnWidth: `${width}px`, columnGap: `${2 * margin}px`, columnFill: 'auto' });
   step = vw;
   pages = Math.max(1, Math.round((ui.flow.scrollWidth + 2 * margin) / vw));
-  go(keepRatio ? Math.round(ratio * (pages - 1)) : Math.min(page, pages - 1), false);
+}
+
+/** The chapter's lines cut into pieces of about PIECE_CHARS letters: after a blank line, or at a line's end when a paragraph runs on. */
+function cutPieces(from, to) {
+  const out = [];
+  let start = from;
+  let size = 0;
+  let before = 0;
+  for (let i = from; i < to; i++) {
+    size += lines[i].length + 1;
+    if (i + 1 < to && ((size >= PIECE_CHARS && !lines[i].trim()) || size >= 2 * PIECE_CHARS)) {
+      out.push({ from: start, to: i + 1, before, chars: size });
+      before += size;
+      start = i + 1;
+      size = 0;
+    }
+  }
+  out.push({ from: start, to, before, chars: size });
+  return out;
+}
+
+/**
+ * How far through the chapter the page is, 0 to 1, as kept with the book. A chapter in one piece keeps it as it always
+ * was (page of pages); in pieces, it is the letters before the page's start, so it names one piece and one page in it.
+ */
+function placeRatio() {
+  if (pieces.length === 1) return pages > 1 ? page / (pages - 1) : 0;
+  const p = pieces[piece];
+  return chapterChars ? Math.min(1, (p.before + (page / pages) * p.chars) / chapterChars) : 0;
+}
+
+/**
+ * Shows piece k of the chapter: at its start, its end, or a share of the way through it (0 up to, not reaching, 1). A
+ * chapter in one piece is given its place as it is kept, page of pages (0 to 1).
+ */
+function showPiece(k, at) {
+  piece = Math.max(0, Math.min(pieces.length - 1, k));
+  const p = pieces[piece];
+  ui.flow.replaceChildren(...paragraphs(p.from, p.to));
+  page = 0;
+  pages = 1;
+  measure();
+  go(at === 'end' ? pages - 1 : typeof at === 'number' ? Math.min(pages - 1, Math.round(at * (pieces.length === 1 ? pages - 1 : pages))) : 0, false);
 }
 
 function go(p, animate = true) {
@@ -114,22 +171,26 @@ function go(p, animate = true) {
   ui.flow.style.transition = animate ? '' : 'none';
   ui.flow.style.transform = `translateX(${-page * step}px)`;
   const n = work.chapters.length;
-  ui.count.textContent = `Page ${page + 1} of ${pages}`;
-  ui.prev.disabled = page === 0 && chapter === 0;
-  ui.next.disabled = page === pages - 1 && chapter === n - 1;
-  ui.next.textContent = page === pages - 1 && chapter < n - 1 ? 'Next chapter ›' : 'Next page ›';
-  ui.prev.textContent = page === 0 && chapter > 0 ? '‹ Previous chapter' : '‹ Previous page';
-  ui.bar.style.width = `${(100 * (chapter + (pages > 1 ? page / (pages - 1) : 1))) / n}%`;
-  places.set(work.id, { chapter, ratio: pages > 1 ? page / (pages - 1) : 0 });
+  const first = page === 0 && piece === 0;
+  const last = page === pages - 1 && piece === pieces.length - 1;
+  ui.count.textContent = `Page ${page + 1} of ${pages}${pieces.length > 1 ? ` · section ${piece + 1} of ${pieces.length}` : ''}`;
+  ui.prev.disabled = first && chapter === 0;
+  ui.next.disabled = last && chapter === n - 1;
+  ui.next.textContent = last && chapter < n - 1 ? 'Next chapter ›' : 'Next page ›';
+  ui.prev.textContent = first && chapter > 0 ? '‹ Previous chapter' : '‹ Previous page';
+  const through = pieces.length === 1 ? (pages > 1 ? page / (pages - 1) : 1) : (pieces[piece].before + ((page + 1) / pages) * pieces[piece].chars) / (chapterChars || 1);
+  ui.bar.style.width = `${(100 * (chapter + Math.min(1, through))) / n}%`;
+  places.set(work.id, { chapter, ratio: placeRatio() });
 }
 
 function showChapter(i, at = 'start') {
   chapter = Math.max(0, Math.min(work.chapters.length - 1, i));
   const ch = work.chapters[chapter];
   const to = chapter + 1 < work.chapters.length ? work.chapters[chapter + 1].line : work.end;
-  const prose = work.prose ?? author.id === 'doyle';
+  prose = work.prose ?? author.id === 'doyle';
   ui.flow.className = `r-flow${prose ? ' is-prose' : ''}`;
-  ui.flow.replaceChildren(...paragraphs(ch.line, to, prose));
+  pieces = cutPieces(ch.line, to);
+  chapterChars = pieces[pieces.length - 1].before + pieces[pieces.length - 1].chars;
   ui.title.textContent = ch.title;
   ui.where.textContent = `${work.title} · ${author.name} · ${chapter + 1} of ${work.chapters.length}`;
   for (const [k, b] of ui.chapterButtons.entries()) {
@@ -138,10 +199,16 @@ function showChapter(i, at = 'start') {
       b.scrollIntoView({ block: 'nearest' });
     } else b.removeAttribute('aria-current');
   }
-  page = 0;
-  pages = 1;
-  paginate(false);
-  go(at === 'end' ? pages - 1 : typeof at === 'number' ? Math.round(at * (pages - 1)) : 0, false);
+  if (at === 'end') showPiece(pieces.length - 1, 'end');
+  else if (typeof at !== 'number') showPiece(0, 'start');
+  else if (pieces.length === 1) showPiece(0, Math.max(0, Math.min(1, at)));
+  else {
+    // The piece the place falls in, then the share of the way through that piece.
+    const letters = Math.max(0, Math.min(1, at)) * chapterChars;
+    let k = 0;
+    while (k + 1 < pieces.length && pieces[k + 1].before <= letters + 0.5) k++;
+    showPiece(k, pieces[k].chars ? Math.max(0, (letters - pieces[k].before) / pieces[k].chars) : 0);
+  }
   const url = new URL(location.href);
   url.searchParams.set('author', author.id);
   url.searchParams.set('work', work.id);
@@ -149,8 +216,8 @@ function showChapter(i, at = 'start') {
   history.replaceState(null, '', url);
 }
 
-const next = () => (page < pages - 1 ? go(page + 1) : chapter < work.chapters.length - 1 && showChapter(chapter + 1, 'start'));
-const prev = () => (page > 0 ? go(page - 1) : chapter > 0 && showChapter(chapter - 1, 'end'));
+const next = () => (page < pages - 1 ? go(page + 1) : piece < pieces.length - 1 ? showPiece(piece + 1, 'start') : chapter < work.chapters.length - 1 && showChapter(chapter + 1, 'start'));
+const prev = () => (page > 0 ? go(page - 1) : piece > 0 ? showPiece(piece - 1, 'end') : chapter > 0 && showChapter(chapter - 1, 'end'));
 
 // ---------- The column ----------
 

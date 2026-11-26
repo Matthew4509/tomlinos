@@ -331,6 +331,8 @@ const HEADING = new RegExp(`^\\[?(?:Illustration:\\s*)?(?:chapter|book|part|stav
 // "I. A SCANDAL IN BOHEMIA": a Roman number, then a name in capitals (story collections).
 const NAMED_ROMAN = /^[IVXLC]{1,6}\.\s+[A-Z][A-Z0-9'’,.:;!?& -]{2,64}$/;
 const ROMAN = /^[IVXLCDM]{1,7}\.?$/;
+/** A part cut by size is at most about this many letters (some 25 pages). */
+const PART_CHARS = 60000;
 
 function titleCase(t) {
   const clean = t.replace(/_/g, '').replace(/\s+/g, ' ').trim();
@@ -369,8 +371,17 @@ export function parseGutenberg(text) {
   // A contents list names every chapter once more, before the book starts: when a named heading comes again later,
   // the earlier one was the contents.
   if (kept.some(f => f.named)) {
+    // Each heading is cleaned once and looked up in the ones after it (walked from the end), so thousands of headings
+    // (letters, verses, a dictionary) take no longer than reading them.
     const key = f => lines[f.at].trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-    kept = kept.filter((f, k) => !kept.slice(k + 1).some(g => key(g) === key(f)));
+    const later = new Set();
+    const again = new Array(kept.length);
+    for (let k = kept.length - 1; k >= 0; k--) {
+      const name = key(kept[k]);
+      again[k] = later.has(name);
+      later.add(name);
+    }
+    kept = kept.filter((f, k) => !again[k]);
   }
   // And a heading with almost nothing after it is a contents line too.
   const textBetween = (a, b) => { let n = 0; for (let i = a + 1; i < b; i++) if (lines[i].trim()) n++; return n; };
@@ -391,10 +402,17 @@ export function parseGutenberg(text) {
     });
     if (textBetween(-1, heads[0]) > 3) chapters.unshift({ title: 'Opening pages', line: 0 });
   } else {
-    // No headings found: parts of about 300 lines, each starting at a paragraph.
+    // No headings found: parts of about 300 lines, each starting at a paragraph. A text with no blank lines (a
+    // paragraph a line) or with very long paragraphs is cut by size too, at the end of a line.
     chapters = [{ title: 'Part 1', line: 0 }];
-    for (let i = 300; i < lines.length; i++) {
-      if (i - chapters[chapters.length - 1].line >= 300 && blank(i - 1) && !blank(i)) chapters.push({ title: `Part ${chapters.length + 1}`, line: i });
+    let from = 0;
+    let size = 0;
+    for (let i = 0; i < lines.length; i++) {
+      const n = i - from;
+      if (n >= 300 && blank(i - 1) && !blank(i)) chapters.push({ title: `Part ${chapters.length + 1}`, line: (from = i) });
+      else if ((n >= 600 || size >= PART_CHARS) && !blank(i)) chapters.push({ title: `Part ${chapters.length + 1}`, line: (from = i) });
+      if (from === i) size = 0;
+      size += lines[i].length + 1;
     }
   }
   return { lines, chapters };

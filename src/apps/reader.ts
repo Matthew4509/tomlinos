@@ -45,6 +45,17 @@ export function cleanShelf(raw: unknown): SavedBook[] {
   });
 }
 
+/**
+ * Changes to the hidden indexes, one after another: each reads the index, changes it and writes it back, so two at
+ * once (two saves, a save and a removal, or two Reader windows) would each write over what the other added.
+ */
+let turns: Promise<unknown> = Promise.resolve();
+function inTurn<T>(change: () => Promise<T>): Promise<T> {
+  const run = turns.then(change, change);
+  turns = run.catch(() => undefined);
+  return run;
+}
+
 export const readerApp: AppDef = {
   ...APPS.reader,
   async launch(app, arg) {
@@ -82,12 +93,26 @@ export const readerApp: AppDef = {
       if (query) frame.src = `reader/index.html${query}`;
     });
 
-    async function readShelf(): Promise<SavedBook[]> {
+    /**
+     * A hidden index's contents, or undefined when there is no such file yet. Any other failure (the store did not
+     * answer, the file cannot be read or is not JSON) is thrown, so nothing is written over an index that is there.
+     */
+    async function readIndex(path: string, what: string): Promise<unknown> {
+      if (!(await fs.stat(path))) return undefined;
+      let text: string;
       try {
-        return cleanShelf(JSON.parse(await fs.readText(SHELF_PATH)));
-      } catch {
-        return [];
+        text = await fs.readText(path);
+      } catch (error) {
+        throw new Error(`${what} could not be read just now (${error instanceof Error ? error.message : String(error)}), so nothing was changed. Try again.`);
       }
+      try {
+        return JSON.parse(text);
+      } catch {
+        throw new Error(`${what} (${path}) is damaged, so it was left as it is and nothing was changed.`);
+      }
+    }
+    async function readShelf(): Promise<SavedBook[]> {
+      return cleanShelf(await readIndex(SHELF_PATH, 'The list of My books'));
     }
     async function writeShelf(list: SavedBook[]): Promise<void> {
       await fs.ensureFolder('/System', { hidden: true });
@@ -95,12 +120,10 @@ export const readerApp: AppDef = {
     }
 
     async function readPlaces(): Promise<Record<string, { chapter: number; ratio: number }>> {
-      try {
-        const raw = JSON.parse(await fs.readText(PLACES_PATH));
-        return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
-      } catch {
-        return {};
-      }
+      const raw = await readIndex(PLACES_PATH, 'The reading places');
+      if (raw === undefined) return {};
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error(`The reading places (${PLACES_PATH}) are damaged, so they were left as they are.`);
+      return raw as Record<string, { chapter: number; ratio: number }>;
     }
 
     async function save(book: Record<string, unknown>): Promise<void> {
@@ -113,7 +136,8 @@ export const readerApp: AppDef = {
       await fs.ensureFolder(BOOKS_FOLDER);
       let path = had?.path;
       if (!path) {
-        const names = (await fs.list(BOOKS_FOLDER)).map(e => e.name);
+        // The folder's names and the index's own (a book whose file is not there just now still has its name).
+        const names = [...(await fs.list(BOOKS_FOLDER, true)).map(e => e.name), ...list.map(b => b.path.slice(BOOKS_FOLDER.length + 1))];
         path = joinPath(BOOKS_FOLDER, uniqueName(bookFileName(String(book.title ?? ''), String(book.author ?? '')), names));
       }
       await fs.writeText(path, text);
@@ -129,7 +153,7 @@ export const readerApp: AppDef = {
       if (d.type === 'reader-hello') {
         frame.contentWindow?.postMessage({ type: 'reader-host', name: 'TOMLIN OS' }, location.origin);
       } else if (d.type === 'reader-save') {
-        save((d.book ?? {}) as Record<string, unknown>).then(() => reply({ ok: true }), fail);
+        inTurn(() => save((d.book ?? {}) as Record<string, unknown>)).then(() => reply({ ok: true }), fail);
       } else if (d.type === 'reader-shelf') {
         readShelf().then(books => reply({ books: books.map(({ path, ...rest }) => rest) }), fail);
       } else if (d.type === 'reader-load') {
@@ -138,7 +162,8 @@ export const readerApp: AppDef = {
           reply({ text: b ? await fs.readText(b.path) : null });
         }).catch(fail);
       } else if (d.type === 'reader-remove') {
-        readShelf().then(async list => {
+        inTurn(async () => {
+          const list = await readShelf();
           const b = list.find(x => x.id === Number(d.id));
           // The text file goes to the Recycle Bin, so a removal can be undone from there.
           if (b) await shell.actions.deleteToBin([b.path]).catch(() => undefined);
@@ -148,8 +173,12 @@ export const readerApp: AppDef = {
       } else if (d.type === 'reader-place-get' || d.type === 'reader-place-set') {
         const id = String(d.id ?? '');
         if (!/^pg-\d{1,7}$/.test(id)) return fail(new Error('not a book'));
-        readPlaces().then(async all => {
-          if (d.type === 'reader-place-get') return reply({ place: all[id] ?? null });
+        if (d.type === 'reader-place-get') {
+          readPlaces().then(all => reply({ place: all[id] ?? null }), fail);
+          return;
+        }
+        inTurn(async () => {
+          const all = await readPlaces();
           const p = (d.place ?? {}) as { chapter?: unknown; ratio?: unknown };
           const chapter = Number(p.chapter);
           const ratio = Number(p.ratio);
