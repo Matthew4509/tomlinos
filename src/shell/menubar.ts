@@ -256,8 +256,7 @@ export function classicBar(spec: BarSpec, opts: BarOptions): ClassicBar {
   const { layer, signal, scope } = opts;
   const keys = pickAccessKeys(spec.menus);
   let openAt = -1;
-  /** Which title's menu closed last, and when: the press on that title that closed it must not open it again. */
-  let closed = { at: -2, time: 0 };
+  /** A press on the title whose menu is open: the menu layer closes the menu for it, and the click must not reopen it. */
   let pressClosed = -2;
   /** What had the keyboard before the bar took it. */
   let cameFrom: HTMLElement | null = null;
@@ -346,7 +345,6 @@ export function classicBar(spec: BarSpec, opts: BarOptions): ClassicBar {
         stopDecorating();
         if (openAt !== i) return;
         openAt = -1;
-        closed = { at: i, time: performance.now() };
         title.setAttribute('aria-expanded', 'false');
         title.classList.remove('on');
         roveTitles(-1);
@@ -362,10 +360,13 @@ export function classicBar(spec: BarSpec, opts: BarOptions): ClassicBar {
     bar.classList.add('cbar-active');
   }
 
+  // Heard before the menu layer's own listener (added later, when a menu opens), which closes the menu on this press.
+  on(document, 'pointerdown', (event: PointerEvent) => {
+    const at = event.target instanceof Node ? allTitles.findIndex(t => t.contains(event.target as Node)) : -1;
+    pressClosed = at >= 0 && at === openAt && layer.isOpen ? at : -2;
+  }, signal, { capture: true });
   allTitles.forEach((t, i) => {
     on(t, 'pointerdown', (event: PointerEvent) => {
-      // The menu layer has already closed the open menu for this press (it closes on any press outside itself).
-      pressClosed = closed.at === i && performance.now() - closed.time < 80 ? i : -2;
       // Keep the keyboard where it is: a mouse press on a title is not a move to the bar.
       if (event.pointerType === 'mouse') event.preventDefault();
     }, signal);
@@ -526,8 +527,8 @@ export function classicBar(spec: BarSpec, opts: BarOptions): ClassicBar {
       for (const row of menu.querySelectorAll(':scope > .menu-item')) {
         const id = icons.get(row.querySelector('.menu-label')?.textContent ?? '');
         const slot = row.querySelector('.menu-check');
-        if (!id || !slot || slot.firstChild) continue;
-        slot.append(toolIcon(id));
+        if (!id || !slot || slot.textContent || slot.querySelector('svg')) continue;
+        slot.replaceChildren(toolIcon(id));
         row.classList.add('cbar-has-icon');
       }
     };
@@ -539,25 +540,34 @@ export function classicBar(spec: BarSpec, opts: BarOptions): ClassicBar {
   }
 
   // ---- Fitting a narrow window ----
+  /** Each title's and button's width when last drawn, so a fit never has to hide (and so unfocus) one to measure it. */
+  const widthOf = new WeakMap<HTMLElement, number>();
+  const measure = (el: HTMLElement, gap: number): number => {
+    if (el.hidden && widthOf.has(el)) return widthOf.get(el)!;
+    const was = el.hidden;
+    // Only a hidden element never yet drawn is shown for a moment, and a hidden element never has the keyboard.
+    el.hidden = false;
+    const cs = getComputedStyle(el);
+    const w = el.getBoundingClientRect().width + (parseFloat(cs.marginLeft) || 0) + (parseFloat(cs.marginRight) || 0) + gap;
+    el.hidden = was;
+    if (w > gap) widthOf.set(el, w);
+    return w;
+  };
   function fitRow(row: HTMLElement, els: HTMLElement[], more: HTMLElement, wanted: (i: number) => boolean, spill: Set<number>): void {
-    spill.clear();
-    els.forEach((el, i) => (el.hidden = !wanted(i)));
-    more.hidden = true;
-    const room = row.clientWidth - (parseFloat(getComputedStyle(row).paddingLeft) || 0) - (parseFloat(getComputedStyle(row).paddingRight) || 0);
+    const cs = getComputedStyle(row);
+    const room = row.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0);
     if (room <= 0) return;
-    const widths = els.map(el => (el.hidden ? 0 : el.getBoundingClientRect().width + (parseFloat(getComputedStyle(el).marginLeft) || 0) + (parseFloat(getComputedStyle(el).marginRight) || 0)));
-    more.hidden = false;
-    const moreWidth = more.getBoundingClientRect().width + 2;
-    more.hidden = true;
-    const n = fitCount(widths, room - 1, moreWidth);
-    if (n >= els.length) return;
+    const gap = parseFloat(cs.columnGap) || 0;
+    const widths = els.map((el, i) => (wanted(i) ? measure(el, gap) : 0));
+    const n = fitCount(widths, room - 1, measure(more, gap) + 2);
+    spill.clear();
     els.forEach((el, i) => {
-      if (i >= n && wanted(i)) {
-        el.hidden = true;
-        spill.add(i);
-      }
+      const show = wanted(i) && i < n;
+      if (wanted(i) && !show) spill.add(i);
+      if (el.hidden === show) el.hidden = !show;
     });
-    more.hidden = ![...spill].some(i => !(row === toolbar && toolEls[i].entry === '|'));
+    const needMore = [...spill].some(i => !(row === toolbar && toolEls[i].entry === '|'));
+    if (more.hidden === needMore) more.hidden = !needMore;
   }
   function fit(): void {
     if (!bar.isConnected) return;

@@ -343,6 +343,10 @@ body.is-dragging .win-body { pointer-events: none; }
 .cbar-has-icon .menu-check { display: inline-flex; align-items: center; justify-content: center; height: 16px; }
 .cbar-has-icon:hover .ti-acc, .cbar-has-icon:focus .ti-acc { fill: currentColor; }
 .cbar-has-icon:hover .ti-acc-line, .cbar-has-icon:focus .ti-acc-line { stroke: currentColor; }
+.cbar-has-icon[aria-disabled="true"] .ti { opacity: .45; }
+:root[data-theme="dark"] .menu { background: var(--paper); border-color: var(--line); color: var(--ink); }
+:root[data-theme="dark"] .menu-sep { background: var(--line); }
+:root[data-theme="dark"] .menu-item[aria-disabled="true"], :root[data-theme="dark"] .menu-item[aria-disabled="true"]:hover, :root[data-theme="dark"] .menu-item[aria-disabled="true"]:focus { color: var(--ink-soft); }
 @media (pointer: coarse) {
   .cbar-title { min-height: 36px; padding: 6px 12px; }
   .cbar-tool { width: 40px; height: 40px; }
