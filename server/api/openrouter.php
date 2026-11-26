@@ -26,6 +26,13 @@ $op = query_str('op');
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 $dollars = static fn (int $micro): float => round($micro / 1e6, 4);
 $letters = static fn (string $t): int => function_exists('mb_strlen') ? mb_strlen($t) : strlen($t);
+// The most tokens a text can have run to, for when no final count comes: a token for every 2 bytes, or one for every
+// Chinese, Japanese or Korean letter, whichever is more (the same measure as the cost reserve, never an undercount).
+$tokensAtMost = static function (string $t): int {
+    $cjk = @preg_match_all('/[\x{1100}-\x{11FF}\x{2E80}-\x{A4CF}\x{AC00}-\x{D7AF}\x{F900}-\x{FAFF}\x{FE30}-\x{FE4F}\x{FF00}-\x{FFEF}\x{20000}-\x{3FFFF}]/u', $t);
+
+    return max(intdiv(strlen($t) + 1, 2), is_int($cjk) ? $cjk : 0);
+};
 
 if (!extension_loaded('openssl') || !extension_loaded('curl')) {
     api_fail(501, 'This server\'s PHP is missing "openssl" or "curl", which OpenRouter needs. The owner ticks both in cPanel > Select PHP Version > Extensions.');
@@ -104,7 +111,7 @@ switch ("$method $op") {
         $rows = array_map(static fn ($r) => [
             'at' => (int) ($r['at'] ?? 0), 'model' => (string) ($r['model'] ?? ''),
             'in' => (int) ($r['in'] ?? 0), 'out' => (int) ($r['out'] ?? 0), 'cost' => $dollars((int) ($r['cost'] ?? 0)),
-            'note' => (string) ($r['note'] ?? ''),
+            'note' => (string) ($r['note'] ?? ''), 'estimated' => !empty($r['est']),
         ], array_reverse(array_slice($l['log'], -300)));
         api_json(['month' => ai_month(), 'spent' => $dollars(ai_ledger_total($l)), 'cap' => or_settings($root, $uid)['cap'] / 100, 'rows' => $rows]);
     }
@@ -171,7 +178,8 @@ ignore_user_abort(true);
 @ini_set('zlib.output_compression', '0');
 @set_time_limit(300);
 $started = false;
-$emitted = 0;
+$said = '';
+$estimated = false;
 $emit = static function (array $line) use (&$started): void {
     if (!$started) {
         $started = true;
@@ -207,9 +215,9 @@ try {
         ai_book($root, $uid, $reserve, ['model' => $model['name'], 'in' => 0, 'out' => 0, 'cost' => 0, 'note' => 'refused (' . $status . ')'], null, OR_BOOK);
         api_fail($code, $words);
     }
-    $r = or_read_stream($res->getBody(), static function (string $t) use ($emit, &$emitted, $letters): void {
+    $r = or_read_stream($res->getBody(), static function (string $t) use ($emit, &$said): void {
         $emit(['t' => $t]);
-        $emitted += $letters($t);
+        $said .= $t;
     }, static fn (): bool => (bool) connection_aborted());
     if ($r['aborted']) {
         $note = 'stopped';
@@ -228,12 +236,15 @@ try {
     $note = 'broke off';
     $emit(['error' => or_error_words(0)[1]]);
 }
-if ($r['out'] === 0 && $emitted > 0) {
-    // The final count never came: the words received stand in for it (about 4 letters a token).
-    $r['out'] = intdiv($emitted, 4) + 1;
-    $r['in'] = $r['in'] ?: intdiv($chars, 4) + 1;
+if ($r['out'] === 0 && $said !== '') {
+    // The final count never came: the words received stand in for it, counted at the most they could be (never past a
+    // full answer, what the reserve set aside), and the question as the reserve counted it.
+    $r['out'] = min(OR_MAX_OUTPUT, $tokensAtMost($said) + 1);
+    $r['in'] = $r['in'] ?: intdiv($bytes, 2) + 200;
     $note = trim($note . ', estimated', ', ');
+    $estimated = true;
 }
+unset($said);
 // OpenRouter's own figure when it sent one; otherwise worked out from the list prices.
 $cost = $r['cost'] !== null ? (int) ceil($r['cost'] * 1e6) : or_cost_micro($model, $r['in'], $r['out']);
 if ($r['cost'] === null && $r['in'] === 0 && $r['out'] === 0 && !$r['aborted'] && $r['error'] === null && $r['stop'] !== '') {
@@ -242,7 +253,7 @@ if ($r['cost'] === null && $r['in'] === 0 && $r['out'] === 0 && !$r['aborted'] &
     $cost = $worst;
     $note = trim($note . ', no count sent: booked at the most it could cost', ', ');
 }
-ai_book($root, $uid, $reserve, ['model' => $model['name'], 'in' => $r['in'], 'out' => $r['out'], 'cost' => $cost, 'note' => $note ?: ($r['stop'] === 'length' ? 'cut at the length limit' : '')], null, OR_BOOK);
+ai_book($root, $uid, $reserve, ['model' => $model['name'], 'in' => $r['in'], 'out' => $r['out'], 'cost' => $cost, 'note' => $note ?: ($r['stop'] === 'length' ? 'cut at the length limit' : '')] + ($estimated ? ['est' => true] : []), null, OR_BOOK);
 $emit([
     'done' => true, 'model' => $model['name'], 'in' => $r['in'], 'out' => $r['out'], 'cost' => $dollars($cost),
     'stop' => $r['stop'] === 'length' ? 'max_tokens' : $r['stop'], 'spent' => $dollars(ai_ledger_total(ai_ledger_read($root, $uid, ai_month(), OR_BOOK))), 'cap' => $s['cap'] / 100,

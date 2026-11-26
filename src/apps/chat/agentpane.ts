@@ -67,6 +67,8 @@ export function agentPane(app: AppHandle): { el: HTMLElement; shown: (want?: Clo
   /** This tab is starting a model, or waiting for its own answer. */
   let busy = false;
   let claudeStop: AbortController | null = null;
+  /** Stop was pressed during the answer being written. */
+  let stopAsked = false;
   let trouble: Trouble | null = null;
 
   const pick = h('select', { class: 'agent-pick', 'aria-label': 'Agent' });
@@ -414,8 +416,10 @@ export function agentPane(app: AppHandle): { el: HTMLElement; shown: (want?: Clo
 
   /**
    * `shown` is what the thread shows for a quick job ("Summarise: ..."), when it differs from what the AI is sent.
-   * `again`: the last question is already in the thread (Regenerate). `short`: only this question, cut to half of what
-   * the device takes, with a short answer asked for (after the graphics chip stopped).
+   * `again`: the last question is already in the thread (Regenerate); its earlier answer, if any, stays in the thread
+   * and its file until a new one has fully arrived, and stays for good when the new one fails or is stopped.
+   * `short`: only this question, cut to half of what the device takes, with a short answer asked for (after the
+   * graphics chip stopped).
    */
   async function send(text: string, shown = text, mode: SendMode = 'new'): Promise<void> {
     if (busy || live.busy || !text.trim()) return;
@@ -427,9 +431,12 @@ export function agentPane(app: AppHandle): { el: HTMLElement; shown: (want?: Clo
     busy = true;
     live.busy = true;
     trouble = null;
+    stopAsked = false;
     if (!thread.turns.length) thread.title = titleFrom(text);
-    let question = thread.turns[thread.turns.length - 1];
-    if (mode !== 'again' || question?.role !== 'user') {
+    const last = thread.turns[thread.turns.length - 1];
+    const earlier = mode === 'again' && last?.role === 'assistant' && thread.turns[thread.turns.length - 2]?.role === 'user' ? last : null;
+    let question = earlier ? thread.turns[thread.turns.length - 2] : last;
+    if (!earlier && (mode !== 'again' || question?.role !== 'user')) {
       question = { role: 'user', text, at: Date.now() };
       if (shown !== text) live.labels.set(question, shown);
       thread.turns.push(question);
@@ -440,8 +447,9 @@ export function agentPane(app: AppHandle): { el: HTMLElement; shown: (want?: Clo
     live.tell('thread');
     // The line under the answer counts the seconds even while nothing has come yet.
     const ticker = setInterval(() => live.pending === pending && live.tell('pending'), 1000);
-    await keep(thread);
-    let turns: ChatTurn[] = thread.turns.map(t => ({ role: t.role, content: t.text }));
+    // A Regenerate changes nothing yet, so the kept file is left as it is.
+    if (!earlier) await keep(thread);
+    let turns: ChatTurn[] = (earlier ? thread.turns.slice(0, -1) : thread.turns).map(t => ({ role: t.role, content: t.text }));
     if (mode === 'short') turns = [{ role: 'user', content: `${fitText(text, Math.max(200, Math.floor((await limit()) / 2))).text}\n\nAnswer in two or three short sentences.` }];
     const show = (t: string) => {
       if (live.thread !== thread) return;
@@ -455,12 +463,16 @@ export function agentPane(app: AppHandle): { el: HTMLElement; shown: (want?: Clo
     let perSecond = 0;
     let failed: string | null = null;
     let lost = false;
+    let stopped = false;
     try {
       if (agent === 'claude' || agent === 'openrouter') {
         claudeStop = new AbortController();
         // OpenRouter's server half streams the same way as Claude's (server/api/openrouter.php).
         const r = await askClaude(agent === 'claude' ? api! : orApi!, turns, show, claudeStop.signal).catch(error => {
-          if ((error as Error).name === 'AbortError') return { text: live.pending?.text ?? '', done: null, error: null };
+          if ((error as Error).name === 'AbortError') {
+            stopped = true;
+            return { text: live.pending?.text ?? '', done: null, error: null };
+          }
           throw error;
         });
         answer = r.text;
@@ -487,7 +499,18 @@ export function agentPane(app: AppHandle): { el: HTMLElement; shown: (want?: Clo
       live.busy = false;
       live.pending = null;
     }
-    if (answer.trim()) {
+    if (stopAsked) stopped = true;
+    if (earlier && (failed || stopped || !answer.trim())) {
+      // A Regenerate that did not finish: the thread and its file stay as they were, the earlier answer included.
+      if (!failed && !stopped) failed = 'No answer came back.';
+      if (failed) failed = `${failed} The earlier answer is kept.`;
+      else setNote('Stopped: the earlier answer is kept.');
+      if (device && failed) trouble = { kind: lost ? 'lost' : 'empty', words: failed, question: { text, shown: live.labels.get(question) ?? shown }, agent };
+    } else if (answer.trim()) {
+      if (earlier) {
+        const at = thread.turns.lastIndexOf(earlier);
+        if (at >= 0) thread.turns.splice(at, 1);
+      }
       const turn: AgentTurn = { role: 'assistant', by, text: answer, at: Date.now() };
       thread.turns.push(turn);
       live.feet.set(turn, footWords(pending, turn.at, perSecond));
@@ -498,7 +521,7 @@ export function agentPane(app: AppHandle): { el: HTMLElement; shown: (want?: Clo
       if (!failed) failed = 'No answer came back.';
       if (device) trouble = { kind: lost ? 'lost' : 'empty', words: failed, question: { text, shown: live.labels.get(question) ?? shown }, agent };
     }
-    await keep(thread);
+    if (!earlier || !thread.turns.includes(earlier)) await keep(thread);
     live.tell('thread');
     if (failed) {
       const li = h('li', { class: 'chat-empty agent-error', role: 'alert' }, failed, trouble ? ' ' : false, trouble ? helpButton() : false);
@@ -510,14 +533,12 @@ export function agentPane(app: AppHandle): { el: HTMLElement; shown: (want?: Clo
     box.focus();
   }
 
-  /** Regenerate: the last answer is taken away and the same question asked again. */
+  /** Regenerate: the same question asked again; the last answer is replaced only once a new one has fully arrived. */
   async function regenerate(): Promise<void> {
     const thread = live.thread;
     const last = thread.turns[thread.turns.length - 1];
     const question = thread.turns[thread.turns.length - 2];
     if (busy || live.busy || last?.role !== 'assistant' || question?.role !== 'user') return;
-    thread.turns.pop();
-    live.tell('thread');
     await send(question.text, live.labels.get(question) ?? question.text, 'again');
   }
 
@@ -711,6 +732,7 @@ ${text}`;
     }
   }, signal);
   on(stopBtn, 'click', () => {
+    if (busy) stopAsked = true;
     if (connected === 'claude' || connected === 'openrouter') claudeStop?.abort();
     else ai.stop();
   }, signal);

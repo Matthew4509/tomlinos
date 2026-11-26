@@ -26,6 +26,13 @@ $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 $dollars = static fn (int $micro): float => round($micro / 1e6, 4);
 // Letters where mbstring is on; bytes otherwise (never fewer, so limits and estimates stay on the safe side).
 $letters = static fn (string $t): int => function_exists('mb_strlen') ? mb_strlen($t) : strlen($t);
+// The most tokens a text can have run to, for when no final count comes: a token for every 2 bytes, or one for every
+// Chinese, Japanese or Korean letter, whichever is more (the same measure as the cost reserve, never an undercount).
+$tokensAtMost = static function (string $t): int {
+    $cjk = @preg_match_all('/[\x{1100}-\x{11FF}\x{2E80}-\x{A4CF}\x{AC00}-\x{D7AF}\x{F900}-\x{FAFF}\x{FE30}-\x{FE4F}\x{FF00}-\x{FFEF}\x{20000}-\x{3FFFF}]/u', $t);
+
+    return max(intdiv(strlen($t) + 1, 2), is_int($cjk) ? $cjk : 0);
+};
 
 if (!extension_loaded('openssl')) {
     api_fail(501, 'This server has no secure-connection support (the PHP extension "openssl"), so it cannot keep a key or reach Anthropic. The owner ticks "openssl" in cPanel > Select PHP Version > Extensions.');
@@ -96,7 +103,7 @@ switch ("$method $op") {
         $rows = array_map(static fn ($r) => [
             'at' => (int) ($r['at'] ?? 0), 'model' => (string) (AI_MODELS[$r['model'] ?? '']['name'] ?? ($r['model'] ?? '')),
             'in' => (int) ($r['in'] ?? 0), 'out' => (int) ($r['out'] ?? 0), 'cost' => $dollars((int) ($r['cost'] ?? 0)),
-            'note' => (string) ($r['note'] ?? ''),
+            'note' => (string) ($r['note'] ?? ''), 'estimated' => !empty($r['est']),
         ], array_reverse(array_slice($l['log'], -300)));
         api_json(['month' => ai_month(), 'spent' => $dollars(ai_ledger_total($l)), 'cap' => ai_settings($root, $uid)['cap'] / 100, 'rows' => $rows]);
     }
@@ -166,7 +173,9 @@ $cacheWrite = 0;
 $cacheRead = 0;
 $stop = '';
 $chunks = 0;
-$emitted = 0;
+$said = '';
+$counted = false;
+$estimated = false;
 $started = false;
 $emit = static function (array $line) use (&$started): void {
     if (!$started) {
@@ -197,13 +206,14 @@ try {
             $cacheRead = (int) ($u->cacheReadInputTokens ?? 0);
         } elseif ($event instanceof Anthropic\Messages\RawContentBlockDeltaEvent && $event->delta instanceof Anthropic\Messages\TextDelta) {
             $emit(['t' => $event->delta->text]);
-            $emitted += $letters($event->delta->text);
+            $said .= $event->delta->text;
             if (++$chunks % 8 === 0 && connection_aborted()) {
                 $note = 'stopped';
                 break;
             }
         } elseif ($event instanceof Anthropic\Messages\RawMessageDeltaEvent) {
             $out = (int) $event->usage->outputTokens;
+            $counted = true;
             $in = (int) ($event->usage->inputTokens ?? $in);
             $stop = (string) ($event->delta->stopReason ?? '');
         }
@@ -220,13 +230,21 @@ try {
     $note = 'broke off';
     $emit(['error' => $words]);
 }
-if ($note !== '' && $out === 0) {
-    // Stopped part-way: the final count never came, so the words received stand in for it (about 4 letters a token).
-    $out = intdiv($emitted, 4) + 1;
+if (!$counted && ($started || $in > 0)) {
+    // The final count never came (stopped, broke off, or the stream simply ended): the words received stand in for it,
+    // counted at the most they could be, and never past a full answer (what the reserve set aside).
+    if ($note === '') {
+        $note = 'broke off';
+        $emit(['error' => 'The connection to Anthropic broke off before the answer finished. The part that came is shown.']);
+    }
+    $out = min(AI_MAX_OUTPUT, $tokensAtMost($said) + 1);
+    $in = $in ?: intdiv($bytes, 2) + 200;
     $note .= ', output estimated';
+    $estimated = true;
 }
+unset($said);
 $cost = ai_cost_micro($model, $in, $out, $cacheWrite, $cacheRead);
-ai_book($root, $uid, $reserve, ['model' => $model, 'in' => $in + $cacheWrite + $cacheRead, 'out' => $out, 'cost' => $cost, 'note' => $note ?: ($stop === 'max_tokens' ? 'cut at the length limit' : ($stop === 'refusal' ? 'declined' : ''))]);
+ai_book($root, $uid, $reserve, ['model' => $model, 'in' => $in + $cacheWrite + $cacheRead, 'out' => $out, 'cost' => $cost, 'note' => $note ?: ($stop === 'max_tokens' ? 'cut at the length limit' : ($stop === 'refusal' ? 'declined' : ''))] + ($estimated ? ['est' => true] : []));
 $emit([
     'done' => true, 'model' => AI_MODELS[$model]['name'], 'in' => $in + $cacheWrite + $cacheRead, 'out' => $out, 'cost' => $dollars($cost),
     'stop' => $stop, 'spent' => $dollars(ai_ledger_total(ai_ledger_read($root, $uid, ai_month()))), 'cap' => $s['cap'] / 100,
