@@ -3,7 +3,7 @@
 // looks through this folder and every folder inside it, by name and, when ticked, inside text files.
 import { css, h, on } from '../core/dom.ts';
 import { formatDate } from '../core/format.ts';
-import { joinPath, parentPath, splitPath } from '../fs/names.ts';
+import { joinPath, nameKey, parentPath, splitPath } from '../fs/names.ts';
 import { fileTypeOf } from '../shell/filetypes.ts';
 import { createFolderView } from '../shell/foldview.ts';
 import { icon } from '../shell/icons.ts';
@@ -74,8 +74,69 @@ export const explorerApp: AppDef = {
 
     async function show(): Promise<void> {
       drawCrumbs();
+      void learnChain(path);
       await view.refresh();
     }
+
+    // ---- Following a rename ----
+    // The folders along the path, by id: one renamed here, in another window or another tab is followed to its new
+    // name instead of the window saying the folder is not there. One moved elsewhere or deleted is not followed.
+    let chain: string[] = [];
+    async function learnChain(at: string): Promise<void> {
+      const parts = splitPath(at);
+      const ids: string[] = [];
+      try {
+        for (let i = 0; i < parts.length; i++) {
+          const entry = await shell.fs.stat(joinPath(...parts.slice(0, i + 1)));
+          if (entry?.kind !== 'folder') return;
+          ids.push(entry.id);
+        }
+      } catch {
+        return;
+      }
+      if (at === path) chain = ids;
+    }
+    let following = false;
+    let followAgain = false;
+    async function follow(): Promise<void> {
+      if (following) return void (followAgain = true);
+      if (!chain.length) return;
+      following = true;
+      followAgain = false;
+      const at = path;
+      try {
+        const parts: string[] = [];
+        for (const id of chain) {
+          const found = (await shell.fs.list(joinPath(...parts), true)).find(e => e.id === id && e.kind === 'folder');
+          if (!found) return;
+          parts.push(found.name);
+        }
+        const now = joinPath(...parts);
+        if (at !== path || now === path) return;
+        const old = path;
+        path = now;
+        // Back and Forward lead to the folder's new name too.
+        const moved = (p: string) => (p === old || p.startsWith(old + '/') ? now + p.slice(old.length) : p);
+        back.splice(0, back.length, ...back.map(moved));
+        forward.splice(0, forward.length, ...forward.map(moved));
+        drawCrumbs();
+        await view.refresh();
+      } catch {
+        // Could not look: the window shows what it finds, as before.
+      } finally {
+        following = false;
+        if (followAgain) void follow();
+      }
+    }
+    // A rename changes the folder holding the renamed one: a change to any folder above this one may be a rename.
+    shell.changes.on(paths => {
+      const mine = splitPath(path).map(nameKey);
+      const above = paths.some(p => {
+        const theirs = splitPath(p).map(nameKey);
+        return theirs.length < mine.length && theirs.every((part, i) => part === mine[i]);
+      });
+      if (above) void follow();
+    }, app.signal);
 
     // ---- Search ----
     let searching: AbortController | null = null;
@@ -117,11 +178,13 @@ export const explorerApp: AppDef = {
               h('span', { class: 'hit-where' }, `${folder === '/' ? 'This desktop' : folder} · ${formatDate(hit.modified)}`),
               hit.snippet ? h('span', { class: 'hit-snippet' }, hit.snippet) : null),
           );
-          row.addEventListener('click', () => void shell.openPath(hit.path), { signal: app.signal });
+          // A folder opens here, in this window, as a folder clicked in the list does; a file opens in its app.
+          const open = () => (hit.kind === 'folder' ? go(hit.path) : void shell.openPath(hit.path));
+          row.addEventListener('click', open, { signal: app.signal });
           row.addEventListener('contextmenu', event => {
             event.preventDefault();
             shell.menus.show([
-              { label: 'Open', action: () => void shell.openPath(hit.path) },
+              { label: 'Open', action: open },
               { label: 'Open folder location', action: () => { search.value = ''; endSearch(); go(folder); } },
             ], event.clientX, event.clientY, { returnFocus: row });
           }, { signal: app.signal });

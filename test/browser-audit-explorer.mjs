@@ -143,18 +143,20 @@ await step('Delete sends a file to the Recycle Bin and the toast\'s Undo brings 
 
 await step('E-P1-5: a folder open in Explorer that is renamed in a second Explorer window is followed, not shown as gone', async () => {
   await newFolder('Before');
-  // A folder found by search opens in a second Explorer window: that is the way to get two.
-  const search = ew().locator('input.search');
-  await search.fill('Before');
-  await search.press('Enter');
-  await ew().locator('.search-hit', { hasText: 'Before' }).first().click();
+  // A second Explorer window (Start > Documents; the first was opened at This desktop), sent to the folder by its path.
+  await page.locator('.start-btn').click();
+  await page.locator('.start-filter').fill('Documents');
+  await page.locator('.start-menu .start-item[data-label="documents"]').first().click();
   await settle(800);
   const wins = page.locator('.win', { has: page.locator('.explorer') });
   if ((await wins.count()) < 2) throw new Error('no second Explorer window opened');
   const second = wins.last();
+  await second.locator('.explorer-view').focus();
+  await page.keyboard.press('Control+l');
+  await second.locator('input.address').fill('/Documents/Before');
+  await second.locator('input.address').press('Enter');
   await second.locator('.crumb', { hasText: 'Before' }).waitFor();
   await page.locator('.task', { hasText: 'Documents' }).first().click();
-  await search.press('Escape');
   await item('Before').click();
   await page.keyboard.press('F2');
   await ew().locator('input.rename').fill('After');
@@ -166,7 +168,7 @@ await step('E-P1-5: a folder open in Explorer that is renamed in a second Explor
   const text = await second.locator('.explorer-view').innerText();
   const crumbs = await second.locator('.crumb').allInnerTexts();
   await second.getByRole('button', { name: 'Close' }).click();
-  ok(!/not there/.test(text), `the second window now says ${JSON.stringify(text.slice(0, 120))}, path still ${JSON.stringify(crumbs)}`);
+  ok(!/not there/.test(text) && crumbs.includes('After'), `the second window now says ${JSON.stringify(text.slice(0, 120))}, path still ${JSON.stringify(crumbs)}`);
 });
 
 await step('dragging a file onto a folder moves it there; Download on a folder gives "<name>.zip"', async () => {
