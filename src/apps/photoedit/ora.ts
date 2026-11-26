@@ -33,6 +33,14 @@ export interface TextSpec {
   align: 'left' | 'center' | 'right';
   x: number;
   y: number;
+  /** An outline drawn behind the letters (white text with a black edge). Width 0: worked out from the size. */
+  outline?: TextOutline;
+}
+
+export interface TextOutline {
+  colour: string;
+  /** Pixels outside the letters, 1 to 20; 0 means one twelfth of the text size. */
+  width: number;
 }
 
 export interface OraLayer {
@@ -85,6 +93,15 @@ function num(v: string | undefined, fallback: number): number {
   return v !== undefined && Number.isFinite(n) ? n : fallback;
 }
 
+/** A text layer's outline as saved; anything not plainly an outline is left off (files from before it have none). */
+function readOutline(raw: unknown): { outline?: TextOutline } {
+  if (!raw || typeof raw !== 'object') return {};
+  const o = raw as Partial<TextOutline>;
+  const width = Number(o.width);
+  if (!/^#[0-9a-f]{6}$/i.test(String(o.colour)) || !Number.isFinite(width)) return {};
+  return { outline: { colour: String(o.colour), width: Math.min(20, Math.max(0, Math.round(width))) } };
+}
+
 function readText(raw: string | undefined): TextSpec | undefined {
   if (!raw) return undefined;
   try {
@@ -94,6 +111,7 @@ function readText(raw: string | undefined): TextSpec | undefined {
       text: t.text.slice(0, 10000), family: t.family.slice(0, 100), size: Math.min(2000, Math.max(1, num(String(t.size), 32))),
       colour: /^#[0-9a-f]{6}$/i.test(String(t.colour)) ? String(t.colour) : '#000000', bold: !!t.bold, italic: !!t.italic,
       align: t.align === 'center' || t.align === 'right' ? t.align : 'left', x: num(String(t.x), 0), y: num(String(t.y), 0),
+      ...readOutline(t.outline),
     };
   } catch {
     return undefined;

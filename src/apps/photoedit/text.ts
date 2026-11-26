@@ -24,6 +24,15 @@ export function fontOf(t: TextSpec): string {
 
 export const lineHeight = (t: TextSpec) => Math.round(t.size * 1.25);
 
+/** The outline width that suits a text size when none is chosen: a twelfth of it, 1 to 20 pixels. */
+export const autoOutline = (size: number) => Math.min(20, Math.max(1, Math.round(size / 12)));
+
+/** How far the outline reaches outside the letters (0: no outline). */
+export function outlineWidth(t: TextSpec): number {
+  if (!t.outline) return 0;
+  return t.outline.width > 0 ? Math.min(20, Math.max(1, Math.round(t.outline.width))) : autoOutline(t.size);
+}
+
 export interface Placed {
   text: string;
   x: number;

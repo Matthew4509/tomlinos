@@ -6,7 +6,7 @@ import { blendInfo, type BlendMode } from './layers.ts';
 import { maskBounds, maskEdges, maskMix, type Mask } from './selection.ts';
 import type { TextSpec } from './ora.ts';
 import type { Pixels } from './pixels.ts';
-import { fontOf, layoutText } from './text.ts';
+import { fontOf, layoutText, outlineWidth } from './text.ts';
 
 /** Undo keeps steps until they add up to this. */
 export const HISTORY_BYTES = 256 * 1024 * 1024;
@@ -97,12 +97,24 @@ export function paintText(layer: Layer): void {
   if (!t) return;
   c.save();
   c.font = fontOf(t);
-  c.fillStyle = t.colour;
   c.textBaseline = 'top';
-  for (const line of layoutText(t, s => c.measureText(s).width).lines) c.fillText(line.text, line.x, line.y);
+  const lines = layoutText(t, s => c.measureText(s).width).lines;
+  // The outline first, then the letters over it: a stroke twice the width, centred on each letter's edge, leaves the
+  // chosen width showing outside once the fill covers its inner half. Round joins keep corners from spiking.
+  const ow = outlineWidth(t);
+  if (ow && t.outline) {
+    c.strokeStyle = t.outline.colour;
+    c.lineWidth = ow * 2;
+    c.lineJoin = 'round';
+    c.lineCap = 'round';
+    for (const line of lines) c.strokeText(line.text, line.x, line.y);
+  }
+  c.fillStyle = t.colour;
+  for (const line of lines) c.fillText(line.text, line.x, line.y);
   c.restore();
 }
 
+/** Where a text layer's words are, outline included. */
 export function textBounds(layer: Layer): Rect | null {
   const t = layer.text;
   if (!t) return null;
@@ -111,7 +123,8 @@ export function textBounds(layer: Layer): Rect | null {
   c.font = fontOf(t);
   const b = layoutText(t, s => c.measureText(s).width).bounds;
   c.restore();
-  return b;
+  const ow = outlineWidth(t);
+  return ow ? { x: b.x - ow - 1, y: b.y - ow - 1, w: b.w + 2 * ow + 2, h: b.h + 2 * ow + 2 } : b;
 }
 
 export class Doc {

@@ -27,9 +27,9 @@ import { clipRect, group, PixelPatch, TILE, unionRect, type HistoryMark, type Re
 import { combine, cropMask, ellipseMask, feather, flipMaskIn, invertMask, polygonMask, rectMask, wandMask, type Combine, type Mask, type Point } from './photoedit/selection.ts';
 import { blurSharpenDab, cloneDab, DabPath, dabRect, dodgeBurnDab, healDab, makeCarry, makeStroke, smudgeDab, type Carry, type Dab, type StrokeState } from './photoedit/retouch.ts';
 import { blendInfo, copyName, moveItem, nextName, noRoomForLayer } from './photoedit/layers.ts';
-import { buildOra, MAX_SIDE, openOra, OraProblem, thumbSize, type OraLayer, type TextSpec } from './photoedit/ora.ts';
+import { buildOra, MAX_SIDE, openOra, OraProblem, thumbSize, type OraLayer, type TextOutline, type TextSpec } from './photoedit/ora.ts';
 import { boxBounds, corners, dragBox, HANDLES, handlePoint, hitHandle, isIdentity, type Box, type Handle } from './photoedit/transform.ts';
-import { FONT_FAMILIES } from './photoedit/text.ts';
+import { autoOutline, FONT_FAMILIES } from './photoedit/text.ts';
 import { adjust, ADJUST_TITLES, type AdjustKind } from './photoedit/adjust-ui.ts';
 import { layersPanel } from './photoedit/layers-ui.ts';
 
@@ -160,8 +160,26 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
   const xfApply = tool$('Apply', 'Apply the move (Enter)');
   const xfCancel = tool$('Cancel', 'Put it back (Escape)');
   const xfBar = h('span', { class: 'pe-opt pe-cropbar', hidden: true }, xfApply, xfCancel);
+  // The Text tool's outline, for the next words written (a text layer's own is in its Change the text window).
+  const outlineOn = h('input', { type: 'checkbox', 'aria-label': 'Outline round the letters' });
+  const outlineCol = h('input', { type: 'color', value: '#000000', 'aria-label': 'Outline colour', title: 'Outline colour' });
+  const outlineW = h('input', { type: 'number', class: 'field num', min: 1, max: 20, placeholder: 'auto', 'aria-label': 'Outline width in pixels (empty: a twelfth of the text size)', title: 'Outline width in pixels, 1 to 20 (empty: a twelfth of the text size)' });
+  const outlinePreset = tool$('White with black outline', 'White letters with a black outline: sets both colours');
+  const outlineOpts = h('span', { class: 'pe-opt pe-outline' }, h('label', { class: 'pe-opt', title: 'Draw an outline round the letters, behind them' }, outlineOn, 'Outline'), outlineCol,
+    h('label', { class: 'pe-opt' }, 'Width', outlineW), outlinePreset);
+  /** The outline the Text tool's options ask for (none when it is off). */
+  const outlineChosen = (): { outline?: TextOutline } => {
+    if (!outlineOn.checked) return {};
+    const w = Number(outlineW.value);
+    return { outline: { colour: outlineCol.value, width: outlineW.value.trim() && Number.isFinite(w) ? Math.min(20, Math.max(1, Math.round(w))) : 0 } };
+  };
+  on(outlinePreset, 'click', () => {
+    colour.value = '#ffffff';
+    outlineOn.checked = true;
+    outlineCol.value = '#000000';
+  }, app.signal);
   const options = h('div', { class: 'pe-options' }, colour, swapBtn, colour2, size.wrap, hardness.wrap, opacity.wrap, spacing.wrap, fillLabel,
-    tolerance.wrap, joinedLabel, featherLabel, gradLabel, dodgeMode, blurMode, cropBar, xfBar, hint);
+    tolerance.wrap, joinedLabel, featherLabel, gradLabel, dodgeMode, blurMode, outlineOpts, cropBar, xfBar, hint);
 
   const status = h('div', { class: 'statusbar pe-status', role: 'status' });
   const where = h('span', { class: 'pe-where' });
@@ -745,6 +763,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     show(gradLabel, t === 'gradient');
     show(dodgeMode, t === 'dodge');
     show(blurMode, t === 'blur');
+    show(outlineOpts, t === 'text');
     show(colour2, t === 'gradient' || brushy || SHAPES.includes(t) || t === 'fill' || t === 'text' || t === 'picker');
     show(swapBtn, !colour2.hidden);
     cropBar.hidden = true;
@@ -1218,7 +1237,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
 
   // ---- Text ----
   async function askText(spec: TextSpec | null, at: Point): Promise<TextSpec | null> {
-    const t: TextSpec = spec ?? { text: '', family: FONT_FAMILIES[0][0], size: 32, colour: colour.value, bold: false, italic: false, align: 'left', x: Math.round(at.x), y: Math.round(at.y) };
+    const t: TextSpec = spec ?? { text: '', family: FONT_FAMILIES[0][0], size: 32, colour: colour.value, bold: false, italic: false, align: 'left', x: Math.round(at.x), y: Math.round(at.y), ...outlineChosen() };
     const words = h('textarea', { class: 'field pe-textarea', rows: 4, 'aria-label': 'Words' }, t.text);
     const family = h('select', { class: 'field', 'aria-label': 'Font' }, ...FONT_FAMILIES.map(([name]) => h('option', { value: name, selected: name === t.family }, name)));
     const sizeIn = h('input', { type: 'number', class: 'field num', min: 4, max: 2000, value: t.size, 'aria-label': 'Text size' });
@@ -1226,18 +1245,36 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     const bold = h('input', { type: 'checkbox', checked: t.bold, 'aria-label': 'Bold' });
     const italic = h('input', { type: 'checkbox', checked: t.italic, 'aria-label': 'Italic' });
     const align = h('select', { class: 'field', 'aria-label': 'Line up' }, ...([['left', 'Left'], ['center', 'Centre'], ['right', 'Right']] as const).map(([v, l]) => h('option', { value: v, selected: v === t.align }, l)));
+    // The outline: on or off, its colour, and its width (left empty, a twelfth of the size, shown as the hint).
+    const oOn = h('input', { type: 'checkbox', checked: !!t.outline, 'aria-label': 'Outline round the letters' });
+    const oCol = h('input', { type: 'color', value: t.outline?.colour ?? outlineCol.value, 'aria-label': 'Outline colour' });
+    const oW = h('input', { type: 'number', class: 'field num', min: 1, max: 20, value: t.outline?.width ? t.outline.width : '', 'aria-label': 'Outline width in pixels (empty: a twelfth of the text size)' });
+    const autoHint = () => (oW.placeholder = `auto (${autoOutline(Number(sizeIn.value) || t.size)})`);
+    autoHint();
+    on(sizeIn, 'input', autoHint, app.signal);
+    const preset = h('button', { type: 'button', class: 'tool wide', title: 'White letters with a black outline: sets both colours' }, 'White with black outline');
+    on(preset, 'click', () => {
+      col.value = '#ffffff';
+      oOn.checked = true;
+      oCol.value = '#000000';
+    }, app.signal);
+    const widthOk = () => oW.value.trim() === '' || (Number(oW.value) >= 1 && Number(oW.value) <= 20);
     const ok = await shell.dialogs.ask({
       title: spec ? 'Change the text' : 'Text',
       body: h('div', { class: 'pe-form' }, words,
         h('div', { class: 'pe-row3' }, h('label', {}, 'Font ', family), h('label', {}, 'Size ', sizeIn)),
-        h('div', { class: 'pe-row3' }, h('label', {}, 'Colour ', col), h('label', {}, bold, ' Bold'), h('label', {}, italic, ' Italic'), h('label', {}, 'Line up ', align))),
+        h('div', { class: 'pe-row3' }, h('label', {}, 'Colour ', col), h('label', {}, bold, ' Bold'), h('label', {}, italic, ' Italic'), h('label', {}, 'Line up ', align)),
+        h('div', { class: 'pe-row3' }, h('label', {}, oOn, ' Outline'), h('label', {}, 'Colour ', oCol), h('label', {}, 'Width ', oW), preset)),
       buttons: [{ label: spec ? 'Change' : 'Add', value: true, primary: true }, { label: 'Cancel', value: false }],
       cancel: false,
-      primaryEnabled: () => words.value.trim() !== '' && Number(sizeIn.value) >= 4 && Number(sizeIn.value) <= 2000,
+      primaryEnabled: () => words.value.trim() !== '' && Number(sizeIn.value) >= 4 && Number(sizeIn.value) <= 2000 && widthOk(),
       focus: () => words,
     });
     if (!ok) return null;
-    return { ...t, text: words.value.slice(0, 10000), family: family.value, size: Math.round(Number(sizeIn.value)), colour: col.value, bold: bold.checked, italic: italic.checked, align: align.value as TextSpec['align'] };
+    const out: TextSpec = { ...t, text: words.value.slice(0, 10000), family: family.value, size: Math.round(Number(sizeIn.value)), colour: col.value, bold: bold.checked, italic: italic.checked, align: align.value as TextSpec['align'] };
+    delete out.outline;
+    if (oOn.checked) out.outline = { colour: oCol.value, width: oW.value.trim() ? Math.round(Number(oW.value)) : 0 };
+    return out;
   }
   /** Changes the words of this text layer (Layer > Change the text, or a click on its words). */
   async function editText(layer: Layer) {
