@@ -240,7 +240,26 @@ await step('FAULT (P1): text Notepad saved over 2 MB can be opened again by Note
   ok(!status.includes('Notepad opens text up to'), 'reopening says: ' + status);
 });
 
-await step('P1: Tab types a tab into the text', async () => {
+await step('N-P1-1: text over what Notepad can open again is refused before saving, and the text stays in the window', async () => {
+  await page.locator('.start-btn').click();
+  await page.locator('.start-filter').fill('notepad');
+  await page.locator('.start-menu [data-label="notepad"]').first().click();
+  const n = pad();
+  await n.locator('textarea').evaluate(a => {
+    a.value = 'y'.repeat(5.5 * 1024 * 1024);
+    a.dispatchEvent(new Event('input'));
+  });
+  // Said before a name is asked for, so no time is spent naming a file that cannot be saved.
+  await page.keyboard.press('Control+Shift+s');
+  const box = page.locator('.dialog', { hasText: 'Too big to save' });
+  await box.waitFor({ timeout: 10000 });
+  ok(!(await box.locator('input').count()), 'a name was asked for first');
+  await box.getByRole('button').first().click();
+  eq(await page.locator('.dialog').count(), 0, 'boxes still open');
+  ok((await n.locator('textarea').inputValue()).length > 5 * 1024 * 1024, 'the text is still in the window');
+});
+
+await step('N-P1-3: Tab types a tab into the text; Escape then Tab leaves the text box', async () => {
   await page.locator('.start-btn').click();
   await page.locator('.start-filter').fill('notepad');
   await page.locator('.start-menu [data-label="notepad"]').first().click();
@@ -248,6 +267,12 @@ await step('P1: Tab types a tab into the text', async () => {
   await n.locator('textarea').type('a');
   await page.keyboard.press('Tab');
   eq(await n.locator('textarea').inputValue(), 'a\t', 'text after Tab');
+  await page.keyboard.press('Control+z');
+  eq(await n.locator('textarea').inputValue(), 'a', 'text after Ctrl+Z (the tab can be undone)');
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Tab');
+  eq(await n.locator('textarea').inputValue(), 'a', 'text after Escape, Tab');
+  ok(!(await n.locator('textarea').evaluate(a => document.activeElement === a)), 'Escape then Tab left the focus in the text');
 });
 
 await step('P1: closing with changes offers to save them', async () => {

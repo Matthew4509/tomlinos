@@ -11,7 +11,8 @@ import { detectEol, EOL_NAMES, fileBytes, findNext, hasBom, lineCol, lineStart, 
 import { APPS } from './catalog.ts';
 import { saveOver } from '../shell/savefile.ts';
 
-const MAX_TEXT_BYTES = 2 * 1024 * 1024;
+// One limit for opening and saving (the same as Notepad Pro's), so Notepad never saves a file it then refuses to open.
+const MAX_TEXT_BYTES = 5 * 1024 * 1024;
 const ZOOMS = [50, 67, 80, 90, 100, 110, 125, 150, 175, 200, 250, 300];
 const EOL_SHORT: Record<Eol, string> = { '\r\n': 'CRLF', '\n': 'LF', '\r': 'CR' };
 
@@ -137,7 +138,15 @@ export const editorApp: AppDef = {
     const save = () => once(() => (path ? saveNow() : saveAsNow()));
     app.onSave?.(save);
 
+    /** Says so, before anything is written or a name asked for, when the text is more than Notepad opens. */
+    async function tooBig(bytes: number): Promise<boolean> {
+      if (bytes <= MAX_TEXT_BYTES) return false;
+      await shell.dialogs.alert('Too big to save', `This text would make a file of ${formatSize(bytes)}. Notepad saves and opens text up to ${formatSize(MAX_TEXT_BYTES)}, so it was not saved. The text is still here: make it shorter, or split it into more than one file.`);
+      return true;
+    }
+
     async function saveAsNow(): Promise<boolean> {
+      if (await tooBig(snapshot().bytes.length)) return false;
       const folder = path ? parentPath(path) : '/Documents';
       let taken: string[] = [];
       try {
@@ -157,6 +166,7 @@ export const editorApp: AppDef = {
       if (name === null) return false;
       try {
         const snap = snapshot();
+        if (await tooBig(snap.bytes.length)) return false;
         const entry = await shell.fs.writeFile(joinPath(folder, name), snap.bytes, { mustBeNew: true });
         path = joinPath(folder, entry.name);
         markSaved(entry.id, snap);
@@ -172,6 +182,7 @@ export const editorApp: AppDef = {
       if (!path) return saveAsNow();
       try {
         const snap = snapshot();
+        if (await tooBig(snap.bytes.length)) return false;
         const entry = await saveOver(shell, path, snap.bytes, loadedId);
         if (!entry) return false;
         markSaved(entry.id, snap);
