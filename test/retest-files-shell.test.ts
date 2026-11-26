@@ -187,7 +187,8 @@ test('restoring a file with the longest allowed name over a new one with the sam
 test('moving a file onto a folder that has its name works even when the source folder already has "name (2)"', async () => {
   const fs = new FileSystem(new MemoryStore());
   const alerts: string[] = [];
-  const shell = { fs, dialogs: { alert: async (_t: string, text: string) => void alerts.push(text) } } as unknown as Shell;
+  // The clash is asked about first (Keep both / Skip): the answer here is Keep both.
+  const shell = { fs, toast: () => {}, dialogs: { alert: async (_t: string, text: string) => void alerts.push(text), ask: async () => 'keep' } } as unknown as Shell;
   await fs.mkdir('/Documents/A');
   await fs.mkdir('/Documents/B');
   await fs.writeText('/Documents/A/a.txt', '1');

@@ -1,6 +1,6 @@
 // The file-type drop-down of the Open and Save as windows: which entries it lists, which one starts selected, how a
 // choice filters the list, and how a typed name gets (or keeps) its ending when saving.
-import { splitExtension } from '../fs/names.ts';
+import { nameProblem, splitExtension } from '../fs/names.ts';
 import type { FileTypeChoice } from './filepicker.ts';
 import { extensionOf, fileTypeOf } from './filetypes.ts';
 
@@ -87,4 +87,19 @@ export function finalSaveName(typed: string, choices: FileTypeChoice[], index: n
     if (fileTypeOf(typed).apps.length > 0) return { name: `${typed.slice(0, -ext.length - 1)}.${current.ext[0]}`, index };
   }
   return { name: `${typed}.${current.ext[0]}`, index };
+}
+
+/**
+ * Why the typed name cannot be saved under the chosen type, or null. A name that is fine as typed but too long once the
+ * type's ending is added is refused in words, never saved without the ending.
+ */
+export function saveNameProblem(typed: string, choices: FileTypeChoice[], index: number): string | null {
+  const own = nameProblem(typed);
+  if (own) return own;
+  const final = finalSaveName(typed, choices, index);
+  if (final.name === typed) return null;
+  const problem = nameProblem(final.name);
+  if (problem === null) return null;
+  const ending = final.name.slice(final.name.lastIndexOf('.'));
+  return new TextEncoder().encode(final.name).length > 255 ? `That name is too long once “${ending}” is added. Make it shorter.` : problem;
 }
