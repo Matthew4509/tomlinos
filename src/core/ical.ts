@@ -62,6 +62,8 @@ interface EventKeep {
   /** A repeating event's start as the file wrote it, in its own zone (UTC counts as one): each showing is placed from
    *  this, so a daylight-saving change there or here moves the time shown on the days after it. */
   zone?: { name: string; date: string; time: string };
+  /** The moment (ms since 1970) the file's UNTIL names, when it gives a time: a showing that starts after it does not show. */
+  untilAt?: number;
 }
 
 const WEEKDAYS = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
@@ -134,12 +136,19 @@ const WINDOWS_ZONES: Record<string, string> = {
   'Tasmania Standard Time': 'Australia/Hobart', 'New Zealand Standard Time': 'Pacific/Auckland', 'Fiji Standard Time': 'Pacific/Fiji', 'Tonga Standard Time': 'Pacific/Tongatapu',
 };
 
+/** One clock reader per zone: a repeat is placed in its own zone for every day shown, and making one is slow. */
+const ZONE_CLOCKS = new Map<string, Intl.DateTimeFormat>();
+
 /** The moment (ms since 1970) a wall-clock time in a named zone stands for, or null for a zone this browser does not know. */
 function zoneToUtc(y: number, mo: number, d: number, h: number, mi: number, zone: string): number | null {
   try {
     // An own-property check: a file's zone name must not reach Object's built-ins ("constructor") through this table.
     const timeZone = Object.hasOwn(WINDOWS_ZONES, zone) ? WINDOWS_ZONES[zone] : zone;
-    const f = new Intl.DateTimeFormat('en-US', { timeZone, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    let f = ZONE_CLOCKS.get(timeZone);
+    if (!f) {
+      f = new Intl.DateTimeFormat('en-US', { timeZone, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+      if (ZONE_CLOCKS.size < 100) ZONE_CLOCKS.set(timeZone, f);
+    }
     const want = Date.UTC(y, mo - 1, d, h, mi);
     let guess = want;
     for (let i = 0; i < 3; i++) {
@@ -208,13 +217,17 @@ function repeatOf(rule: string): Repeat {
   return f ? (f[1].toLowerCase() as Repeat) : 'none';
 }
 
-/** A rule's COUNT (0 when none) and UNTIL as a local day ('' when none). */
-function limitsOf(rule: string): { count: number; until: string } {
+/** A rule's COUNT (0 when none), UNTIL as a local day ('' when none) and, when UNTIL gives a time, the moment it names
+ *  (in UTC with a Z, otherwise this computer's clock). */
+function limitsOf(rule: string): { count: number; until: string; untilAt?: number } {
   const c = /(?:^|;)COUNT=(\d{1,4})(?:;|$)/i.exec(rule);
   const u = /(?:^|;)UNTIL=([0-9TZ]{8,16})(?:;|$)/i.exec(rule);
   const count = c ? Number(c[1]) : 0;
   const until = u ? parseStamp({ name: 'UNTIL', params: {}, value: u[1], raw: '' })?.date ?? '' : '';
-  return { count: count >= 1 ? count : 0, until };
+  const t = until ? /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(Z?)$/i.exec(u![1]) : null;
+  const n = t ? t.slice(1, 7).map(Number) : [];
+  const untilAt = !t ? undefined : t[7] ? Date.UTC(n[0], n[1] - 1, n[2], n[3], n[4], n[5]) : new Date(n[0], n[1] - 1, n[2], n[3], n[4], n[5]).getTime();
+  return untilAt !== undefined && Number.isFinite(untilAt) ? { count: count >= 1 ? count : 0, until, untilAt } : { count: count >= 1 ? count : 0, until };
 }
 
 /** The value of an RRULE line (after the colon). */
@@ -251,7 +264,7 @@ function readIcs(text: string): { events: CalEvent[]; calendar: string[]; unread
   // Each repeat by the file's UID, and each moved showing: the day it was moved from, for the series to skip.
   const series = new Map<string, EventKeep>();
   const moved: Array<{ uid: string; day: string }> = [];
-  let cur: (Partial<CalEvent> & { keep: EventKeep; raw: string[]; recurrence: string; movedFrom?: string; cancelled?: boolean; ruleText?: string; endStamp?: { date: string; time: string }; duration?: string }) | null = null;
+  let cur: (Partial<CalEvent> & { keep: EventKeep; raw: string[]; recurrence: string; movedFrom?: string; cancelled?: boolean; ruleText?: string; untilAt?: number; endStamp?: { date: string; time: string }; duration?: string }) | null = null;
   // Inner parts (an event's alarms; the calendar's time zones) are kept whole, line for line.
   let depth = 0;
   let inCalendar = false;
@@ -273,7 +286,8 @@ function readIcs(text: string): { events: CalEvent[]; calendar: string[]; unread
       if (cur.date) {
         const keep = cur.keep;
         if (cur.ruleText !== undefined) {
-          const shown = ruleOf(cur.ruleText, cur.date);
+          // A rule's weekdays and month days are those of the zone the start is written in.
+          const shown = ruleOf(cur.ruleText, keep.zone?.date ?? cur.date);
           cur.repeat = shown.repeat;
           if (shown.shape) keep.shape = shown.shape;
         }
@@ -291,6 +305,7 @@ function readIcs(text: string): { events: CalEvent[]; calendar: string[]; unread
         if (e.repeat !== 'none') {
           if (cur.count) e.count = cur.count;
           if (cur.until) e.until = cur.until;
+          if (cur.until && cur.untilAt !== undefined) keep.untilAt = cur.untilAt;
         }
         // Only a repeat is placed again day by day; a single showing keeps the time it was converted to.
         if (e.repeat === 'none' || !e.start) delete keep.zone;
@@ -325,6 +340,7 @@ function readIcs(text: string): { events: CalEvent[]; calendar: string[]; unread
         if (!cur.keep.rule.length) {
           cur.repeat = repeatOf(line.value);
           cur.ruleText = line.value;
+          cur.untilAt = undefined;
           Object.assign(cur, limitsOf(line.value));
         }
         cur.keep.rule.push(line.raw);
@@ -378,8 +394,8 @@ export function writeIcs(events: CalEvent[], previous?: string | null): string {
   for (const e of copiesInOrder(events)) {
     const k = e.keep;
     out.push('BEGIN:VEVENT', writeLine('UID', k?.uid || e.uid), writeLine('SUMMARY', escapeValue(e.title)));
-    const endDay = e.endDate && e.endDate > e.date && isDate(e.endDate) ? e.endDate : '';
-    const timeKept = !!k && k.time.length > 0 && k.was.date === e.date && k.was.start === e.start && k.was.end === e.end && k.was.endDate === endDay;
+    const endDay = endDayOf(e);
+    const timeKept = timeKeptOf(e);
     if (timeKept) {
       for (const raw of k!.time) out.push(foldLine(raw));
     } else {
@@ -391,15 +407,23 @@ export function writeIcs(events: CalEvent[], previous?: string | null): string {
     const count = e.repeat !== 'none' && e.count && e.count >= 1 ? Math.floor(e.count) : 0;
     const until = e.repeat !== 'none' && e.until && isDate(e.until) ? e.until : '';
     if (k && k.rule.length && k.was.repeat === e.repeat) {
-      if (k.was.count === count && k.was.until === until) {
+      const sameEnd = k.was.count === count && k.was.until === until;
+      // The start written anew on another day than the rule was read from (moved, or out of its zone): weekdays and
+      // month days the rule names for the old start follow the new one.
+      const ruleDay = k.zone?.date ?? k.was.date;
+      const moved = !timeKept && e.date !== ruleDay;
+      if (sameEnd && (!moved || e.repeat === 'none')) {
         for (const raw of k.rule) out.push(foldLine(raw));
       } else if (e.repeat !== 'none') {
-        // Only the end changed (Stop repeating): the file's own rule keeps its other parts (which weekdays, every 2 weeks).
+        // Only the end changed (Stop repeating), or the start moved: the file's own rule keeps its other parts (which
+        // weekdays, every 2 weeks).
         const dtstart = timeKept ? k.time.find(raw => /^DTSTART[;:]/i.test(raw)) : undefined;
         const utc = !!dtstart && (/TZID=/i.test(dtstart.slice(0, dtstart.indexOf(':'))) || /Z\s*$/i.test(dtstart));
-        const parts = ruleValue(k.rule[0]).split(';').filter(p => p && !/^(COUNT|UNTIL)=/i.test(p));
-        if (count) parts.push(`COUNT=${count}`);
-        else if (until) parts.push(`UNTIL=${untilStamp(until, !!e.start, utc)}`);
+        let parts = ruleValue(k.rule[0]).split(';').filter(p => p && (sameEnd || !/^(COUNT|UNTIL)=/i.test(p)));
+        if (moved) parts = partsMoved(parts, ruleDay, e.date);
+        // An unchanged end keeps the file's own COUNT or UNTIL.
+        if (!sameEnd && count) parts.push(`COUNT=${count}`);
+        else if (!sameEnd && until) parts.push(`UNTIL=${untilStamp(until, !!e.start, utc)}`);
         out.push(foldLine(`RRULE:${parts.join(';')}`));
         for (const raw of k.rule.slice(1)) out.push(foldLine(raw));
       }
@@ -420,28 +444,86 @@ export function writeIcs(events: CalEvent[], previous?: string | null): string {
   return out.join('\r\n') + '\r\n';
 }
 
+/** An event's last day when later than its first, else ''. */
+const endDayOf = (e: CalEvent) => (e.endDate && e.endDate > e.date && isDate(e.endDate) ? e.endDate : '');
+
+/** Is the event's time as the file wrote it (so its own time lines, and the zone they name, still stand)? */
+function timeKeptOf(e: CalEvent): boolean {
+  const k = e.keep;
+  return !!k && k.time.length > 0 && k.was.date === e.date && k.was.start === e.start && k.was.end === e.end && k.was.endDate === endDayOf(e);
+}
+
+/** Days between two YYYY-MM-DD days (b - a). */
+function daysBetween(a: string, b: string): number {
+  const [y, m, d] = a.split('-').map(Number);
+  const [Y, M, D] = b.split('-').map(Number);
+  return Math.round((Date.UTC(Y, M - 1, D) - Date.UTC(y, m - 1, d)) / 86400000);
+}
+
+/** The weekday of a YYYY-MM-DD day, 0 = Sunday. */
+function weekdayOf(day: string): number {
+  const [y, m, d] = day.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+}
+
+const clockOf = (t: Date) => `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
+
+/** A rule's parts once its start has moved from `from` to `to`: one weekday (BYDAY), a month day (BYMONTHDAY) or month
+ *  (BYMONTH) that named the old start's follows the new one; a weekday that is just the start's own is dropped. */
+function partsMoved(parts: string[], from: string, to: string): string[] {
+  const [, fm, fd] = from.split('-').map(Number);
+  const [, tm, td] = to.split('-').map(Number);
+  return parts.flatMap(p => {
+    const at = p.indexOf('=');
+    const name = p.slice(0, at).toUpperCase();
+    const value = p.slice(at + 1).trim().toUpperCase();
+    if (name === 'BYDAY' && value === WEEKDAYS[weekdayOf(from)]) return [];
+    if (name === 'BYMONTHDAY' && Number(value) === fd && /^\d+$/.test(value)) return [`BYMONTHDAY=${td}`];
+    if (name === 'BYMONTH' && Number(value) === fm && /^\d+$/.test(value)) return [`BYMONTH=${tm}`];
+    return [p];
+  });
+}
+
+/**
+ * The file's own rule as the event now stands: its shape while it keeps its kind of repeat (a weekday that named the
+ * old start follows a moved one, as when written); the zone its start is written in while its time is as the file
+ * wrote it; and the moment UNTIL names while that end is the file's.
+ */
+function ruleNow(e: CalEvent): { shape?: EventKeep['shape']; zone?: EventKeep['zone']; untilAt?: number } {
+  const k = e.keep;
+  if (!k) return {};
+  const kept = k.rule.length > 0 && k.was.repeat === e.repeat;
+  const zone = k.zone && e.start && timeKeptOf(e) ? k.zone : undefined;
+  let shape = kept ? k.shape : undefined;
+  const ruleDay = k.zone?.date ?? k.was.date;
+  if (shape && !zone && e.date !== ruleDay && shape.days.length === 1 && shape.days[0] === weekdayOf(ruleDay)) shape = { ...shape, days: [] };
+  const untilAt = kept && e.start && e.until && e.until === k.was.until ? k.untilAt : undefined;
+  return { shape, zone, untilAt };
+}
+
 const daysIn = (y: number, m: number) => new Date(Date.UTC(y, m, 0)).getUTCDate();
 
 /**
- * Which showing of the event this day is (0 = its first day), counting its repeats but not its limits; -1 when it does
- * not fall on this day. A monthly event on the 31st skips short months, a yearly one on 29 February skips other years.
+ * Which showing of a repeat first on `first` this day is (0 = its first day), counting its repeats but not its limits;
+ * -1 when it does not fall on this day. Both days are on the clock the rule counts by: this computer's, or the zone its
+ * start is written in. A monthly event on the 31st skips short months, a yearly one on 29 February skips other years.
+ * `shape` is the file's own rule (every 2 weeks, on Mondays and Fridays) while the event keeps it; a repeat chosen
+ * here is plain.
  */
-function showingIndex(e: CalEvent, day: string): number {
-  if (day === e.date) return 0;
-  if (e.repeat === 'none' || day < e.date) return -1;
-  // The file's own rule (every 2 weeks, on Mondays and Fridays) while the event keeps it; a repeat chosen here is plain.
-  const shape = e.keep && e.keep.rule.length && e.keep.was.repeat === e.repeat ? e.keep.shape : undefined;
+function showingIndex(first: string, repeat: Repeat, shape: EventKeep['shape'], day: string): number {
+  if (day === first) return 0;
+  if (repeat === 'none' || day < first) return -1;
   const every = shape?.every ?? 1;
-  const [y, m, d] = e.date.split('-').map(Number);
+  const [y, m, d] = first.split('-').map(Number);
   const [Y, M, D] = day.split('-').map(Number);
-  if (e.repeat === 'yearly') {
+  if (repeat === 'yearly') {
     if (M !== m || D !== d || (Y - y) % every) return -1;
     if (!(m === 2 && d === 29)) return (Y - y) / every;
     let n = 0;
     for (let yy = y; yy < Y; yy += every) if (daysIn(yy, 2) === 29) n++;
     return n;
   }
-  if (e.repeat === 'monthly') {
+  if (repeat === 'monthly') {
     const months = (Y - y) * 12 + (M - m);
     if (D !== d || months % every) return -1;
     if (d <= 28) return months / every;
@@ -451,7 +533,7 @@ function showingIndex(e: CalEvent, day: string): number {
   }
   const diff = Math.round((Date.UTC(Y, M - 1, D) - Date.UTC(y, m - 1, d)) / 86400000);
   if (shape?.days.length) return weekdayIndex(diff, new Date(Date.UTC(y, m - 1, d)).getUTCDay(), shape);
-  if (e.repeat === 'daily') return diff % every ? -1 : diff / every;
+  if (repeat === 'daily') return diff % every ? -1 : diff / every;
   return diff % (7 * every) === 0 ? diff / (7 * every) : -1;
 }
 
@@ -481,8 +563,43 @@ export function occursOn(e: CalEvent, day: string): boolean {
   if (day === e.date) return true;
   if (e.repeat === 'none' || day < e.date) return false;
   if (e.until && day > e.until) return false;
-  const n = showingIndex(e, day);
-  return n >= 0 && (!e.count || n < e.count);
+  const s = showingOn(e, day);
+  if (!s || (e.count && s.n >= e.count)) return false;
+  // An UNTIL with a time ends at that moment: a showing that starts after it does not show, whatever the day here.
+  const { untilAt } = ruleNow(e);
+  return untilAt === undefined || s.at === undefined || s.at <= untilAt;
+}
+
+/**
+ * The showing of the event that starts on this day here, if any: which one it is (0 = the first) and the moment it
+ * starts (absent for an all-day event). A repeat written in another zone is counted in that zone (its weekdays, its
+ * month days, its daylight-saving changes), and each showing then falls on the day its moment is here.
+ */
+function showingOn(e: CalEvent, day: string): { n: number; at?: number } | null {
+  const { shape, zone } = ruleNow(e);
+  const [Y, M, D] = day.split('-').map(Number);
+  if (!zone) {
+    const n = showingIndex(e.date, e.repeat, shape, day);
+    if (n < 0) return null;
+    if (!e.start) return { n };
+    const [h, mi] = e.start.split(':').map(Number);
+    return { n, at: new Date(Y, M - 1, D, h, mi).getTime() };
+  }
+  const [h, mi] = zone.time.split(':').map(Number);
+  const at = (source: string) => { const [y, mo, d] = source.split('-').map(Number); return zoneToUtc(y, mo, d, h, mi, zone.name); };
+  if (day === e.date) return { n: 0, at: at(zone.date) ?? undefined };
+  if (e.repeat === 'none' || day < e.date) return null;
+  // The zone's day is the first showing's day there, moved as this day is from the first here; a daylight-saving
+  // change in either zone can put a showing a day either side.
+  const shift = daysBetween(zone.date, e.date);
+  for (const k of [0, -1, 1]) {
+    const source = addDays(day, k - shift);
+    const n = showingIndex(zone.date, e.repeat, shape, source);
+    if (n < 0) continue;
+    const t = at(source);
+    if (t !== null && dateKey(new Date(t)) === day) return { n, at: t };
+  }
+  return null;
 }
 
 /** The first day on or after `from` the event shows on, looking at most `within` days ahead; null when none. */
@@ -537,25 +654,31 @@ export const REMIND_CHOICES: Array<[number, string]> = [[-1, 'No reminder'], [0,
 
 /**
  * The event as it shows on this day: a repeat written in another zone keeps its time there, so after a daylight-saving
- * change in either zone its time here has moved. A copy with `of` the event itself; the event itself when nothing moves.
+ * change in either zone its time here has moved (and may be on the next day or the one before); each showing ends its
+ * own length after it starts, so a later showing of one past midnight ends on the day after its own. A copy with `of`
+ * the event itself; the event itself when nothing moves.
  */
 function placedOn(e: CalEvent, day: string): CalEvent {
-  const z = e.keep?.zone;
-  if (!z || day === e.date || !e.start) return e;
-  const utcDay = (key: string) => { const [yy, mm, dd] = key.split('-').map(Number); return Date.UTC(yy, mm - 1, dd); };
-  const days = Math.round((utcDay(day) - utcDay(e.date)) / 86400000);
-  const source = addDays(z.date, days);
-  const [y, mo, d] = source.split('-').map(Number);
-  const [h, mi] = z.time.split(':').map(Number);
-  const at = zoneToUtc(y, mo, d, h, mi, z.name);
-  if (at === null) return e;
-  const t = new Date(at);
-  const start = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
-  if (start === e.start) return e;
-  const minutes = (time: string) => Number(time.slice(0, 2)) * 60 + Number(time.slice(3));
-  const shift = minutes(start) - minutes(e.start);
-  const end = e.end ? (() => { const n = (((minutes(e.end) + shift) % 1440) + 1440) % 1440; return `${String(Math.floor(n / 60)).padStart(2, '0')}:${String(n % 60).padStart(2, '0')}`; })() : '';
-  return { ...e, start, end, of: e };
+  if (day === e.date) return e;
+  const { zone } = ruleNow(e);
+  let { start, end } = e;
+  let endDate: string | undefined;
+  if (zone && e.start) {
+    const at = showingOn(e, day)?.at;
+    if (at === undefined) return e;
+    const local = (key: string, time: string) => { const [y, m, d] = key.split('-').map(Number); const [h, mi] = time.split(':').map(Number); return new Date(y, m - 1, d, h, mi).getTime(); };
+    start = clockOf(new Date(at));
+    if (e.end) {
+      const ends = new Date(at + Math.max(0, local(e.endDate ?? e.date, e.end) - local(e.date, e.start)));
+      end = clockOf(ends);
+      if (dateKey(ends) > day) endDate = dateKey(ends);
+    }
+  } else if (e.endDate) endDate = addDays(day, daysBetween(e.date, e.endDate));
+  if (start === e.start && end === e.end && endDate === e.endDate) return e;
+  const shown: CalEvent = { ...e, start, end, of: e };
+  if (endDate) shown.endDate = endDate;
+  else delete shown.endDate;
+  return shown;
 }
 
 /** The events on a day, all-day first, then by start time. */
@@ -566,24 +689,37 @@ export function eventsOn(events: CalEvent[], day: string): CalEvent[] {
 /** How far back to look for a repeat's showing that runs on into a day: a year, whatever a file says. */
 const MAX_SPAN_DAYS = 366;
 
-/** Is the event on this day: a showing starts then, or one that began earlier runs into it (past midnight, or over several days)? */
-function runsOn(e: CalEvent, day: string): boolean {
-  if (occursOn(e, day)) return true;
-  if (!e.endDate || day <= e.date) return false;
-  // Ending on the stroke of midnight is not a showing on that day.
-  const last = e.start && e.end === '00:00' ? addDays(e.endDate, -1) : e.endDate;
-  if (e.repeat === 'none') return day <= last && occursOn(e, e.date);
-  const [y, m, d] = e.date.split('-').map(Number);
-  const [Y, M, D] = last.split('-').map(Number);
-  const span = Math.min(MAX_SPAN_DAYS, Math.round((Date.UTC(Y, M - 1, D) - Date.UTC(y, m - 1, d)) / 86400000));
-  for (let back = 1; back <= span; back++) if (occursOn(e, addDays(day, -back))) return true;
-  return false;
+/** The showing of the event on this day, as it shows: one that starts then, or one that began earlier and runs into it
+ *  (past midnight, or over several days); null when none. */
+function shownOn(e: CalEvent, day: string): CalEvent | null {
+  if (occursOn(e, day)) return placedOn(e, day);
+  if (day <= e.date) return null;
+  if (e.repeat === 'none') {
+    if (!e.endDate) return null;
+    const last = e.start && e.end === '00:00' ? addDays(e.endDate, -1) : e.endDate;
+    return day <= last && occursOn(e, e.date) ? e : null;
+  }
+  // A showing placed in its zone may run past midnight here when the first did not, after a daylight-saving change.
+  const zoned = !!ruleNow(e).zone && !!e.end;
+  if (!e.endDate && !zoned) return null;
+  const span = Math.min(MAX_SPAN_DAYS, (e.endDate ? daysBetween(e.date, e.endDate) : 0) + (zoned ? 1 : 0));
+  for (let back = 1; back <= span; back++) {
+    const from = addDays(day, -back);
+    if (from < e.date) break;
+    if (!occursOn(e, from)) continue;
+    const shown = placedOn(e, from);
+    if (!shown.endDate) continue;
+    // Ending on the stroke of midnight is not a showing on that day.
+    const last = shown.start && shown.end === '00:00' ? addDays(shown.endDate, -1) : shown.endDate;
+    if (day <= last) return shown;
+  }
+  return null;
 }
 
 /** The events to show on a day of the month grid and its list: with those that began earlier and run into it. (eventsOn
  *  gives only what starts that day: reminders and the Panel count from the start.) */
 export function eventsShownOn(events: CalEvent[], day: string): CalEvent[] {
-  return events.filter(e => runsOn(e, day)).map(e => (occursOn(e, day) ? placedOn(e, day) : e)).sort((a, b) => (a.start || '').localeCompare(b.start || '') || a.title.localeCompare(b.title));
+  return events.map(e => shownOn(e, day)).filter((e): e is CalEvent => e !== null).sort((a, b) => (a.start || '').localeCompare(b.start || '') || a.title.localeCompare(b.title));
 }
 
 /** When the reminder for this event's showing on `day` is due, in ms since 1970 (local time); null if none. Counted back
