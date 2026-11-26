@@ -173,6 +173,19 @@ await step('FAULT (P0): closing the window with typed, unsaved Edit changes asks
   ok((await D().count()) > 0, 'the window closed with no question; the typed notes are lost');
 });
 
+await step('PRJ: Save in the close question saves the edited notes, then the window closes', async () => {
+  await openProjects();
+  await row('Alpha').locator('.proj-name').click();
+  await P().getByRole('button', { name: 'Edit' }).click();
+  await P().getByLabel('Notes').fill('kept by Save on close');
+  await P().locator('.win-close').first().click();
+  await D().getByRole('button', { name: 'Save', exact: true }).click();
+  await P().waitFor({ state: 'detached', timeout: 10000 });
+  await openProjects();
+  await row('Alpha').locator('.proj-name').click();
+  await P().locator('.proj-notes-full', { hasText: 'kept by Save on close' }).waitFor({ timeout: 5000 });
+});
+
 await step('FAULT (P1): Escape inside the Notes box does not drop the typed notes without asking', async () => {
   await openProjects();
   await row('Alpha').locator('.proj-name').click();

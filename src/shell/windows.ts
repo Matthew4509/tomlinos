@@ -19,6 +19,8 @@ export interface WinOptions {
 }
 
 type State = 'normal' | 'max' | 'min';
+/** The answer to "close with unsaved work?": save first, close without saving, or keep the window open. */
+export type CloseAnswer = 'save' | 'discard' | 'keep';
 const EDGES = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'] as const;
 
 export class Win {
@@ -35,6 +37,10 @@ export class Win {
   wasMax = false;
   dirty = false;
   guard: (() => boolean | Promise<boolean>) | null = null;
+  /** The app's own save, offered when the window closes with unsaved work; false when it was not saved. */
+  save: (() => Promise<boolean>) | null = null;
+  /** A close that is still asking: a second close of the same window waits for its answer instead of asking again. */
+  closing: Promise<boolean> | null = null;
   /** Hears the argument when a single-window app is opened again while this window is open. */
   reopen: ((arg: string) => void) | null = null;
   rect: WindowPrefs = { x: 0, y: 0, w: 400, h: 300 };
@@ -83,7 +89,7 @@ export class WindowManager {
   private savePrefs: (appId: string, prefs: WindowPrefs) => void;
   private savedPrefs: (appId: string) => WindowPrefs | undefined;
   private menu: (items: MenuItem[], x: number, y: number, returnFocus: HTMLElement | null) => void;
-  private confirmDiscard: (title: string) => Promise<boolean>;
+  private confirmClose: (title: string, canSave: boolean) => Promise<CloseAnswer>;
   /** Windows are drawn as full-screen panels on small screens. */
   private compact = window.matchMedia('(max-width: 720px)');
 
@@ -93,14 +99,15 @@ export class WindowManager {
       savePrefs: (appId: string, prefs: WindowPrefs) => void;
       savedPrefs: (appId: string) => WindowPrefs | undefined;
       menu: (items: MenuItem[], x: number, y: number, returnFocus: HTMLElement | null) => void;
-      confirmDiscard: (title: string) => Promise<boolean>;
+      /** Asked when a window with unsaved work closes; Save is offered only when the app gave a save. */
+      confirmClose: (title: string, canSave: boolean) => Promise<CloseAnswer>;
     },
   ) {
     this.host = host;
     this.savePrefs = hooks.savePrefs;
     this.savedPrefs = hooks.savedPrefs;
     this.menu = hooks.menu;
-    this.confirmDiscard = hooks.confirmDiscard;
+    this.confirmClose = hooks.confirmClose;
     // The browser window was resized: pull every window back on screen.
     window.addEventListener('resize', () => {
       for (const win of this.wins.values()) this.applyRect(win);
@@ -314,13 +321,33 @@ export class WindowManager {
   }
   private hidden: Win[] = [];
 
-  async close(win: Win): Promise<boolean> {
-    if (!this.wins.has(win.id)) return true;
-    if (win.guard) {
+  /** Closes the window after asking about unsaved work; true once it is closed. One question per window at a time. */
+  close(win: Win): Promise<boolean> {
+    if (!this.wins.has(win.id)) return Promise.resolve(true);
+    if (win.closing) return win.closing;
+    const run = this.closeAsking(win);
+    win.closing = run;
+    const done = () => {
+      if (win.closing === run) win.closing = null;
+    };
+    run.then(done, done);
+    return run;
+  }
+
+  private async closeAsking(win: Win): Promise<boolean> {
+    // An app with a save of its own is asked Save / Close without saving / Keep it open; after a save that worked, its
+    // own close check (if any) still runs. "Close without saving" closes without it.
+    if (win.dirty && win.save) {
+      const answer = await this.confirmClose(win.title, true);
+      if (answer === 'keep') return false;
+      if (answer === 'save' && !(await win.save!())) return false;
+      if (answer === 'save' && win.guard && !(await win.guard())) return false;
+    } else if (win.guard) {
       if (!(await win.guard())) return false;
-    } else if (win.dirty && !(await this.confirmDiscard(win.title))) {
+    } else if (win.dirty && (await this.confirmClose(win.title, false)) !== 'discard') {
       return false;
     }
+    if (!this.wins.has(win.id)) return true;
     this.wins.delete(win.id);
     this.order = this.order.filter(w => w !== win);
     win.abort.abort();

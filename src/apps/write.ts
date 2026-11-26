@@ -1161,6 +1161,7 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
   const oneSave = serialQueue();
   const save = (): Promise<boolean> => oneSave(saveNow);
   const saveAs = (): Promise<boolean> => oneSave(saveAsNow);
+  app.onSave?.(save);
 
   async function saveNow(): Promise<boolean> {
     if (!path) return saveAsNow();

@@ -31,6 +31,12 @@ export interface AppHandle {
   setDirty(dirty: boolean): void;
   /** Runs before the window closes; return false to keep it open (after asking the person, for instance). */
   onClose(guard: () => boolean | Promise<boolean>): void;
+  /**
+   * The app's own save: closing with unsaved work then offers Save as well as Close without saving and Keep it open.
+   * It resolves false when nothing was saved (it failed, or Save as was cancelled), and the window stays open. Not
+   * every host has it (the Panel does not), so apps call it as `app.onSave?.(...)`.
+   */
+  onSave?(save: () => Promise<boolean>): void;
   /** A single-window app opened again with an argument while open: `listener` gets it (to go to a page, a book...). */
   onReopen(listener: (arg: string) => void): void;
 }

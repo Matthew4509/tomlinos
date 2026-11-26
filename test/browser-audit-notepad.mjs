@@ -258,6 +258,35 @@ await step('P1: closing with changes offers to save them', async () => {
   ok(/\bSave\b/.test(await page.locator('.dialog').getByRole('button').allInnerTexts().then(a => a.join('|'))), 'buttons in the close box: ' + text.replace(/\s+/g, ' ').slice(0, 160));
 });
 
+await step('N-P1-4: Save in the close question saves the file, then the window closes', async () => {
+  const n = await openInNotepad('plain');
+  const before = await n.locator('textarea').inputValue();
+  await n.locator('textarea').press('End');
+  await n.locator('textarea').type('Q');
+  await n.locator('.win-close').first().click();
+  await page.locator('.dialog').getByRole('button', { name: 'Save', exact: true }).click();
+  await page.locator('.win', { has: page.locator('.editor') }).waitFor({ state: 'detached', timeout: 10000 });
+  await closeAll();
+  const bytes = (await downloadBytes('plain')).toString('utf8');
+  ok(bytes.includes('Q') && !before.includes('Q'), 'saved text: ' + JSON.stringify(bytes.slice(0, 80)));
+});
+
+await step('N-P1-4: Save in the close question of a new, unnamed text, then Cancel in Save as, keeps the window open', async () => {
+  await page.keyboard.press('Escape');
+  if (!(await page.locator('.start-filter').isVisible())) await page.locator('.start-btn').click();
+  await page.locator('.start-filter').fill('notepad');
+  await page.locator('.start-menu [data-label="notepad"]').first().click();
+  const n = pad();
+  await n.locator('textarea').type('new words');
+  await n.locator('.win-close').first().click();
+  await page.locator('.dialog').getByRole('button', { name: 'Save', exact: true }).click();
+  const saveAs = page.locator('.dialog').last();
+  await saveAs.getByRole('button', { name: 'Cancel' }).click();
+  await page.waitForTimeout(300);
+  eq(await page.locator('.win', { has: page.locator('.editor') }).count(), 1, 'Notepad windows after Cancel in Save as');
+  eq(await pad().locator('textarea').inputValue(), 'new words', 'the typing');
+});
+
 await browser.close();
 console.log(`\n${passed} passed, ${failures.length} failed`);
 if (failures.length) console.log('failed: ' + failures.join('; '));

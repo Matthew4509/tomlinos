@@ -28,7 +28,7 @@ import { buildTaskbar } from './taskbar.ts';
 import { Transfers } from './transfer.ts';
 import { purgeCutoff, RecycleBin, TRASH_DIR } from './trash.ts';
 import type { Account, AppDef, AppHandle, Clipboard, Shell } from './types.ts';
-import { WindowManager } from './windows.ts';
+import { WindowManager, type CloseAnswer } from './windows.ts';
 import { clearOldThreads } from '../apps/chat/agents.ts';
 
 const PICTURE_MIME: Record<string, string> = {
@@ -104,8 +104,18 @@ class DesktopShell implements Shell {
       },
       savedPrefs: appId => this.session.data.windows[appId],
       menu: (items, x, y, returnFocus) => this.menus.show(items, x, y, { returnFocus }),
-      confirmDiscard: title =>
-        this.dialogs.confirm({ title: 'Close without saving?', text: `“${title}” has changes that are not saved. If you close it they will be lost.`, ok: 'Close without saving', danger: true, cancel: 'Keep it open' }),
+      confirmClose: async (title, canSave) => canSave
+        ? this.dialogs.ask<CloseAnswer>({
+          title: 'Save your changes?',
+          text: `“${title}” has changes that are not saved. Save them before it closes, or close it and they are lost.`,
+          buttons: [
+            { label: 'Save', value: 'save', primary: true },
+            { label: 'Close without saving', value: 'discard', danger: true },
+            { label: 'Keep it open', value: 'keep' },
+          ],
+          cancel: 'keep',
+        })
+        : (await this.dialogs.confirm({ title: 'Close without saving?', text: `“${title}” has changes that are not saved. If you close it they will be lost.`, ok: 'Close without saving', danger: true, cancel: 'Keep it open' })) ? 'discard' : 'keep',
     });
     // A save the lock turned down is made again once the screen is unlocked.
     let saveWaiting = false;
@@ -196,6 +206,9 @@ class DesktopShell implements Shell {
       onClose: guard => {
         win.guard = guard;
       },
+      onSave: save => {
+        win.save = save;
+      },
       onReopen: listener => {
         win.reopen = listener;
       },
@@ -205,6 +218,7 @@ class DesktopShell implements Shell {
     } catch (error) {
       win.dirty = false;
       win.guard = null;
+      win.save = null;
       await this.windows.close(win);
       await this.report(`Could not open ${app.title}`, error);
     }

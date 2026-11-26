@@ -23,11 +23,11 @@ test('TM-P0-keys: the window list handles arrow keys and Enter', () => {
   assert.match(src, /'Enter'/);
 });
 
-// TM-P1-twice: End task does not wait for a close already asking. Today every guard opens its modal at once, which
-// takes the focus and the pointer, so a second ask was only seen with Delete events sent back to back (3 asks stacked).
-// A guard that awaits anything before asking would make it real.
-test('TM-P1-twice: End task is not run again while a close of that window is still asking', { todo: 'P1' }, () => {
-  assert.match(src, /closing|endBtn\.disabled = true/);
+// TM-P1-twice (TM-P1-4): Delete held down sent End task again while the close was still asking, and three asks stacked.
+// The shell now keeps one close per window: a second close of the same window waits for the first one's answer.
+test('TM-P1-twice: End task is not run again while a close of that window is still asking', () => {
+  const windows = readFileSync(new URL('../src/shell/windows.ts', import.meta.url), 'utf8');
+  assert.match(windows, /if \(win\.closing\) return win\.closing;/);
 });
 
 // TM-P0-files: "Your files" adds up the file sizes, but the server charges at least STORE_MIN_CHARGE per record, counts

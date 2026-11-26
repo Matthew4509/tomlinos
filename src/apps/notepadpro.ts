@@ -458,6 +458,15 @@ async function run(app: AppHandle, cm: Bundle, arg: string | undefined): Promise
     void next.finally(() => saving.get(d) === next && saving.delete(d));
     return next;
   }
+  // Save on closing the window: every tab with changes, each shown as it is saved; one not saved keeps the window open.
+  app.onSave?.(async () => {
+    for (const d of docs.filter(isDirty)) {
+      if (!docs.includes(d)) continue;
+      activate(d);
+      if (!(await save())) return false;
+    }
+    return true;
+  });
 
   async function saveDoc(d: Doc): Promise<boolean> {
     if (!d.path) return d === active ? saveAs() : false;

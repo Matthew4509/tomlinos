@@ -135,6 +135,7 @@ export const editorApp: AppDef = {
     };
     const saveAs = () => once(saveAsNow);
     const save = () => once(() => (path ? saveNow() : saveAsNow()));
+    app.onSave?.(save);
 
     async function saveAsNow(): Promise<boolean> {
       const folder = path ? parentPath(path) : '/Documents';

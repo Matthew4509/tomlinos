@@ -35,3 +35,24 @@ test('AS-P1-6: in the owner\'s password prompt the guarded action is the primary
   assert.match(src, /\{ label: 'Cancel', value: false \}/);
 });
 
+test('close with unsaved work: the shell offers Save when the app gives a save, and stays open when it fails', () => {
+  const win = read('src/shell/windows.ts');
+  assert.match(win, /save: \(\(\) => Promise<boolean>\) \| null = null/);
+  assert.match(win, /if \(win\.dirty && win\.save\) \{\s+const answer = await this\.confirmClose\(win\.title, true\);/);
+  assert.match(win, /answer === 'save' && !\(await win\.save!\(\)\)\) return false;/);
+  const shell = read('src/shell/shell.ts');
+  assert.match(shell, /label: 'Save', value: 'save', primary: true/);
+  assert.match(shell, /onSave: save => \{\s+win\.save = save;/);
+  assert.match(read('src/shell/types.ts'), /onSave\?\(save: \(\) => Promise<boolean>\): void;/);
+});
+
+test('W-P1-5 / NP-P1-1 / N-P1-4 / PRJ: Write, Notepad, Notepad Pro and My Projects give the shell their save', () => {
+  for (const path of ['src/apps/write.ts', 'src/apps/editor.ts', 'src/apps/notepadpro.ts', 'src/apps/projects.ts']) {
+    assert.match(read(path), /app\.onSave\?\.\(/, `${path} gives no save to the close question`);
+  }
+});
+
+test('TM-P1-4: one close question per window at a time (End task held down does not stack them)', () => {
+  const win = read('src/shell/windows.ts');
+  assert.match(win, /if \(win\.closing\) return win\.closing;/);
+});

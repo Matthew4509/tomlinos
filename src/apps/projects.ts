@@ -53,6 +53,9 @@ export const projectsApp: AppDef = {
       return ok;
     }
     app.onClose(() => leaveForm());
+    /** The open form's own Save, offered when the window closes with typing in it; false when it was not saved. */
+    let saveForm: (() => Promise<boolean>) | null = null;
+    app.onSave?.(async () => !saveForm || (await saveForm()));
 
     const addBtn = h('button', { type: 'button', class: 'tool wide' }, 'Add project');
     const apptBtn = h('button', { type: 'button', class: 'tool wide' }, 'Appointment');
@@ -230,6 +233,7 @@ export const projectsApp: AppDef = {
           if (ok) draw();
         };
         on(save, 'click', () => void doSave(), signal);
+        saveForm = async () => (await doSave(), !formChanged);
         on(cancel, 'click', () => draw(), signal);
         for (const input of [nameIn, siteIn]) on(input, 'keydown', (e: KeyboardEvent) => e.key === 'Enter' && void doSave(), signal);
         on(head, 'keydown', (e: KeyboardEvent) => {
@@ -341,7 +345,7 @@ export const projectsApp: AppDef = {
         actions = [...d.actions];
         paintActions();
       }, signal);
-      on(save, 'click', async () => {
+      const saveSettings = async () => {
         if (!isTime(timeIn.value)) return void (problem.textContent = 'Choose a default time.');
         const hours = hoursIn.value.trim() ? Number(hoursIn.value) : 0;
         if (!Number.isFinite(hours) || hours < 0 || hours > 24) return void (problem.textContent = 'Default hours: a number from 0.25 to 24, or leave it empty.');
@@ -358,7 +362,9 @@ export const projectsApp: AppDef = {
         } finally {
           save.disabled = false;
         }
-      }, signal);
+      };
+      on(save, 'click', () => void saveSettings(), signal);
+      saveForm = async () => (await saveSettings(), !formChanged);
       on(cancel, 'click', () => {
         formChanged = null;
         go({ kind: 'list' });

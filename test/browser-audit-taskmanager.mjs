@@ -116,6 +116,24 @@ await step('TM-P0-keys: the window list can be used from the keyboard (arrow pic
   ok(!/Task Manager/.test(front), 'Enter did not switch to the chosen window; front is ' + front);
 });
 
+await step('TM-P1-4: Delete held down on a window with unsaved typing asks once, not three times over', async () => {
+  await closeAll();
+  await dirtyNotepad('held');
+  await openTm();
+  await tmWin().locator('.tm-list').focus();
+  await page.keyboard.press('Home');
+  // Key repeat: three Delete presses reach the list before the first question has taken the focus.
+  await tmWin().locator('.tm-list').evaluate(list => {
+    for (let i = 0; i < 3; i++) list.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }));
+  });
+  await page.locator('.dialog').first().waitFor();
+  await page.waitForTimeout(300);
+  eq(await page.locator('.dialog').count(), 1, 'close questions open');
+  await page.locator('.dialog').getByRole('button', { name: 'Keep it open' }).click();
+  eq(await page.locator('.dialog').count(), 0, 'questions left after Keep it open');
+  eq(await page.locator('.win', { has: page.locator('.editor') }).count(), 1, 'Notepad windows still open');
+});
+
 let manyOk = false;
 await step('setup: 120 small files opened in Notepad from the Terminal (120 windows)', async () => {
   await closeAll();
