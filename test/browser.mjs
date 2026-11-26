@@ -854,6 +854,22 @@ const typeRow = async (cells) => {
   }
 };
 
+// The Spreadsheet steps below drive the ribbon. New desktops start it in the Classic look, so View > Modern (ribbon)
+// first (kept for this person, so every window after this one has the ribbon).
+await step('Spreadsheet: starts in the Classic look; View > Modern (ribbon) brings the ribbon for the steps below', async () => {
+  await closeAll();
+  await page.locator('.start-btn').click();
+  await page.locator('.start-filter').fill('spreadsheet');
+  await page.locator('.start-item', { hasText: 'Spreadsheet' }).click();
+  await page.locator('.sheet .grid-scroll').waitFor();
+  ok(await page.locator('.sheet .classic-bar').isVisible(), 'the menu bar shows at first');
+  ok(!(await page.locator('.sheet .ribbon').isVisible()), 'no ribbon at first');
+  await page.locator('.sheet .cbar-title[data-menu="View"]').click();
+  await page.locator('.menu-item', { hasText: 'Modern (ribbon)' }).click();
+  await page.locator('.sheet .ribbon').waitFor();
+  await closeAll();
+});
+
 await step('Spreadsheet: opens from Start; typing with Tab and Enter fills cells, and Enter returns to the first column', async () => {
   await closeAll();
   await page.locator('.start-btn').click();
@@ -1570,7 +1586,7 @@ await step('Spreadsheet: View > Classic swaps the ribbon for a menu bar and two 
   const tool = (toolbar, name) => page.locator(`.sheet .toolbar[aria-label="${toolbar}"]`).getByRole('button', { name, exact: true });
   const menuRow = label => page.locator('.menu .menu-item', { has: page.locator('.menu-label', { hasText: new RegExp('^' + label.replace(/[().]/g, '\\$&') + '$') }) }).last();
   const expanded = async () => (await bar().locator('.cbar-title[aria-expanded="true"]').allInnerTexts()).join();
-  // New desktops start in the Modern look: the ribbon, no menu bar.
+  // The Modern look, as chosen at the first Spreadsheet step: the ribbon, no menu bar.
   ok(await page.locator('.sheet .ribbon').isVisible(), 'the ribbon shows at first');
   ok(!(await page.locator('.sheet .classic-bar').isVisible()), 'no menu bar at first');
   await goTo('A1');

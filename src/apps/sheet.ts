@@ -79,7 +79,7 @@ const PALETTE: Array<[string, string]> = [
 const SETTINGS_PATH = '/System/spreadsheet.json';
 /**
  * Modern: the ribbon. Classic: a menu bar and two rows of small buttons, as desktop spreadsheets looked before the
- * ribbon. New installs start Modern.
+ * ribbon. New installs start Classic.
  */
 type Look = 'modern' | 'classic';
 /** Told to every spreadsheet window on this page when one changes the look, so they all follow. */
@@ -118,13 +118,13 @@ export const sheetApp: AppDef = {
     app.root.classList.add('sheet');
     const wb = new Workbook();
     // Read before any file is opened: a CSV's dates are read this way round.
-    let look: Look = 'modern';
+    let look: Look = 'classic';
     try {
       const saved = JSON.parse(await shell.fs.readText(SETTINGS_PATH)) as { dateOrder?: unknown; look?: unknown };
       if (saved.dateOrder === 'dmy' || saved.dateOrder === 'mdy' || saved.dateOrder === 'ymd') wb.dateOrder = saved.dateOrder;
-      if (saved.look === 'classic') look = 'classic';
+      if (saved.look === 'modern') look = 'modern';
     } catch {
-      // Nothing saved yet: the order this computer's browser writes dates in, and the Modern look.
+      // Nothing saved yet: the order this computer's browser writes dates in, and the Classic look.
     }
     /** Keeps one setting for next time, leaving the others in the file as they are. */
     const keepSetting = async (patch: Record<string, string>): Promise<void> => {

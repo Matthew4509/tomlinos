@@ -94,6 +94,19 @@ await step('set up a fresh desktop', async () => {
   await page.locator('#desktop .item').first().waitFor({ timeout: 20000 });
 });
 
+// The steps below drive the ribbon. New desktops start Write in the Classic look, so View > Modern (ribbon) first
+// (kept for this person, so every window after this one has the ribbon).
+await step('Write starts in the Classic look; View > Modern (ribbon) brings the ribbon for the steps below', async () => {
+  await openApp('write');
+  await W().locator('.cbar-title[data-menu="View"]').waitFor({ timeout: 20000 });
+  ok(!(await W().locator('.ribbon').isVisible()), 'no ribbon at first');
+  await W().locator('.cbar-title[data-menu="View"]').click();
+  await page.locator('.menu-item', { hasText: 'Modern (ribbon)' }).click();
+  await W().locator('.ribbon').waitFor();
+  ok(!(await W().locator('.cbar').count()), 'the menu bar is gone');
+  await closeAllWrite();
+});
+
 await step('W-P0-1 find: Enter from the top goes to the first place found (the one marked current), not the second', async () => {
   await newDoc();
   await page.keyboard.type('apple one. apple two. apple three.');

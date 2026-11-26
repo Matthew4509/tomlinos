@@ -121,6 +121,16 @@ await step('set up the owner (or log in)', async () => {
   await page.locator('#desktop .item').first().waitFor({ timeout: 30000 });
 });
 
+// Some steps below use the ribbon. New desktops start the Spreadsheet in the Classic look, so View > Modern (ribbon)
+// first (kept for this person, so every window after this one has the ribbon).
+await step('the Spreadsheet starts Classic; View > Modern (ribbon) brings the ribbon for the steps below', async () => {
+  await freshSheet();
+  await page.locator('.sheet .cbar-title[data-menu="View"]').click();
+  await page.locator('.menu-item', { hasText: 'Modern (ribbon)' }).click();
+  await page.locator('.sheet .ribbon').waitFor();
+  await closeAll();
+});
+
 await step('S-P0-1: Delete on a filtered list clears only the rows in view (the hidden "b, 1" row survives)', async () => {
   await filteredList();
   await goTo('A2:B5');

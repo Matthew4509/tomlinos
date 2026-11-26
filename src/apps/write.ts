@@ -40,7 +40,7 @@ import { fromMenuItems, helpMenu } from './classic-menus.ts';
 
 /**
  * Modern: the ribbon. Classic: a menu bar and a row of small buttons, as word processors looked before the ribbon.
- * Kept per person in /System/write.json; every Write window on the page follows a change.
+ * Kept per person in /System/write.json; every Write window on the page follows a change. New installs start Classic.
  */
 type Look = 'modern' | 'classic';
 const LOOK_EVENT = 'write-look';
@@ -185,13 +185,13 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
   // Write's own settings: spell checking on or off.
   const SETTINGS = '/System/write.json';
   let spell = true;
-  let look: Look = 'modern';
+  let look: Look = 'classic';
   try {
     const saved = JSON.parse(await shell.fs.readText(SETTINGS)) as { spell?: unknown; look?: unknown };
     if (saved.spell === false) spell = false;
-    if (saved.look === 'classic') look = 'classic';
+    if (saved.look === 'modern') look = 'modern';
   } catch {
-    // Nothing kept yet: spelling is checked, and the Modern look.
+    // Nothing kept yet: spelling is checked, and the Classic look.
   }
 
   // A copy of unsaved work every two minutes, offered back if the page stops before it is saved. The copy is a Word
@@ -2165,7 +2165,8 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
           { label: 'Increase indent', icon: 'indent', action: () => indentBy(1) },
         ] },
         { label: 'Style', submenu: () => STYLE_IDS.map((id): BarItem => ({
-          label: STYLES[id].label, shortcut: id === 'normal' ? 'Ctrl+Shift+N' : id === 'title' ? undefined : `Ctrl+Alt+${id.slice(1)}`, checked: () => styleNow() === id, action: run(styleCmd(id)),
+          // Normal's Ctrl+Shift+N works where the browser passes it on; it is not shown, as the browser keeps it.
+          label: STYLES[id].label, shortcut: id === 'normal' || id === 'title' ? undefined : `Ctrl+Alt+${id.slice(1)}`, checked: () => styleNow() === id, action: run(styleCmd(id)),
         })) },
         { separator: true },
         { label: 'Page', icon: 'page-setup', submenu: () => [
