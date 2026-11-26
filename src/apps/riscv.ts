@@ -190,8 +190,8 @@ class Studio {
     return [
       { label: 'File', key: 'f', items: file },
       { label: 'Edit', key: 'e', items: edit },
-      { label: 'Search', key: 's', items: search },
       { label: 'View', key: 'v', items: view },
+      { label: 'Search', key: 's', items: search },
       { label: 'Run', key: 'r', items: run },
       { label: 'Examples', key: 'x', items: examples },
       { label: 'Help', key: 'h', items: help },
