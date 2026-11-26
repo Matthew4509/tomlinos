@@ -13,7 +13,7 @@ export const TOOL_ICON_IDS = [
   'insert-picture', 'insert-table', 'insert-link', 'page-setup',
   'zoom-in', 'zoom-out', 'zoom-fit', 'refresh', 'properties', 'help',
   'new-folder', 'up-folder', 'back', 'forward', 'recycle', 'restore',
-  'sort', 'filter', 'sum', 'chart', 'play', 'pause', 'stop', 'rename', 'settings',
+  'sort', 'filter', 'sum', 'chart', 'play', 'pause', 'stop', 'rename', 'settings', 'open-apps',
 ] as const;
 
 export type ToolIconId = (typeof TOOL_ICON_IDS)[number];
@@ -128,6 +128,8 @@ const SHAPES: Record<ToolIconId, Part[]> = {
   // Other
   rename: [p('M8.5 4.5h-7v7h7M12.5 4.5h2v7h-2'), p('M3.5 8h3'), p('M10.5 2.5v11M9 2.5h3M9 13.5h3', A)],
   settings: [p(cog()), c(8, 8, 2, A)],
+  // Two windows, one in front of the other: the back one stops where the front one covers it.
+  'open-apps': [p('M5.5 9.5h-4v-8h9v5M1.5 3.5h9'), r(5.5, 6.5, 9, 2, AF), r(5.5, 6.5, 9, 8)],
 };
 
 /** The parts of a picture, for the tests and anything else that wants to read the drawing. */

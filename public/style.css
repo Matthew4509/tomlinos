@@ -992,6 +992,38 @@ body.is-dragging .win-body { pointer-events: none; }
 .notice-time { font-size: 12px; color: var(--ink-soft); white-space: nowrap; }
 .notice-text { font-size: 12px; overflow-wrap: anywhere; white-space: pre-line; }
 
+/* ---- Open apps (shell/openapps.ts): the tray button and its list of open windows --------------------------------- */
+.tray-apps { position: relative; display: inline-flex; align-items: center; }
+.tray-apps .ti .ti-acc { fill: currentColor; }
+.apps-count { position: absolute; top: 3px; right: 0; min-width: 16px; height: 16px; padding: 0 3px; border-radius: 8px; background: #fff; color: #143f9a; font-size: 12px; line-height: 16px; font-weight: 700; text-align: center; box-shadow: 0 0 0 1px rgba(0, 0, 0, .35); }
+.apps-count[hidden] { display: none; }
+.open-apps {
+  position: absolute; width: min(340px, calc(100vw - 8px)); max-height: min(70vh, 520px); display: flex; flex-direction: column; background: var(--paper); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 6px 20px rgba(0, 0, 0, .35); bottom: var(--taskbar); right: 4px; outline: none;
+}
+.apps-head { padding: 8px 10px; border-bottom: 1px solid var(--line); font-weight: 700; }
+.apps-list { overflow: auto; min-height: 0; padding: 3px; }
+.apps-list[hidden], .apps-empty[hidden] { display: none; }
+.apps-row { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 3px 4px 3px 8px; border-radius: 4px; cursor: pointer; outline: none; }
+.apps-row .icon { flex: none; }
+.apps-row:hover { background: var(--sel-soft); }
+.apps-row:focus-visible, .apps-row[aria-selected="true"]:focus { background: var(--sel); color: #fff; }
+.apps-row:focus-visible .apps-note, .apps-row[aria-selected="true"]:focus .apps-note { color: inherit; }
+.apps-row.front .apps-title { font-weight: 700; }
+.apps-row:focus-visible.dirty .apps-title::after, .apps-row.dirty[aria-selected="true"]:focus .apps-title::after { background: currentColor; }
+.apps-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.apps-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.apps-note { font-size: 12px; color: var(--ink-soft); }
+.apps-row.dirty .apps-title::after { content: ""; display: inline-block; width: 7px; height: 7px; margin-left: 6px; border-radius: 50%; background: var(--danger); vertical-align: middle; }
+.apps-x { flex: none; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 4px; font-size: 18px; line-height: 1; color: inherit; }
+.apps-x:hover { background: var(--danger); color: #fff; }
+.apps-empty { margin: 0; padding: 14px 12px; color: var(--ink-soft); }
+.apps-foot { display: flex; justify-content: flex-end; padding: 6px 8px; border-top: 1px solid var(--line); }
+@media (pointer: coarse) {
+  .apps-row { min-height: 44px; }
+  .apps-x { width: 40px; height: 40px; }
+}
+
 /* ---- Calendar and Contacts ---------------------------------------------------------------------------------------- */
 .calendar-app, .contacts-app, .linkapp, .shortcuts { display: flex; flex-direction: column; height: 100%; }
 .pad { padding: 12px 16px; }

@@ -1,9 +1,10 @@
 // The taskbar: the Start button, one button per window, a padlock (lock at once; right-click to sign out), the clock
-// (which opens a small calendar) and a "show desktop" button. The clock reads this device's own time; nothing is
+// (which opens a small calendar), "Open apps" (a list of open windows to switch to or close) and a "show desktop" button. The clock reads this device's own time; nothing is
 // fetched.
 import { css, h, on } from '../core/dom.ts';
 import { addMonths, dateKey, monthCells, weekdayNames } from '../core/ical.ts';
 import { icon } from './icons.ts';
+import { buildOpenApps } from './openapps.ts';
 import type { MenuLayer } from './menu.ts';
 import type { WindowManager } from './windows.ts';
 
@@ -36,7 +37,8 @@ export function buildTaskbar(host: HTMLElement, windows: WindowManager, menus: M
       ], event.clientX || r.left, event.clientY || r.top, { returnFocus: padlock, fromKeyboard: event.detail === 0, anchor: padlock });
     }, signal);
   }
-  const tray = h('div', { class: 'tray' }, padlock, clock, showDesktop);
+  const openApps = buildOpenApps(windows, calendarHost, signal);
+  const tray = h('div', { class: 'tray' }, padlock, clock, openApps, showDesktop);
   host.append(startButton, tasks, tray);
 
   function drawTasks(): void {
