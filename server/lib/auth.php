@@ -953,8 +953,15 @@ function require_admin(array $user): void
  * someone at an unlocked, unattended desktop cannot do those without the password.
  * With two-step on, an unused recovery code is taken in place of the authenticator's code (and used up), so someone
  * whose phone is lost can still turn two-step off, make new codes or change their password.
+ *
+ * With $spend false the code is checked but not used up: the answer is the proof (the step or the recovery code), for
+ * the caller to use up with auth_proof_spend in the same write, under the same lock, as the change itself. A change
+ * refused after this check (a weak new password, a duplicate name) then keeps the code, and two requests sent with
+ * one code cannot both make their change.
  */
-function confirm_identity(string $dataDir, array $user, array $body): void
+const AUTH_CODE_USED = 'That two-step code is not right (or was already used), so nothing was changed. Type the code your authenticator shows now, or one of your recovery codes.';
+
+function confirm_identity(string $dataDir, array $user, array $body, bool $spend = true): array
 {
     // The same brake as signing in: someone at an unlocked, unattended desktop cannot try passwords at full speed.
     $ip = (string) ($_SERVER['REMOTE_ADDR'] ?? '');
@@ -965,17 +972,67 @@ function confirm_identity(string $dataDir, array $user, array $body): void
     if (!password_verify(body_str($body, 'password'), $user['hash'])) {
         api_fail(403, 'That password is not right, so nothing was changed. Type your current password.');
     }
+    $proof = [];
     if (!empty($user['totp']['enabled'])) {
-        $code = strtolower(trim(body_str($body, 'code')));
-        $step = auth_totp_check($user['totp']['secret'], $code, (int) ($user['totp']['last'] ?? 0));
-        if ($step === null || !auth_totp_use($dataDir, $user['id'], $step)) {
-            if (!auth_recovery_use($dataDir, $user['id'], $code)) {
-                api_fail(403, 'That two-step code is not right (or was already used), so nothing was changed. Type the code your authenticator shows now, or one of your recovery codes.');
+        $proof = auth_code_proof($dataDir, $user, body_str($body, 'code'));
+        if ($proof === null || ($spend && !auth_locked($dataDir, static function () use ($dataDir, $user, $proof): bool {
+            $users = auth_users($dataDir);
+            $spent = isset($users[$user['id']]) ? auth_proof_spend($users[$user['id']], $proof) : null;
+            if ($spent === null) {
+                return false;
             }
+            $users[$user['id']] = $spent;
+            auth_save_users($dataDir, $users);
+
+            return true;
+        }))) {
+            api_fail(403, AUTH_CODE_USED);
         }
     }
     auth_throttle_clear($dataDir, $user['name']);
     auth_throttle_refund($dataDir, $ip);
+
+    return $proof;
+}
+
+/**
+ * A typed two-step code checked against the person's record without using it up: ['step' => n] for the
+ * authenticator's code, ['recovery' => hash] for one of their unused recovery codes, null when it is neither.
+ */
+function auth_code_proof(string $dataDir, array $user, string $typed): ?array
+{
+    $code = strtolower(trim($typed));
+    $step = auth_totp_check((string) ($user['totp']['secret'] ?? ''), $code, (int) ($user['totp']['last'] ?? 0));
+    if ($step !== null) {
+        return ['step' => $step];
+    }
+    $hashed = hash_hmac('sha256', auth_recovery_form($code), auth_pepper($dataDir));
+
+    return in_array($hashed, $user['recovery'] ?? [], true) ? ['recovery' => $hashed] : null;
+}
+
+/**
+ * Uses up a proof from auth_code_proof on a person's record read under the accounts lock, and gives the record back
+ * changed; null when it was used meanwhile (a later step, or the recovery code gone). An empty proof (two-step off)
+ * changes nothing.
+ */
+function auth_proof_spend(array $u, array $proof): ?array
+{
+    if (isset($proof['step'])) {
+        if (empty($u['totp']['enabled']) || (int) $proof['step'] <= (int) ($u['totp']['last'] ?? 0)) {
+            return null;
+        }
+        $u['totp']['last'] = (int) $proof['step'];
+    }
+    if (isset($proof['recovery'])) {
+        $at = array_search($proof['recovery'], $u['recovery'] ?? [], true);
+        if ($at === false) {
+            return null;
+        }
+        array_splice($u['recovery'], (int) $at, 1);
+    }
+
+    return $u;
 }
 
 /** Uses up one of a person's recovery codes, under the lock. False when it is not one of their unused codes. */

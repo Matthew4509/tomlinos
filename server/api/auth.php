@@ -88,13 +88,25 @@ function refuse_while_stale(array $user): void
     }
 }
 
-/** Changes one person's record under the lock. $fn gets the record and returns it changed. */
-function update_user(string $dataDir, string $id, callable $fn): array
+/**
+ * Changes one person's record under the lock. $fn gets the record and returns it changed. With a $proof (from
+ * confirm_identity without spending), the two-step or recovery code is used up in the same write, on $proofUser's record
+ * (the person's own unless named): a change that is refused keeps the code, and a code used meanwhile refuses the change.
+ */
+function update_user(string $dataDir, string $id, callable $fn, ?array $proof = null, ?string $proofUser = null): array
 {
-    return auth_locked($dataDir, static function () use ($dataDir, $id, $fn): array {
+    return auth_locked($dataDir, static function () use ($dataDir, $id, $fn, $proof, $proofUser): array {
         $users = auth_users($dataDir);
         if (!isset($users[$id])) {
             api_fail(404, 'That person is not on this desktop any more.');
+        }
+        if ($proof) {
+            $who = $proofUser ?? $id;
+            $spent = isset($users[$who]) ? auth_proof_spend($users[$who], $proof) : null;
+            if ($spent === null) {
+                api_fail(403, AUTH_CODE_USED);
+            }
+            $users[$who] = $spent;
         }
         $users[$id] = $fn($users[$id]);
         auth_save_users($dataDir, $users);
@@ -387,20 +399,23 @@ try {
             $body = api_body();
             [$token, , $user] = require_full($dataDir);
             refuse_while_stale($user);
-            confirm_identity($dataDir, $user, $body);
+            // Each change below checks the code without using it up, and uses it up only in the write that makes the
+            // change: a change refused after the check keeps the code for the next try.
+            $proof = confirm_identity($dataDir, $user, $body, false);
             $next = body_str($body, 'next');
             if ($problem = auth_password_problem($next, $user['name'])) {
                 api_fail(400, $problem);
             }
             $keys = auth_vault_for_owner($user) ? auth_vault_keys($body) : null;
-            update_user($dataDir, $user['id'], static function (array $u) use ($next, $keys): array {
-                $u['hash'] = auth_hash_password($next);
+            $hash = auth_hash_password($next);
+            update_user($dataDir, $user['id'], static function (array $u) use ($hash, $keys): array {
+                $u['hash'] = $hash;
                 if ($keys) {
                     $u['vault'] = array_merge($u['vault'], $keys, ['stale' => false]);
                 }
 
                 return $u;
-            });
+            }, $proof);
             $ended = auth_sessions_end_all($dataDir, $user['id'], hash('sha256', $token));
             auth_history_add($dataDir, $user['id'], 'Password changed' . ($ended ? " (signed out of $ended other " . ($ended === 1 ? 'device)' : 'devices)') : ''));
             api_json(['ok' => true, 'endedOthers' => $ended]);
@@ -409,7 +424,7 @@ try {
         case 'pin': {
             $body = api_body();
             [, , $user] = require_full($dataDir);
-            confirm_identity($dataDir, $user, $body);
+            $proof = confirm_identity($dataDir, $user, $body, false);
             $pin = $body['pin'] ?? null;
             if ($pin !== null && (!is_string($pin) || !preg_match(AUTH_PIN_RE, $pin))) {
                 api_fail(400, 'A PIN is exactly 4 numbers.');
@@ -419,7 +434,7 @@ try {
                 $u['pin'] = $hash;
 
                 return $u;
-            });
+            }, $proof);
             auth_history_add($dataDir, $user['id'], $hash ? 'Screen PIN set' : 'Screen PIN removed');
             api_json(['ok' => true, 'user' => auth_public_user($user)]);
         }
@@ -504,7 +519,7 @@ try {
             $body = api_body();
             [, , $user] = require_full($dataDir);
             refuse_while_stale($user);
-            confirm_identity($dataDir, $user, $body);
+            $proof = confirm_identity($dataDir, $user, $body, false);
             $hash = auth_rkey_hash($dataDir, body_str($body, 'rkAuth'));
             $wrapRk = auth_vault_for_owner($user) ? auth_wrap_rk($body) : null;
             $user = update_user($dataDir, $user['id'], static function (array $u) use ($hash, $wrapRk): array {
@@ -515,7 +530,7 @@ try {
                 }
 
                 return $u;
-            });
+            }, $proof);
             auth_history_add($dataDir, $user['id'], 'New recovery key made (the old one stopped working)');
             api_json(['ok' => true, 'user' => auth_public_user($user)]);
         }
@@ -542,8 +557,9 @@ try {
                 api_fail(409, "Encryption is \"$from\" here, not off, so a new key cannot be taken. Reload My account and try again.");
             }
             refuse_while_stale($user);
+            $proof = null;
             if ($to === 'migrating-on' || $to === 'migrating-off') {
-                confirm_identity($dataDir, $user, $body);
+                $proof = confirm_identity($dataDir, $user, $body, false);
             }
             $vault = $user['vault'] ?? null;
             $rkey = null;
@@ -557,7 +573,7 @@ try {
             $id = $user['id'];
             // Files the person's page found are plain though they start with the seal marker (store_count_unconverted).
             $plain = $to === 'off' && is_array($body['plainLookalikes'] ?? null) ? array_filter($body['plainLookalikes'], 'is_string') : [];
-            [$wrong, $user] = store_locked(auth_user_store($dataDir, $id), static function () use ($dataDir, $id, $to, $vault, $rkey, $plain): array {
+            [$wrong, $user] = store_locked(auth_user_store($dataDir, $id), static function () use ($dataDir, $id, $to, $vault, $rkey, $plain, $proof): array {
                 if ($to === 'on' || $to === 'off') {
                     $wrong = store_count_unconverted(auth_user_store($dataDir, $id), $to === 'on', $plain);
                     if ($wrong > 0) {
@@ -573,7 +589,7 @@ try {
                     }
 
                     return $u;
-                })];
+                }, $proof)];
             });
             if ($user === null) {
                 api_fail(409, sprintf('%s still %s (saved in another window or on another device while this ran). They are being converted again.', $wrong === 1 ? 'One file is' : "$wrong files are", $to === 'on' ? 'not encrypted' : 'encrypted'), ['redo' => $wrong]);
@@ -626,11 +642,13 @@ try {
             if (($body['confirm'] ?? '') !== 'start again') {
                 api_fail(400, 'Type "start again" to confirm.');
             }
-            confirm_identity($dataDir, $user, $body);
+            $proof = confirm_identity($dataDir, $user, $body, false);
             // Files set aside earlier are kept (never deleted), so a cap stops this being a way round the space allowed.
             if (count(glob(auth_user_store($dataDir, $user['id']) . '/locked-*', GLOB_ONLYDIR) ?: []) >= 3) {
                 api_fail(409, 'Three sets of locked files are already kept aside. Ask the owner to clear old ones from the server first.');
             }
+            // The code is used up before the files move, so one code cannot set them aside twice.
+            update_user($dataDir, $user['id'], static fn (array $u): array => $u, $proof);
             $store = auth_user_store($dataDir, $user['id']);
             $aside = $store . '/locked-' . date('Ymd-His');
             // Under the store's lock, so a save part-way through finishes before (and never lands half in) the files set aside.
@@ -816,7 +834,7 @@ try {
         case 'unlock-email': {
             $body = api_body();
             [, , $user] = require_full($dataDir);
-            confirm_identity($dataDir, $user, $body);
+            $proof = confirm_identity($dataDir, $user, $body, false);
             $email = trim(body_str($body, 'email'));
             if ($email !== '' && (strlen($email) > 254 || preg_match('/[\r\n,;]/', $email) || !filter_var($email, FILTER_VALIDATE_EMAIL))) {
                 api_fail(400, 'That does not look like an email address. Check it and try again.');
@@ -832,7 +850,7 @@ try {
                 }
 
                 return $u;
-            });
+            }, $proof);
             auth_history_add($dataDir, $user['id'], $email === '' ? 'Unlock email removed' : 'Unlock email set');
             api_json(['ok' => true, 'user' => auth_public_user($user)]);
         }
@@ -873,9 +891,10 @@ try {
             }
             // Adding a person gives someone a way in: the owner's own password (and code) first, so someone at the
             // owner's unlocked, unattended desktop cannot do it.
-            confirm_identity($dataDir, $me, $body);
+            $proof = confirm_identity($dataDir, $me, $body, false);
             $display = trim(body_str($body, 'display'));
-            $user = auth_locked($dataDir, static function () use ($dataDir, $name, $display, $password): array {
+            $meId = $me['id'];
+            $user = auth_locked($dataDir, static function () use ($dataDir, $name, $display, $password, $proof, $meId): array {
                 $users = auth_users($dataDir);
                 if (auth_find_user($users, $name)) {
                     api_fail(409, "There is already someone called \"$name\" here. Choose another user name.");
@@ -884,6 +903,11 @@ try {
                 if (count($users) >= $max) {
                     api_fail(409, "This desktop holds up to $max people (max_users in server/config.php).");
                 }
+                $spent = isset($users[$meId]) ? auth_proof_spend($users[$meId], $proof) : null;
+                if ($spent === null) {
+                    api_fail(403, AUTH_CODE_USED);
+                }
+                $users[$meId] = $spent;
                 $id = auth_new_user_id();
                 $users[$id] = ['id' => $id, 'name' => $name, 'display' => auth_cut($display !== '' ? $display : $name, 60), 'hash' => auth_hash_password($password), 'admin' => false, 'created' => time(), 'totp' => null, 'recovery' => [], 'pin' => null];
                 auth_save_users($dataDir, $users);
@@ -907,7 +931,8 @@ try {
             // Setting someone's password or turning off their two-step opens their account, and switching an account off
             // or on decides who gets in: the owner's own password (and code) first, so someone at the owner's unlocked,
             // unattended desktop cannot do it.
-            confirm_identity($dataDir, $me, $body);
+            $proof = confirm_identity($dataDir, $me, $body, false);
+            $meId = $me['id'];
             if ($op === 'user-password') {
                 $target = auth_users($dataDir)[$id] ?? null;
                 $password = body_str($body, 'next');
@@ -921,11 +946,11 @@ try {
                     }
 
                     return $u;
-                });
-                $event = 'Password set by ' . $me['name'] . (($user['vault']['state'] ?? 'off') !== 'off' ? ' (the recovery key is needed to open the encrypted files)' : '');
+                }, $proof, $meId);
+                $event = 'Password set by '. $me['name'] . (($user['vault']['state'] ?? 'off') !== 'off' ? ' (the recovery key is needed to open the encrypted files)' : '');
             } elseif ($op === 'user-disable') {
                 $off = !empty($body['disabled']);
-                $user = update_user($dataDir, $id, static fn (array $u): array => ['disabled' => $off] + $u);
+                $user = update_user($dataDir, $id, static fn (array $u): array => ['disabled' => $off] + $u, $proof, $meId);
                 $event = ($off ? 'Account switched off by ' : 'Account switched on by ') . $me['name'];
             } else {
                 $user = update_user($dataDir, $id, static function (array $u): array {
@@ -933,7 +958,7 @@ try {
                     $u['recovery'] = [];
 
                     return $u;
-                });
+                }, $proof, $meId);
                 $event = 'Two-step sign-in turned off by ' . $me['name'];
             }
             $ended = auth_sessions_end_all($dataDir, $id);

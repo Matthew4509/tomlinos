@@ -140,13 +140,38 @@ test('setup for the two-step findings: two-step on for the owner', { skip: noPhp
 });
 
 test('ACC-P1-1: Change password refused for a weak new password does not use up the recovery code typed with it',
-  { skip: noPhp, todo: 'P1' }, async () => {
+  { skip: noPhp }, async () => {
     clearBrakes();
     const before = (await owner.call('status')).json.user.recoveryLeft;
     const r = await owner.call('password', { password: PASS, code: recovery[0], next: 'short' });
     assert.equal(r.status, 400);
     const left = (await owner.call('status')).json.user.recoveryLeft;
     assert.equal(left, before, 'nothing was changed, but a recovery code is gone');
+  });
+
+test('ACC-P1-1 (the same order elsewhere): a change refused after the identity check keeps the recovery code',
+  { skip: noPhp }, async () => {
+    clearBrakes();
+    const before = (await owner.call('status')).json.user.recoveryLeft;
+    const id = { password: PASS, code: recovery[0] };
+    const refused: [string, unknown][] = [
+      ['pin', { ...id, pin: '12a4' }],
+      ['recovery-key', { ...id, rkAuth: 'not-a-proof' }],
+      ['unlock-email', { ...id, email: 'bad address' }],
+      ['user-password', { ...id, id: bobId, next: 'short' }],
+      ['user-create', { ...id, name: 'bob', next: 'another-good-pass-12' }],
+      ['vault', { ...id, state: 'migrating-on', salt: 'x', iter: 10, wrapPw: 'x', wrapRk: 'x', rkAuth: 'x' }],
+    ];
+    for (const [op, body] of refused) {
+      const r = await owner.call(op, body);
+      assert.ok(r.status === 400 || r.status === 409, `${op} was not refused: ${r.status} ${JSON.stringify(r.json)}`);
+      assert.equal((await owner.call('status')).json.user.recoveryLeft, before, `${op} was refused, but a recovery code is gone`);
+    }
+    // A change that goes through still uses the code up, and the same code then works no more.
+    const set = await owner.call('pin', { ...id, pin: '4821' });
+    assert.equal(set.status, 200, JSON.stringify(set.json));
+    assert.equal((await owner.call('status')).json.user.recoveryLeft, before - 1, 'the code was used up');
+    assert.equal((await owner.call('pin', { ...id, pin: null })).status, 403, 'a used recovery code is refused');
   });
 
 test('ACC-P1-3: "Forgot your password?" refused for a weak new password can be tried again with the same recovery code',
