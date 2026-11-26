@@ -42,8 +42,12 @@ export const calendarApp: AppDef = {
     /** Set while a form is open: whether anything in it differs from what it opened with. */
     let formDirty: (() => boolean) | null = null;
     const isDirty = () => !!formDirty?.();
+    /** Set while a save from the form is on its way, until the form has been redrawn after it. */
+    let saving: Promise<void> | null = null;
     /** True when it is fine to leave the form (it holds nothing unsaved, or the person chose to discard it). */
     async function leaveForm(): Promise<boolean> {
+      // A save on its way is waited for: once saved, nothing is left to lose; if it failed, the form is still there.
+      while (saving) await saving;
       if (!isDirty()) return true;
       const ok = await shell.dialogs.confirm({ title: 'Discard your changes?', text: 'This event has changes that are not saved. If you leave, they are lost.', ok: 'Discard', danger: true, cancel: 'Keep editing' });
       if (ok) {
@@ -134,6 +138,24 @@ export const calendarApp: AppDef = {
         return false;
       } finally {
         for (const b of busy) b.disabled = false;
+      }
+    }
+
+    /** After a save from a form that was closed meanwhile: the month and the day shown, with the change in them. */
+    function redrawBehind(): void {
+      drawMonth();
+      if (!editing) drawDay();
+    }
+
+    /** Runs a save from the form, with `saving` set until it and the redraw after it are done. */
+    async function whileSaving(run: () => Promise<void>): Promise<void> {
+      let done = () => {};
+      saving = new Promise<void>(r => (done = r));
+      try {
+        await run();
+      } finally {
+        saving = null;
+        done();
       }
     }
 
@@ -228,22 +250,30 @@ export const calendarApp: AppDef = {
         const saved: CalEvent = { ...e, title: titleIn.value.trim(), date: dateIn.value, start, end, endDate: later ? endDay : undefined, notes: notesIn.value, where: whereIn.value.trim(), repeat: repeatSel.value as Repeat, ...limits(), remind: Number(remindSel.value) };
         // An edit of an event someone deleted meanwhile (another window) is refused, not quietly put back.
         const edited = existing !== null;
-        if (await save(list => {
-          if (edited && !list.some(x => x.uid === saved.uid)) throw new Error('This event was deleted in another window, so your changes were not saved. Choose New event to add it again.');
-          return [...list.filter(x => x.uid !== saved.uid), saved];
-        }, [saveBtn, del])) {
+        await whileSaving(async () => {
+          if (!(await save(list => {
+            if (edited && !list.some(x => x.uid === saved.uid)) throw new Error('This event was deleted in another window, so your changes were not saved. Choose New event to add it again.');
+            return [...list.filter(x => x.uid !== saved.uid), saved];
+          }, [saveBtn, del]))) return;
+          // The form was closed meanwhile (Cancel): what is shown now stays, with the saved event in it.
+          if (signal.aborted) return redrawBehind();
           // Saving a later showing stays on that day, unless the event was moved off it.
           if (saved.date !== e.date || !occursOn(saved, chosen)) {
             chosen = saved.date;
             showMonthOf(chosen);
           }
           draw(true);
-        }
+        });
       }, { signal });
       cancel.addEventListener('click', () => drawDay(true), { signal });
       del.addEventListener('click', async () => {
         const ok = await shell.dialogs.confirm({ title: 'Delete this event?', text: `“${e.title}”${e.repeat !== 'none' ? ' and all its repeats' : ''} will be removed from the calendar.`, ok: 'Delete', danger: true, cancel: 'Keep it' });
-        if (ok && (await save(list => withoutEvent(list, e), [saveBtn, del]))) draw(true);
+        if (!ok) return;
+        await whileSaving(async () => {
+          if (!(await save(list => withoutEvent(list, e), [saveBtn, del]))) return;
+          if (signal.aborted) return redrawBehind();
+          draw(true);
+        });
       }, { signal });
     }
 
