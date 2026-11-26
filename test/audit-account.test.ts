@@ -189,7 +189,7 @@ test('ACC-P1-2: the lock screen takes a recovery code in place of the authentica
   });
 
 test('ACC-P1-3: "Forgot your password?" refused for a weak new password can be tried again with the same recovery code',
-  { skip: noPhp, todo: 'P1' }, async () => {
+  { skip: noPhp }, async () => {
     clearBrakes();
     const rkAuth = 'ab'.repeat(32);
     const made = await owner.call('recovery-key', { password: PASS, code: recovery[1], rkAuth });
@@ -200,6 +200,24 @@ test('ACC-P1-3: "Forgot your password?" refused for a weak new password can be t
     const again = await c.call('recover-start', { name: 'sampleowner', rkAuth, code: recovery[2] });
     await c.call('logout', {});
     assert.equal(again.status, 200, 'the second try, with only the new password fixed, got: ' + again.json?.error);
+  });
+
+test('ACC-P1-3 (no replay): one recovery code opens two resets, but only the first to finish changes the password',
+  { skip: noPhp }, async () => {
+    clearBrakes();
+    const rkAuth = 'ab'.repeat(32);
+    const before = (await owner.call('status')).json.user.recoveryLeft;
+    const a = new Client();
+    const b = new Client();
+    assert.equal((await a.call('recover-start', { name: 'sampleowner', rkAuth, code: recovery[5] })).status, 200);
+    assert.equal((await b.call('recover-start', { name: 'sampleowner', rkAuth, code: recovery[5] })).status, 200);
+    const first = await a.call('recover-finish', { password: PASS });
+    assert.equal(first.status, 200, JSON.stringify(first.json));
+    const second = await b.call('recover-finish', { password: 'a-thief-chose-this-88' });
+    assert.equal(second.status, 401, 'the same recovery code reset the password twice: ' + JSON.stringify(second.json));
+    // The finished reset is a full sign-in; it carries on as the owner (the reset ended the owner's other sessions).
+    owner.cookie = a.cookie;
+    assert.equal((await owner.call('status')).json.user.recoveryLeft, before - 1, 'the code was used up by the reset');
   });
 
 test('ACC-P1-4: a right password waiting for its two-step code is written in the sign-in history',

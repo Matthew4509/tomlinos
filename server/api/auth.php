@@ -691,16 +691,12 @@ try {
             $user = auth_find_user(auth_users($dataDir), $name);
             $proof = body_str($body, 'rkAuth');
             $ok = $user && !empty($user['rkey']) && preg_match('/^[0-9a-f]{64}$/', $proof) && hash_equals($user['rkey'], auth_rkey_hash($dataDir, $proof));
-            $step = null;
-            $usedCode = null;
+            // The code is checked here but used up only when the new password is set (recover-finish), so a new
+            // password refused there can be tried again with the same key and code.
+            $codeProof = [];
             if ($ok && !empty($user['totp']['enabled'])) {
-                $code = strtolower(trim(body_str($body, 'code')));
-                $step = auth_totp_check($user['totp']['secret'], $code, (int) ($user['totp']['last'] ?? 0));
-                if ($step === null) {
-                    $hashed = hash_hmac('sha256', auth_recovery_form($code), auth_pepper($dataDir));
-                    $usedCode = in_array($hashed, $user['recovery'] ?? [], true) ? $hashed : null;
-                    $ok = $usedCode !== null;
-                }
+                $codeProof = auth_code_proof($dataDir, $user, body_str($body, 'code'));
+                $ok = $codeProof !== null;
             }
             // As at sign-in: a switched-off account answers the same whether the key was right or not.
             if ($user && !empty($user['disabled'])) {
@@ -713,17 +709,10 @@ try {
                 api_fail(401, 'Those do not match. Check the user name and the recovery key (and, if you use two-step sign-in, the code). If you have lost the recovery key, ask the owner of this desktop to set you a new password.');
             }
             auth_throttle_clear($dataDir, $name);
-            update_user($dataDir, $user['id'], static function (array $u) use ($step, $usedCode): array {
-                if ($step !== null) {
-                    $u['totp']['last'] = $step;
-                }
-                if ($usedCode !== null) {
-                    $u['recovery'] = array_values(array_filter($u['recovery'], static fn ($c) => $c !== $usedCode));
-                }
-
-                return $u;
-            });
             $token = auth_session_create($dataDir, $user['id'], 'reset');
+            if ($codeProof) {
+                auth_session_update($dataDir, $token, static fn (array $s): array => ['proof' => $codeProof] + $s);
+            }
             set_session_cookie($token, $days);
             api_json(['ok' => true, 'vaultKeys' => auth_vault_for_owner($user)]);
         }
@@ -744,8 +733,18 @@ try {
                 api_fail(400, $problem);
             }
             $keys = auth_vault_for_owner($user) ? auth_vault_keys($body) : null;
-            $user = update_user($dataDir, $user['id'], static function (array $u) use ($next, $keys): array {
-                $u['hash'] = auth_hash_password($next);
+            $hash = auth_hash_password($next);
+            $codeProof = is_array($session['proof'] ?? null) ? $session['proof'] : [];
+            $user = update_user($dataDir, $user['id'], static function (array $u) use ($hash, $keys, $codeProof, $dataDir, $token): array {
+                // The two-step or recovery code from recover-start is used up in this same write: a code that opened
+                // two resets changes the password once.
+                $spent = auth_proof_spend($u, $codeProof);
+                if ($spent === null) {
+                    auth_session_end($dataDir, $token);
+                    api_fail(401, 'That two-step or recovery code was used meanwhile, so the password was not changed. Start "Forgot your password?" again.', ['auth' => 'signin']);
+                }
+                $u = $spent;
+                $u['hash'] = $hash;
                 if ($keys) {
                     $u['vault'] = array_merge($u['vault'], $keys, ['stale' => false]);
                 }
@@ -755,6 +754,7 @@ try {
             $ended = auth_sessions_end_all($dataDir, $user['id'], hash('sha256', $token));
             $session['stage'] = 'full';
             $session['fails'] = 0;
+            unset($session['proof']);
             auth_session_save($dataDir, $token, $session);
             auth_history_add($dataDir, $user['id'], 'Password reset with the recovery key' . ($ended ? " (signed out of $ended other " . ($ended === 1 ? 'device)' : 'devices)') : ''));
             api_json(signed_in_answer($user, $session));
