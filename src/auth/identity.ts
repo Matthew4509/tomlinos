@@ -28,9 +28,11 @@ export async function askIdentity(shell: Shell, options: { title: string; text: 
     title: options.title,
     text: options.text,
     body,
+    // The action is the primary button even when it is a dangerous one: Enter in the password field does it, and the
+    // password is what holds it back. Cancel never needs the password.
     buttons: [
-      { label: options.ok, value: true, primary: !options.danger, danger: options.danger },
-      { label: 'Cancel', value: false, primary: options.danger },
+      { label: options.ok, value: true, primary: true, danger: options.danger },
+      { label: 'Cancel', value: false },
     ],
     cancel: false,
     primaryEnabled: () => pass.input.value !== '',

@@ -29,3 +29,9 @@ test('AS-P1-5: a fault in the desktop itself still gets the general words (no st
   }
 });
 
+test('AS-P1-6: in the owner\'s password prompt the guarded action is the primary button (Enter does it), and Cancel is never held back by the password', () => {
+  const src = read('src/auth/identity.ts');
+  assert.match(src, /\{ label: options\.ok, value: true, primary: true, danger: options\.danger \}/);
+  assert.match(src, /\{ label: 'Cancel', value: false \}/);
+});
+
