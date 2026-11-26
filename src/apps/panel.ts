@@ -17,6 +17,7 @@ import { APPS } from './catalog.ts';
 import { ChatSession } from './chat/session.ts';
 import { joinPath } from '../fs/names.ts';
 import { dayName, listPads, padLabel, PAD_FOLDER, readPad, savePadFile } from './panel/scratchpad.ts';
+import { standing } from './panel/today.ts';
 import { saveOver } from '../shell/savefile.ts';
 import { nextFor, parseProjects, PROJECTS_PATH, shortTitle, sortProjects, type Project } from './projects/data.ts';
 
@@ -73,19 +74,6 @@ function since(ms: number): string {
   if (m < 60) return `${m} min`;
   const hrs = Math.floor(m / 60);
   return hrs < 24 ? `${hrs} h ${m % 60} min` : `${Math.floor(hrs / 24)} d ${hrs % 24} h`;
-}
-
-/** Minutes from now to an event's start today (negative once started), or null for all-day events. */
-function minutesTo(e: CalEvent, now: Date): number | null {
-  if (!e.start) return null;
-  const [hh, mm] = e.start.split(':').map(Number);
-  return hh * 60 + mm - (now.getHours() * 60 + now.getMinutes());
-}
-
-function endsIn(e: CalEvent, now: Date): number {
-  if (!e.end) return 60 + (minutesTo(e, now) ?? 0);
-  const [hh, mm] = e.end.split(':').map(Number);
-  return hh * 60 + mm - (now.getHours() * 60 + now.getMinutes());
 }
 
 export const panelApp: AppDef = {
@@ -436,9 +424,7 @@ export const panelApp: AppDef = {
         rows.push(h('div', { class: 'panel-day' }, label));
         if (!on_.length) rows.push(h('p', { class: 'panel-empty' }, 'Nothing on the calendar today.'));
         for (const e of on_) {
-          const to = i === 0 ? minutesTo(e, now) : null;
-          const live = to !== null && to <= 0 && endsIn(e, now) > 0;
-          const done = to !== null && endsIn(e, now) <= 0;
+          const { to, live, done } = i === 0 ? standing(e, todayKey, now) : { to: null, live: false, done: false };
           rows.push(h('div', { class: 'panel-row' + (done ? ' done' : '') },
             h('span', { class: 'panel-t' }, timeLabel(e)),
             h('span', { class: 'panel-row-main' }, e.title || '(no title)'),
@@ -451,12 +437,12 @@ export const panelApp: AppDef = {
       // The strip across the top: an event starting within 15 minutes, or on now (a critical strip; one click
       // opens the calendar, Dismiss hides it until the Panel is next opened).
       const soon = today.find(e => {
-        const to = minutesTo(e, now);
-        return to !== null && to <= SOON_MIN && endsIn(e, now) > 0 && !dismissed.has(e.uid);
+        const { to, done } = standing(e, todayKey, now);
+        return to !== null && to <= SOON_MIN && !done && !dismissed.has(e.uid);
       });
       critical.hidden = !soon;
       if (soon) {
-        const to = minutesTo(soon, now) ?? 0;
+        const to = standing(soon, todayKey, now).to ?? 0;
         const open = h('button', { type: 'button', class: 'panel-btn' }, 'Open');
         const dismiss = h('button', { type: 'button', class: 'panel-btn' }, 'Dismiss');
         on(open, 'click', () => show('calendar'), signal);
