@@ -1,6 +1,6 @@
 // Write: a document writer. A File menu and a ribbon laid out like a familiar word processor's (Home: undo,
-// font, paragraph, styles; Insert: page break, table, picture; Layout: margins, orientation, paper size, header and
-// footer; View: the look; Table and Picture tabs when one is chosen; Help), or, in the Classic look (View > Classic), a
+// font, paragraph, styles; View: the look, in the Classic menu order; Insert: page break, table, picture; Layout:
+// margins, orientation, paper size, header and footer; Table and Picture tabs when one is chosen; Help), or, in the Classic look (View > Classic), a
 // menu bar and a row of small buttons that reach the same commands; the document on pages as it will print, and a
 // status bar with the page, the word count and the zoom. Opens and saves Word documents (.docx) and plain text (.txt); prints and
 // makes PDFs. The editor is ProseMirror (MIT), bundled as public/vendor/prosemirror.js by vendor-src/prosemirror and
@@ -1881,7 +1881,7 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
 
   type Tab = 'home' | 'insert' | 'layout' | 'review' | 'mailings' | 'view' | 'table' | 'picture' | 'help';
   const TAB_NAMES: Record<Tab, string> = { home: 'Home', insert: 'Insert', layout: 'Layout', review: 'Review', mailings: 'Mailings', view: 'View', table: 'Table', picture: 'Picture', help: 'Help' };
-  const TAB_ORDER: Tab[] = ['home', 'insert', 'layout', 'review', 'mailings', 'view', 'table', 'picture', 'help'];
+  const TAB_ORDER: Tab[] = ['home', 'view', 'insert', 'layout', 'review', 'mailings', 'table', 'picture', 'help'];
   const groupsOf = (t: Tab): HTMLElement[] => {
     if (t === 'home') {
       return [

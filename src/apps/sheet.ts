@@ -1396,7 +1396,8 @@ export const sheetApp: AppDef = {
     };
     // Table Design: shown only while the active cell is in a table, as Excel's own tab for tables is.
     type Tab = keyof typeof tabGroups | 'table' | 'pivot';
-    const TAB_ORDER: Tab[] = [...(Object.keys(tabGroups) as Tab[]), 'table', 'pivot'];
+    // View sits after Home, as in the Classic menu bar (File, Edit, View, Insert); the context tabs come last.
+    const TAB_ORDER: Tab[] = ['home', 'view', 'insert', 'layout', 'formulas', 'data', 'review', 'help', 'table', 'pivot'];
     const TAB_NAMES: Record<Tab, string> = { home: 'Home', insert: 'Insert', layout: 'Page Layout', formulas: 'Formulas', data: 'Data', review: 'Review', view: 'View', help: 'Help', table: 'Table Design', pivot: 'PivotTable Analyze' };
     let tab: Tab = 'home';
     /** View > Page break preview, in the Classic look (the Modern look shows page breaks on the Page Layout tab). */
