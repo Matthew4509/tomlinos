@@ -118,13 +118,18 @@ await step('old Mac (CR) file: the line-ending button agrees with the status bar
   const w = npp();
   const s = await status();
   ok(s.includes('Old Mac (CR)'), 'status reads CR: ' + s);
-  const label = await w.locator('button', { hasText: /^(LF|CRLF|CR)$/ }).innerText();
-  eq(label, 'CR', 'line-ending button');
+  // The old button row's LF/CR/CRLF button is Format > Line endings when saving now: the file's own is ticked.
+  await w.locator('.cbar-title[data-menu=Format]').click();
+  await page.locator('.menu-item', { hasText: 'Line endings when saving' }).click();
+  const label = await page.locator('.menu-item[aria-checked="true"]', { hasText: /\((CR|LF|CRLF)\)/ }).innerText();
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  ok(label.includes('(CR)'), 'line ending ticked in the Format menu: ' + label);
 });
 
 await step('Replace in open files keeps the bookmarks of the tabs it changes', async () => {
   const w = npp();
-  await w.getByRole('button', { name: 'New', exact: true }).click();
+  await w.getByRole('button', { name: 'New tab', exact: true }).click();
   await w.locator('.cm-content').click();
   await page.keyboard.type('first\nsecond\nthird word');
   await page.keyboard.press('Control+Home');
@@ -204,7 +209,7 @@ await step('NP-P1-7: the New and Close shortcuts shown are ones the browser lets
   await page.locator('.start-menu [data-label="notepad pro"]').first().click();
   const w = npp();
   await w.locator('.cm-content').waitFor({ timeout: 15000 });
-  const tips = [await w.getByRole('button', { name: 'New', exact: true }).getAttribute('title'), await w.locator('.npp-tab-x').first().getAttribute('title')].join(' | ');
+  const tips = [await w.getByRole('button', { name: 'New tab', exact: true }).getAttribute('title'), await w.locator('.npp-tab-x').first().getAttribute('title')].join(' | ');
   ok(!/Ctrl\+[NW]\b/.test(tips) && /Alt\+N/.test(tips) && /Alt\+W/.test(tips), 'tooltips: ' + tips);
   await w.locator('.cm-content').click();
   await page.keyboard.press('Alt+n');

@@ -14,6 +14,8 @@ import { langById, langFor, LANGS, type Bundle } from './notepadpro/languages.ts
 import { renderMarkdown, toDom, type MarkdownParser } from './notepadpro/markdown.ts';
 import { APPS } from './catalog.ts';
 import { saveOver } from '../shell/savefile.ts';
+import { classicBar } from '../shell/menubar.ts';
+import { helpMenu } from './classic-menus.ts';
 
 const MAX_BYTES = 5 * 1024 * 1024;
 const ZOOMS = [60, 70, 80, 90, 100, 110, 125, 150, 175, 200];
@@ -160,20 +162,7 @@ async function run(app: AppHandle, cm: Bundle, arg: string | undefined): Promise
 
   // ---- The window ----
   const tool = (label: string, title: string, extra: Record<string, string> = {}) => h('button', { type: 'button', class: 'tool wide', title, ...extra }, label);
-  const newBtn = tool('New', 'New tab (Alt+N)');
-  const openBtn = tool('Open...', 'Open a file (Ctrl+O)');
-  const saveBtn = tool('Save', 'Save (Ctrl+S)');
-  const saveAsBtn = tool('Save as...', 'Save under another name (Ctrl+Shift+S)');
-  const findBtn = tool('Find', 'Find and replace (Ctrl+F, Ctrl+H). Patterns, match case and whole word are in the bar.');
-  const filesBtn = tool('Find in files', 'Search every file in a folder (Ctrl+Shift+F)');
-  const markBtn = tool('Bookmark', 'Bookmark this line (Ctrl+F2); F2 goes to the next, Shift+F2 the one before');
-  const wrapBtn = tool('Wrap', 'Wrap long lines', { 'aria-pressed': 'false' });
-  const spaceBtn = tool('Show spaces', 'Show spaces and tabs', { 'aria-pressed': 'false' });
-  const previewBtn = tool('Preview', 'Show the Markdown preview beside the text', { 'aria-pressed': 'true' });
-  const zoomOut = tool('−', 'Zoom out (Ctrl+-)', { 'aria-label': 'Zoom out' });
-  const zoomIn = tool('+', 'Zoom in (Ctrl++)', { 'aria-label': 'Zoom in' });
-  const langSelect = h('select', { class: 'field npp-lang', 'aria-label': 'Language' }, ...LANGS.map(l => h('option', { value: l.id }, l.label)));
-  const eolBtn = tool('LF', 'Line endings used when saving: click to switch');
+  const langSelect = h('select', { class: 'field npp-lang', 'aria-label': 'Language', title: 'Language (colours the text)' }, ...LANGS.map(l => h('option', { value: l.id }, l.label)));
   const tabs = h('div', { class: 'npp-tabs', role: 'tablist', 'aria-label': 'Open files' });
   const host = h('div', { class: 'npp-editor' });
   const previewPane = h('div', { class: 'npp-preview md', 'aria-label': 'Markdown preview', tabindex: '0', hidden: true });
@@ -197,10 +186,113 @@ async function run(app: AppHandle, cm: Bundle, arg: string | undefined): Promise
     h('div', { class: 'find-row' }, h('span', { class: 'npp-in' }, 'In'), fFolder, fFolderBtn, fGo),
     fNote, fList);
 
-  app.root.replaceChildren(
-    h('div', { class: 'toolbar npp-toolbar' }, newBtn, openBtn, saveBtn, saveAsBtn, h('span', { class: 'tool-gap' }), findBtn, filesBtn, markBtn,
-      h('span', { class: 'tool-gap' }), wrapBtn, spaceBtn, previewBtn, zoomOut, zoomIn, h('span', { class: 'tool-gap' }), langSelect, eolBtn),
-    tabs, h('div', { class: 'npp-main' }, host, previewPane), filesPanel, status);
+  // ---- Menu bar and toolbar: every command the old button row had, and the editor's own (Undo, Go to line...) ----
+  const has = () => !!active;
+  /** Runs a CodeMirror command on the text, with the keyboard back in it. */
+  const onView = (command: (v: any) => unknown) => () => {
+    if (!active) return;
+    view.focus();
+    command(view);
+  };
+  const clip = (what: 'cut' | 'copy') => onView(() => document.execCommand(what));
+  const chosen = () => !!active && !view.state.selection.main.empty;
+  const isMarkdown = () => active?.lang === 'markdown';
+  const EOLS: Eol[] = ['\r\n', '\n', '\r'];
+  const setEol = (to: Eol) => {
+    if (!active) return;
+    active.eol = to;
+    refresh();
+    shell.toast(`“${active.name}” will save with ${EOL_NAMES[active.eol]} line endings.`);
+  };
+  const toggleWrap = () => {
+    wrap = !wrap;
+    view.dispatch({ effects: wrapBox.reconfigure(wrap ? cm.EditorView.lineWrapping : []) });
+  };
+  const toggleSpaces = () => {
+    spaces = !spaces;
+    view.dispatch({ effects: spaceBox.reconfigure(spaces ? cm.highlightWhitespace() : []) });
+  };
+  const togglePreview = () => {
+    preview = !preview;
+    renderPreview();
+  };
+  const bar = classicBar({
+    menus: [
+      { label: 'File', items: [
+        { label: 'New tab', icon: 'new', shortcut: 'Alt+N', action: () => newTab() },
+        { label: 'Open...', icon: 'open', shortcut: 'Ctrl+O', action: () => void openPicked() },
+        { separator: true },
+        { label: 'Save', icon: 'save', shortcut: 'Ctrl+S', enabled: has, action: () => void save() },
+        { label: 'Save as...', icon: 'save-as', shortcut: 'Ctrl+Shift+S', enabled: has, action: () => void saveAs() },
+        { separator: true },
+        { label: 'Close tab', shortcut: 'Alt+W', enabled: has, action: () => active && void closeTab(active) },
+        { label: 'Close window', icon: 'close', shortcut: 'Alt+Q', action: () => app.close() },
+      ] },
+      { label: 'Edit', items: [
+        { label: 'Undo', icon: 'undo', shortcut: 'Ctrl+Z', enabled: has, action: onView(cm.undo) },
+        { label: 'Redo', icon: 'redo', shortcut: 'Ctrl+Y', enabled: has, action: onView(cm.redo) },
+        { separator: true },
+        { label: 'Cut', icon: 'cut', shortcut: 'Ctrl+X', enabled: chosen, action: clip('cut') },
+        { label: 'Copy', icon: 'copy', shortcut: 'Ctrl+C', enabled: chosen, action: clip('copy') },
+        { separator: true },
+        { label: 'Select all', icon: 'select-all', shortcut: 'Ctrl+A', enabled: has, action: onView(cm.selectAll) },
+      ] },
+      { label: 'Search', items: [
+        { label: 'Find...', icon: 'find', shortcut: 'Ctrl+F', enabled: has, action: onView(cm.openSearchPanel) },
+        { label: 'Find next', shortcut: 'F3', enabled: has, action: onView(cm.findNext) },
+        { label: 'Find previous', shortcut: 'Shift+F3', enabled: has, action: onView(cm.findPrevious) },
+        { label: 'Replace...', icon: 'replace', shortcut: 'Ctrl+H', enabled: has, action: onView(cm.openSearchPanel) },
+        { label: 'Go to line...', shortcut: 'Ctrl+G', enabled: has, action: onView(cm.gotoLine) },
+        { separator: true },
+        { label: 'Find in files...', shortcut: 'Ctrl+Shift+F', action: openFiles },
+        { separator: true },
+        { label: 'Bookmark this line', shortcut: 'Ctrl+F2', enabled: has, action: () => (toggleBookmark(), view.focus()) },
+        { label: 'Next bookmark', shortcut: 'F2', enabled: has, action: () => jumpMark(1) },
+        { label: 'Previous bookmark', shortcut: 'Shift+F2', enabled: has, action: () => jumpMark(-1) },
+      ] },
+      { label: 'View', items: [
+        { label: 'Word wrap', checked: () => wrap, action: toggleWrap },
+        { label: 'Show spaces and tabs', checked: () => spaces, action: toggleSpaces },
+        { label: 'Markdown preview', checked: () => preview, enabled: isMarkdown, action: togglePreview },
+        { separator: true },
+        { label: 'Zoom in', icon: 'zoom-in', shortcut: 'Ctrl++', enabled: () => zoom < ZOOMS[ZOOMS.length - 1], action: () => step(1) },
+        { label: 'Zoom out', icon: 'zoom-out', shortcut: 'Ctrl+-', enabled: () => zoom > ZOOMS[0], action: () => step(-1) },
+        { label: 'Normal size (100%)', shortcut: 'Ctrl+0', enabled: () => zoom !== 100, action: () => setZoom(100) },
+        { separator: true },
+        // The browser keeps Ctrl+PageDown and Ctrl+PageUp (they still work where it passes them on), so none is shown.
+        { label: 'Next tab', enabled: () => docs.length > 1, action: () => cycle(1) },
+        { label: 'Previous tab', enabled: () => docs.length > 1, action: () => cycle(-1) },
+      ] },
+      { label: 'Format', items: [
+        { label: 'Language', enabled: has, submenu: () => LANGS.map(l => ({ label: l.label, checked: () => active?.lang === l.id, action: () => setLang(l.id) })) },
+        { label: 'Line endings when saving', enabled: has, submenu: () => EOLS.map(e => ({ label: `${EOL_NAMES[e]} (${EOL_SHORT[e]})`, checked: () => active?.eol === e, action: () => setEol(e) })) },
+      ] },
+      helpMenu(shell),
+    ],
+    tools: [
+      { label: 'New tab', icon: 'new', shortcut: 'Alt+N', action: () => newTab() },
+      { label: 'Open', icon: 'open', shortcut: 'Ctrl+O', action: () => void openPicked() },
+      { label: 'Save', icon: 'save', shortcut: 'Ctrl+S', enabled: has, action: () => void save() },
+      { label: 'Save as', icon: 'save-as', shortcut: 'Ctrl+Shift+S', enabled: has, action: () => void saveAs() },
+      '|',
+      { label: 'Cut', icon: 'cut', shortcut: 'Ctrl+X', enabled: chosen, action: clip('cut') },
+      { label: 'Copy', icon: 'copy', shortcut: 'Ctrl+C', enabled: chosen, action: clip('copy') },
+      '|',
+      { label: 'Undo', icon: 'undo', shortcut: 'Ctrl+Z', enabled: has, action: onView(cm.undo) },
+      { label: 'Redo', icon: 'redo', shortcut: 'Ctrl+Y', enabled: has, action: onView(cm.redo) },
+      '|',
+      { label: 'Find', icon: 'find', shortcut: 'Ctrl+F', enabled: has, action: onView(cm.openSearchPanel) },
+      { label: 'Replace', icon: 'replace', shortcut: 'Ctrl+H', enabled: has, action: onView(cm.openSearchPanel) },
+      '|',
+      { id: 'wrap', label: 'Word wrap', icon: 'justify', pressed: () => wrap, action: toggleWrap },
+      { label: 'Zoom in', icon: 'zoom-in', shortcut: 'Ctrl++', enabled: () => zoom < ZOOMS[ZOOMS.length - 1], action: () => step(1) },
+      { label: 'Zoom out', icon: 'zoom-out', shortcut: 'Ctrl+-', enabled: () => zoom > ZOOMS[0], action: () => step(-1) },
+      '|',
+      { widget: langSelect },
+    ],
+  }, { layer: shell.menus, signal: app.signal, scope: app.root, doc: () => (active && !host.hidden ? (view.contentDOM as HTMLElement) : null), label: 'Notepad Pro menu bar' });
+
+  app.root.replaceChildren(bar.el, tabs, h('div', { class: 'npp-main' }, host, previewPane), filesPanel, status);
 
   // ---- One editor view; each tab keeps its own state ----
   const keys = cm.keymap.of([
@@ -257,7 +349,6 @@ async function run(app: AppHandle, cm: Bundle, arg: string | undefined): Promise
   function renderPreview() {
     const show = !!active && active.lang === 'markdown' && preview;
     previewPane.hidden = !show;
-    previewBtn.disabled = !active || active.lang !== 'markdown';
     if (!show) return;
     mdParser ??= cm.markdownParser.configure(cm.GFM) as MarkdownParser;
     const scroll = previewPane.scrollTop;
@@ -288,7 +379,6 @@ async function run(app: AppHandle, cm: Bundle, arg: string | undefined): Promise
       langById(d.lang).label, EOL_NAMES[d.eol], 'UTF-8', `${zoom}%`,
       count ? plural(count, 'bookmark') : '',
     ].filter(Boolean).join('  ·  ');
-    eolBtn.textContent = EOL_SHORT[d.eol];
     langSelect.value = d.lang;
     if (changed && d.lang === 'markdown' && preview) {
       clearTimeout(previewTimer);
@@ -354,6 +444,7 @@ async function run(app: AppHandle, cm: Bundle, arg: string | undefined): Promise
     refresh();
     renderPreview();
     view.focus();
+    bar.refresh();
   }
 
   function addDoc(text: string, path: string | null, name: string, fileId = '', bom = false): Doc {
@@ -412,6 +503,7 @@ async function run(app: AppHandle, cm: Bundle, arg: string | undefined): Promise
         host.hidden = true;
         previewPane.hidden = true;
         refresh();
+        bar.refresh();
       }
     } else refresh();
   }
@@ -639,49 +731,16 @@ async function run(app: AppHandle, cm: Bundle, arg: string | undefined): Promise
   }
 
   // ---- Wiring ----
-  on(newBtn, 'click', newTab, app.signal);
-  on(openBtn, 'click', () => void openPicked(), app.signal);
-  on(saveBtn, 'click', () => void save(), app.signal);
-  on(saveAsBtn, 'click', () => void saveAs(), app.signal);
-  on(findBtn, 'click', () => active && (cm.openSearchPanel(view), true), app.signal);
-  on(filesBtn, 'click', openFiles, app.signal);
-  on(markBtn, 'click', () => (toggleBookmark(), view.focus()), app.signal);
-  on(wrapBtn, 'click', () => {
-    wrap = !wrap;
-    wrapBtn.setAttribute('aria-pressed', String(wrap));
-    view.dispatch({ effects: wrapBox.reconfigure(wrap ? cm.EditorView.lineWrapping : []) });
-  }, app.signal);
-  on(spaceBtn, 'click', () => {
-    spaces = !spaces;
-    spaceBtn.setAttribute('aria-pressed', String(spaces));
-    view.dispatch({ effects: spaceBox.reconfigure(spaces ? cm.highlightWhitespace() : []) });
-  }, app.signal);
-  on(previewBtn, 'click', () => {
-    preview = !preview;
-    previewBtn.setAttribute('aria-pressed', String(preview));
-    renderPreview();
-  }, app.signal);
-  const setZoom = (z: number) => {
+  function setZoom(z: number) {
     zoom = z;
-    zoomOut.disabled = zoom === ZOOMS[0];
-    zoomIn.disabled = zoom === ZOOMS[ZOOMS.length - 1];
     view.dispatch({ effects: zoomBox.reconfigure(fontTheme(zoom)) });
     refresh();
-  };
-  const step = (dir: 1 | -1) => {
+  }
+  function step(dir: 1 | -1) {
     const i = ZOOMS.indexOf(zoom) + dir;
     if (i >= 0 && i < ZOOMS.length) setZoom(ZOOMS[i]);
-  };
-  on(zoomIn, 'click', () => step(1), app.signal);
-  on(zoomOut, 'click', () => step(-1), app.signal);
+  }
   on(langSelect, 'change', () => setLang(langSelect.value), app.signal);
-  on(eolBtn, 'click', () => {
-    if (!active) return;
-    // LF, CRLF, CR in turn: an old Mac file can be kept as it is.
-    active.eol = active.eol === '\n' ? '\r\n' : active.eol === '\r\n' ? '\r' : '\n';
-    refresh();
-    shell.toast(`“${active.name}” will save with ${EOL_NAMES[active.eol]} line endings.`);
-  }, app.signal);
   on(fGo, 'click', () => void findAll(), app.signal);
   on(fReplaceBtn, 'click', () => void replaceOpen(), app.signal);
   on(fFolderBtn, 'click', async () => {
