@@ -123,6 +123,31 @@ export function splitWordsQuoted(line: string): Word[] {
   return out;
 }
 
+/**
+ * The one redirect at the end of a line (echo text > file, echo text >> file), found outside quotes and backslash
+ * escapes, with a space before it. The target is one word and may be quoted: echo hi > "my notes.txt".
+ */
+export function findRedirect(line: string): { before: string; path: string; append: boolean } | null {
+  let quote: string | null = null;
+  let at = -1;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (quote) {
+      if (c === quote) quote = null;
+      else if (c === '\\' && quote === '"') i++;
+    } else if (c === '"' || c === "'") quote = c;
+    else if (c === '\\') i++;
+    else if (c === '>') at = i;
+  }
+  if (at < 0) return null;
+  const append = at > 0 && line[at - 1] === '>';
+  const start = append ? at - 1 : at;
+  if (start === 0 || !/\s/.test(line[start - 1])) return null;
+  const target = splitWordsQuoted(line.slice(at + 1));
+  if (target.length !== 1 || !target[0].text) return null;
+  return { before: line.slice(0, start - 1), path: target[0].text, append };
+}
+
 /** The words alone. */
 export function splitWords(line: string): string[] {
   return splitWordsQuoted(line).map(w => w.text);
@@ -267,12 +292,9 @@ export class TerminalShell {
 
   private async dispatch(line: string): Promise<Line[]> {
     // One redirect at the end: echo text > file, echo text >> file.
-    let redirect: { path: string; append: boolean } | null = null;
-    const m = /^(.*?)\s(>>?)\s*(\S+)\s*$/.exec(line);
-    if (m && !/["']/.test(m[3]) && (m[1].split(/["']/).length % 2 === 1)) {
-      line = m[1];
-      redirect = { path: m[3], append: m[2] === '>>' };
-    }
+    const found = findRedirect(line);
+    const redirect = found && { path: found.path, append: found.append };
+    if (found) line = found.before;
     const [first, ...raw] = splitWordsQuoted(line);
     const cmd = first.text;
     const args = cmd === 'find' || cmd === 'grep' || cmd === 'echo' ? raw.map(w => w.text) : await this.expand(raw);
