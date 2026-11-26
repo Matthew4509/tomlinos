@@ -5,7 +5,8 @@
 // = saves it. The cells chosen light up and the display reads "A1 + B3 − A5". Escape stops without saving.
 // → cell puts the number on the display into the chosen A or B cell. Sheets save as small .calc files.
 import { h, on } from '../core/dom.ts';
-import { baseName, joinPath, nameProblem, parentPath, uniqueName } from '../fs/names.ts';
+import { baseName, parentPath, uniqueName } from '../fs/names.ts';
+import { pickSave } from '../shell/filepicker.ts';
 import type { AppDef } from '../shell/types.ts';
 import { APPS } from './catalog.ts';
 import { saveOver } from '../shell/savefile.ts';
@@ -347,24 +348,23 @@ export const calculatorApp: AppDef = {
       } catch {
         // Saving will say what is wrong.
       }
-      const name = await shell.dialogs.prompt({
-        title: 'Save sheet',
-        label: `Name (saved in ${folder})`,
-        value: uniqueName(path ? baseName(path) : 'Sums.calc', taken),
+      const chosen = await pickSave(shell, {
+        title: 'Save sheet as',
+        folder,
+        name: uniqueName(path ? baseName(path) : 'Sums.calc', taken),
+        accept: ['calc'],
         ok: 'Save',
-        selectStem: true,
-        check: v => {
-          // The name is checked as it will be saved, with ".calc" added, so a taken one is caught here, not at Save.
-          const final = /\.calc$/i.test(v) ? v : `${v}.calc`;
-          return nameProblem(v) ?? (taken.some(t => t.toLowerCase() === final.toLowerCase()) ? `There is already something called "${final}" here.` : null);
-        },
+        types: [{ label: 'Calculator sheet', ext: ['calc'] }],
       });
-      if (name === null) return false;
-      const finalName = /\.calc$/i.test(name) ? name : `${name}.calc`;
+      if (!chosen) return false;
+      // The window gives the path the .calc ending; added here only if it ever comes back without one.
+      const target = /\.calc$/i.test(chosen.path) ? chosen.path : `${chosen.path}.calc`;
       try {
         const snap = snapshot();
-        const entry = await shell.fs.writeFile(joinPath(folder, finalName), snap.bytes, { mustBeNew: true });
-        path = joinPath(folder, entry.name);
+        const replace = target === chosen.path ? chosen.replace : !!(await shell.fs.stat(target).catch(() => null));
+        if (replace && target !== chosen.path && !(await shell.dialogs.confirm({ title: 'Replace it?', text: `“${baseName(target)}” already exists. Replace it with this one?`, ok: 'Replace', danger: true, cancel: 'Cancel' }))) return false;
+        const entry = await shell.fs.writeFile(target, snap.bytes, replace ? {} : { mustBeNew: true });
+        path = target;
         markSaved(entry.id, snap);
         shell.toast(`Saved “${entry.name}”.`);
         return true;

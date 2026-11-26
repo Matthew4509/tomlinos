@@ -2,7 +2,8 @@
 // 160 x 90 screen, what the program prints, its registers). File > Open and Save work on the desktop's own files
 // (.s and .asm); the Examples menu loads the example RISC-V games. F5 runs, F6 pauses, F8 steps, F9 checks.
 import { h, on } from '../core/dom.ts';
-import { baseName, joinPath, nameProblem, parentPath } from '../fs/names.ts';
+import { baseName, joinPath, parentPath } from '../fs/names.ts';
+import { pickFile, pickSave, type FileTypeChoice } from '../shell/filepicker.ts';
 import { saveOver } from '../shell/savefile.ts';
 import type { AppDef, AppHandle } from '../shell/types.ts';
 import { dosAlert, dosBox, DosMenuBar, dosPrompt, type DosItem } from './riscv/dos.ts';
@@ -17,6 +18,11 @@ const MAX_SOURCE_BYTES = 1024 * 1024;
 const LINE_PX = 20;
 const PAD_PX = 4;
 const CODE_TYPES = ['s', 'asm'];
+/** The kinds of program Open and Save as offer. */
+const CODE_CHOICES: FileTypeChoice[] = [
+  { label: 'Assembly program', ext: ['s'] },
+  { label: 'Assembly program (.asm)', ext: ['asm'] },
+];
 
 type Mark = 'error' | 'pc';
 
@@ -547,22 +553,16 @@ class Studio {
   }
 
   private async saveAs(): Promise<boolean> {
-    const path = await this.fileDialog('save');
-    if (!path) return false;
     const shell = this.app.shell;
+    // The kind the program has now comes first, so the window starts on it.
+    const asm = /\.asm$/i.test(this.name);
+    const types = asm ? [CODE_CHOICES[1], CODE_CHOICES[0]] : CODE_CHOICES;
+    const chosen = await pickSave(shell, { title: 'Save program as', folder: this.folder, name: /\.(s|asm)$/i.test(this.name) ? this.name : 'PROGRAM.S', accept: CODE_TYPES, ok: 'Save', types });
+    if (!chosen) return false;
+    const path = chosen.path;
     try {
-      const existing = await shell.fs.stat(path);
-      if (existing) {
-        if (existing.kind !== 'file') throw new Error(`There is a folder called "${existing.name}" there.`);
-        const ok = await dosBox<boolean>(this.app.root, {
-          title: 'Replace?',
-          body: [h('p', {}, `${existing.name} already exists in ${parentPath(path)}.`), h('p', {}, 'Replace it with this program?')],
-          buttons: [{ label: 'Replace', value: true }, { label: 'Cancel', value: false, primary: true }],
-        });
-        if (!ok) return false;
-      }
       const text = this.area.value;
-      const entry = await shell.fs.writeFile(path, new TextEncoder().encode(text), existing ? {} : { mustBeNew: true });
+      const entry = await shell.fs.writeFile(path, new TextEncoder().encode(text), chosen.replace ? {} : { mustBeNew: true });
       this.path = joinPath(parentPath(path), entry.name);
       this.name = entry.name;
       this.example = false;
@@ -581,100 +581,8 @@ class Studio {
 
   private async openDialog(): Promise<void> {
     if (!(await this.keepOrDiscard())) return;
-    const path = await this.fileDialog('open');
+    const path = await pickFile(this.app.shell, { title: 'Open program', folder: this.folder, accept: CODE_TYPES, ok: 'Open', types: [{ label: 'All programs', ext: CODE_TYPES }, ...CODE_CHOICES] });
     if (path) await this.openPath(path);
-  }
-
-  /** The DOS-style Open and Save As box: a name field, the folder, and a list of folders and programs. */
-  private async fileDialog(mode: 'open' | 'save'): Promise<string | null> {
-    const shell = this.app.shell;
-    let folder = this.folder;
-    try {
-      const f = await shell.fs.stat(folder);
-      if (folder !== '/' && (!f || f.kind !== 'folder')) folder = '/Documents';
-    } catch {
-      folder = '/Documents';
-    }
-    const nameIn = h('input', { type: 'text', class: 'dos-field', spellcheck: 'false', autocomplete: 'off', value: mode === 'save' ? (/\.(s|asm)$/i.test(this.name) ? this.name : 'PROGRAM.S') : '*.S' });
-    const where = h('p', { class: 'dos-where' });
-    const list = h('select', { class: 'dos-list', size: 12, 'aria-label': 'Folders and programs' });
-    const problem = h('p', { class: 'dos-problem', role: 'alert' });
-    let chosen: string | null = null;
-
-    const fill = async () => {
-      where.textContent = folder;
-      let entries: Array<{ name: string; kind: 'file' | 'folder' }> = [];
-      try {
-        entries = await shell.fs.list(folder);
-      } catch (error) {
-        problem.textContent = error instanceof Error ? error.message : String(error);
-      }
-      const folders = entries.filter(e => e.kind === 'folder').map(e => e.name).sort((a, b) => a.localeCompare(b));
-      const files = entries.filter(e => e.kind === 'file' && CODE_TYPES.includes(e.name.slice(e.name.lastIndexOf('.') + 1).toLowerCase())).map(e => e.name).sort((a, b) => a.localeCompare(b));
-      list.replaceChildren(
-        ...(folder === '/' ? [] : [h('option', { value: 'up' }, '.. (up one folder)')]),
-        ...folders.map(n => h('option', { value: `d:${n}` }, `[${n}]`)),
-        ...files.map(n => h('option', { value: `f:${n}` }, n)),
-      );
-      if (!files.length && !folders.length) list.append(h('option', { value: '', disabled: true }, '(no .S or .ASM programs here)'));
-    };
-
-    const activate = async (): Promise<boolean> => {
-      const v = list.value;
-      if (v === 'up') {
-        folder = parentPath(folder);
-        await fill();
-        return false;
-      }
-      if (v.startsWith('d:')) {
-        folder = joinPath(folder, v.slice(2));
-        await fill();
-        return false;
-      }
-      if (v.startsWith('f:')) nameIn.value = v.slice(2);
-      return true;
-    };
-
-    const accept = (): boolean => {
-      const name = nameIn.value.trim();
-      const issue = name.includes('*') ? 'Choose a program from the list, or type its name.' : nameProblem(name);
-      problem.textContent = issue ?? '';
-      if (issue) return false;
-      chosen = joinPath(folder, mode === 'save' && !/\.[A-Za-z0-9]+$/.test(name) ? `${name}.S` : name);
-      return true;
-    };
-
-    await fill();
-    const result = await dosBox<'ok'>(this.app.root, {
-      title: mode === 'open' ? 'Open Program' : 'Save As',
-      wide: true,
-      body: [h('label', { class: 'dos-row' }, h('span', {}, 'File Name:'), nameIn), where, list, problem],
-      buttons: [
-        { label: mode === 'open' ? 'Open' : 'Save', value: 'ok', primary: true },
-        { label: 'Cancel', value: null as unknown as 'ok' },
-      ],
-      ready: close => {
-        nameIn.focus();
-        nameIn.select();
-        list.addEventListener('dblclick', () => void activate().then(done => done && accept() && close('ok')));
-        list.addEventListener('keydown', event => {
-          if (event.key !== 'Enter') return;
-          event.preventDefault();
-          event.stopPropagation();
-          void activate().then(done => done && accept() && close('ok'));
-        });
-        list.addEventListener('change', () => {
-          if (list.value.startsWith('f:')) nameIn.value = list.value.slice(2);
-        });
-        nameIn.closest('.dos-box')?.querySelector<HTMLButtonElement>('.dos-btn.primary')?.addEventListener('click', event => {
-          if (!accept()) {
-            event.stopImmediatePropagation();
-            nameIn.focus();
-          }
-        }, { capture: true });
-      },
-    });
-    return result === 'ok' ? chosen : null;
   }
 
   // ---- Search ------------------------------------------------------------------------------------------------------
