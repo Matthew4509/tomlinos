@@ -1,4 +1,4 @@
-// Drives CAD Draft in a real Chrome: the window's parts (menus, two toolbars, the tool columns, the Layers panel, the
+// Drives CAD Draft in a real Chrome: the window's parts (menus, the toolbars across the top and down each side, the Layers panel, the
 // drawing area, the command line, the status bar), a closed 600 x 400 outline typed on the command line, undo and
 // redo, saving and opening again; snaps found with the pointer (middle, intersection, centre); the shapes (circle by
 // diameter, ellipse, polygon, slot, arcs, curves); construction lines and tangent lines; choosing by window, crossing
@@ -130,10 +130,10 @@ await step('CAD Draft is in Start > Office and opens in the classic CAD layout',
   ok(labels.includes('cad draft'), 'listed in Office: ' + labels.join(', '));
   await page.keyboard.press('Escape');
   await openCad();
-  eq(await W().locator('.menubar-item').allInnerTexts(), ['File', 'Edit', 'View', 'Geometry', 'CAD', 'Utils', 'Help'], 'menus in order');
-  eq(await W().locator('.cad-tb').count(), 3, 'three toolbar rows');
-  eq(await W().locator('.cad-col').count(), 2, 'a tool column each side');
-  eq(await W().locator('.cad-snaps .cad-btn').count(), 9, 'nine snaps on the right');
+  eq(await W().locator('.cbar-title:not(.cbar-more)').allInnerTexts(), ['File', 'Edit', 'View', 'Geometry', 'CAD', 'Utils', 'Help'], 'menus in order');
+  eq(await W().locator('.cbar-dock-top .cbar-band').evaluateAll(els => els.map(e => e.getAttribute('aria-label'))), ['Standard', 'Draw', 'Text and dimensions', 'Modify', 'Trim and fillet', 'Construction', 'Geometries', 'Measure'], 'toolbars across the top');
+  eq(await W().locator('.cbar-dock-side .cbar-band').evaluateAll(els => els.map(e => e.getAttribute('aria-label'))), ['Select and zoom', 'Snaps'], 'a toolbar down each side');
+  eq(await W().locator('[data-toolbar="snaps"] .cbar-tool:not(.cbar-more)').count(), 9, 'nine snaps on the right');
   ok(await W().locator('.cad-panel').isVisible(), 'the Layers panel');
   eq(await W().locator('.cad-layer-name').allInnerTexts().then(t => t.map(s => s.replace(' ✎', ''))), ['Geometry', 'Construction', 'Dimensions', 'Text'], 'the first layers');
   eq(await canvas().evaluate(c => getComputedStyle(c.parentElement).backgroundColor), 'rgb(30, 32, 136)', 'dark blue drawing area');
@@ -442,7 +442,7 @@ await step('session 7: text, text round an arc, dimensions (linear, diameter, an
   await cmd('circle', '300,200', '50');
   await page.keyboard.press('Escape');
   // Text: a point, then the words in the box (two lines), on the Text layer.
-  await W().locator('.cad-tb .cad-btn[aria-label="Text"]').click();
+  await W().locator('.cbar-tool[aria-label="Text"]').click();
   await cmd('100,450');
   await D().locator('textarea').fill('FRONT PANEL\nOak 18');
   await D().getByRole('button', { name: 'OK' }).click();
@@ -1166,9 +1166,10 @@ await step('phone width (375 x 812): the drawing area gets the room, one toolbar
     ok(!(await W().locator('.cad-panel').isVisible()), 'Layers starts closed');
     const y = await W().locator('.cad-xy').last().boundingBox();
     ok(y.x + y.width <= 375, `the Y readout is on screen: its right edge is at ${y.x + y.width}`);
-    const tops = await W().locator('.cad-tb').evaluateAll(rows => rows.map(r => Math.round(r.getBoundingClientRect().top)));
+    const tops = await W().locator('.cbar-dock-top .cbar-band').evaluateAll(rows => rows.map(r => Math.round(r.getBoundingClientRect().top)));
     eq(new Set(tops).size, 1, `one toolbar row (tops ${tops})`);
-    const strip = await W().locator('.cad-tbs').evaluate(el => ({ sw: el.scrollWidth, cw: el.clientWidth, h: el.clientHeight, overflow: getComputedStyle(el).overflowX }));
+    eq(await W().locator('.cbar-dock-side .cbar-band:visible').count(), 0, 'the side toolbars are up in that row (no room beside the drawing)');
+    const strip = await W().locator('.cbar-dock-top').evaluate(el => ({ sw: el.scrollWidth, cw: el.clientWidth, h: el.clientHeight, overflow: getComputedStyle(el).overflowX }));
     ok(strip.sw > strip.cw && strip.overflow === 'auto', `it scrolls sideways: ${JSON.stringify(strip)}`);
     ok(strip.h <= 40, `one row high: ${strip.h}`);
     const body = await W().locator('.cad').evaluate(el => ({ sw: el.scrollWidth, cw: el.clientWidth, sh: el.scrollHeight, ch: el.clientHeight }));
@@ -1195,7 +1196,7 @@ await step('phone width (375 x 812): the drawing area gets the room, one toolbar
     await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
     await closeAll();
     await openCad();
-    eq(await W().locator('.cad-btn').first().evaluate(b => b.getBoundingClientRect().width), 32, 'large buttons on a touch screen');
+    eq(await W().locator('.cbar-tool').first().evaluate(b => b.getBoundingClientRect().width), 32, 'large buttons on a touch screen');
     await closeAll();
   } finally {
     await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: false }).catch(() => {});
@@ -1207,7 +1208,7 @@ await step('phone width (375 x 812): the drawing area gets the room, one toolbar
   await page.waitForTimeout(600);
   await openCad();
   ok(await W().locator('.cad-panel').isVisible(), 'on the desktop Layers is open as before');
-  eq(await W().locator('.cad-btn').first().evaluate(b => b.getBoundingClientRect().width), 24, 'and the buttons are the usual size');
+  eq(await W().locator('.cbar-tool').first().evaluate(b => b.getBoundingClientRect().width), 24, 'and the buttons are the usual size');
   ok((await canvas().boundingBox()).width > 800, 'and the drawing area is wide');
 });
 
@@ -1237,7 +1238,7 @@ await step('the question being asked is told to a screen reader with the boxes; 
   // A text with "null" in its words still shows while it is being moved.
   await closeAll();
   await openCad();
-  await W().locator('.cad-tb .cad-btn[aria-label="Text"]').click();
+  await W().locator('.cbar-tool[aria-label="Text"]').click();
   await cmd('0,0');
   await D().locator('textarea').fill('annulled');
   await D().getByRole('button', { name: 'OK' }).click();
@@ -1309,7 +1310,7 @@ await step('View: grid, white background, large icons, help', async () => {
   await W().getByRole('menuitem', { name: 'View' }).click();
   await page.locator('.menu').getByText('Large icons', { exact: true }).click();
   ok(await W().locator('.cad.cad-large').count(), 'large icons');
-  eq(await W().locator('.cad-btn').first().evaluate(b => b.getBoundingClientRect().width), 32, '32 px buttons');
+  eq(await W().locator('.cbar-tool').first().evaluate(b => b.getBoundingClientRect().width), 32, '32 px buttons');
   await W().getByRole('menuitem', { name: 'Help' }).click();
   await page.locator('.menu').getByText('What CAD Draft does', { exact: true }).click();
   ok((await D().innerText()).includes('Never here: CAM (toolpaths, G-code), 3D'), 'help says what is not here');
