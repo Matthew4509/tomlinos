@@ -463,7 +463,7 @@ export const calculatorApp: AppDef = {
           { label: 'Save sheet as...', icon: 'save-as', shortcut: 'Ctrl+Shift+S', shown: () => open, action: () => void saveAs() },
         ] },
         { label: 'View', items: [
-          { label: 'Sheet beside the calculator', checked: () => open, action: () => setOpen(!open) },
+          { label: 'Extended', checked: () => open, action: () => setOpen(!open) },
         ] },
         helpMenu(shell),
       ],
