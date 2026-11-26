@@ -1,5 +1,5 @@
 // Notepad: plain text only. Opens a file (or starts an empty one), saves with Ctrl+S, and asks before losing changes.
-// Find and Replace (Ctrl+F, Ctrl+H), Go to line (Ctrl+G), word wrap, zoom (Ctrl + and -), and a status bar with the
+// Tab types a tab (Escape then Tab, or Shift+Tab, moves on). Find and Replace (Ctrl+F, Ctrl+H), Go to line (Ctrl+G), word wrap, zoom (Ctrl + and -), and a status bar with the
 // line, column and the file's line endings, which are kept on save. It never shows anything as a page, so a .html
 // file is just letters. If the file was changed elsewhere since it was opened, saving asks before replacing it.
 // The app id stays "editor" so file types, the Terminal's "nano file" and saved sessions keep working.
@@ -297,6 +297,17 @@ export const editorApp: AppDef = {
       select(at, at);
     }
 
+    // Tab types a tab (undone by Ctrl+Z). The keyboard way out of the text: Escape, then Tab; Shift+Tab also leaves.
+    let leaving = false;
+    on(area, 'keydown', (event: KeyboardEvent) => {
+      const plainTab = event.key === 'Tab' && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey;
+      if (plainTab && !leaving) {
+        event.preventDefault();
+        typeOver(area.selectionStart, area.selectionEnd, '\t');
+      }
+      leaving = event.key === 'Escape';
+    }, app.signal);
+    on(area, 'blur', () => (leaving = false), app.signal);
     on(area, 'input', refresh, app.signal);
     for (const type of ['keyup', 'click', 'select'] as const) on(area, type, refresh, app.signal);
     on(saveBtn, 'click', () => void save(), app.signal);
