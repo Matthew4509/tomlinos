@@ -52,7 +52,7 @@ export const linkApp: AppDef = {
     app.setTitle(baseName(arg));
     if (!url) {
       app.root.append(h('div', { class: 'pad' },
-        h('p', {}, 'This link is not followed: its address does not start with https:// or http://.'),
+        h('p', {}, 'This link is not followed: its address does not start with https:// or http://, so it is not a web page.'),
         h('p', { class: 'hint' }, 'You can open it in Notepad to see or fix what is inside.')));
       return;
     }
