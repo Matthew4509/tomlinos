@@ -246,7 +246,9 @@ await step('E-P0-4: copying a folder called "Project v1.5" next to itself gives 
   await newFolder('Project v1.5');
   await item('Project v1.5').click();
   await page.keyboard.press('Control+c');
-  await ew().locator('.explorer-view').click({ position: { x: 5, y: 300 } });
+  // An empty spot near the foot of the view (the menu bar and toolbar above it leave less than 300 px at this size).
+  const viewBox = await ew().locator('.explorer-view').boundingBox();
+  await ew().locator('.explorer-view').click({ position: { x: 5, y: Math.round(viewBox.height) - 8 } });
   await page.keyboard.press('Control+v');
   await settle(800);
   const all = await names();

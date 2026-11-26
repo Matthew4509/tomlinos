@@ -1,6 +1,8 @@
-// File Explorer. A toolbar (Back, Forward, Up, the path (click it to type one), Upload, Download), the shared
-// folder view, and a status line. Every part of the path is a drop target for moving items. The search box (Ctrl+F)
-// looks through this folder and every folder inside it, by name and, when ticked, inside text files.
+// File Explorer. A menu bar (File, Edit, View, Go, Help) and a toolbar of small pictures (Back, Forward, Up, New folder,
+// Cut, Copy, Paste, Rename, Delete, Properties, Refresh), then the address row (the path (click it to type one),
+// Search, Upload, Download), the shared folder view, and a status line. Every part of the path is a drop target for
+// moving items. The search box (Ctrl+F) looks through this folder and every folder inside it, by name and, when
+// ticked, inside text files.
 import { css, h, on } from '../core/dom.ts';
 import { formatDate } from '../core/format.ts';
 import { joinPath, nameKey, parentPath, splitPath } from '../fs/names.ts';
@@ -10,7 +12,9 @@ import { icon } from '../shell/icons.ts';
 import { MAX_HITS, searchFiles } from '../shell/search.ts';
 import type { AppDef } from '../shell/types.ts';
 import { destinationReason } from '../shell/actions.ts';
+import { classicBar } from '../shell/menubar.ts';
 import { APPS } from './catalog.ts';
+import { fromMenuItems, helpMenu } from './classic-menus.ts';
 
 export const explorerApp: AppDef = {
   ...APPS.explorer,
@@ -20,9 +24,6 @@ export const explorerApp: AppDef = {
     const back: string[] = [];
     const forward: string[] = [];
 
-    const backBtn = h('button', { type: 'button', class: 'tool', 'aria-label': 'Back', title: 'Back' }, '←');
-    const forwardBtn = h('button', { type: 'button', class: 'tool', 'aria-label': 'Forward', title: 'Forward' }, '→');
-    const upBtn = h('button', { type: 'button', class: 'tool', 'aria-label': 'Up one folder', title: 'Up one folder' }, '↑');
     const crumbs = h('nav', { class: 'crumbs', 'aria-label': 'Folder path', title: 'Click the empty part to type a path' });
     const address = h('input', { type: 'text', class: 'field address', 'aria-label': 'Folder path', spellcheck: 'false', autocomplete: 'off' });
     css(address, { display: 'none' });
@@ -35,7 +36,7 @@ export const explorerApp: AppDef = {
     const results = h('div', { class: 'search-results', role: 'list', 'aria-label': 'Search results', hidden: true });
     const statusEl = h('div', { class: 'statusbar', role: 'status' });
     app.root.classList.add('explorer');
-    app.root.append(h('div', { class: 'toolbar' }, backBtn, forwardBtn, upBtn, crumbs, address, search, insideLabel, uploadBtn, downloadBtn), body, results, statusEl);
+    const addressRow = h('div', { class: 'toolbar' }, crumbs, address, search, insideLabel, uploadBtn, downloadBtn);
 
     const view = createFolderView({
       shell,
@@ -48,6 +49,104 @@ export const explorerApp: AppDef = {
       onUp: () => up(),
       onStatus: text => (statusEl.textContent = text),
     });
+
+    // ---- Menu bar and toolbar ----
+    const cmd = view.commands;
+    const chosen = () => view.selectedPaths();
+    const some = () => chosen().length > 0;
+    const atTop = () => splitPath(path).length === 0;
+    const properties = () => {
+      const one = chosen();
+      void shell.actions.properties(one.length === 1 ? one[0] : path);
+    };
+    const recycle = () => {
+      const paths = chosen();
+      if (paths.length) void shell.actions.deleteToBin(paths);
+    };
+    const download = () => {
+      const paths = chosen();
+      if (paths.length) void shell.transfers.download(paths);
+      else void shell.dialogs.alert('Nothing selected', 'Click a file or folder first, then Download.');
+    };
+    const findBox = () => {
+      search.focus();
+      search.select();
+    };
+    const bar = classicBar({
+      menus: [
+        { label: 'File', items: [
+          { label: 'Open', shortcut: 'Enter', enabled: () => cmd.chosen() > 0, action: () => cmd.open() },
+          { separator: true },
+          { label: 'New folder', icon: 'new-folder', action: () => void cmd.create('folder') },
+          { label: 'New', submenu: [
+            { label: 'Text document', action: () => void cmd.create('text') },
+            { label: 'Spreadsheet', action: () => void cmd.create('sheet') },
+            { label: 'Web link...', action: () => void cmd.create('link') },
+          ] },
+          { separator: true },
+          { label: 'Upload files...', action: () => shell.transfers.choose('files', path) },
+          { label: 'Upload a folder...', action: () => shell.transfers.choose('folder', path) },
+          { label: 'Download', enabled: some, action: download },
+          { separator: true },
+          { label: 'Open Terminal here', shown: () => shell.hasApp('terminal'), action: () => void shell.openApp('terminal', path) },
+          { label: 'Properties', icon: 'properties', shortcut: 'Alt+Enter', action: properties },
+          { separator: true },
+          { label: 'Close', icon: 'close', shortcut: 'Alt+Q', action: () => app.close() },
+        ] },
+        { label: 'Edit', items: [
+          { label: 'Cut', icon: 'cut', shortcut: 'Ctrl+X', enabled: some, action: () => shell.actions.setClipboard('cut', chosen()) },
+          { label: 'Copy', icon: 'copy', shortcut: 'Ctrl+C', enabled: some, action: () => shell.actions.setClipboard('copy', chosen()) },
+          { label: 'Paste', icon: 'paste', shortcut: 'Ctrl+V', enabled: () => !!shell.clipboard, action: () => void shell.actions.paste(path) },
+          { separator: true },
+          { label: 'Delete', icon: 'recycle', shortcut: 'Delete', enabled: some, action: recycle },
+          { label: 'Rename', icon: 'rename', shortcut: 'F2', enabled: () => cmd.chosen() === 1 && some(), action: () => cmd.rename() },
+          { separator: true },
+          { label: 'Select all', icon: 'select-all', shortcut: 'Ctrl+A', action: () => cmd.selectAll() },
+          { separator: true },
+          { label: 'Search...', icon: 'find', shortcut: 'Ctrl+F', action: findBox },
+        ] },
+        { label: 'View', items: () => [
+          ...fromMenuItems(cmd.viewItems()),
+          { separator: true },
+          { label: 'Sort by', submenu: () => fromMenuItems(cmd.sortItems()) },
+          { label: 'Search inside files', checked: () => inside.checked, action: () => {
+            inside.checked = !inside.checked;
+            if (search.value.trim()) void runSearch();
+          } },
+          { separator: true },
+          { label: 'Refresh', icon: 'refresh', shortcut: 'F5', action: () => void view.refresh() },
+        ] },
+        { label: 'Go', items: [
+          { label: 'Back', icon: 'back', shortcut: 'Alt+Left', enabled: () => back.length > 0, action: goBack },
+          { label: 'Forward', icon: 'forward', shortcut: 'Alt+Right', enabled: () => forward.length > 0, action: goForward },
+          { label: 'Up one folder', icon: 'up-folder', shortcut: 'Alt+Up', enabled: () => !atTop(), action: up },
+          { separator: true },
+          { label: 'Type a path...', shortcut: 'Ctrl+L', action: editPath },
+          { label: 'This desktop', action: () => go('/') },
+          { label: 'Recycle Bin', shown: () => shell.hasApp('trash'), action: () => void shell.openApp('trash') },
+        ] },
+        helpMenu(shell),
+      ],
+      tools: [
+        { label: 'Back', icon: 'back', shortcut: 'Alt+Left', enabled: () => back.length > 0, action: goBack },
+        { label: 'Forward', icon: 'forward', shortcut: 'Alt+Right', enabled: () => forward.length > 0, action: goForward },
+        { id: 'up', label: 'Up one folder', icon: 'up-folder', shortcut: 'Alt+Up', enabled: () => !atTop(), action: up },
+        '|',
+        { label: 'New folder', icon: 'new-folder', action: () => void cmd.create('folder') },
+        '|',
+        { label: 'Cut', icon: 'cut', shortcut: 'Ctrl+X', enabled: some, action: () => shell.actions.setClipboard('cut', chosen()) },
+        { label: 'Copy', icon: 'copy', shortcut: 'Ctrl+C', enabled: some, action: () => shell.actions.setClipboard('copy', chosen()) },
+        { label: 'Paste', icon: 'paste', shortcut: 'Ctrl+V', enabled: () => !!shell.clipboard, action: () => void shell.actions.paste(path) },
+        '|',
+        { label: 'Rename', icon: 'rename', shortcut: 'F2', enabled: () => cmd.chosen() === 1 && some(), action: () => cmd.rename() },
+        { label: 'Delete (to the Recycle Bin)', icon: 'recycle', shortcut: 'Delete', enabled: some, action: recycle },
+        { label: 'Properties', icon: 'properties', shortcut: 'Alt+Enter', action: properties },
+        '|',
+        { label: 'Refresh', icon: 'refresh', shortcut: 'F5', action: () => void view.refresh() },
+      ],
+    }, { layer: shell.menus, signal: app.signal, scope: app.root, doc: () => body.querySelector<HTMLElement>('[tabindex="0"]') ?? body, label: 'File Explorer menu bar' });
+    app.root.append(bar.el, addressRow, body, results, statusEl);
+    shell.clipboardChanged.on(() => bar.refresh(), app.signal);
 
     function drawCrumbs(): void {
       const parts = splitPath(path);
@@ -67,9 +166,7 @@ export const explorerApp: AppDef = {
       const title = parts.length ? parts[parts.length - 1] : 'This desktop';
       app.setTitle(title);
       app.setIcon(parts.length ? 'folder' : 'files');
-      backBtn.disabled = back.length === 0;
-      forwardBtn.disabled = forward.length === 0;
-      upBtn.disabled = parts.length === 0;
+      bar.refresh();
     }
 
     async function show(): Promise<void> {
@@ -255,19 +352,18 @@ export const explorerApp: AppDef = {
       if (splitPath(path).length) go(parentPath(path));
     }
 
-    on(backBtn, 'click', () => {
+    function goBack(): void {
       const to = back.pop();
       if (to === undefined) return;
       forward.push(path);
       go(to, false);
-    }, app.signal);
-    on(forwardBtn, 'click', () => {
+    }
+    function goForward(): void {
       const to = forward.pop();
       if (to === undefined) return;
       back.push(path);
       go(to, false);
-    }, app.signal);
-    on(upBtn, 'click', up, app.signal);
+    }
 
     function editPath(): void {
       address.value = path === '/' ? '/' : path;
@@ -328,11 +424,7 @@ export const explorerApp: AppDef = {
     let asking = false;
     on(address, 'blur', () => !asking && stopEditing(), app.signal);
     on(uploadBtn, 'click', (event: MouseEvent) => shell.transfers.choose(event.shiftKey ? 'folder' : 'files', path), app.signal);
-    on(downloadBtn, 'click', () => {
-      const chosen = view.selectedPaths();
-      if (chosen.length) void shell.transfers.download(chosen);
-      else void shell.dialogs.alert('Nothing selected', 'Click a file or folder first, then Download.');
-    }, app.signal);
+    on(downloadBtn, 'click', download, app.signal);
     on(app.root, 'keydown', (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
         event.preventDefault();
@@ -343,8 +435,8 @@ export const explorerApp: AppDef = {
         editPath();
       } else if (event.altKey && !event.ctrlKey && !event.metaKey) {
         // Alt alone: Ctrl+Alt+arrow snaps the window (keys.ts) and must not also go Back, Forward or Up.
-        if (event.key === 'ArrowLeft') backBtn.click();
-        else if (event.key === 'ArrowRight') forwardBtn.click();
+        if (event.key === 'ArrowLeft') goBack();
+        else if (event.key === 'ArrowRight') goForward();
         else if (event.key === 'ArrowUp') up();
       }
     }, app.signal);

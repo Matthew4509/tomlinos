@@ -46,6 +46,17 @@ export interface FolderView {
   refresh(): Promise<void>;
   focus(): void;
   selectedPaths(): string[];
+  /** What its right-click menus and keys do, for a window's own menu bar to reach (File Explorer's). */
+  commands: {
+    /** How many items are selected (the Desktop and Recycle Bin shortcuts count too). */
+    chosen(): number;
+    open(): void;
+    rename(): void;
+    create(kind: 'folder' | 'text' | 'sheet' | 'link'): Promise<void>;
+    selectAll(): void;
+    viewItems(): MenuItem[];
+    sortItems(): MenuItem[];
+  };
 }
 
 interface Item {
@@ -831,6 +842,21 @@ export function createFolderView(o: ViewOptions): FolderView {
     refresh,
     focus: () => (focusKey ? els.get(focusKey) : null)?.focus({ preventScroll: true }) ?? host.focus({ preventScroll: true }),
     selectedPaths: () => realSelected().map(i => i.path),
+    commands: {
+      chosen: () => selected.size,
+      open: () => selectedItems().slice(0, 10).forEach(open),
+      rename: () => {
+        if (selected.size === 1) startRename([...selected][0]);
+      },
+      create: kind => create(kind),
+      selectAll: () => {
+        for (const item of items) selected.add(item.key);
+        paintSelection();
+        status();
+      },
+      viewItems: viewMenu,
+      sortItems: sortMenu,
+    },
   };
 }
 
