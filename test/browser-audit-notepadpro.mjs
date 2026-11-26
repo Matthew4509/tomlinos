@@ -197,6 +197,47 @@ await step('the open tab can be reached with the keyboard (one tab in the Tab or
   eq(await w.locator('.npp-tab.active').getAttribute('tabindex'), '0', 'active tab tabindex');
 });
 
+await step('NP-P1-7: the New and Close shortcuts shown are ones the browser lets through (Alt+N, Alt+W), and they work', async () => {
+  await closeAll();
+  await page.locator('.start-btn').click();
+  await page.locator('.start-filter').fill('notepad pro');
+  await page.locator('.start-menu [data-label="notepad pro"]').first().click();
+  const w = npp();
+  await w.locator('.cm-content').waitFor({ timeout: 15000 });
+  const tips = [await w.getByRole('button', { name: 'New', exact: true }).getAttribute('title'), await w.locator('.npp-tab-x').first().getAttribute('title')].join(' | ');
+  ok(!/Ctrl\+[NW]\b/.test(tips) && /Alt\+N/.test(tips) && /Alt\+W/.test(tips), 'tooltips: ' + tips);
+  await w.locator('.cm-content').click();
+  await page.keyboard.press('Alt+n');
+  eq(await w.locator('.npp-tab').count(), 2, 'tabs after Alt+N');
+  await page.keyboard.press('Alt+w');
+  eq(await w.locator('.npp-tab').count(), 1, 'tabs after Alt+W');
+});
+
+await step('NP-P1-2: the tab strip is a tab list the arrow keys move along', async () => {
+  const w = npp();
+  await w.locator('.cm-content').click();
+  await page.keyboard.press('Alt+n');
+  await page.keyboard.press('Alt+n');
+  eq(await w.locator('[role=tab]').count(), 3, 'tabs');
+  await w.locator('.npp-tab.active').focus();
+  const focused = () => page.evaluate(() => document.activeElement?.querySelector?.('.npp-tab-name')?.textContent ?? document.activeElement?.className);
+  const before = await focused();
+  await page.keyboard.press('ArrowLeft');
+  const left = await focused();
+  ok(left !== before && (await w.locator('.npp-tab.active .npp-tab-name').innerText()) === left, `ArrowLeft: focus ${before} -> ${left}`);
+  await page.keyboard.press('Home');
+  eq(await w.locator('[role=tab]').first().evaluate(t => t === document.activeElement && t.getAttribute('aria-selected')), 'true', 'Home: first tab focused and selected');
+  await page.keyboard.press('End');
+  eq(await w.locator('[role=tab]').last().evaluate(t => t === document.activeElement && t.getAttribute('aria-selected')), 'true', 'End: last tab focused and selected');
+  await page.keyboard.press('ArrowRight');
+  eq(await w.locator('[role=tab]').first().evaluate(t => t === document.activeElement), true, 'ArrowRight from the last goes round to the first');
+  eq(await w.locator('[role=tab][tabindex="0"]').count(), 1, 'tabs in the Tab order');
+  eq(await w.locator('.npp-tab-x[tabindex="-1"]').count(), 3, 'close buttons kept out of the Tab order');
+  await page.keyboard.press('Delete');
+  eq(await w.locator('[role=tab]').count(), 2, 'tabs after Delete on a tab');
+  ok(await page.evaluate(() => document.activeElement?.getAttribute('role') === 'tab'), 'after Delete the focus stays on the tab list');
+});
+
 await step('no errors in the page', async () => eq(problems.filter(p => !p.includes('404')), [], 'problems'));
 
 // Last, because it can hang the page for good: a pattern that can match nothing, on a file holding an emoji.

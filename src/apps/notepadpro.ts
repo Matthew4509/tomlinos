@@ -314,6 +314,24 @@ async function run(app: AppHandle, cm: Bundle, arg: string | undefined): Promise
     return tab;
   }
 
+  // The strip as a tab list: Left and Right (round the ends), Home and End choose a tab and keep the focus on it;
+  // Delete closes the focused tab (asking first if it has changes).
+  on(tabs, 'keydown', async (e: KeyboardEvent) => {
+    const at = docs.findIndex(d => d.tab === e.target);
+    if (at < 0 || e.ctrlKey || e.altKey || e.metaKey) return;
+    const to = e.key === 'ArrowRight' ? (at + 1) % docs.length : e.key === 'ArrowLeft' ? (at - 1 + docs.length) % docs.length
+      : e.key === 'Home' ? 0 : e.key === 'End' ? docs.length - 1 : -1;
+    if (to >= 0) {
+      e.preventDefault();
+      activate(docs[to]);
+      docs[to].tab.focus();
+    } else if (e.key === 'Delete') {
+      e.preventDefault();
+      await closeTab(docs[at]);
+      active?.tab.focus();
+    }
+  }, app.signal);
+
   function labelTab(d: Doc) {
     d.tab.querySelector('.npp-tab-name')!.textContent = d.name;
     d.tab.title = d.path ?? d.name;
@@ -330,6 +348,7 @@ async function run(app: AppHandle, cm: Bundle, arg: string | undefined): Promise
     for (const doc of docs) {
       doc.tab.classList.toggle('active', doc === d);
       doc.tab.setAttribute('aria-selected', String(doc === d));
+      doc.tab.tabIndex = doc === d ? 0 : -1; // one stop in the Tab order; the arrow keys move along the strip
     }
     d.tab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     refresh();
