@@ -490,15 +490,17 @@ export async function startDesktop(root: HTMLElement, store: Store, account: Acc
 
   // Housekeeping, as the person set it in Settings (the Recycle Bin's clearing, and old AI chats): at start-up, hourly,
   // and on coming back.
-  const tidy = () => {
+  const tidy = async () => {
+    // The rules as saved now, not as this page read them at start (another tab may have changed them).
+    await shell.session.adoptClearingRules().catch(() => undefined);
     void shell.applyBinPolicy();
     void clearOldThreads(shell.fs, shell.session.data.aiHistoryDays).catch(() => undefined);
   };
-  tidy();
-  const housekeeping = window.setInterval(tidy, 3600000);
+  void tidy();
+  const housekeeping = window.setInterval(() => void tidy(), 3600000);
   signal.addEventListener('abort', () => clearInterval(housekeeping), { once: true });
   on(document, 'visibilitychange', () => {
-    if (!document.hidden) tidy();
+    if (!document.hidden) void tidy();
   }, signal);
 
   // ---- Page-level behaviour --------------------------------------------------------------------------------

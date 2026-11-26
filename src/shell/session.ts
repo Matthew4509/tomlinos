@@ -246,11 +246,12 @@ export class Session {
    * Each setting as text, to tell which ones this page has changed since it read or wrote them. A setting that is a group
    * (the lock settings, the bin's, each icon's place, each folder's view, each app's window) is listed field by field, as
    * "lock.idle", so two tabs changing different fields of one group keep both changes instead of the last undoing the first.
+   * The background is one setting, not fields: a colour chosen over another tab's picture must not keep that picture.
    */
   private static parts(data: SessionData): Record<string, string> {
     const parts: Record<string, string> = {};
     for (const [k, v] of Object.entries(data)) {
-      if (isObject(v)) for (const [field, value] of Object.entries(v)) parts[`${k}.${field}`] = JSON.stringify(value);
+      if (isObject(v) && k !== 'wallpaper') for (const [field, value] of Object.entries(v)) parts[`${k}.${field}`] = JSON.stringify(value);
       else parts[k] = JSON.stringify(v);
     }
     return parts;
@@ -334,6 +335,31 @@ export class Session {
         else delete this.base[k];
       }
       return;
+    }
+  }
+
+  /**
+   * Takes up the Recycle Bin and AI-chat clearing rules as saved now (another tab or device may have changed them since
+   * this page read them), unless this page has changed them itself and not yet saved. Run before anything is deleted by
+   * those rules, so a page left open from before never deletes by an old rule.
+   */
+  async adoptClearingRules(): Promise<void> {
+    if (!this.loaded) return;
+    let saved: SessionData;
+    try {
+      saved = parseSession(JSON.parse(await this.fs.readText(SESSION_PATH)));
+    } catch {
+      return;
+    }
+    const now = Session.parts(this.data);
+    const theirs = Session.parts(saved);
+    const record = this.data as unknown as Record<string, unknown>;
+    for (const k of Object.keys(theirs)) {
+      if (!(k.startsWith('bin.') || k === 'aiHistoryDays')) continue;
+      if (now[k] !== this.base[k]) continue; // changed here, not yet saved: this page's choice stands
+      if (k === 'aiHistoryDays') record.aiHistoryDays = saved.aiHistoryDays;
+      else (this.data.bin as unknown as Record<string, unknown>)[k.slice(4)] = (saved.bin as unknown as Record<string, unknown>)[k.slice(4)];
+      this.base[k] = theirs[k];
     }
   }
 
