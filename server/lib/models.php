@@ -77,8 +77,15 @@ const MODEL_RETIRED = [
 function models_test_base(): ?string
 {
     $test = (string) getenv('DESKTOP_MODELS_TEST_URL');
+    if ($test === '') {
+        return null;
+    }
+    // Set but not a stand-in address: stop, rather than quietly fetch from the real Hugging Face with the real pins.
+    if (!preg_match('#^http://127\.0\.0\.1:\d{2,5}$#', $test)) {
+        throw new RuntimeException('DESKTOP_MODELS_TEST_URL is set but is not an address on this computer (http://127.0.0.1:<port>), so nothing is fetched.');
+    }
 
-    return preg_match('#^http://127\.0\.0\.1:\d{2,5}$#', $test) ? $test : null;
+    return $test;
 }
 
 function models_hf_base(): string
@@ -279,7 +286,16 @@ function models_fetch_piece(string $modelsDir, string $id, array $file): array
 {
     $target = models_target($modelsDir, $id, $file);
     if (is_file($target)) {
-        return ['have' => (int) filesize($target), 'done' => true];
+        // Already there (from an earlier save, a copy, a hand edit): kept only if it is the pinned bytes.
+        if ((int) filesize($target) === (int) $file['size'] && hash_equals((string) $file['sha256'], (string) hash_file('sha256', $target))) {
+            // Checked once: its time now says so, so later requests of this save do not hash it again.
+            @touch($target);
+
+            return ['have' => (int) filesize($target), 'done' => true];
+        }
+        if (!@unlink($target)) {
+            throw new RuntimeException('A model file that is not the pinned version (' . $file['path'] . ') could not be deleted. Check that the server may change the models folder.');
+        }
     }
     if (!is_dir(dirname($target)) && !mkdir(dirname($target), 0775, true) && !is_dir(dirname($target))) {
         throw new RuntimeException('The folder for the model files could not be made. Check that the server may write to it.');
@@ -315,11 +331,23 @@ function models_fetch_piece(string $modelsDir, string $id, array $file): array
  * pinned version is tried once more (a damaged download), then stops it. $plan is updated in place; 'changed' says the
  * caller must keep it.
  */
+/**
+ * A planned file finished during this save: there, and written (or checked against its pin) since the plan was made.
+ * One older than the plan (left from before, copied in, edited by hand) is checked by models_fetch_piece first.
+ */
+function models_finished(string $modelsDir, string $id, array $file, array $plan): bool
+{
+    $target = models_target($modelsDir, $id, $file);
+    clearstatcache(true, $target);
+
+    return is_file($target) && (int) filemtime($target) > (int) ($plan['made'] ?? 0);
+}
+
 function models_save_step(string $modelsDir, string $id, array &$plan): array
 {
     foreach ($plan['files'] as $i => $f) {
-        if (is_file(models_target($modelsDir, $id, $f))) {
-            continue; // finished in an earlier request
+        if (models_finished($modelsDir, $id, $f, $plan)) {
+            continue; // finished (and checked against its pin) during this save
         }
         try {
             $r = models_fetch_piece($modelsDir, $id, $f);
@@ -337,7 +365,7 @@ function models_save_step(string $modelsDir, string $id, array &$plan): array
         }
         // A finished file: carry on with the next in the same request only when it is small, else answer so the page
         // can show progress and no request runs long.
-        if ((int) $f['size'] > 4 * 1024 * 1024 && array_filter($plan['files'], static fn ($g) => !is_file(models_target($modelsDir, $id, $g)))) {
+        if ((int) $f['size'] > 4 * 1024 * 1024 && array_filter($plan['files'], static fn ($g) => !models_finished($modelsDir, $id, $g, $plan))) {
             return ['done' => false, 'changed' => false];
         }
     }
@@ -438,10 +466,17 @@ function models_remove(string $modelsDir, string $id): void
     $folder = $modelsDir . '/' . $id;
     if (is_dir($folder)) {
         $items = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($folder, FilesystemIterator::SKIP_DOTS), RecursiveIteratorIterator::CHILD_FIRST);
+        // Every file must go before the model is called removed: a failure is only a PHP warning, so each is checked.
+        $left = 0;
         foreach ($items as $item) {
-            $item->isDir() && !$item->isLink() ? rmdir($item->getPathname()) : unlink($item->getPathname());
+            $gone = $item->isDir() && !$item->isLink() ? @rmdir($item->getPathname()) : @unlink($item->getPathname());
+            if (!$gone) {
+                $left++;
+            }
         }
-        rmdir($folder);
+        if ($left > 0 || !@rmdir($folder)) {
+            throw new RuntimeException('Some of the model\'s files could not be deleted (' . max($left, 1) . ' left), so it is still listed. Check that the server may change the models folder, then remove it again.');
+        }
     }
     models_index_change($modelsDir, static function (array $index) use ($modelsDir, $id): array {
         // The program's name from the catalog, or (a retired model) from what the index kept when it was saved.
