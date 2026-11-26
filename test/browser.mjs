@@ -1565,11 +1565,11 @@ await step('Spreadsheet: View > Classic swaps the ribbon for a menu bar and two 
   };
   await openSheet();
   const sw = () => page.locator('.win', { has: page.locator('.sheet') });
-  const bar = () => page.locator('.sheet .menubar');
+  const bar = () => page.locator('.sheet .cbar-menus');
   const title = name => bar().getByRole('menuitem', { name, exact: true });
   const tool = (toolbar, name) => page.locator(`.sheet .toolbar[aria-label="${toolbar}"]`).getByRole('button', { name, exact: true });
   const menuRow = label => page.locator('.menu .menu-item', { has: page.locator('.menu-label', { hasText: new RegExp('^' + label.replace(/[().]/g, '\\$&') + '$') }) }).last();
-  const expanded = async () => (await bar().locator('.menubar-item[aria-expanded="true"]').allInnerTexts()).join();
+  const expanded = async () => (await bar().locator('.cbar-title[aria-expanded="true"]').allInnerTexts()).join();
   // New desktops start in the Modern look: the ribbon, no menu bar.
   ok(await page.locator('.sheet .ribbon').isVisible(), 'the ribbon shows at first');
   ok(!(await page.locator('.sheet .classic-bar').isVisible()), 'no menu bar at first');
@@ -1584,7 +1584,7 @@ await step('Spreadsheet: View > Classic swaps the ribbon for a menu bar and two 
   await page.locator('.toast', { hasText: 'View > Modern brings the ribbon back' }).waitFor();
   ok(await page.locator('.sheet .classic-bar').isVisible(), 'the menu bar and toolbars show');
   ok(!(await page.locator('.sheet .ribbon').isVisible()) && !(await page.locator('.sheet .ribbon-tabs').isVisible()), 'the ribbon and its tabs are gone');
-  eq(await bar().locator('.menubar-item:visible').allInnerTexts(), ['File', 'Edit', 'View', 'Insert', 'Format', 'Tools', 'Data'], 'the menus (no Help inside the desktop)');
+  eq(await bar().locator('.cbar-title:visible').allInnerTexts(), ['File', 'Edit', 'View', 'Insert', 'Format', 'Tools', 'Data', 'Help'], 'the menus (the shared menu bar ends with Help)');
   // Standard: New, Open, Save, Print, Cut, Copy, Paste, Format painter, Undo, Redo, Sort A-Z, Z-A, AutoSum, Chart (14);
   // Formatting: B, I, U, left, centre, right, Merge, currency, %, comma, decimals +/-, borders, fill, text colour (15).
   eq(await page.locator('.sheet .toolbar .rb.tb').count(), 29, 'small buttons on the two toolbars');
@@ -1612,7 +1612,7 @@ await step('Spreadsheet: View > Classic swaps the ribbon for a menu bar and two 
   eq(await cell('A2'), 'Cups', 'Data > Sort A to Z sorted the block under its heading');
   await page.keyboard.press('Alt+D');
   await page.keyboard.press('ArrowRight');
-  eq(await expanded(), 'File', 'Right from Data goes round to File (no Table Design or PivotTable Analyze menu outside them)');
+  eq(await expanded(), 'Help', 'Right from Data goes to Help (no Table Design or PivotTable Analyze menu outside them)');
   await page.keyboard.press('ArrowLeft');
   eq(await expanded(), 'Data', 'Left goes back');
   await page.keyboard.press('Escape');
@@ -1651,7 +1651,7 @@ await step('Spreadsheet: View > Classic swaps the ribbon for a menu bar and two 
 
   // View > Modern: the ribbon is back, and stays back.
   await title('View').click();
-  await menuRow('Modern (the ribbon)').click();
+  await menuRow('Modern (ribbon)').click();
   ok(await page.locator('.sheet .ribbon').isVisible(), 'the ribbon is back');
   ok(!(await page.locator('.sheet .classic-bar').isVisible()), 'the menu bar is gone');
   await sw().getByRole('button', { name: 'Close' }).click();

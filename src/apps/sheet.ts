@@ -1,6 +1,7 @@
 // Spreadsheet: the window around the grid. A File menu, a ribbon laid out like a familiar spreadsheet's (Home: clipboard,
 // font, alignment, number, styles, editing, view; Insert: charts; Page Layout: printing; Data: sort, filter, validation),
-// or, in the Classic look (View > Classic), a menu bar and two toolbars of small pictures that reach the same commands;
+// or, in the Classic look (View > Classic), the desktop's shared menu bar (src/shell/menubar.ts) and two toolbars of
+// small pictures that reach the same commands;
 // the formula bar, sheet tabs, and a status bar that shows the sum, average and count of whatever is selected. Opens
 // .sheet files (our own format), Excel workbooks (.xlsx, saved back as .xlsx) and .csv/.tsv (as a new, unsaved workbook).
 // Find and Replace is a panel over the grid; the filter's ▾ opens a list of values; charts float over the cells.
@@ -31,7 +32,8 @@ import { formatCellsDialog } from './sheet/format-ui.ts';
 import { filterRuleMenu, removeDuplicatesDialog, sortDialog, textToColumnsDialog } from './sheet/data-ui.ts';
 import { activePivot, insertPivotDialog, mountPivotPane, pivotAnalyze, pivotMenu } from './sheet/pivot-ui.ts';
 import { classicIcon, type ClassicIcon } from './sheet/classic-icons.ts';
-import { menuBar } from './sheet/classic-ui.ts';
+import { classicBar, type BarMenu, type ClassicBar } from '../shell/menubar.ts';
+import { fromMenuItems, helpMenu } from './classic-menus.ts';
 
 /** Excel's ready-made cell styles (Home > Cell styles): a look each, with its colours as Excel has them. */
 const CELL_STYLES: Array<{ label: string; look: CellStyle }> = [
@@ -1854,8 +1856,8 @@ export const sheetApp: AppDef = {
       ] },
       { label: 'Freeze panes', submenu: freezeItems() },
       { separator: true },
-      { label: 'Classic (menus and small buttons)', checked: true, action: () => void setLook('classic') },
-      { label: 'Modern (the ribbon)', checked: false, action: () => void setLook('modern') },
+      { label: 'Classic', checked: true, action: () => void setLook('classic') },
+      { label: 'Modern (ribbon)', checked: false, action: () => void setLook('modern') },
     ];
     const insertMenu = (): MenuItem[] => [
       ...insertItems(),
@@ -1863,7 +1865,8 @@ export const sheetApp: AppDef = {
       { separator: true },
       { label: 'Chart', submenu: chartItems() },
       { label: 'PivotTable...', action: insertPivot },
-      { label: 'Table...', hint: 'Ctrl+T', action: () => void insertTableDialog(ctx) },
+      // Ctrl+T works where the browser passes it on; it is not shown, as the browser keeps it for a new tab.
+      { label: 'Table...', action: () => void insertTableDialog(ctx) },
       { separator: true },
       { label: 'Function...', hint: 'Shift+F3', action: () => void insertFunctionDialog(ctx) },
       { label: 'AutoSum', submenu: autoSumMenu(ctx) },
@@ -1980,28 +1983,30 @@ export const sheetApp: AppDef = {
         { label: 'Print titles...', action: () => void pageSetupDialog(ctx) },
       ] },
     ];
-    const bar = menuBar(shell, app.signal, [
-      { label: 'File', key: 'f', items: () => fileItems(filePrinting()) },
-      { label: 'Edit', key: 'e', items: editMenu },
-      { label: 'View', key: 'v', items: viewMenu },
-      { label: 'Insert', key: 'i', items: insertMenu },
-      { label: 'Format', key: 'o', items: formatMenu },
-      { label: 'Tools', key: 't', items: toolsMenu },
-      { label: 'Data', key: 'd', items: dataMenu },
+    const classicMenus: BarMenu[] = [
+      { label: 'File', key: 'f', items: () => fromMenuItems(fileItems(filePrinting())) },
+      { label: 'Edit', key: 'e', items: () => fromMenuItems(editMenu()) },
+      { label: 'View', key: 'v', items: () => fromMenuItems(viewMenu()) },
+      { label: 'Insert', key: 'i', items: () => fromMenuItems(insertMenu()) },
+      { label: 'Format', key: 'o', items: () => fromMenuItems(formatMenu()) },
+      { label: 'Tools', key: 't', items: () => fromMenuItems(toolsMenu()) },
+      { label: 'Data', key: 'd', items: () => fromMenuItems(dataMenu()) },
       // Shown while the active cell is in a table (a PivotTable), named as the Modern look's tabs are, so a message
       // that says "Table Design" or "PivotTable Analyze > Delete" is right in both looks.
       { label: 'Table Design', key: 'a', items: () => {
         const t = activeTable(ctx);
-        return t ? tableMenu(ctx, t, tableTools) : [];
+        return t ? fromMenuItems(tableMenu(ctx, t, tableTools)) : [];
       }, shown: () => !!activeTable(ctx) },
       { label: 'PivotTable Analyze', key: 'p', items: () => {
         const pv = activePivot(ctx);
-        return pv ? pivotMenu(ctx, pv, () => pivotPane.toggle()) : [];
+        return pv ? fromMenuItems(pivotMenu(ctx, pv, () => pivotPane.toggle())) : [];
       }, shown: () => !!activePivot(ctx) },
-      // A program of its own has a Help menu (About, Licences, updates); inside the desktop it has none.
-      ...(shell.native ? [{ label: 'Help', key: 'h', items: () => shell.native!.help().flatMap(g => g.items.map(i => ({ label: i.label, action: i.run }))) }] : []),
-    ], { before: () => grid.commit(), returnFocus: () => grid.el.querySelector<HTMLElement>('.grid-scroll') });
-    const classicBar = h('div', { class: 'classic-bar' }, bar.el, standardBar, formattingBar);
+      helpMenu(shell),
+    ];
+    /** The shared menu bar, made while the Classic look is shown (so its Alt and F10 keys are heard only then). */
+    let bar: ClassicBar | null = null;
+    let barStop: AbortController | null = null;
+    const classicWrap = h('div', { class: 'classic-bar' }, standardBar, formattingBar);
 
     /**
      * Inside the desktop a new spreadsheet is a file, as File Explorer's New > Spreadsheet makes it (the desktop keeps
@@ -2018,6 +2023,20 @@ export const sheetApp: AppDef = {
     function applyLook(next: Look): void {
       look = next;
       app.root.classList.toggle('sheet-classic', next === 'classic');
+      barStop?.abort();
+      bar?.el.remove();
+      bar = null;
+      barStop = null;
+      if (next === 'classic') {
+        const stop = new AbortController();
+        app.signal.addEventListener('abort', () => stop.abort(), { once: true });
+        barStop = stop;
+        bar = classicBar({ menus: classicMenus }, {
+          layer: shell.menus, signal: stop.signal, scope: app.root, label: 'Spreadsheet menu bar',
+          before: () => grid.commit(), doc: () => grid.el.querySelector<HTMLElement>('.grid-scroll'),
+        });
+        classicWrap.prepend(bar.el);
+      }
       closePalette();
       showBreaks();
       syncToolbar();
@@ -2195,7 +2214,7 @@ export const sheetApp: AppDef = {
       zoomBox.value = listedZoom ? String(ZOOMS.find(v => Math.abs(v - z) < 0.005)) : '';
       press(classicBtn, look === 'classic');
       press(modernBtn, look === 'modern');
-      bar.sync();
+      bar?.refresh();
       updateStats();
     }
 
@@ -2225,7 +2244,7 @@ export const sheetApp: AppDef = {
       app.setDirty(unsaved());
     };
 
-    app.root.append(tabsRow, ribbon, classicBar, formulaBar, main, tabsBar, status);
+    app.root.append(tabsRow, ribbon, classicWrap, formulaBar, main, tabsBar, status);
     drawTabs();
     applyLook(look);
     refresh();
@@ -2233,12 +2252,7 @@ export const sheetApp: AppDef = {
     on(app.root, 'keydown', (event: KeyboardEvent) => {
       const ctrl = event.ctrlKey || event.metaKey;
       const k = event.key.toLowerCase();
-      if (look === 'classic' && event.altKey && !ctrl && !event.shiftKey && /^[a-z]$/.test(k) && bar.openByKey(k)) {
-        event.preventDefault();
-      } else if (look === 'classic' && event.key === 'F10' && !event.altKey && !ctrl && !event.shiftKey) {
-        event.preventDefault();
-        bar.openFirst();
-      } else if (ctrl && k === 's') {
+      if (ctrl && k === 's') {
         event.preventDefault();
         void (event.shiftKey ? saveAs() : save());
       } else if (shell.native && event.key === 'F12' && !ctrl && !event.shiftKey) {
