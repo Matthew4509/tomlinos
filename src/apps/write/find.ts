@@ -36,13 +36,13 @@ function fold(s: string): string {
   return out;
 }
 
-/** Every place `query` is found in the document. */
-export function findAll(doc: any, query: string, opts: FindOptions): Hit[] {
+/** Every place `query` is found in the document, up to `most` (marking stops at MOST_HITS; Replace all wants them all). */
+export function findAll(doc: any, query: string, opts: FindOptions, most = MOST_HITS): Hit[] {
   const hits: Hit[] = [];
   if (!query) return hits;
   const needle = opts.matchCase ? query : fold(query);
   doc.descendants((node: any, pos: number) => {
-    if (hits.length >= MOST_HITS) return false;
+    if (hits.length >= most) return false;
     if (!node.isTextblock) return true;
     // The paragraph's text, one character per position (anything not text stands as one character no word matches).
     let text = '';
@@ -51,7 +51,7 @@ export function findAll(doc: any, query: string, opts: FindOptions): Hit[] {
     });
     const hay = opts.matchCase ? text : fold(text);
     let at = hay.indexOf(needle);
-    while (at >= 0 && hits.length < MOST_HITS) {
+    while (at >= 0 && hits.length < most) {
       const end = at + needle.length;
       if (!opts.wholeWord || (!isWordChar(text[at - 1]) && !isWordChar(text[end]))) hits.push({ from: pos + 1 + at, to: pos + 1 + end });
       at = hay.indexOf(needle, at + Math.max(1, needle.length));

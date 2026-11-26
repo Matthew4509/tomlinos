@@ -1650,8 +1650,10 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
   function replaceEvery(): void {
     const s = findState();
     if (!s.hits.length) return;
-    const n = s.hits.length;
-    view.dispatch(replaceAll(view.state, s.hits, replaceInput.value));
+    // Every place, not only the ones marked (marking stops at MOST_HITS): the count said is the count replaced.
+    const every = findAll(view.state.doc, s.query, s.opts, Number.MAX_SAFE_INTEGER);
+    const n = every.length;
+    view.dispatch(replaceAll(view.state, every, replaceInput.value));
     showCount();
     shell.toast(`Replaced ${n.toLocaleString()} ${n === 1 ? 'place' : 'places'}.`);
   }
