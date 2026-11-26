@@ -555,7 +555,10 @@ export function agentPane(app: AppHandle): { el: HTMLElement; shown: (want?: Clo
       }
     } catch (error) {
       const words = error instanceof Error ? error.message : String(error);
-      if (/disposed|device.*lost|DEVICE_HUNG/i.test(words)) {
+      // The chip lost part-way through shows up in other words too (a buffer that can no longer be read back, a model
+      // the engine says is no longer loaded): any of them means the on-device AI is gone and must be connected again.
+      if (/disposed|device.*(lost|destroyed)|DEVICE_HUNG/i.test(words)
+        || (device && /mapAsync|GPUBuffer|GPUDevice|Instance dropped|Model not loaded|MLCEngine\.reload/i.test(words))) {
         lost = true;
         await ai.lost();
         connected = null;
