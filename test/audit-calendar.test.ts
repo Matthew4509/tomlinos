@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { addDays, eventsOn, eventsShownOn, occursOn, parseIcs, timeLabel, writeIcs, type CalEvent } from '../src/core/ical.ts';
 import { dueReminders } from '../src/shell/reminders.ts';
+import { withoutEvent } from '../src/apps/calendar.ts';
 
 const ics = (...events: string[][]) => ['BEGIN:VCALENDAR', 'VERSION:2.0', ...events.flatMap(e => ['BEGIN:VEVENT', ...e, 'END:VEVENT']), 'END:VCALENDAR', ''].join('\r\n');
 
@@ -92,13 +93,16 @@ test('CAL-P0-7: a later showing of a repeating overnight event says the day it e
   });
 });
 
-test('CAL-P1-1: deleting a repeat "and all its repeats" also removes its moved showing', { todo: 'P1' }, () => {
+test('CAL-P1-1: deleting a repeat "and all its repeats" also removes its moved showing', () => {
   const text = ics(['UID:s', 'DTSTART:20261102T090000', 'RRULE:FREQ=DAILY;COUNT=5', 'SUMMARY:Series'], ['UID:s', 'RECURRENCE-ID:20261103T090000', 'DTSTART:20261103T150000', 'SUMMARY:Series moved']);
   const list = parseIcs(text);
   const series = list.find(e => e.repeat !== 'none')!;
-  // What the Calendar's Delete does: drop the event by its id.
-  const after = parseIcs(writeIcs(list.filter(x => x.uid !== series.uid), text));
+  // What the Calendar's Delete does.
+  const after = parseIcs(writeIcs(withoutEvent(list, series), text));
   assert.deepEqual(after.map(e => e.title), []);
+  // Deleting the moved showing alone leaves the series.
+  const moved = list.find(e => e.repeat === 'none')!;
+  assert.deepEqual(parseIcs(writeIcs(withoutEvent(list, moved), text)).map(e => e.title), ['Series']);
 });
 
 test('CAL-P1-2: a common monthly rule from Google or Outlook (the second Tuesday) shows every month, not only its first day', { todo: 'P1' }, () => {

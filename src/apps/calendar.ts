@@ -15,6 +15,16 @@ export { CALENDAR_PATH };
 const REPEATS: Array<[Repeat, string]> = [['none', 'Does not repeat'], ['daily', 'Every day'], ['weekly', 'Every week'], ['monthly', 'Every month'], ['yearly', 'Every year']];
 const REMINDS = REMIND_CHOICES;
 
+/**
+ * The list with this event deleted. A repeat goes "and all its repeats": its moved or changed showings (their own
+ * events in the file, sharing its UID) go with it, so none is left behind on its own.
+ */
+export function withoutEvent(list: CalEvent[], e: CalEvent): CalEvent[] {
+  const uid = e.keep?.uid;
+  const series = e.repeat !== 'none' && !!uid && e.keep?.copy?.of === uid;
+  return list.filter(x => x.uid !== e.uid && !(series && x.keep?.uid === uid && !!x.keep?.copy?.of.startsWith(`${uid}#`)));
+}
+
 export const calendarApp: AppDef = {
   ...APPS.calendar,
   async launch(app, arg) {
@@ -233,7 +243,7 @@ export const calendarApp: AppDef = {
       cancel.addEventListener('click', () => drawDay(true), { signal });
       del.addEventListener('click', async () => {
         const ok = await shell.dialogs.confirm({ title: 'Delete this event?', text: `“${e.title}”${e.repeat !== 'none' ? ' and all its repeats' : ''} will be removed from the calendar.`, ok: 'Delete', danger: true, cancel: 'Keep it' });
-        if (ok && (await save(list => list.filter(x => x.uid !== e.uid), [saveBtn, del]))) draw(true);
+        if (ok && (await save(list => withoutEvent(list, e), [saveBtn, del]))) draw(true);
       }, { signal });
     }
 
