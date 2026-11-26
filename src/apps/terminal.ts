@@ -53,7 +53,9 @@ export const terminalApp: AppDef = {
     const where = h('span', { class: 'term-path' });
     const tail = h('span', {});
     const input = h('input', { type: 'text', class: 'term-in', 'aria-label': 'Command', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' });
-    const promptLine = h('div', { class: 'term-line' }, userHost, colon, where, tail, input);
+    // The prompt is one piece that wraps inside itself, and the input takes the rest of its row or a row of its own:
+    // a deep folder used to push the screen sideways and leave a 40 px input.
+    const promptLine = h('div', { class: 'term-line' }, h('span', { class: 'term-prompt' }, userHost, colon, where, tail), input);
     const screen = h('div', { class: 'term-screen', tabindex: -1 }, output, promptLine);
     app.root.append(screen);
 

@@ -1254,8 +1254,9 @@ textarea.field { resize: vertical; font: inherit; }
 .term-row.ok { color: #8ae68f; }
 .term-row.dir, .term-path { color: #6fa8ff; font-weight: 700; }
 .term-user { color: #8ae234; font-weight: 700; }
-.term-line { display: flex; align-items: baseline; white-space: pre; }
-.term-in { flex: 1; min-width: 40px; border: 0; padding: 0; margin: 0; background: transparent; color: inherit; font: inherit; outline: none; caret-color: #e8e8e8; }
+.term-line { display: flex; flex-wrap: wrap; align-items: baseline; }
+.term-prompt { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.term-in { flex: 1 0 16ch; min-width: 16ch; border: 0; padding: 0; margin: 0; background: transparent; color: inherit; font: inherit; outline: none; caret-color: #e8e8e8; }
 .cal-row { display: contents; }
 .cal-cell:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }

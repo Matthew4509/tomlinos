@@ -90,22 +90,30 @@ await step('T-P0-1 (browser): echo > /System/session.json is refused, as rm and 
   ok(after !== 'broken', `the desktop's own settings file now reads "${after}" (was ${before.slice(0, 60)}...)`);
 });
 
-await step('P1 checks (reported as info)', async () => {
-  // A folder five levels deep: the prompt does not wrap, so the screen scrolls sideways and the input is 40 px wide.
+await step('T-P1-13: a prompt five folders deep wraps instead of scrolling the screen sideways', async () => {
   const deep = 'Documents/' + Array.from({ length: 5 }, (_, i) => 'Project Archive 202' + i).join('/');
   await type(`mkdir -p "${deep}"`);
   await type(`cd "${deep}"`);
-  const s = await term().locator('.term-screen').evaluate(el => ({ sl: el.scrollLeft, sw: el.scrollWidth, cw: el.clientWidth }));
+  const s = await term().locator('.term-screen').evaluate(el => ({ sw: el.scrollWidth, cw: el.clientWidth }));
   const w = (await inp().boundingBox())?.width ?? 0;
-  if (s.sw > s.cw + 2) info('T-P1-13', `deep folder: the screen scrolls sideways (${s.sw} px wide in ${s.cw}), output is cut on the left and the input is ${Math.round(w)} px wide`);
   await type('cd /');
-  // Pasting two lines joins them into one command.
+  ok(s.sw <= s.cw + 2 && w >= 80, `the screen is ${s.sw} px wide in ${s.cw} and the input is ${Math.round(w)} px wide`);
+});
+
+await step('T-P1-14: pasting two lines runs the first and leaves the second in the line', async () => {
   await inp().focus();
   await page.evaluate(() => navigator.clipboard.writeText('cd Documents\nls'));
   await page.keyboard.press('Control+v');
+  await page.waitForFunction(i => !i.disabled && i.value === 'ls', await inp().elementHandle(), { timeout: 10000 }).catch(() => {});
   const pasted = await inp().inputValue();
-  if (pasted !== 'cd Documents') info('T-P1-14', `pasting "cd Documents\\nls" gives one line ${JSON.stringify(pasted)}; the lines are not run one by one`);
+  const where = await term().locator('.term-line .term-path').innerText();
   await inp().fill('');
+  await type('cd /');
+  ok(pasted === 'ls', `the line holds ${JSON.stringify(pasted)}`);
+  ok(where.includes('Documents'), `the pasted "cd Documents" did not run (prompt ${where})`);
+});
+
+await step('P1 checks (reported as info)', async () => {
   // A second terminal: Ctrl+Alt+T only brings the first one forward.
   await page.keyboard.press('Control+Alt+t');
   await page.waitForTimeout(1000);
