@@ -127,7 +127,7 @@ export function cleanActions(raw: unknown): string[] {
 
 export function cleanSettings(raw: unknown): ProjectSettings {
   const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
-  const hours = typeof r.hours === 'number' && Number.isFinite(r.hours) && r.hours > 0 && r.hours <= 24 ? Math.round(r.hours * 4) / 4 : 0;
+  const hours = typeof r.hours === 'number' && Number.isFinite(r.hours) && r.hours > 0 && r.hours <= 24 ? Math.max(0.25, Math.round(r.hours * 4) / 4) : 0;
   return {
     time: typeof r.time === 'string' && isTime(r.time) ? r.time : DEFAULT_SETTINGS.time,
     hours,

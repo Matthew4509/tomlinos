@@ -12,8 +12,11 @@ test('P1: a log entry keeps its short title ("Add new feature") after the projec
   assert.equal(shortTitle({ title: 'Add new feature: Alpha' }, { name: 'Alpha renamed' }), 'Add new feature');
 });
 
-test('P1: Default hours 0.1 is not silently turned into "no end time"', { todo: 'P1' }, () => {
+test('PRJ-P1-3: Default hours 0.1 is not silently turned into "no end time"', () => {
   assert.notEqual(cleanSettings({ hours: 0.1 }).hours, 0);
+  assert.equal(cleanSettings({ hours: 0.1 }).hours, 0.25);
+  assert.equal(cleanSettings({ hours: 1.3 }).hours, 1.25);
+  assert.equal(cleanSettings({ hours: 0 }).hours, 0);
 });
 
 test('P1: a project typed into Projects.json by hand with no id is kept (given an id), not dropped on the next save', { todo: 'P1' }, () => {

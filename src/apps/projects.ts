@@ -324,17 +324,22 @@ export const projectsApp: AppDef = {
         }));
         if (focusKey) list.querySelector<HTMLElement>(`[data-key="${focusKey}"]`)?.focus();
       };
-      const addOne = () => {
-        if (actions.length >= MAX_ACTIONS) return void (listProblem.textContent = `${MAX_ACTIONS} buttons at most. Remove one first.`);
+      /** Adds the typed button name; false (and why, under the list) when it cannot be added. */
+      const addOne = (): boolean => {
+        if (actions.length >= MAX_ACTIONS) {
+          listProblem.textContent = `${MAX_ACTIONS} buttons at most. Remove one first.`;
+          return false;
+        }
         const why = actionProblem(actions, newIn.value);
         listProblem.textContent = why ?? '';
-        if (why) return;
+        if (why) return false;
         actions.push(newIn.value.trim());
         newIn.value = '';
         paintActions();
         newIn.focus();
+        return true;
       };
-      on(addAct, 'click', addOne, signal);
+      on(addAct, 'click', () => void addOne(), signal);
       on(newIn, 'keydown', (e: KeyboardEvent) => e.key === 'Enter' && (e.preventDefault(), addOne()), signal);
       on(reset, 'click', () => {
         const d = cleanSettings({});
@@ -348,7 +353,9 @@ export const projectsApp: AppDef = {
       const saveSettings = async () => {
         if (!isTime(timeIn.value)) return void (problem.textContent = 'Choose a default time.');
         const hours = hoursIn.value.trim() ? Number(hoursIn.value) : 0;
-        if (!Number.isFinite(hours) || hours < 0 || hours > 24) return void (problem.textContent = 'Default hours: a number from 0.25 to 24, or leave it empty.');
+        if (!Number.isFinite(hours) || hours < 0 || (hours > 0 && hours < 0.25) || hours > 24) return void (problem.textContent = 'Default hours: a number from 0.25 to 24, or leave it empty.');
+        // A button name typed but not yet added is added now, or Save stops and says why it cannot be.
+        if (newIn.value.trim() && !addOne()) return void (problem.textContent = 'The new button name was not added: see above.');
         const next = cleanSettings({ time: timeIn.value, hours, day: daySel.value, remind: Number(remindSel.value), actions });
         save.disabled = true;
         try {

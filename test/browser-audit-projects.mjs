@@ -197,7 +197,7 @@ await step('FAULT (P1): Escape inside the Notes box does not drop the typed note
   ok(editing || (await D().count()), 'Escape in the notes closed the form with nothing kept and no question');
 });
 
-await step('FAULT (P1): a name typed in "New button name" but not added is not silently dropped by Save settings', async () => {
+await step('FAULT PRJ-P1-2: a name typed in "New button name" but not added is not silently dropped by Save settings', async () => {
   await openProjects();
   await P().getByRole('button', { name: /Settings/ }).click();
   await P().getByLabel('New button name').fill('Write the docs');
@@ -209,7 +209,7 @@ await step('FAULT (P1): a name typed in "New button name" but not added is not s
   ok(buttons.includes('Write the docs'), 'saved and closed; buttons are ' + buttons.join(', '));
 });
 
-await step('FAULT (P1): Default hours 0.1 is refused or kept, not silently turned into "no end time"', async () => {
+await step('FAULT PRJ-P1-3: Default hours 0.1 is refused or kept, not silently turned into "no end time"', async () => {
   await openProjects();
   await P().getByRole('button', { name: /Settings/ }).click();
   await P().getByLabel('Default hours').fill('0.1');
@@ -247,7 +247,7 @@ await step('FAULT (P1): after renaming a project its log still shows "Add new fe
   eq(await P().locator('.proj-entries .proj-entry-title').allInnerTexts(), ['Add new feature'], 'log title after rename');
 });
 
-await step('FAULT (P1): a quick double click on the star toggles twice (back to unstarred)', async () => {
+await step('FAULT PRJ-P1-5: a quick double click on the star toggles twice (back to unstarred)', async () => {
   await openProjects();
   await row('Beta').locator('.proj-star').evaluate(b => {
     b.click();
@@ -291,7 +291,7 @@ await step('Projects.json deleted while open: the list empties, a new project st
   ok(!problems.length, problems.join('; '));
 });
 
-await step('FAULT (P1): big list: 3000 projects and 3000 calendar entries draw and star in reasonable time', async () => {
+await step('FAULT PRJ-P1-8: big list: 3000 projects and 3000 calendar entries draw and star in reasonable time', async () => {
   await closeAll();
   const list = [];
   for (let i = 0; i < 3000; i++) list.push({ uid: `p${i}`, name: `Project ${i}`, site: i % 3 ? '' : `site${i}.example.com`, notes: `notes ${i}\nmore`, focus: i % 50 === 0, finished: i % 7 === 0, created: i });
