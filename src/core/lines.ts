@@ -2,7 +2,10 @@
 // onto the next line with a leading space, and \, \; \n escapes inside values. Only what our two apps need.
 
 export interface ContentLine {
+  /** The property's name, without any group it is in (Apple Contacts writes item1.EMAIL): EMAIL. */
   name: string;
+  /** The group the property is in ('item1'), or '' for none. The raw line keeps it, so a line written back has it. */
+  group?: string;
   params: Record<string, string>;
   value: string;
   /** The whole line as it was (unfolded), for writing back a property this app does not edit. */
@@ -51,7 +54,9 @@ export function readLines(text: string): ContentLine[] {
       const eq = p.indexOf('=');
       if (eq > 0) map[p.slice(0, eq).toUpperCase()] = p.slice(eq + 1).replace(/^"|"$/g, '');
     }
-    out.push({ name: name.toUpperCase(), params: map, value: line.slice(colon + 1), raw: line });
+    // A grouped property (item1.EMAIL, as Apple Contacts writes) is read by its own name.
+    const grouped = /^([A-Za-z0-9-]+)\.([A-Za-z0-9-]+)$/.exec(name);
+    out.push({ name: (grouped ? grouped[2] : name).toUpperCase(), group: grouped ? grouped[1] : '', params: map, value: line.slice(colon + 1), raw: line });
   }
   return out;
 }

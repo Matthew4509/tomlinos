@@ -9,6 +9,28 @@ import { nameKey, parentPath } from '../fs/names.ts';
 
 export const MAX_RECORD_FILE = 4 * 1024 * 1024;
 
+/**
+ * A file's text: UTF-8, or UTF-16 (as some programs on Windows save a .vcf), told by its byte-order mark or, without
+ * one, by the zero bytes every plain letter has in UTF-16. A byte-order mark is not part of the text.
+ */
+export function decodeText(bytes: Uint8Array): string {
+  let encoding = 'utf-8';
+  let from = 0;
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) [encoding, from] = ['utf-16le', 2];
+  else if (bytes[0] === 0xfe && bytes[1] === 0xff) [encoding, from] = ['utf-16be', 2];
+  else if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) from = 3;
+  else if (bytes.length >= 4 && bytes.length % 2 === 0) {
+    // No mark: UTF-16 when the first letters are all plain ones with their zero byte on the same side.
+    const n = Math.min(bytes.length, 200);
+    let even = 0;
+    let odd = 0;
+    for (let i = 0; i < n; i++) if (!bytes[i]) i % 2 ? odd++ : even++;
+    if (odd === n / 2 && !even) encoding = 'utf-16le';
+    else if (even === n / 2 && !odd) encoding = 'utf-16be';
+  }
+  return new TextDecoder(encoding).decode(bytes.subarray(from));
+}
+
 export interface RecordFile<T> {
   readonly path: string;
   /** The records, or [] when the file does not exist yet. Throws (in words) for a file too big or unreadable. */
@@ -25,15 +47,15 @@ export interface RecordFile<T> {
  */
 export function recordFile<T>(fs: FileSystem, path: string, parse: (text: string) => T[], write: (list: T[], previous: string | null) => string): RecordFile<T> {
   /** The records, the text they came from and the id of that copy ('' and null when there is no file yet). */
-  const read = async (): Promise<{ list: T[]; text: string | null; id: string }> => {
+  const read = async (): Promise<{ list: T[]; text: string | null; id: string; name: string }> => {
     const entry = await fs.stat(path);
-    if (!entry) return { list: [], text: null, id: '' };
+    if (!entry) return { list: [], text: null, id: '', name: '' };
     if (entry.kind !== 'file') throw new FsError(`“${entry.name}” is a folder, not a file.`);
     if (entry.size > MAX_RECORD_FILE) {
       throw new FsError(`“${entry.name}” is ${formatSize(entry.size)}; this app opens files up to ${formatSize(MAX_RECORD_FILE)}. It is safe where it is.`);
     }
-    const text = await fs.readText(path);
-    return { list: parse(text), text, id: entry.id };
+    const text = decodeText(await fs.readFile(path));
+    return { list: parse(text), text, id: entry.id, name: entry.name };
   };
   const load = async (): Promise<T[]> => (await read()).list;
   return {
@@ -43,7 +65,12 @@ export function recordFile<T>(fs: FileSystem, path: string, parse: (text: string
       // Written only over the copy the change was made from: if another window or device saved in between, its
       // version is read and the change made again on top of it, so neither undoes the other.
       for (let attempt = 1; ; attempt++) {
-        const { list, text, id } = await read();
+        const { list, text, id, name } = await read();
+        // A file with text in it from which nothing at all was read (another encoding, another kind of file) is not
+        // saved over: the save would hold only this change, and everything the file held would be lost.
+        if (text !== null && text.trim() && !list.length && !write([], text).trim()) {
+          throw new FsError(`No records could be read from “${name}”, so it was not saved over. It is safe where it is; it may be in a form this app does not read.`);
+        }
         const written = write(apply(list), text);
         try {
           await fs.writeText(path, written, id ? { replacing: id } : { mustBeNew: true });

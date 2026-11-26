@@ -65,7 +65,12 @@ const FIELD_OF: Record<string, Field> = { FN: 'name', N: 'name', ORG: 'org', TEL
 
 export const emptyContact = (): Contact => ({ uid: crypto.randomUUID(), name: '', org: '', phones: [], emails: [], address: '', birthday: '', notes: '' });
 
-const valueOf = (c: Contact, f: Field): string => JSON.stringify(c[f]);
+/**
+ * A field's value for telling whether it was changed. An address is compared as the form gives it back (a line break
+ * inside it as ", "), so a street with a line break that was not edited keeps its own line, parts and TYPE.
+ */
+const valueOf = (c: Contact, f: Field): string => JSON.stringify(f === 'address' ? oneLine(c.address) : c[f]);
+const oneLine = (address: string): string => address.trim().replace(/\s*\n\s*/g, ', ');
 
 /** One phone or email line: shown if there is room, and either way its line is not lost. */
 function addTo(c: Contact, keep: CardKeep, field: ListField, value: string, raw: string): void {

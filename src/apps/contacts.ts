@@ -27,6 +27,8 @@ export const contactsApp: AppDef = {
     let chosen: string | null = null;
     /** Set while a form is open: whether anything in it differs from what it opened with. */
     let formDirty: (() => boolean) | null = null;
+    /** True while the edit or new-contact form is showing (the card is then left alone when the file changes). */
+    let formOpen = false;
     const isDirty = () => !!formDirty?.();
     /** True when it is fine to leave the form (it holds nothing unsaved, or the person chose to discard it). */
     async function leaveForm(): Promise<boolean> {
@@ -76,6 +78,7 @@ export const contactsApp: AppDef = {
     function drawCard(): void {
       const signal = fresh();
       formDirty = null;
+      formOpen = false;
       app.setDirty(false);
       const p = people.find(x => x.uid === chosen);
       if (!p) {
@@ -84,7 +87,8 @@ export const contactsApp: AppDef = {
       }
       const row = (label: string, values: string[]) => (values.length ? [h('dt', {}, label), ...values.map(v => h('dd', {}, v))] : []);
       const edit = h('button', { type: 'button', class: 'btn' }, 'Edit');
-      edit.addEventListener('click', () => editCard(p), { signal });
+      // The contact as it is now, should the file have changed since the card was drawn.
+      edit.addEventListener('click', () => editCard(people.find(x => x.uid === p.uid) ?? p), { signal });
       card.replaceChildren(
         h('h2', {}, p.name),
         ...(p.org ? [h('p', { class: 'hint' }, p.org)] : []),
@@ -115,6 +119,7 @@ export const contactsApp: AppDef = {
 
     function editCard(existing: Contact | null): void {
       const signal = fresh();
+      formOpen = true;
       const c = existing ? { ...existing } : emptyContact();
       // The longest each field may be: what the file reader keeps (src/core/vcard.ts), so nothing typed here is cut
       // quietly the next time the file is read.
@@ -147,6 +152,9 @@ export const contactsApp: AppDef = {
         problem,
         h('div', { class: 'row-buttons' }, saveBtn, cancel, existing ? del : null),
       );
+      /** Each field and what it held when the form opened. */
+      const inputs: Array<[keyof Contact, HTMLInputElement | HTMLTextAreaElement]> = [['name', nameIn], ['org', orgIn], ['phones', phoneIn], ['emails', emailIn], ['address', addrIn], ['birthday', bdayIn], ['notes', notesIn]];
+      const opened = Object.fromEntries(inputs.map(([f, input]) => [f, input.value])) as Partial<Record<keyof Contact, string>>;
       const snap = () => JSON.stringify([nameIn.value, orgIn.value, phoneIn.value, emailIn.value, addrIn.value, bdayIn.value, notesIn.value]);
       const was = snap();
       formDirty = () => snap() !== was;
@@ -162,13 +170,17 @@ export const contactsApp: AppDef = {
         if (phones.length > 20 || emails.length > 20) return void (problem.textContent = 'A contact keeps up to 20 phone numbers and 20 email addresses.');
         if (phones.some(p => p.length > 60)) return void (problem.textContent = 'A phone number can be up to 60 characters.');
         if (emails.some(e => e.length > 200)) return void (problem.textContent = 'An email address can be up to 200 characters.');
-        const saved: Contact = { ...c, name, org: orgIn.value.trim(), phones, emails, address: addrIn.value.trim().replace(/\s*\n\s*/g, ', '), birthday: bdayIn.value, notes: notesIn.value.trim() };
-        // An edit of a contact someone deleted meanwhile (another window) is refused, not quietly put back.
-        const edited = existing !== null;
+        const typed: Partial<Contact> = { name, org: orgIn.value.trim(), phones, emails, address: addrIn.value.trim().replace(/\s*\n\s*/g, ', '), birthday: bdayIn.value, notes: notesIn.value.trim() };
+        // Only the fields changed in the form are saved, onto the contact as the file holds it now: a change made in
+        // another window since the form opened is kept, and a field not touched here keeps its own line in the file.
+        const changes: Partial<Contact> = existing ? Object.fromEntries(inputs.filter(([f, input]) => input.value !== opened[f]).map(([f]) => [f, typed[f]])) : typed;
+        const uid = c.uid;
         if (await save(list => {
-          if (edited && !list.some(x => x.uid === saved.uid)) throw new Error('This contact was deleted in another window, so your changes were not saved. Choose New contact to add it again.');
-          return [...list.filter(x => x.uid !== saved.uid), saved];
-        }, [saveBtn, del])) pick(saved.uid, true);
+          const now = list.find(x => x.uid === uid);
+          // An edit of a contact someone deleted meanwhile (another window) is refused, not quietly put back.
+          if (existing && !now) throw new Error('This contact was deleted in another window, so your changes were not saved. Choose New contact to add it again.');
+          return [...list.filter(x => x.uid !== uid), { ...(now ?? c), ...changes }];
+        }, [saveBtn, del])) pick(uid, true);
       }, { signal });
       cancel.addEventListener('click', () => {
         drawCard();
@@ -213,6 +225,13 @@ export const contactsApp: AppDef = {
     file.watch(shell.changes, app.signal, latest => {
       people = latest;
       drawList();
+      // The open card is drawn again from the file as it is now. A form is left as it is: its Save applies only what
+      // was changed in it onto the newest copy of the contact.
+      if (!formOpen) {
+        const focused = card.contains(document.activeElement);
+        drawCard();
+        if (focused) card.querySelector<HTMLElement>('button')?.focus();
+      }
     });
 
     try {
