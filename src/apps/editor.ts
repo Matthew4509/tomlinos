@@ -7,12 +7,13 @@ import { h, on } from '../core/dom.ts';
 import { formatSize } from '../core/format.ts';
 import { baseName, joinPath, nameProblem, parentPath, uniqueName } from '../fs/names.ts';
 import type { AppDef } from '../shell/types.ts';
-import { detectEol, EOL_NAMES, findNext, lineCol, lineStart, replaceAll, toBox, toFile, type Eol } from './notepad/text.ts';
+import { detectEol, EOL_NAMES, fileBytes, findNext, hasBom, lineCol, lineStart, replaceAll, toBox, type Eol } from './notepad/text.ts';
 import { APPS } from './catalog.ts';
 import { saveOver } from '../shell/savefile.ts';
 
 const MAX_TEXT_BYTES = 2 * 1024 * 1024;
 const ZOOMS = [50, 67, 80, 90, 100, 110, 125, 150, 175, 200, 250, 300];
+const EOL_SHORT: Record<Eol, string> = { '\r\n': 'CRLF', '\n': 'LF', '\r': 'CR' };
 
 export const editorApp: AppDef = {
   ...APPS.editor,
@@ -23,6 +24,8 @@ export const editorApp: AppDef = {
     let saved = '';
     let eol: Eol = '\n';
     let savedEol: Eol = '\n';
+    /** The file began with the UTF-8 mark (a BOM): it goes back on saving. */
+    let bom = false;
     let zoom = 100;
     app.root.classList.add('editor');
 
@@ -64,9 +67,9 @@ export const editorApp: AppDef = {
       app.setTitle(path ? baseName(path) : 'Untitled');
       const { line, col } = lineCol(area.value, area.selectionStart);
       const lines = area.value.split('\n').length;
-      const size = new TextEncoder().encode(toFile(area.value, eol)).length;
+      const size = fileBytes(area.value, eol, bom).length;
       status.textContent = `Ln ${line}, Col ${col}  ·  ${lines} line${lines === 1 ? '' : 's'}, ${formatSize(size)}  ·  ${EOL_NAMES[eol]}  ·  UTF-8  ·  ${zoom}%${dirty() ? '  ·  not saved' : ''}`;
-      eolBtn.textContent = eol === '\r\n' ? 'CRLF' : 'LF';
+      eolBtn.textContent = EOL_SHORT[eol];
     };
     const setZoom = (z: number) => {
       zoom = z;
@@ -86,11 +89,13 @@ export const editorApp: AppDef = {
         if (!entry || entry.kind !== 'file') throw new Error('gone');
         if (entry.size > MAX_TEXT_BYTES) {
           area.disabled = true;
+          for (const b of [saveBtn, saveAsBtn, findBtn, replaceBtn, gotoBtn, wrapBtn, zoomOut, zoomIn, eolBtn]) b.disabled = true;
           status.textContent = `This file is ${formatSize(entry.size)}. Notepad opens text up to ${formatSize(MAX_TEXT_BYTES)}. It is safe where it is.`;
           saveBtn.disabled = saveAsBtn.disabled = true;
           return;
         }
         const bytes = await shell.fs.readFile(path);
+        bom = hasBom(bytes);
         const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
         eol = savedEol = detectEol(text, '\n');
         area.value = toBox(text);
@@ -98,7 +103,8 @@ export const editorApp: AppDef = {
         loadedId = entry.id;
       } catch (error) {
         area.disabled = true;
-        saveBtn.disabled = saveAsBtn.disabled = true;
+        // Every button that works on the text is off: there is no text to work on.
+        for (const b of [saveBtn, saveAsBtn, findBtn, replaceBtn, gotoBtn, wrapBtn, zoomOut, zoomIn, eolBtn]) b.disabled = true;
         status.textContent = error instanceof TypeError
           ? 'This file does not look like text, so it was not opened. It is safe where it is.'
           : 'That file is not there any more. It may have been moved or deleted.';
@@ -108,7 +114,7 @@ export const editorApp: AppDef = {
     setZoom(100);
 
     // What a save writes, taken when the save starts: typing while it is on its way stays unsaved (and marked so).
-    const snapshot = () => ({ text: area.value, eol, bytes: new TextEncoder().encode(toFile(area.value, eol)) });
+    const snapshot = () => ({ text: area.value, eol, bytes: fileBytes(area.value, eol, bom) });
     const markSaved = (id: string, snap: { text: string; eol: Eol }) => {
       loadedId = id;
       saved = snap.text;
@@ -116,7 +122,21 @@ export const editorApp: AppDef = {
       refresh();
     };
 
-    async function saveAs(): Promise<boolean> {
+    // One save at a time: a second Save while the first is on its way waits for it (so it replaces the copy the first one
+    // made), and a second Save while the Save as box is up does nothing.
+    let busy: Promise<boolean> | null = null;
+    let naming = false;
+    const once = (run: () => Promise<boolean>): Promise<boolean> => {
+      if (naming) return busy ?? Promise.resolve(false);
+      const next = (busy ?? Promise.resolve(true)).then(run, run);
+      busy = next;
+      void next.finally(() => busy === next && (busy = null));
+      return next;
+    };
+    const saveAs = () => once(saveAsNow);
+    const save = () => once(() => (path ? saveNow() : saveAsNow()));
+
+    async function saveAsNow(): Promise<boolean> {
       const folder = path ? parentPath(path) : '/Documents';
       let taken: string[] = [];
       try {
@@ -124,6 +144,7 @@ export const editorApp: AppDef = {
       } catch {
         // The folder is gone; saving will say so.
       }
+      naming = true;
       const name = await shell.dialogs.prompt({
         title: 'Save as',
         label: `Name (saved in ${folder})`,
@@ -131,7 +152,7 @@ export const editorApp: AppDef = {
         ok: 'Save',
         selectStem: true,
         check: v => nameProblem(v) ?? (taken.some(t => t.toLowerCase() === v.toLowerCase()) ? `There is already something called "${v}" here.` : null),
-      });
+      }).finally(() => (naming = false));
       if (name === null) return false;
       try {
         const snap = snapshot();
@@ -146,8 +167,8 @@ export const editorApp: AppDef = {
       }
     }
 
-    async function save(): Promise<boolean> {
-      if (!path) return saveAs();
+    async function saveNow(): Promise<boolean> {
+      if (!path) return saveAsNow();
       try {
         const snap = snapshot();
         const entry = await saveOver(shell, path, snap.bytes, loadedId);
@@ -171,10 +192,31 @@ export const editorApp: AppDef = {
     const select = (start: number, end: number) => {
       area.focus();
       area.setSelectionRange(start, end);
-      // Bring the selection into view: a blur and focus makes the browser scroll to the caret.
-      area.blur();
-      area.focus();
+      scrollToCaret(start);
       refresh();
+    };
+    /**
+     * Scrolls the text box so `at` is in view. A textarea does not scroll to a selection set from code (blur and focus
+     * did in some browsers only), so a hidden copy of the box, laid out the same, finds how far down it is.
+     */
+    const scrollToCaret = (at: number) => {
+      const style = getComputedStyle(area);
+      const mirror = h('div', { 'aria-hidden': 'true' });
+      Object.assign(mirror.style, {
+        position: 'absolute', visibility: 'hidden', top: '0', left: '-99999px', boxSizing: style.boxSizing,
+        width: `${area.clientWidth}px`, padding: style.padding, font: style.font, lineHeight: style.lineHeight,
+        letterSpacing: style.letterSpacing, tabSize: style.tabSize,
+        whiteSpace: area.getAttribute('wrap') === 'off' ? 'pre' : 'pre-wrap', overflowWrap: 'break-word',
+      });
+      const mark = h('span', {}, '​');
+      mirror.append(document.createTextNode(area.value.slice(0, at)), mark);
+      document.body.append(mirror);
+      const top = mark.offsetTop;
+      const left = mark.offsetLeft;
+      mirror.remove();
+      const lineHeight = parseFloat(style.lineHeight) || 20;
+      if (top < area.scrollTop || top + lineHeight > area.scrollTop + area.clientHeight) area.scrollTop = Math.max(0, top - area.clientHeight / 2);
+      if (area.getAttribute('wrap') === 'off' && (left < area.scrollLeft || left > area.scrollLeft + area.clientWidth - 20)) area.scrollLeft = Math.max(0, left - area.clientWidth / 2);
     };
 
     const openFind = (replace: boolean) => {
@@ -268,7 +310,8 @@ export const editorApp: AppDef = {
     on(zoomIn, 'click', () => step(1), app.signal);
     on(zoomOut, 'click', () => step(-1), app.signal);
     on(eolBtn, 'click', () => {
-      eol = eol === '\n' ? '\r\n' : '\n';
+      // LF, CRLF, CR in turn: an old Mac file can be kept as it is.
+      eol = eol === '\n' ? '\r\n' : eol === '\r\n' ? '\r' : '\n';
       refresh();
       shell.toast(`Will save with ${EOL_NAMES[eol]} line endings.`);
     }, app.signal);

@@ -392,7 +392,7 @@ body.is-dragging .win-body { pointer-events: none; }
 /* Apps: editor, pictures, player, PDF viewer. */
 .app-message { margin: 0; padding: 24px; text-align: center; color: var(--ink-soft); }
 .editor, .photos, .player, .pdf { display: flex; flex-direction: column; height: 100%; }
-.editor-text { flex: 1; min-height: 0; width: 100%; resize: none; border: 0; padding: 8px; font: 14px/1.4 ui-monospace, Consolas, "Courier New", monospace; color: var(--ink); background: #fff; outline: none; }
+.editor-text { flex: 1; min-height: 60px; width: 100%; resize: none; border: 0; padding: 8px; font: 14px/1.4 ui-monospace, Consolas, "Courier New", monospace; color: var(--ink); background: #fff; outline: none; }
 .editor-status { white-space: pre; overflow: hidden; text-overflow: ellipsis; }
 .tool-gap { width: 8px; flex: none; }
 .find-bar { flex: none; display: flex; flex-direction: column; gap: 4px; padding: 6px; background: var(--face); border-bottom: 1px solid var(--line); }
@@ -519,8 +519,9 @@ body.is-dragging .win-body { pointer-events: none; }
 .filter-all { font-weight: 600; }
 .filter-buttons, .find-buttons { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
 .find-panel { position: absolute; z-index: 25; right: 16px; top: 120px; width: min(340px, calc(100% - 32px)); padding: 10px; background: #fff; color: #222; border: 1px solid #b5b5b5; box-shadow: 0 4px 14px rgba(0, 0, 0, .3); border-radius: 4px; font-size: 13px; }
-.find-row { display: grid; grid-template-columns: 92px 1fr; align-items: center; gap: 6px; margin-bottom: 6px; }
-.find-row[hidden] { display: none; }
+/* The Spreadsheet's Find window only: Notepad's and Notepad Pro's find bars use .find-row as a single flex row. */
+.find-panel .find-row { display: grid; grid-template-columns: 92px 1fr; align-items: center; gap: 6px; margin-bottom: 6px; }
+.find-panel .find-row[hidden] { display: none; }
 .find-options { display: flex; flex-direction: column; gap: 4px; margin: 4px 0; }
 .find-options .find-row { margin-bottom: 0; }
 .find-hint { margin: 4px 0; font-size: 12px; color: #555; }
