@@ -474,6 +474,7 @@ body.is-dragging .win-body { pointer-events: none; }
 /* Apps: editor, pictures, player, PDF viewer. */
 .app-message { margin: 0; padding: 24px; text-align: center; color: var(--ink-soft); }
 .editor, .photos, .player, .pdf { display: flex; flex-direction: column; height: 100%; }
+.viewer-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .editor-text { flex: 1; min-height: 60px; width: 100%; resize: none; border: 0; padding: 8px; font: 14px/1.4 ui-monospace, Consolas, "Courier New", monospace; color: var(--ink); background: #fff; outline: none; }
 .editor-status { white-space: pre; overflow: hidden; text-overflow: ellipsis; }
 .tool-gap { width: 8px; flex: none; }
