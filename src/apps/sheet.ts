@@ -751,6 +751,7 @@ export const sheetApp: AppDef = {
         }
         // The selected cell, or a sample number (a date's for a date format) when it is empty.
         const shownValue = v === null || v instanceof CellError ? (isDateCode(input.value) ? 46308.6041666667 : -1234.5678) : v;
+        wb.useDates();
         sample.textContent = formatCode(shownValue, input.value).text;
         return true;
       };

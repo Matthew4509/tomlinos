@@ -53,6 +53,33 @@ export function wholeColumns(a: { col: number; absC: boolean }, b: { col: number
   return [{ col: a.col, row: 0, absC: a.absC, absR: true }, { col: b.col, row: MAX_ROWS - 1, absC: b.absC, absR: true }];
 }
 
+const ROW = /^(\$?)(\d{1,7})$/;
+
+/** "3" or "$3" as one end of a whole-row range (1:1); null when it is not a row on the sheet. */
+export function parseRowRef(text: string): { row: number; absR: boolean } | null {
+  const m = ROW.exec(text);
+  if (!m) return null;
+  const row = parseInt(m[2], 10) - 1;
+  return row >= 0 && row < MAX_ROWS ? { row, absR: m[1] === '$' } : null;
+}
+
+/** 1:3 as a range: the whole width of the sheet (columns fixed, so copying it never moves them). */
+export function wholeRows(a: { row: number; absR: boolean }, b: { row: number; absR: boolean }): [Ref, Ref] {
+  return [{ col: 0, row: a.row, absC: true, absR: a.absR }, { col: MAX_COLS - 1, row: b.row, absC: true, absR: b.absR }];
+}
+
+/** At token k: a whole-row range (1:3, $2:$2), written with no space round the colon; null when there is none. */
+export function rowsAt(toks: Tok[], k: number): [Ref, Ref] | null {
+  const t = toks[k];
+  const colon = toks[k + 1];
+  const u = toks[k + 2];
+  if (!t || !colon || !u || colon.type !== 'colon' || colon.start !== t.end || u.start !== colon.end) return null;
+  if ((t.type !== 'num' && t.type !== 'ident') || (u.type !== 'num' && u.type !== 'ident')) return null;
+  const a = parseRowRef(t.text);
+  const b = a ? parseRowRef(u.text) : null;
+  return a && b ? wholeRows(a, b) : null;
+}
+
 export function refText(r: Ref): string {
   return `${r.absC ? '$' : ''}${colName(r.col)}${r.absR ? '$' : ''}${r.row + 1}`;
 }
@@ -237,6 +264,23 @@ export function mapRefs(
   const edits: Array<{ start: number; end: number; text: string }> = [];
   for (let k = 0; k < toks.length; k++) {
     const t = toks[k];
+    // 1:3 (whole rows) is a range from the left edge of the sheet to the right, and is written back as rows.
+    const rows = t.type === 'num' || t.type === 'ident' ? rowsAt(toks, k) : null;
+    if (rows) {
+      let sheet: string | undefined;
+      let first = k;
+      if (toks[k - 1]?.type === 'bang' && (toks[k - 2]?.type === 'ident' || toks[k - 2]?.type === 'sheetq')) {
+        sheet = sheetNameOf(toks[k - 2]);
+        first = k - 2;
+      }
+      const result = fn(rows[0], rows[1], sheet);
+      const named = result && result.length > 2 ? result[2] : sheet;
+      const prefix = named !== undefined ? `${quoteSheet(named)}!` : '';
+      const rowText = (r: Ref) => `${r.absR ? '$' : ''}${r.row + 1}`;
+      edits.push({ start: toks[first].start, end: toks[k + 2].end, text: result && result[1] ? prefix + rowText(result[0]) + ':' + rowText(result[1]) : '#REF!' });
+      k += 2;
+      continue;
+    }
     if (t.type !== 'ident') continue;
     // A:C (whole columns) is a range from the top of the sheet to the bottom, and is written back as columns.
     const wa = toks[k + 1]?.type === 'colon' && toks[k + 2]?.type === 'ident' ? parseColRef(t.text) : null;

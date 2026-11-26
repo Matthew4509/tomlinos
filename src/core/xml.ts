@@ -163,9 +163,27 @@ export function children(el: XmlEl | undefined, name: string): XmlEl[] {
 
 /** All the text inside an element and its children, in order (a rich-text string's runs joined). */
 export function allText(el: XmlEl): string {
-  let out = el.text;
-  for (const k of el.kids) out += allText(k);
+  // Walked with a list of its own rather than by calling itself, so text nested very deep cannot run out of stack.
+  let out = '';
+  const todo: XmlEl[] = [el];
+  while (todo.length) {
+    const e = todo.pop()!;
+    out += e.text;
+    for (let i = e.kids.length - 1; i >= 0; i--) todo.push(e.kids[i]);
+  }
   return out;
+}
+
+/** How many levels deep the elements under `el` go (`el` alone is 1), counted without calling itself. */
+export function depthOf(el: XmlEl): number {
+  let most = 0;
+  const todo: [XmlEl, number][] = [[el, 1]];
+  while (todo.length) {
+    const [e, d] = todo.pop()!;
+    if (d > most) most = d;
+    for (const k of e.kids) todo.push([k, d + 1]);
+  }
+  return most;
 }
 
 // ---- Writing -------------------------------------------------------------------------------------------------------

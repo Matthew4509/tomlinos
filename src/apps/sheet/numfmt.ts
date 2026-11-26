@@ -1,6 +1,6 @@
 // Number format codes, as Excel writes them: "#,##0.00", "0%", "000-000", "dd/mm/yyyy", "h:mm AM/PM", "0.00E+00",
 // "# ?/?", "[Red]-0.00", "0;-0;\"zero\";@". Used by a cell's number format and by TEXT(). Our own code.
-import { DAYS, MAX_SERIAL, MONTHS, partsOf } from './dates.ts';
+import { DAYS, lastSerial, MONTHS, partsOf } from './dates.ts';
 
 export interface Formatted {
   text: string;
@@ -349,7 +349,7 @@ function renderNumber(sec: Section, v: number): string {
 // ---- Dates and times -----------------------------------------------------------------------------------------------
 
 function renderDate(sec: Section, serial: number): string {
-  if (serial < 0 || serial >= MAX_SERIAL + 1) return '#'.repeat(10);
+  if (serial < 0 || serial >= lastSerial() + 1) return '#'.repeat(10);
   const toks = sec.toks;
   const fracTok = toks.findIndex((t, i) => t.k === 'point' && toks[i + 1]?.k === 'digit' && toks.slice(0, i).some(x => (x.k === 'date' && x.s[0] === 's') || (x.k === 'elapsed' && x.unit === 's')));
   let fracDigits = 0;

@@ -9,13 +9,13 @@
 // a formula that works on lists is stored as a "dynamic array" formula, so Excel 365 fills the cells as it does here.
 import { zipDeflate, type ZipEntry } from '../../core/zip.ts';
 import { ArchiveError, readZip } from '../archive/read.ts';
-import { serialOf, shortDateCode, type DateOrder } from './dates.ts';
+import { serialOf, setDateBase, shortDateCode, type DateOrder } from './dates.ts';
 import { FUNCTION_NAMES, parseFormula, worksOnLists } from './formula.ts';
 import { codeProblem, isDateCode } from './numfmt.ts';
 import { addressOf, colName, MAX_COLS, MAX_ROWS, parseCellRef, shiftFormula, SyntaxProblem, tokenize, type Tok } from './refs.ts';
 import { CellError, type CellStyle, type Line, type Value } from './values.ts';
 import { cleanFilterRule, colOfKey, FILE_FORMAT, keyOf, MAX_CELLS, rowOfKey, type Filter, type FilterRule, type Range, type Workbook } from './workbook.ts';
-import { allText, child, children, escapeXml, parseXml, tag, XML_HEAD, XmlProblem, type XmlEl } from '../../core/xml.ts';
+import { allText, child, children, depthOf, escapeXml, parseXml, tag, XML_HEAD, XmlProblem, type XmlEl } from '../../core/xml.ts';
 import {
   anchorOf, chartXml, drawingXml, dxfXml, finishChart, newPartsReport, printNames, readCf, readChartPart, readDv, readDxfs, readPage, readPrintNames,
   writeCf, writeDv, writePage,
@@ -41,6 +41,10 @@ export interface XlsxReport {
 const MAX_UNPACKED = 200 * 1024 * 1024;
 const MAX_TEXT = 32_000;
 const MAX_SHEETS = 50;
+/** How deep the elements of one part may go before the file is refused (real parts are under twenty levels). */
+const MAX_XML_DEPTH = 1000;
+/** A number as Excel writes one in a cell: digits, a point, an exponent. */
+const PLAIN_NUMBER = /^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?$/;
 
 const NS_MAIN = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
 const NS_REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
@@ -253,7 +257,7 @@ const XLFN = new Set([
   'NORM.INV', 'NORM.S.DIST', 'NORM.S.INV', 'PERCENTILE.EXC', 'PERCENTILE.INC', 'PERCENTRANK.EXC', 'PERCENTRANK.INC', 'QUARTILE.EXC',
   'QUARTILE.INC', 'RANK.AVG', 'RANK.EQ', 'STDEV.P', 'STDEV.S', 'VAR.P', 'VAR.S', 'WORKDAY.INTL',
   // Excel 2013
-  'BASE', 'CEILING.MATH', 'DAYS', 'DECIMAL', 'FLOOR.MATH', 'FORMULATEXT', 'IFNA', 'ISFORMULA', 'ISOWEEKNUM', 'NUMBERVALUE', 'UNICHAR', 'UNICODE', 'XOR',
+  'ARABIC', 'BASE', 'CEILING.MATH', 'DAYS', 'DECIMAL', 'FLOOR.MATH', 'FORMULATEXT', 'IFNA', 'ISFORMULA', 'ISOWEEKNUM', 'NUMBERVALUE', 'UNICHAR', 'UNICODE', 'XOR',
   // Excel 2016 and 2019
   'CONCAT', 'FORECAST.LINEAR', 'IFS', 'MAXIFS', 'MINIFS', 'SWITCH', 'TEXTJOIN',
   // Excel 365
@@ -479,12 +483,16 @@ export async function openXlsx(wb: Workbook, bytes: Uint8Array): Promise<XlsxRep
   const readXml = async (path: string): Promise<XmlEl | null> => {
     const text = await readText(path);
     if (text === null) return null;
+    let doc: XmlEl;
     try {
-      return parseXml(text);
+      doc = parseXml(text);
     } catch (error) {
       if (error instanceof XmlProblem) throw new SyntaxProblem(`Part of this Excel file (${path}) is damaged: ${error.message}`);
       throw error;
     }
+    // An Excel part is a few levels deep; thousands of levels is a crafted file meant to break the reader.
+    if (depthOf(doc) > MAX_XML_DEPTH) throw new SyntaxProblem(`Part of this Excel file (${path}) is nested more than ${MAX_XML_DEPTH.toLocaleString()} levels deep, which no Excel file needs. It cannot be opened.`);
+    return doc;
   };
   const dirOf = (p: string) => p.slice(0, p.lastIndexOf('/') + 1);
   const resolve = (base: string, target: string): string => {
@@ -511,7 +519,9 @@ export async function openXlsx(wb: Workbook, bytes: Uint8Array): Promise<XlsxRep
   if (!book || book.name !== 'workbook') throw new SyntaxProblem('This is not an Excel workbook (it has no list of sheets). It may be a Word or PowerPoint file, or damaged.');
   const bookRels = await relsOf(bookPath);
   const relTarget = (kind: string) => bookRels.find(r => r.type.endsWith(`/${kind}`))?.target;
+  // A workbook that counts days from 1904 keeps that count, as in Excel, so its numbers stay what was saved.
   const date1904 = ['1', 'true'].includes(child(book, 'workbookPr')?.attrs.date1904 ?? '');
+  setDateBase(date1904);
   // PivotTables' data caches, by their number: where the data is, the field names, each field's items.
   const caches = new Map<string, { source: string; fields: string[]; items: string[][]; groups: Record<number, DateGroup> }>();
   for (const pc of children(child(book, 'pivotCaches'), 'pivotCache')) {
@@ -580,6 +590,9 @@ export async function openXlsx(wb: Workbook, bytes: Uint8Array): Promise<XlsxRep
   let total = 0;
   let offSheet = 0;
   let cut = 0;
+  let oldDates = 0;
+  let oddNumbers = 0;
+  let otherErrors = 0;
   let hiddenSheets = 0;
   let customFilters = 0;
   let filtersPastEdge = 0;
@@ -641,6 +654,7 @@ export async function openXlsx(wb: Workbook, bytes: Uint8Array): Promise<XlsxRep
       : [0, 0];
 
     // Cells a list formula fills hold Excel's saved copy of the list: kept out, so the formula fills them itself.
+    setDateBase(date1904);
     const arrays: Range[] = [];
     const shared = new Map<string, { f: string | null; col: number; row: number }>();
     let rowNo = -1;
@@ -679,16 +693,27 @@ export async function openXlsx(wb: Workbook, bytes: Uint8Array): Promise<XlsxRep
         else if (t === 'inlineStr') v = decodeOoxml(stringOf(child(c, 'is')));
         else if (t === 'b') v = vText === '1' || vText === 'true';
         else if (t === 'e') error = vText ?? '#N/A';
-        else if (t === 'd') v = vText ? isoSerial(vText) : null;
-        else if (vText !== undefined && vText !== '') {
-          const n = Number(vText);
-          v = Number.isFinite(n) ? n : null;
+        else if (t === 'd') {
+          v = vText ? isoSerial(vText) : null;
+          // A date this spreadsheet cannot count (before 1900, or before 1904 in a 1904 workbook): kept as it was written.
+          if (v === null && vText) {
+            v = vText;
+            oldDates++;
+          }
+        } else if (vText !== undefined && vText !== '') {
+          // Only a plain decimal number is one: Number() would also read "0x10" as 16 and "Infinity".
+          if (PLAIN_NUMBER.test(vText.trim())) {
+            const n = Number(vText);
+            v = Number.isFinite(n) ? n : null;
+          } else {
+            v = vText;
+            oddNumbers++;
+          }
         }
         if (typeof v === 'string' && v.length > MAX_TEXT) {
           v = v.slice(0, MAX_TEXT);
           cut++;
         }
-        if (typeof v === 'number' && date1904 && info?.date && !fEl) v += 1462;
 
         let f: string | null = null;
         if (fEl) {
@@ -736,7 +761,14 @@ export async function openXlsx(wb: Workbook, bytes: Uint8Array): Promise<XlsxRep
           }
           continue;
         }
-        if (f === null && error !== null) f = /^#(NULL!|DIV\/0!|VALUE!|REF!|NAME\?|NUM!|N\/A)$/i.test(error) ? error.toUpperCase() : null;
+        if (f === null && error !== null) {
+          // An error this spreadsheet has is kept as that error; another (#BLOCKED!, #FIELD!...) is kept as its text.
+          if (/^#(NULL!|DIV\/0!|VALUE!|REF!|NAME\?|NUM!|N\/A|SPILL!|CALC!)$/i.test(error)) f = error.toUpperCase();
+          else {
+            v = error.slice(0, 40);
+            otherErrors++;
+          }
+        }
         const style = ourStyle(xf);
         if (f === null && v === null && !style) continue;
         if (++total > MAX_CELLS) throw new SyntaxProblem(`This workbook has more than ${MAX_CELLS.toLocaleString()} cells, which is more than this spreadsheet holds.`);
@@ -990,6 +1022,9 @@ export async function openXlsx(wb: Workbook, bytes: Uint8Array): Promise<XlsxRep
   say(customFilters ? 1 : 0, 'a filter rule (top 10, a condition, by colour or by date group): the rows it hid stay hidden');
   say(offSheet, `${plural(offSheet, 'cell')} past row ${MAX_ROWS.toLocaleString()} or column ${colName(MAX_COLS - 1)}, the edge of a sheet here`);
   say(cut, `the end of ${plural(cut, 'very long text')} (over ${MAX_TEXT.toLocaleString()} characters)`);
+  say(oldDates, `${plural(oldDates, 'date')} before ${date1904 ? 1904 : 1900}, which this spreadsheet cannot count as ${oldDates === 1 ? 'a date' : 'dates'}: kept as text`);
+  say(oddNumbers, `${plural(oddNumbers, 'number')} not written as a plain number (such as 0x10): kept as text`);
+  say(otherErrors, `${plural(otherErrors, 'error')} this spreadsheet does not have (such as #BLOCKED!): kept as text`);
   // Named ranges and values: kept (with the sheet they belong to); Excel's own hidden ones (_xlnm., _xlfn.) are not names.
   const namesOut: Array<{ name: string; ref: string; scope?: string; comment?: string }> = [];
   let unreadNames = 0;
@@ -1034,6 +1069,7 @@ export async function openXlsx(wb: Workbook, bytes: Uint8Array): Promise<XlsxRep
     format: FILE_FORMAT,
     version: 1,
     symbol: wb.symbol,
+    ...(date1904 ? { date1904: true } : {}),
     active: Math.max(0, Math.min(sheetsOut.length - 1, activeTab)),
     styles: styleList,
     sheets: sheetsOut,
@@ -1114,7 +1150,7 @@ function isoSerial(text: string): number | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2}(?:\.\d+)?))?)?/.exec(text);
   if (!m) return null;
   const day = serialOf(Number(m[1]), Number(m[2]), Number(m[3]));
-  if (day === null) return null;
+  if (!Number.isFinite(day)) return null;
   return day + (Number(m[4] ?? 0) * 3600 + Number(m[5] ?? 0) * 60 + Number(m[6] ?? 0)) / 86400;
 }
 
@@ -1435,7 +1471,7 @@ export async function saveXlsx(wb: Workbook): Promise<Uint8Array<ArrayBuffer>> {
   const nameOf = (x: string) => (/name="([^"]*)"/.exec(x)?.[1] ?? '').toLowerCase();
   definedNames.sort((a, b) => nameOf(a).localeCompare(nameOf(b)));
   const sheetsXml = wb.sheets.map((sh, i) => tag('sheet', { name: sh.name, sheetId: i + 1, 'r:id': `rId${i + 1}` })).join('');
-  add('xl/workbook.xml', `<workbook xmlns="${NS_MAIN}" xmlns:r="${NS_REL}"><bookViews>${tag('workbookView', { activeTab: wb.active || undefined })}</bookViews><sheets>${sheetsXml}</sheets>${definedNames.length ? `<definedNames>${definedNames.join('')}</definedNames>` : ''}<calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>`);
+  add('xl/workbook.xml', `<workbook xmlns="${NS_MAIN}" xmlns:r="${NS_REL}">${wb.date1904 ? '<workbookPr date1904="1"/>' : ''}<bookViews>${tag('workbookView', { activeTab: wb.active || undefined })}</bookViews><sheets>${sheetsXml}</sheets>${definedNames.length ? `<definedNames>${definedNames.join('')}</definedNames>` : ''}<calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>`);
 
   const sst = [...strings.keys()].map(s => `<si>${textTag(s)}</si>`).join('');
   add('xl/sharedStrings.xml', `<sst xmlns="${NS_MAIN}" count="${strings.size}" uniqueCount="${strings.size}">${sst}</sst>`);

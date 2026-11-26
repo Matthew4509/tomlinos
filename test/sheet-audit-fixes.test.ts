@@ -62,9 +62,13 @@ test('AND and OR over only blank cells are #VALUE!', () => {
   assert.equal(wb.evalFormula(0, 'AND(F1:F3)'), true);
 });
 
-test('=SUM(1:1) says whole rows are not supported', () => {
+test('=SUM(2:2) adds up the whole of row 2 (whole rows, as in Excel)', () => {
   const wb = new Workbook();
-  assert.throws(() => wb.setInput(0, 0, 0, '=SUM(1:1)'), (e: Error) => e instanceof SyntaxProblem && /Whole rows/.test(e.message));
+  wb.setInput(0, 1, 1, '4');
+  wb.setInput(0, 7, 1, '5');
+  wb.setInput(0, 0, 0, '=SUM(2:2)');
+  assert.equal(wb.value(0, 0, 0), 9);
+  assert.throws(() => wb.setInput(0, 0, 0, '=SUM(1:)'), (e: Error) => e instanceof SyntaxProblem);
 });
 
 test('a row height past the last row is ignored, so a file keeps what it was given', () => {

@@ -4,9 +4,9 @@
 // Lists work as in Excel 365: an operator or a one-value function given a list works on every value of it
 // (B2:B10>5 is a list of TRUE/FALSE), and a formula whose answer is a list fills the cells around it (see workbook.ts).
 import { wildFind, wildMatch } from './wild.ts';
-import { daysInMonth, nowSerial, partsOf, readDateTime, serialOf, type DateOrder } from './dates.ts';
+import { daysInMonth, nowSerial, partsOf, readDateTime, serialOf, setDateBase, type DateOrder } from './dates.ts';
 import { CodeProblem, formatCode } from './numfmt.ts';
-import { MAX_COLS, MAX_ROWS, parseCellRef, parseColRef, parseTablePart, sheetNameOf, SyntaxProblem, tokenize, wholeColumns, type Ref, type TablePart, type Tok } from './refs.ts';
+import { MAX_COLS, MAX_ROWS, parseCellRef, parseColRef, parseTablePart, rowsAt, sheetNameOf, SyntaxProblem, tokenize, wholeColumns, type Ref, type TablePart, type Tok } from './refs.ts';
 import { moreFunctions } from './formula-fns.ts';
 import { CellError, clean, E, type Value } from './values.ts';
 
@@ -108,6 +108,12 @@ export function parseFormula(text: string): Node {
     return x;
   }
   function refAt(tok: Tok, d: number, sheet?: string): Node | null {
+    // 1:3, whole rows.
+    const rows = rowsAt(toks, p - 1);
+    if (rows) {
+      p += 2;
+      return { t: 'range', a: rows[0], b: rows[1], sheet };
+    }
     // A:C, whole columns (written with no space round the colon).
     if (toks[p]?.type === 'colon' && toks[p + 1]?.type === 'ident' && toks[p].start === tok.end && toks[p + 1].start === toks[p].end) {
       const ca = parseColRef(tok.text);
@@ -143,7 +149,7 @@ export function parseFormula(text: string): Node {
   function primary(d: number): Node {
     const t = toks[p++];
     if (!t) return fail('The formula ends too early.');
-    if (t.type === 'num') return { t: 'num', v: parseFloat(t.text) };
+    if (t.type === 'num') return refAt(t, d) ?? { t: 'num', v: parseFloat(t.text) };
     if (t.type === 'str') return { t: 'str', v: t.text.slice(1, -1).replace(/""/g, '"') };
     if (t.type === 'err') {
       const known = Object.values(E).find(e => e.code === t.text.toUpperCase());
@@ -167,7 +173,7 @@ export function parseFormula(text: string): Node {
       if (rows.some(r => r.length !== rows[0].length)) fail('Every row of a list in { } needs the same number of items.');
       return { t: 'array', rows };
     }
-    if ((t.type === 'ident' || t.type === 'sheetq') && toks[p]?.type === 'bang' && toks[p + 1]?.type === 'ident') {
+    if ((t.type === 'ident' || t.type === 'sheetq') && toks[p]?.type === 'bang' && (toks[p + 1]?.type === 'ident' || (toks[p + 1]?.type === 'num' && rowsAt(toks, p + 1)))) {
       const sheet = sheetNameOf(t);
       p += 2;
       const node = refAt(toks[p - 1], d, sheet);
@@ -241,6 +247,8 @@ export interface Context {
   spill(sheet: number, col: number, row: number): Grid | CellError;
   /** Which way round typed dates are read (13/10/2026 or 10/13/2026). */
   dateOrder?: DateOrder;
+  /** True when the workbook counts its days from 1904 (its serial 0 is 1 January 1904). */
+  date1904?: boolean;
   /** The cell the formula is in (ROW() and COLUMN() with nothing in the brackets, [@Amount] in a table). */
   here?: { col: number; row: number };
   /** A workbook name's formula, read ("Prices" might be Sheet1!$A$2:$B$40); null when there is no such name. */
@@ -778,7 +786,8 @@ export class Ev {
   binary(op: string, l: Value, r: Value): Value {
     if (l instanceof CellError) return l;
     if (r instanceof CellError) return r;
-    if (op === '&') return text(l) + text(r);
+    // Joined text longer than a cell can hold is #VALUE!, as in Excel.
+    if (op === '&') return capped(text(l) + text(r));
     if (['=', '<>', '<', '>', '<=', '>='].includes(op)) return compare(op, l, r);
     const a = toNumber(l);
     if (a instanceof CellError) return a;
@@ -1104,7 +1113,7 @@ const FUNCTIONS: Record<string, Fn> = {
   SUMIF: (ev, a, d) => conditional(ev, a, d, 'sum'),
   COUNTIF: (ev, a, d) => conditional(ev, a, d, 'count'),
   AVERAGEIF: (ev, a, d) => conditional(ev, a, d, 'avg'),
-  CONCATENATE: (ev, a, d) => { const all = collect(ev, a, d); return all instanceof CellError ? all : all.some(x => x.v instanceof CellError) ? (all.find(x => x.v instanceof CellError)!.v as CellError) : all.map(x => text(x.v)).join(''); },
+  CONCATENATE: (ev, a, d) => { const all = collect(ev, a, d); return all instanceof CellError ? all : all.some(x => x.v instanceof CellError) ? (all.find(x => x.v instanceof CellError)!.v as CellError) : capped(all.map(x => text(x.v)).join('')); },
   CONCAT: (ev, a, d) => FUNCTIONS.CONCATENATE(ev, a, d),
   LEN: (ev, a, d) => { const v = ev.scalar(a[0] ?? { t: 'str', v: '' }, d + 1); return v instanceof CellError ? v : text(v).length; },
   UPPER: (ev, a, d) => { const v = ev.scalar(a[0] ?? { t: 'str', v: '' }, d + 1); return v instanceof CellError ? v : text(v).toUpperCase(); },
@@ -1523,10 +1532,15 @@ const LIST_FUNCTIONS: Record<string, (ev: Ev, args: Node[], depth: number) => Gr
     if (step instanceof CellError) return step;
     if (!(rows >= 1) || !(cols >= 1)) return rows === 0 || cols === 0 ? E.CALC : E.VALUE;
     if (rows * cols > MAX_LIST) return E.NUM;
+    const whole = Number.isInteger(start) && Number.isInteger(step);
     const out: Grid = [];
     for (let r = 0; r < rows; r++) {
       const row: Value[] = [];
-      for (let c = 0; c < cols; c++) row.push(clean(start + step * (r * cols + c)));
+      // Whole numbers need no rounding to 15 digits (which is slow over a million of them).
+      for (let c = 0; c < cols; c++) {
+        const v = start + step * (r * cols + c);
+        row.push(whole && Math.abs(v) < 2 ** 53 ? v : clean(v));
+      }
       out.push(row);
     }
     return out;
@@ -2066,6 +2080,7 @@ function within<T>(ev: Ev, fn: () => T): T {
 
 export function evaluate(node: Node, ctx: Context): Value {
   dateOrder = ctx.dateOrder ?? 'dmy';
+  setDateBase(ctx.date1904 === true);
   const ev = new Ev(ctx);
   return tidy(within(ev, () => ev.scalar(node)));
 }
@@ -2102,6 +2117,7 @@ export function worksOnLists(node: Node): boolean {
 /** A cell's formula worked out: one value, or the list it fills the cells around it with. */
 export function evaluateCell(node: Node, ctx: Context): Value | Grid {
   dateOrder = ctx.dateOrder ?? 'dmy';
+  setDateBase(ctx.date1904 === true);
   const ev = new Ev(ctx);
   return within(ev, () => {
     if (!Ev.isList(node)) return tidy(ev.scalar(node));

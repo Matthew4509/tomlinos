@@ -13,6 +13,39 @@ type Fn = (ev: Ev, a: Node[], d: number) => Value;
 type ListFn = (ev: Ev, a: Node[], d: number) => Grid | CellError;
 const ALL = 'all';
 
+/**
+ * A number in Roman letters. Form 0 is the classic way (only IV, IX, XL, XC, CD, CM take one away); each form up to 4
+ * lets a letter take away from one further up when that comes out shorter (499: CDXCIX, LDVLIV, XDIX, VDIV, ID).
+ */
+function roman(n: number, form: number): string {
+  const letters = ['M', 'D', 'C', 'L', 'X', 'V', 'I'];
+  const values = [1000, 500, 100, 50, 10, 5, 1];
+  const last = values.length - 1;
+  let out = '';
+  let rest = n;
+  for (let i = 0; i <= last / 2; i++) {
+    let at = 2 * i;
+    const digit = Math.floor(rest / values[at]);
+    if (digit % 5 === 4) {
+      // A 4 or a 9 of this place: one letter taken away from a bigger one.
+      const big = digit === 4 ? at - 1 : at - 2;
+      let steps = 0;
+      while (steps < form && at < last) {
+        steps++;
+        if (values[big] - values[at + 1] <= rest) at++;
+        else steps = form;
+      }
+      out += letters[at] + letters[big];
+      rest = rest + values[at] - values[big];
+    } else {
+      if (digit > 4) out += letters[at - 1];
+      out += letters[at].repeat(digit % 5);
+      rest %= values[at];
+    }
+  }
+  return out;
+}
+
 /** Every second argument from `from` on, up to Excel's 255 (where SUMIFS-style conditions are). */
 const everyOther = (from: number): number[] => Array.from({ length: 128 }, (_, i) => from + i * 2);
 
@@ -743,6 +776,40 @@ export function moreFunctions(h: Helpers): { fns: Record<string, Fn>; lists: Rec
       if (n < 0 || n >= 2 ** 53 || radix < 2 || radix > 36 || len < 0 || len > 255) return E.NUM;
       return n.toString(radix).toUpperCase().padStart(len, '0');
     },
+    // ROMAN(number, [form]): 499 is CDXCIX; forms 1 to 4 are ever shorter (4 gives ID), as in Excel.
+    ROMAN: (ev, a, d) => {
+      const n = req(ev, a, 0, d);
+      if (n instanceof CellError) return n;
+      let form = 0;
+      if (a[1] && a[1].t !== 'blank') {
+        const f = ev.scalar(a[1], d + 1);
+        if (f instanceof CellError) return f;
+        const fv = typeof f === 'boolean' ? (f ? 0 : 4) : toNumber(f);
+        if (fv instanceof CellError) return fv;
+        form = Math.trunc(fv);
+      }
+      const x = Math.trunc(n);
+      if (x < 0 || x > 3999 || form < 0 || form > 4) return E.VALUE;
+      return roman(x, form);
+    },
+    // ARABIC(text): a Roman number as a number (MMXXVI is 2026); a minus sign in front is kept.
+    ARABIC: (ev, a, d) => {
+      const s = str(ev, a, 0, d);
+      if (s instanceof CellError) return s;
+      let t = s.trim().toUpperCase();
+      if (t.length > 255) return E.VALUE;
+      const minus = t.startsWith('-');
+      if (minus) t = t.slice(1);
+      const worth: Record<string, number> = { I: 1, V: 5, X: 10, L: 50, C: 100, D: 500, M: 1000 };
+      let total = 0;
+      for (let i = 0; i < t.length; i++) {
+        const v = worth[t[i]];
+        if (!v) return E.VALUE;
+        const next = i + 1 < t.length ? worth[t[i + 1]] ?? 0 : 0;
+        total += v < next ? -v : v;
+      }
+      return minus ? -total : total;
+    },
     DECIMAL: (ev, a, d) => {
       const s = str(ev, a, 0, d);
       const r = req(ev, a, 1, d);
@@ -999,6 +1066,51 @@ export function moreFunctions(h: Helpers): { fns: Record<string, Fn>; lists: Rec
     ISEVEN: (ev, a, d) => { const n = toNumber(one(ev, a, 0, d)); return n instanceof CellError ? n : Math.trunc(n) % 2 === 0; },
     ISODD: (ev, a, d) => { const n = toNumber(one(ev, a, 0, d)); return n instanceof CellError ? n : Math.abs(Math.trunc(n) % 2) === 1; },
     ISNONTEXT: (ev, a, d) => typeof one(ev, a, 0, d) !== 'string',
+    // CELL(info_type, [reference]): about a cell (the formula's own when no reference is given).
+    CELL: (ev, a, d) => {
+      const kind = str(ev, a, 0, d);
+      if (kind instanceof CellError) return kind;
+      let b: { s: number; c0: number; r0: number } | null;
+      if (a[1] && a[1].t !== 'blank') {
+        const got = ev.refOf(a[1], d + 1);
+        if (got instanceof CellError) return got;
+        if (!got) return E.VALUE;
+        b = got;
+      } else b = ev.ctx.here ? { s: ev.ctx.current, c0: ev.ctx.here.col, r0: ev.ctx.here.row } : null;
+      const k = kind.trim().toLowerCase();
+      if (k === 'filename') return '';
+      if (!b) return E.VALUE;
+      const v = ev.cell(b.s, b.c0, b.r0);
+      switch (k) {
+        case 'address': return `${b.s !== ev.ctx.current ? `${quoteSheet(ev.ctx.sheetName?.(b.s) ?? '')}!` : ''}$${colName(b.c0)}$${b.r0 + 1}`;
+        case 'col': return b.c0 + 1;
+        case 'row': return b.r0 + 1;
+        case 'contents': return v;
+        case 'type': return v === null ? 'b' : typeof v === 'string' ? 'l' : 'v';
+        // What this spreadsheet cannot tell a formula (the cell's format, width, colour, protection).
+        case 'color': case 'format': case 'parentheses': case 'prefix': case 'protect': case 'width': return E.NA;
+        default: return E.VALUE;
+      }
+    },
+    // INFO(type_text): about the spreadsheet.
+    INFO: (ev, a, d) => {
+      const kind = str(ev, a, 0, d);
+      if (kind instanceof CellError) return kind;
+      switch (kind.trim().toLowerCase()) {
+        case 'numfile': {
+          let n = 0;
+          while (n < 1000 && ev.ctx.sheetName?.(n)) n++;
+          return n || 1;
+        }
+        case 'origin': return '$A:$A$1';
+        case 'recalc': return 'Automatic';
+        case 'system': return 'pcdos';
+        case 'release': return '16.0';
+        // A web desktop has no folder or system version a formula should see.
+        case 'directory': case 'osversion': case 'memavail': case 'memused': case 'totmem': return E.NA;
+        default: return E.VALUE;
+      }
+    },
     ISREF: (ev, a, d) => {
       const b = a[0] ? ev.refOf(a[0], d + 1) : null;
       return !!b && !(b instanceof CellError);
@@ -1525,8 +1637,40 @@ export function moreFunctions(h: Helpers): { fns: Record<string, Fn>; lists: Rec
       if (y instanceof CellError) return y;
       const n = x[0]?.length ?? 0;
       if (n !== y.length) return E.VALUE;
-      for (const v of [...flat(x), ...flat(y)]) if (typeof v !== 'number') return E.VALUE;
-      return x.map(row => (y[0] ?? []).map((_, c) => clean(row.reduce<number>((s, v, k) => s + (v as number) * (y[k][c] as number), 0))));
+      const m = x.length;
+      const p = y[0]?.length ?? 0;
+      // Past 300 million steps the page would stall for seconds: refuse instead (a 1000 x 1000 by 1000 x 1000 product is 1000 million).
+      if (m * n * p > 3e8) return E.NUM;
+      // Packed into flat typed arrays and walked row by row (i, k, j), which keeps the memory reads in order.
+      const a2 = new Float64Array(m * n);
+      const b2 = new Float64Array(n * p);
+      for (let i = 0; i < m; i++) for (let k = 0; k < n; k++) {
+        const v = x[i][k];
+        if (typeof v !== 'number') return E.VALUE;
+        a2[i * n + k] = v;
+      }
+      for (let k = 0; k < n; k++) for (let j = 0; j < p; j++) {
+        const v = y[k][j];
+        if (typeof v !== 'number') return E.VALUE;
+        b2[k * p + j] = v;
+      }
+      const out = new Float64Array(m * p);
+      for (let i = 0; i < m; i++) {
+        const o = i * p;
+        for (let k = 0; k < n; k++) {
+          const av = a2[i * n + k];
+          if (av === 0) continue;
+          const b = k * p;
+          for (let j = 0; j < p; j++) out[o + j] += av * b2[b + j];
+        }
+      }
+      const res: Value[][] = [];
+      for (let i = 0; i < m; i++) {
+        const row: Value[] = new Array(p);
+        for (let j = 0; j < p; j++) row[j] = clean(out[i * p + j]);
+        res.push(row);
+      }
+      return res;
     },
     CHOOSECOLS: (ev, a, d) => choose(ev, a, d, true),
     CHOOSEROWS: (ev, a, d) => choose(ev, a, d, false),

@@ -217,6 +217,7 @@ export async function formatCellsDialog(ctx: SheetContext, tools: FormatTools, f
       if (why) problem.textContent = why;
     }
     try {
+      wb.useDates();
       if (touched.has('number') && !problem.textContent) text = s.fmt === 'custom' && s.code ? formatCode(v, s.code).text : typeof v === 'number' ? formatCode(v, s.fmt === 'percent' ? `0${s.dec ? `.${'0'.repeat(s.dec)}` : ''}%` : s.fmt === 'currency' ? `"${wb.symbol}"#,##0${s.dec ? `.${'0'.repeat(s.dec)}` : ''}` : s.fmt === 'comma' ? `#,##0${s.dec ? `.${'0'.repeat(s.dec)}` : ''}` : s.fmt === 'number' ? `0${s.dec ? `.${'0'.repeat(s.dec)}` : ''}` : 'General').text : String(v);
       else text = wb.display(wb.active, a.col, a.row) || text;
     } catch {

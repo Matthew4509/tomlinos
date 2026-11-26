@@ -32,6 +32,25 @@ export function longDateCode(order: DateOrder): string {
   return order === 'mdy' ? 'dddd, mmmm d, yyyy' : 'dddd, d mmmm yyyy';
 }
 
+/**
+ * A workbook can count its days from 1904 instead (Excel for Mac's old way, still a choice in Excel): its serial 0 is
+ * 1 January 1904, which is 1462 in the 1900 count. While such a workbook is worked on this is 1462, else 0, and the
+ * functions below read and give its own serials, so its values stay as they were saved, as in Excel.
+ */
+let base = 0;
+export const DAYS_1904 = 1462;
+
+/** Sets which count the next dates are read and written in (a workbook calls it before it works dates out). */
+export function setDateBase(date1904: boolean): void {
+  base = date1904 ? DAYS_1904 : 0;
+}
+
+/** True while dates are counted from 1904. */
+export const dateBase1904 = (): boolean => base !== 0;
+
+/** The last serial a date can have in the count in use: the last day of the year 9999. */
+export const lastSerial = (): number => MAX_SERIAL - base;
+
 const isLeap = (y: number): boolean => (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
 
 export function daysInMonth(y: number, m: number): number {
@@ -40,9 +59,15 @@ export function daysInMonth(y: number, m: number): number {
 
 /**
  * The serial of a year, month and day. Months and days past their ends roll over (month 13 is January of the next
- * year, day 0 the last day of the month before), as DATE does. NaN before 1900 or after 9999.
+ * year, day 0 the last day of the month before), as DATE does. NaN before 1900 (1904 when days count from 1904) or
+ * after 9999.
  */
 export function serialOf(y: number, m: number, d: number): number {
+  const s = serialOf1900(y, m, d) - base;
+  return s < 0 ? NaN : s;
+}
+
+function serialOf1900(y: number, m: number, d: number): number {
   const year = y + Math.floor((m - 1) / 12);
   const month = ((((m - 1) % 12) + 12) % 12) + 1;
   if (year < 1900 || year > 9999) return NaN;
@@ -62,7 +87,7 @@ export interface Parts {
 
 /** The year, month, day and weekday of a serial (its whole-day part). Serial 0 is "0 January 1900", as Excel shows it. */
 export function partsOf(serial: number): Parts {
-  const n = Math.floor(serial);
+  const n = Math.floor(serial) + base;
   const wd = (((n - 1) % 7) + 7) % 7;
   if (n === 0) return { y: 1900, m: 1, d: 0, wd: 6 };
   if (n === 60) return { y: 1900, m: 2, d: 29, wd };
@@ -72,7 +97,7 @@ export function partsOf(serial: number): Parts {
 
 /** The serial for this moment (or today) on this computer's clock. */
 export function nowSerial(withTime: boolean, at = new Date()): number {
-  const day = serialOf(at.getFullYear(), at.getMonth() + 1, at.getDate());
+  const day = serialOf1900(at.getFullYear(), at.getMonth() + 1, at.getDate()) - base;
   if (!withTime) return day;
   return day + (at.getHours() * 3600 + at.getMinutes() * 60 + at.getSeconds() + at.getMilliseconds() / 1000) / 86400;
 }
@@ -97,9 +122,10 @@ function fullYear(text: string): number {
 
 function checkedSerial(y: number, m: number, d: number): number | null {
   // 29/02/1900 is a day Excel counts (serial 60), so it reads back as it is shown.
-  if (y === 1900 && m === 2 && d === 29) return 60;
+  if (y === 1900 && m === 2 && d === 29) return base ? null : 60;
   if (!(m >= 1 && m <= 12) || y < 1900 || y > 9999 || !(d >= 1 && d <= daysInMonth(y, m))) return null;
-  return serialOf(y, m, d);
+  const s = serialOf(y, m, d);
+  return Number.isNaN(s) ? null : s;
 }
 
 /** A time of day: 14:30, 2:30 pm, 14:30:15, 9 AM, 0:05:30.5. Hours past 24 are allowed when there are minutes (35:00). */

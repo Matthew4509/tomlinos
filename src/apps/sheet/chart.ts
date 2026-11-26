@@ -304,7 +304,10 @@ function formatterFor(wb: Workbook, own: number, text: string): (n: number) => s
     }
   }
   const keep = style && (style.fmt || style.code) ? style : undefined;
-  return n => formatValue(n, keep, wb.symbol).text;
+  return n => {
+    wb.useDates();
+    return formatValue(n, keep, wb.symbol).text;
+  };
 }
 
 /** The chart's series as numbers (anything else, such as text or an empty cell, is a gap), its categories and names. */

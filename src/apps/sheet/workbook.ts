@@ -3,12 +3,13 @@
 // file format. No page code here, so it can be tested without a browser.
 // A formula whose answer is a list (=SORT(A2:A9), =FILTER(...), =A1:A5*2) fills the cells below and to the right of it
 // ("spills"), as in Excel 365; nothing is stored in those cells, so typing in one of them stops the list (#SPILL!).
-import { daysInMonth, localeDateOrder, MAX_SERIAL, partsOf, readDateTime, serialOf, shortDateCode, type DateOrder } from './dates.ts';
+import { daysInMonth, localeDateOrder, MAX_SERIAL, partsOf, readDateTime, serialOf, setDateBase, shortDateCode, type DateOrder } from './dates.ts';
 import { evaluateCell, givesList, leadingFunction, MAX_FORMULA_LENGTH, parseFormula, text as valueToText, type Context, type Grid, type Node } from './formula.ts';
 import { codeProblem, formatCode, isDateCode, type Formatted } from './numfmt.ts';
 import { plural } from '../../core/format.ts';
 import { colName, MAX_COLS, MAX_ROWS, mapRefs, parseCellRef, renameSheetInFormula, shiftFormula, SyntaxProblem, tokenize, type Ref } from './refs.ts';
 import { CellError, clean, E, formatNumber, formatValue, type CellStyle, type Value } from './values.ts';
+import { wildSpans, wildTest } from './wild.ts';
 import { cleanChart, mapChartRefs, MAX_CHARTS, type Chart } from './chart.ts';
 import { cleanRule, MAX_RANGES, MAX_RULES, subtractAll, type CfEntry } from './condfmt.ts';
 import { cleanPage, type PageSetup } from './print.ts';
@@ -212,21 +213,29 @@ export interface Found {
 
 export const overlaps = (a: Range, b: Range): boolean => a.c0 <= b.c1 && b.c0 <= a.c1 && a.r0 <= b.r1 && b.r0 <= a.r1;
 
+/** A Find pattern, read: whether a text matches it, and the text with each match replaced. */
+export interface FindPattern {
+  test(text: string): boolean;
+  replace(text: string, by: string): string;
+}
+
 /**
  * What Excel's Find reads: * is any run of characters, ? any one, ~ makes the next one plain (~* is a star). Matches
- * part of the cell unless `whole`.
+ * part of the cell unless `whole`. Matched without a regular expression (wild.ts), so no pattern can stall the page.
  */
-export function findPattern(text: string, matchCase = false, whole = false): RegExp {
-  let src = '';
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (c === '~' && i + 1 < text.length && '*?~'.includes(text[i + 1])) {
-      src += '\\' + text[++i];
-    } else if (c === '*') src += '[\\s\\S]*';
-    else if (c === '?') src += '[\\s\\S]';
-    else src += c.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
-  }
-  return new RegExp(whole ? `^(?:${src})$` : src, matchCase ? 'g' : 'gi');
+export function findPattern(text: string, matchCase = false, whole = false): FindPattern {
+  return {
+    test: (t: string) => wildTest(text, t, matchCase, whole),
+    replace: (t: string, by: string) => {
+      let out = '';
+      let last = 0;
+      for (const [a, b] of wildSpans(text, t, matchCase, whole)) {
+        out += t.slice(last, a) + by;
+        last = b;
+      }
+      return out + t.slice(last);
+    },
+  };
 }
 
 interface Change {
@@ -250,7 +259,16 @@ export interface Entry {
   wrap?: boolean;
 }
 
-const NUMBER = /^[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)?(?:\.\d+)?(?:e[-+]?\d+)?$/i;
+/** A typed number: 1,234.5, -7, .5, 5. (a point with nothing after it, as Excel reads it), 1e3. */
+const NUMBER = /^[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)?(?:\.\d*)?(?:e[-+]?\d+)?$/i;
+
+/** True when a number's shown text holds every digit of the number (so writing it as shown loses nothing). */
+function keepsDigits(shownText: string, v: number): boolean {
+  const full = valueToText(v);
+  if (/e/i.test(full)) return false;
+  const digits = full.replace(/\D/g, '').replace(/^0+/, '').replace(/0+$/, '');
+  return shownText.replace(/\D/g, '').includes(digits);
+}
 
 /** True when a style shows numbers as dates or times. */
 export function isDateStyle(style: CellStyle | undefined): boolean {
@@ -282,6 +300,17 @@ function seriesAt(base: number, step: number, months: number, offset: number): n
     if (Number.isFinite(v)) return v;
   }
   return clean(base + step * offset);
+}
+
+/**
+ * Text that ends in a number, filled on: the number goes up by one each time round (Item 9, Item 10, Item 11), with
+ * its leading zeros kept (Week 01, Week 02), and down when filled upward (never below 0), as in Excel.
+ */
+function numberedOn(text: string, times: number): string {
+  const m = /^([\s\S]*?\D)?(\d{1,15})$/.exec(text);
+  if (!m || !m[1] || !times) return text;
+  const n = Math.abs(Number(m[2]) + times);
+  return m[1] + String(n).padStart(m[2].length, '0');
 }
 
 /** A date (and time) as it is put in the editor: in the short date format, so it reads back as the same date. */
@@ -327,6 +356,18 @@ export function parseEntry(input: string, order: DateOrder = 'dmy'): Entry {
     const n = Number(t.replace(/,/g, ''));
     if (Number.isFinite(n)) return { cell: { v: n } };
   }
+  // A number in brackets is a minus number, as accountants write it: (100) is -100.
+  const neg = /^\(([\d.,]+)\)$/.exec(t);
+  if (neg && NUMBER.test(neg[1]) && /\d/.test(neg[1])) {
+    const n = Number(neg[1].replace(/,/g, ''));
+    if (Number.isFinite(n)) return { cell: { v: -n } };
+  }
+  // A whole number and a fraction: 1 1/2 is 1.5, shown as a fraction (Excel). 1/2 alone is a date, as there.
+  const frac = /^([-+]?)(\d{1,9}) (\d{1,5})\/(\d{1,5})$/.exec(t);
+  if (frac && Number(frac[4]) > 0 && Number(frac[3]) < Number(frac[4])) {
+    const n = Number(frac[2]) + Number(frac[3]) / Number(frac[4]);
+    return { cell: { v: clean(frac[1] === '-' ? -n : n) }, fmt: { fmt: 'custom', code: frac[4].length > 1 ? '# ??/??' : '# ?/?' } };
+  }
   // A date or a time is kept as a number of days (as Excel does), shown in the format it was typed in.
   const date = input.includes('\n') ? null : readDateTime(t, order);
   if (date) return { cell: { v: date.serial }, fmt: { fmt: 'custom', code: date.code } };
@@ -342,6 +383,8 @@ export class Workbook {
   version = 0;
   /** How typed dates are read: this computer's order (day first in most of the world), as Excel follows Windows. */
   dateOrder: DateOrder = localeDateOrder();
+  /** True when the workbook counts its days from 1904 (an Excel file can): serial 0 is then 1 January 1904. */
+  date1904 = false;
   /** Named ranges and values (Formulas > Name Manager). */
   names: DefinedName[] = [];
   private memo = new Map<number, Value>();
@@ -369,8 +412,15 @@ export class Workbook {
 
   // ---- Working out values ------------------------------------------------------------------------------------------
 
+  /** Sets the day count (from 1900, or from 1904) the date code works in to this workbook's. */
+  useDates(): void {
+    setDateBase(this.date1904);
+  }
+
   private context(current: number, here?: { col: number; row: number }): Context {
+    this.useDates();
     return {
+      date1904: this.date1904,
       current,
       here,
       cell: (s, c, r) => this.value(s, c, r),
@@ -727,6 +777,7 @@ export class Workbook {
 
   /** What is shown in the cell, and the colour its number format asks for ([Red]), if any. */
   shown(s: number, col: number, row: number): Formatted {
+    this.useDates();
     const cell = this.sheets[s]?.cells.get(keyOf(col, row));
     const v = this.value(s, col, row);
     const style = this.styleOf(cell);
@@ -741,6 +792,7 @@ export class Workbook {
 
   /** The text to put in the editor for this cell. */
   editText(s: number, col: number, row: number): string {
+    this.useDates();
     const cell = this.sheets[s]?.cells.get(keyOf(col, row));
     if (!cell) return '';
     if (cell.f !== undefined) return `=${cell.f}`;
@@ -871,6 +923,7 @@ export class Workbook {
 
   /** Types `input` into a cell. Throws SyntaxProblem (with words for the person) if a formula is wrong. */
   setInput(s: number, col: number, row: number, input: string): void {
+    this.useDates();
     // Outside the sheet a cell's number would land on another cell (the next row's first), or make a file that will not open.
     if (!Number.isInteger(col) || !Number.isInteger(row) || col < 0 || row < 0 || col >= MAX_COLS || row >= MAX_ROWS) {
       throw new SyntaxProblem('That is past the edge of the sheet.');
@@ -1361,6 +1414,7 @@ export class Workbook {
 
   /** A PivotTable's data: the header row's names, the rows under it (empty rows at the end left out), each column's format. */
   pivotData(s: number, source: string): PivotData {
+    this.useDates();
     const at = this.refBox(s, source);
     if (!at) throw new SyntaxProblem(`The PivotTable's data (${source}) cannot be found: its cells, table or sheet may have been deleted. Choose it again (PivotTable Analyze > Change data source).`);
     const { range: r } = at;
@@ -1649,6 +1703,7 @@ export class Workbook {
 
   /** Fills `target` from the pattern in `src` (copies; a run of two or more numbers continues as a series). */
   fill(s: number, src: Range, target: Range): void {
+    this.useDates();
     const changes: Change[] = [];
     const sheet = this.sheets[s];
     const down = target.r1 > src.r1 || target.r0 < src.r0;
@@ -1685,6 +1740,7 @@ export class Workbook {
           if (after.f !== undefined) after.f = shiftFormula(after.f, 0, row - srcRow);
           // Filled upward the series runs back from its first number (1, 2 filled up gives 0, -1), downward on from its last.
           else if (series && typeof after.v === 'number') after.v = seriesAt(offset < 0 ? nums[0] : nums[nums.length - 1], step, months, offset);
+          else if (typeof after.v === 'string') after.v = numberedOn(after.v, (row - srcRow) / height);
           put(col, row, after);
         }
       }
@@ -1710,6 +1766,7 @@ export class Workbook {
           const after: Cell = { ...from };
           if (after.f !== undefined) after.f = shiftFormula(after.f, col - srcCol, 0);
           else if (series && typeof after.v === 'number') after.v = seriesAt(offset < 0 ? nums[0] : nums[nums.length - 1], step, months, offset);
+          else if (typeof after.v === 'string') after.v = numberedOn(after.v, (col - srcCol) / width);
           put(col, row, after);
         }
       }
@@ -1727,10 +1784,18 @@ export class Workbook {
 
   /**
    * Sorts the rows of a block by several columns in turn (Data > Sort): the first key, then the next among equals.
-   * Numbers come before text, then TRUE/FALSE, then errors; empty cells always go last, as in Excel.
+   * A to Z: numbers, then text, then TRUE/FALSE; Z to A: TRUE/FALSE, text, numbers. Errors and then empty cells always
+   * go last, as in Excel.
    */
   sortBy(s: number, r: Range, keys: Array<{ col: number; ascending: boolean }>): void {
     if (this.sheets[s].merges.some(m => overlaps(m, r))) throw new SyntaxProblem('Some of these cells are merged, and merged cells cannot be sorted. Unmerge them first (Merge > Unmerge cells), then sort.');
+    // A list formula that fills cells in the block: moving it (or the cells it fills) would leave it unable to fill.
+    if (this.sheets[s].cells.size && this.listKeys(s).some(k => {
+      const area = this.spillArea(s, colOfKey(k), rowOfKey(k));
+      return area && (area.c1 > area.c0 || area.r1 > area.r0) && overlaps(area, r);
+    })) {
+      throw new SyntaxProblem('A formula in these cells fills the cells around it (a list), and such cells cannot be sorted. Sort the cells it reads instead, or wrap its formula in SORT( ).');
+    }
     if (!keys.length) return;
     const rows: number[] = [];
     for (let row = r.r0; row <= r.r1; row++) rows.push(row);
@@ -1744,7 +1809,8 @@ export class Workbook {
         const vb = kb[i];
         const ra = rank(va);
         const rb = rank(vb);
-        if (ra !== rb) return ra - rb;
+        // Numbers, text and TRUE/FALSE swap order for Z to A; errors and empty cells stay last either way.
+        if (ra !== rb) return !keys[i].ascending && ra < 3 && rb < 3 ? rb - ra : ra - rb;
         let c = 0;
         if (typeof va === 'number' && typeof vb === 'number') c = va - vb;
         else if (typeof va === 'string' && typeof vb === 'string') c = va.toLowerCase().localeCompare(vb.toLowerCase());
@@ -1841,6 +1907,7 @@ export class Workbook {
    * `dest`); each piece is read as typing would read it (numbers, dates). Text in quotes keeps its delimiters. One Undo.
    */
   splitText(s: number, col: number, r0: number, r1: number, opts: { delims: string[]; consecutive: boolean; quote: string | null }, dest = { col, row: r0 }): number {
+    this.useDates();
     const changes: Change[] = [];
     let created = 0;
     let widest = 0;
@@ -2578,7 +2645,6 @@ export class Workbook {
         const row = rowOfKey(k);
         const text = opts.lookIn === 'formulas' ? this.editText(s, col, row) : this.display(s, col, row);
         if (text === '') continue;
-        re.lastIndex = 0;
         if (re.test(text)) out.push({ s, col, row });
       }
     }
@@ -2592,9 +2658,8 @@ export class Workbook {
     const before = this.editText(s, col, row);
     const re = findPattern(opts.text, opts.matchCase, opts.wholeCell);
     if (!re.test(before)) return null;
-    re.lastIndex = 0;
-    // Excel's wildcard "*" can match nothing; a pattern that matched an empty piece moves on rather than repeating.
-    return before.replace(re, m => (m === '' ? '' : by));
+    // Excel's wildcard "*" can match nothing; a match of nothing is left as it is.
+    return re.replace(before, by);
   }
 
   /** Replaces in one cell. False when it does not match, or the result is a formula that does not read. */
@@ -2683,6 +2748,7 @@ export class Workbook {
 
   /** The value typing `input` into a cell would give, without typing it (a formula is worked out). */
   entryValue(s: number, input: string): Value {
+    this.useDates();
     const entry = parseEntry(input, this.dateOrder);
     if (!entry.cell) return null;
     if (entry.cell.f !== undefined) {
@@ -2699,6 +2765,7 @@ export class Workbook {
    * cell back as it was: nothing to undo, and the workbook is not changed.
    */
   withInput<T>(s: number, col: number, row: number, input: string, fn: () => T): T {
+    this.useDates();
     const entry = parseEntry(input, this.dateOrder);
     const sheet = this.sheets[s];
     const key = keyOf(col, row);
@@ -2908,7 +2975,7 @@ export class Workbook {
       ...(sh.pivots.length ? { pivots: sh.pivots.map(p => ({ ...p, last: p.last ? rangeArray(p.last) : null })) } : {}),
       ...(sh.noGrid ? { noGrid: true } : {}),
     }));
-    return JSON.stringify({ format: FILE_FORMAT, version: 1, symbol: this.symbol, active: this.active, styles, sheets, ...(this.names.length ? { names: this.names } : {}) });
+    return JSON.stringify({ format: FILE_FORMAT, version: 1, symbol: this.symbol, ...(this.date1904 ? { date1904: true } : {}), active: this.active, styles, sheets, ...(this.names.length ? { names: this.names } : {}) });
   }
 
   /** Loads a saved workbook, checking every field. Throws SyntaxProblem with a plain reason if the file is not one. */
@@ -3085,6 +3152,7 @@ export class Workbook {
     this.styles = styles;
     this.names = defined;
     this.symbol = typeof d.symbol === 'string' && d.symbol.length <= 3 ? d.symbol : '$';
+    this.date1904 = d.date1904 === true;
     this.active = typeof d.active === 'number' && d.active >= 0 && d.active < sheets.length ? d.active : 0;
     if (!keepUndo) {
       this.undoStack = [];
@@ -3101,6 +3169,7 @@ export class Workbook {
    * What did not fit on the sheet is in `lastCut` afterwards (cutInWords says it).
    */
   importText(s: number, col: number, row: number, textIn: string, delimiter?: '\t'): number {
+    this.useDates();
     const split = splitDelimited(textIn, delimiter);
     const table = split.rows;
     this.lastCut = { rows: Math.max(0, row + split.rowCount - MAX_ROWS), cols: Math.max(0, col + split.widest - MAX_COLS) };
@@ -3147,8 +3216,12 @@ export class Workbook {
         const v = this.value(s, col, row);
         // A number with no format of its own is written with every digit (447700900123, not 4.47701E+11); dates and
         // formatted numbers as shown.
-        const general = typeof v === 'number' && !this.styleOf(this.sheets[s].cells.get(keyOf(col, row)))?.fmt;
+        const style = typeof v === 'number' ? this.styleOf(this.sheets[s].cells.get(keyOf(col, row))) : undefined;
+        const general = typeof v === 'number' && !style?.fmt;
         let t = shown && !general ? this.display(s, col, row) : valueToText(v);
+        // In a CSV, a number shown with fewer digits than it holds (3.14159 shown as 3.14) is written in full, so nothing is lost;
+        // dates and times stay as shown, and so does a number whose shown text keeps all its digits ($1,234.50, 00501).
+        if (delimiter === ',' && shown && typeof v === 'number' && !general && !isDateStyle(style) && !keepsDigits(t, v)) t = valueToText(v);
         // Any text that a spreadsheet program would read as a formula (typed, or the result of one) is kept as text.
         if (typeof v === 'string' && runsAsFormula(t)) t = `'${t}`;
         // A copy (tab-separated): a cell with line breaks or tabs goes in quotes, as Excel copies it, so it pastes back
@@ -3328,13 +3401,33 @@ export function parseDelimited(input: string, given?: '\t'): string[][] {
 }
 
 /**
+ * Which character splits the fields: tabs, commas or semicolons, counted only outside quotes (a heading "Name, first"
+ * holds a comma that splits nothing). The first line decides, as its fields are the headings; when it holds none of
+ * them, the next lines do (up to 20). Later lines alone are not trusted more: 1,5;2,5 there is decimal commas.
+ */
+function guessDelimiter(input: string): string {
+  const counts: Record<string, number> = { '\t': 0, ',': 0, ';': 0 };
+  let quoted = false;
+  let lines = 0;
+  const stop = Math.min(input.length, 65536);
+  for (let i = 0; i < stop && lines < 20; i++) {
+    const c = input[i];
+    if (c === '"') quoted = !quoted;
+    else if (quoted) continue;
+    else if (c === '\n') {
+      lines++;
+      if (counts['\t'] + counts[','] + counts[';'] > 0) break;
+    } else if (c === '\t' || c === ',' || c === ';') counts[c]++;
+  }
+  return counts['\t'] > 0 && counts['\t'] >= counts[','] ? '\t' : counts[';'] > counts[','] ? ';' : ',';
+}
+
+/**
  * parseDelimited, also saying how big the text really was: `rowCount` rows and `widest` fields in its longest row,
  * counted past the edge of a sheet, where `rows` stops.
  */
 export function splitDelimited(input: string, given?: '\t'): { rows: string[][]; rowCount: number; widest: number; delimiter: string } {
-  const firstLine = input.split(/\r?\n/, 1)[0] ?? '';
-  const count = (ch: string) => firstLine.split(ch).length - 1;
-  const delimiter = given ?? (count('\t') > 0 && count('\t') >= count(',') ? '\t' : count(';') > count(',') ? ';' : ',');
+  const delimiter = given ?? guessDelimiter(input);
   const rows: string[][] = [];
   let rowCount = 0;
   let widest = 0;

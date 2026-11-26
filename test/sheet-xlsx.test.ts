@@ -184,7 +184,8 @@ test('xlsx: formulas move between Excel\'s spelling and ours', () => {
   assert.equal(fromExcelFormula('_xlfn._xlws.FILTER(A:A,B:B="x")'), 'FILTER(A:A,B:B="x")');
   assert.equal(fromExcelFormula('SUM(Table1[Amount])'), 'SUM(Table1[Amount])', 'table references are kept as written');
   assert.equal(fromExcelFormula('_xlfn.LET(_xlpm.x,2,_xlpm.x*3)'), 'LET(x,2,x*3)');
-  assert.equal(fromExcelFormula('SUM(1:1)'), null, 'whole rows cannot be read yet');
+  assert.equal(fromExcelFormula('SUM(1:1)'), 'SUM(1:1)', 'whole rows are read');
+  assert.equal(fromExcelFormula('SUM(Sheet2!$2:$3)'), 'SUM(Sheet2!$2:$3)');
   for (const f of ['TEXTJOIN(",",TRUE,UNIQUE(A2:A9))', 'IFNA(XMATCH(A1,B:B),0)', 'SUM(Sheet2!E1#)']) assert.equal(fromExcelFormula(toExcelFormula(f)), f);
 });
 
