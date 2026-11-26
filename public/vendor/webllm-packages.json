@@ -3,5 +3,10 @@
   "name": "@mlc-ai/web-llm",
   "version": "0.2.85",
   "license": "Apache-2.0"
+ },
+ {
+  "name": "loglevel",
+  "version": "1.9.2",
+  "license": "MIT"
  }
 ]
