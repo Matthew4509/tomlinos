@@ -10,7 +10,7 @@ desktop: they are saved on your server.
 
 ## What's in it
 
-- **Files and documents:** Explorer, Notepad and Notepad Pro, an editor with syntax highlighting, a spreadsheet,
+- **Files and documents:** Explorer, Quick Notes and Notepad Pro, an editor with syntax highlighting, a spreadsheet,
   photos and a photo editor with layers (a light GIMP: selections, retouching, levels and curves, text layers,
   OpenRaster .ora files), a PDF viewer, a media player, archives (zip), and a recycle bin.
 - **Write:** a document writer that opens and saves Word documents (.docx), Markdown and plain text, and opens
