@@ -107,6 +107,8 @@ export class BitReader {
   readonly data: Uint8Array;
   readonly ver: V;
   text: TextDecoder;
+  /** The RGB of the last true colour CMC read. */
+  rgb = 0;
   /** R2007+: where an object's texts are kept (a stream of their own at the end of its data). */
   strings: BitReader | null = null;
   constructor(data: Uint8Array, startBit = 0, endBit = data.length * 8, ver: V = V.R2004, text: TextDecoder = decoderFor(30)) {
@@ -381,7 +383,10 @@ export class BitReader {
     if (flags & 2) this.TV();
     const kind = rgb >>> 24;
     if (kind === 0xc3) return rgb & 0xff;
-    if (kind === 0xc2) return -1;
+    if (kind === 0xc2) {
+      this.rgb = rgb & 0xffffff;
+      return -1;
+    }
     if (kind === 0xc0) return 256;
     if (kind === 0xc1) return 0;
     return index;

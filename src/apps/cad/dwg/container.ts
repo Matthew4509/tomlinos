@@ -59,7 +59,7 @@ export function readParts(bytes: Uint8Array): DwgParts {
 function readR2000(bytes: Uint8Array, name: string): DwgParts {
   const v = dv(bytes);
   const count = v.getUint32(0x15, true);
-  if (count > 16) throw new DwgProblem(`This AutoCAD 2000 DWG lists ${count} parts in its header; a real one lists 6 (damaged).`);
+  if (count > 16) throw new DwgProblem(`it lists ${count} parts in its header; a real one lists 6 (damaged)`);
   const parts = new Map<number, { at: number; size: number }>();
   for (let i = 0; i < count; i++) {
     const p = 0x19 + i * 9;
@@ -67,7 +67,7 @@ function readR2000(bytes: Uint8Array, name: string): DwgParts {
   }
   const part = (n: number, what: string) => {
     const p = parts.get(n);
-    if (!p || p.at + p.size > bytes.length || p.at < 0x19) throw new DwgProblem(`This AutoCAD 2000 DWG's ${what} is missing or runs past the end of the file (cut short or damaged).`);
+    if (!p || p.at + p.size > bytes.length || p.at < 0x19) throw new DwgProblem(`its ${what} is missing or runs past the end of the file (cut short or damaged)`);
     return bytes.subarray(p.at, p.at + p.size);
   };
   return {
@@ -100,7 +100,7 @@ function readR2004(bytes: Uint8Array, ver: V, name: string): DwgParts {
   const head = unmaskHeader18(bytes);
   const hv = dv(head);
   const checks: string[] = [];
-  if (String.fromCharCode(...head.subarray(0, 11)) !== 'AcFssFcAJMB') throw new DwgProblem(`This ${VERSION_NAMES[name]} DWG's file header is damaged (its signature is wrong).`);
+  if (String.fromCharCode(...head.subarray(0, 11)) !== 'AcFssFcAJMB') throw new DwgProblem('its file header is damaged (its signature is wrong)');
   const stored = hv.getUint32(0x68, true);
   const copy = head.slice();
   dv(copy).setUint32(0x68, 0, true);
@@ -119,26 +119,26 @@ function readR2004(bytes: Uint8Array, ver: V, name: string): DwgParts {
     p += 8;
     if (num < 0) p += 16;
     else {
-      if (pages.has(num)) throw new DwgProblem('This DWG\'s page map lists one page twice (damaged).');
+      if (pages.has(num)) throw new DwgProblem('its page map lists one page twice (damaged)');
       pages.set(num, { at, size });
     }
-    if (pages.size > MAX_PAGES) throw new DwgProblem('This DWG\'s page map lists more pages than a real drawing has (damaged).');
+    if (pages.size > MAX_PAGES) throw new DwgProblem('its page map lists more pages than a real drawing has (damaged)');
     at += size;
     if (at > bytes.length + 0x100000) break;
   }
   const smPage = pages.get(sectionMapId);
-  if (!smPage) throw new DwgProblem('This DWG\'s section map is missing (damaged).');
+  if (!smPage) throw new DwgProblem('its section map is missing (damaged)');
 
   // The section map: each section's name, sizes and pages.
   const sm = systemPage(bytes, smPage.at, 0x4163003b, 'section map');
   const sv = dv(sm);
-  if (sm.length < 20) throw new DwgProblem('This DWG\'s section map is empty (damaged).');
+  if (sm.length < 20) throw new DwgProblem('its section map is empty (damaged)');
   const count = sv.getUint32(0, true);
-  if (count > 256) throw new DwgProblem('This DWG\'s section map lists more sections than a real drawing has (damaged).');
+  if (count > 256) throw new DwgProblem('its section map lists more sections than a real drawing has (damaged)');
   const sections = new Map<string, SectionInfo>();
   let p = 20;
   for (let i = 0; i < count; i++) {
-    if (p + 96 > sm.length) throw new DwgProblem('This DWG\'s section map is cut short (damaged).');
+    if (p + 96 > sm.length) throw new DwgProblem('its section map is cut short (damaged)');
     const size = Number(sv.getBigUint64(p, true));
     const pageCount = sv.getUint32(p + 8, true);
     const maxSize = sv.getUint32(p + 12, true);
@@ -147,7 +147,7 @@ function readR2004(bytes: Uint8Array, ver: V, name: string): DwgParts {
     let secName = '';
     for (let k = 0; k < 64 && sm[p + 32 + k]; k++) secName += String.fromCharCode(sm[p + 32 + k]);
     p += 96;
-    if (pageCount > MAX_PAGES || p + pageCount * 16 > sm.length) throw new DwgProblem('This DWG\'s section map lists more pages than it holds (damaged).');
+    if (pageCount > MAX_PAGES || p + pageCount * 16 > sm.length) throw new DwgProblem('its section map lists more pages than it holds (damaged)');
     const list: SectionInfo['pages'] = [];
     for (let k = 0; k < pageCount; k++) {
       list.push({ number: sv.getUint32(p, true), dataSize: sv.getUint32(p + 4, true), start: Number(sv.getBigUint64(p + 8, true)) });
@@ -159,24 +159,24 @@ function readR2004(bytes: Uint8Array, ver: V, name: string): DwgParts {
   const section = (secName: string, required: boolean): Uint8Array => {
     const s = sections.get(secName);
     if (!s) {
-      if (required) throw new DwgProblem(`This DWG has no ${secName.replace('AcDb:', '')} section (damaged, or not made by a CAD program).`);
+      if (required) throw new DwgProblem(`it has no ${secName.replace('AcDb:', '')} section (damaged, or not made by a CAD program)`);
       return new Uint8Array(0);
     }
     if (s.encrypted === 1) throw new DwgProblem('This DWG is protected with a password; CAD Draft cannot open it. Save an unprotected copy in the program that made it.');
-    if (s.size > MAX_SECTION_BYTES) throw new DwgProblem(`This DWG's ${secName.replace('AcDb:', '')} section says it holds ${s.size.toLocaleString('en-GB')} bytes, more than CAD Draft opens (damaged, or far too big).`);
-    if (s.maxSize > 0x100000) throw new DwgProblem(`This DWG's ${secName.replace('AcDb:', '')} section has pages bigger than a real drawing's (damaged).`);
+    if (s.size > MAX_SECTION_BYTES) throw new DwgProblem(`its ${secName.replace('AcDb:', '')} section says it holds ${s.size.toLocaleString('en-GB')} bytes, more than CAD Draft opens (damaged, or far too big)`);
+    if (s.maxSize > 0x100000) throw new DwgProblem(`its ${secName.replace('AcDb:', '')} section has pages bigger than a real drawing's (damaged)`);
     const out = new Uint8Array(s.size);
     for (const pg of s.pages) {
-      if (used.has(pg.number)) throw new DwgProblem('This DWG uses one page in two places (damaged: its section map loops).');
+      if (used.has(pg.number)) throw new DwgProblem('it uses one page in two places (damaged: its section map loops)');
       used.add(pg.number);
       const loc = pages.get(pg.number);
-      if (!loc || loc.at + 32 > bytes.length) throw new DwgProblem(`A page of this DWG's ${secName.replace('AcDb:', '')} section is missing (cut short or damaged).`);
+      if (!loc || loc.at + 32 > bytes.length) throw new DwgProblem(`a page of its ${secName.replace('AcDb:', '')} section is missing (cut short or damaged)`);
       const mask = (0x4164536b ^ loc.at) >>> 0;
       const h = (k: number) => (fv.getUint32(loc.at + k * 4, true) ^ mask) >>> 0;
-      if (h(0) !== 0x4163043b) throw new DwgProblem(`A page of this DWG's ${secName.replace('AcDb:', '')} section is damaged (its header is wrong).`);
+      if (h(0) !== 0x4163043b) throw new DwgProblem(`a page of its ${secName.replace('AcDb:', '')} section is damaged (its header is wrong)`);
       const dataSize = h(2);
-      if (loc.at + 32 + dataSize > bytes.length) throw new DwgProblem('This DWG is cut short (a page runs past the end of the file).');
-      if (pg.start >= s.size) throw new DwgProblem(`A page of this DWG's ${secName.replace('AcDb:', '')} section lies outside its section (damaged).`);
+      if (loc.at + 32 + dataSize > bytes.length) throw new DwgProblem('it is cut short (a page runs past the end of the file)');
+      if (pg.start >= s.size) throw new DwgProblem(`a page of its ${secName.replace('AcDb:', '')} section lies outside its section (damaged)`);
       const room = Math.min(s.maxSize, s.size - pg.start);
       const raw = bytes.subarray(loc.at + 32, loc.at + 32 + dataSize);
       const data = s.compressed === 2 ? decompress18(raw, s.maxSize) : raw;
@@ -191,13 +191,13 @@ function readR2004(bytes: Uint8Array, ver: V, name: string): DwgParts {
 }
 
 function systemPage(bytes: Uint8Array, at: number, type: number, what: string): Uint8Array {
-  if (at < 0x100 || at + 20 > bytes.length) throw new DwgProblem(`This DWG's ${what} is missing (the file is cut short or damaged).`);
+  if (at < 0x100 || at + 20 > bytes.length) throw new DwgProblem(`its ${what} is missing (the file is cut short or damaged)`);
   const v = dv(bytes);
-  if (v.getUint32(at, true) !== type) throw new DwgProblem(`This DWG's ${what} is damaged (its page header is wrong).`);
+  if (v.getUint32(at, true) !== type) throw new DwgProblem(`its ${what} is damaged (its page header is wrong)`);
   const size = v.getUint32(at + 4, true);
   const comp = v.getUint32(at + 8, true);
   const kind = v.getUint32(at + 12, true);
-  if (size > 0x1000000 || at + 20 + comp > bytes.length) throw new DwgProblem(`This DWG's ${what} is bigger than the file (damaged).`);
+  if (size > 0x1000000 || at + 20 + comp > bytes.length) throw new DwgProblem(`its ${what} is bigger than the file (damaged)`);
   const raw = bytes.subarray(at + 20, at + 20 + comp);
   return kind === 2 ? decompress18(raw, size) : raw.slice(0, size);
 }
@@ -212,7 +212,7 @@ function deinterleave(src: Uint8Array, factor: number, blockSize: number, length
     const size = Math.min(length - index, blockSize);
     let c = i;
     for (let k = 0; k < size; k++, c += factor) {
-      if (c >= src.length) throw new DwgProblem('This AutoCAD 2007 DWG is cut short (a page runs past the end of the file).');
+      if (c >= src.length) throw new DwgProblem('it is cut short (a page runs past the end of the file)');
       out[index++] = src[c];
     }
   }
@@ -231,7 +231,7 @@ function readR2007(bytes: Uint8Array, name: string): DwgParts {
   const comprLen = dd.getInt32(24, true);
   let fh: Uint8Array;
   if (comprLen < 0) fh = decoded.slice(32, 32 + Math.min(-comprLen, 0x110));
-  else if (comprLen > 3 * 239 - 32) throw new DwgProblem('This AutoCAD 2007 DWG\'s file header is damaged.');
+  else if (comprLen > 3 * 239 - 32) throw new DwgProblem('its file header is damaged');
   else fh = decompress21(decoded.subarray(32, 32 + comprLen), 0x110);
   if (fh.length < 0x110) {
     const f = new Uint8Array(0x110);
@@ -249,11 +249,11 @@ function readR2007(bytes: Uint8Array, name: string): DwgParts {
   const sectionsMapSizeUncomp = F(25);
   const sectionsMapCorrection = F(27);
   const sysPage = (offset: number, comp: number, uncomp: number, correction: number) => {
-    if (comp > 0x1000000 || uncomp > 0x1000000 || correction > 16 || correction < 1) throw new DwgProblem('This AutoCAD 2007 DWG\'s page map is damaged.');
+    if (comp > 0x1000000 || uncomp > 0x1000000 || correction > 16 || correction < 1) throw new DwgProblem('its page map is damaged');
     const total = ((comp + 7) & ~7) * correction;
     const factor = Math.ceil(total / 239);
     const at = 0x480 + offset;
-    if (at + factor * 255 > bytes.length) throw new DwgProblem('This AutoCAD 2007 DWG is cut short (its page map runs past the end of the file).');
+    if (at + factor * 255 > bytes.length) throw new DwgProblem('it is cut short (its page map runs past the end of the file)');
     const data = deinterleave(bytes.subarray(at, at + factor * 255), factor, 239, total);
     return decompress21(data.subarray(0, comp), uncomp);
   };
@@ -266,10 +266,10 @@ function readR2007(bytes: Uint8Array, name: string): DwgParts {
     const id = Math.abs(Number(pmv.getBigInt64(p + 8, true)));
     pages.set(id, { at: off, size });
     off += size;
-    if (pages.size > MAX_PAGES) throw new DwgProblem('This DWG\'s page map lists more pages than a real drawing has (damaged).');
+    if (pages.size > MAX_PAGES) throw new DwgProblem('its page map lists more pages than a real drawing has (damaged)');
   }
   const smLoc = pages.get(sectionsMapId);
-  if (!smLoc) throw new DwgProblem('This AutoCAD 2007 DWG\'s section map is missing (damaged).');
+  if (!smLoc) throw new DwgProblem('its section map is missing (damaged)');
   const sm = sysPage(smLoc.at, sectionsMapSizeComp, sectionsMapSizeUncomp, sectionsMapCorrection);
   const smv = dv(sm);
   const sections = new Map<string, { size: number; maxSize: number; encoding: number; encrypted: number; pages: Array<{ offset: number; size: number; id: number; uncomp: number; comp: number }> }>();
@@ -282,7 +282,7 @@ function readR2007(bytes: Uint8Array, name: string): DwgParts {
     const encoding = u64(smv, p + 48);
     const nPages = u64(smv, p + 56);
     p += 64;
-    if (nameLen > 512 || nPages > MAX_PAGES || p + nameLen + nPages * 56 > sm.length) throw new DwgProblem('This AutoCAD 2007 DWG\'s section map is damaged.');
+    if (nameLen > 512 || nPages > MAX_PAGES || p + nameLen + nPages * 56 > sm.length) throw new DwgProblem('its section map is damaged');
     let secName = '';
     for (let k = 0; k + 1 < nameLen; k += 2) {
       const c = smv.getUint16(p + k, true);
@@ -300,20 +300,20 @@ function readR2007(bytes: Uint8Array, name: string): DwgParts {
   const used = new Set<number>();
   const section = (secName: string): Uint8Array => {
     const s = sections.get(secName);
-    if (!s) throw new DwgProblem(`This AutoCAD 2007 DWG has no ${secName.replace('AcDb:', '')} section (damaged).`);
+    if (!s) throw new DwgProblem(`it has no ${secName.replace('AcDb:', '')} section (damaged)`);
     if (s.encrypted === 1) throw new DwgProblem('This DWG is protected with a password; CAD Draft cannot open it. Save an unprotected copy in the program that made it.');
-    if (s.size > MAX_SECTION_BYTES) throw new DwgProblem(`This DWG's ${secName.replace('AcDb:', '')} section is bigger than CAD Draft opens (damaged, or far too big).`);
+    if (s.size > MAX_SECTION_BYTES) throw new DwgProblem(`its ${secName.replace('AcDb:', '')} section is bigger than CAD Draft opens (damaged, or far too big)`);
     const out = new Uint8Array(s.size);
     for (const pg of s.pages) {
-      if (used.has(pg.id)) throw new DwgProblem('This DWG uses one page in two places (damaged: its section map loops).');
+      if (used.has(pg.id)) throw new DwgProblem('it uses one page in two places (damaged: its section map loops)');
       used.add(pg.id);
       const loc = pages.get(pg.id);
-      if (!loc) throw new DwgProblem(`A page of this DWG's ${secName.replace('AcDb:', '')} section is missing (damaged).`);
-      if (pg.uncomp > s.maxSize || pg.offset + pg.uncomp > out.length || pg.comp > pg.uncomp + 0x10000) throw new DwgProblem('A page of this AutoCAD 2007 DWG is bigger than its section (damaged).');
+      if (!loc) throw new DwgProblem(`a page of its ${secName.replace('AcDb:', '')} section is missing (damaged)`);
+      if (pg.uncomp > s.maxSize || pg.offset + pg.uncomp > out.length || pg.comp > pg.uncomp + 0x10000) throw new DwgProblem('a page of it is bigger than its section (damaged)');
       const at = 0x480 + loc.at;
       const stored = (pg.comp + 7) & ~7;
       const factor = Math.max(1, Math.ceil(stored / 251));
-      if (at + Math.min(loc.size, factor * 255) > bytes.length) throw new DwgProblem('This AutoCAD 2007 DWG is cut short (a page runs past the end of the file).');
+      if (at + Math.min(loc.size, factor * 255) > bytes.length) throw new DwgProblem('it is cut short (a page runs past the end of the file)');
       const raw = bytes.subarray(at, Math.min(bytes.length, at + factor * 255));
       const data = s.encoding === 4 ? deinterleave(raw, factor, 251, factor * 251) : raw;
       out.set(pg.comp !== pg.uncomp ? decompress21(data.subarray(0, pg.comp), pg.uncomp) : data.subarray(0, pg.uncomp), pg.offset);
@@ -328,10 +328,10 @@ function readR2007(bytes: Uint8Array, name: string): DwgParts {
 
 /** A section's data after its 16-byte start marker and size (as header and class sections hold it). */
 export function afterSentinel(data: Uint8Array, sentinel: number[], what: string, ver: V, maint: number): { body: BitReader; size: number; start: number } {
-  for (let i = 0; i < 16; i++) if (data[i] !== sentinel[i]) throw new DwgProblem(`This DWG's ${what} is damaged (it does not start the way it should).`);
+  for (let i = 0; i < 16; i++) if (data[i] !== sentinel[i]) throw new DwgProblem(`its ${what} is damaged (it does not start the way it should)`);
   const r = new BitReader(data, 16 * 8, data.length * 8, ver);
   const size = r.RL();
   if (ver >= V.R2010 && maint > 3) r.RL();
-  if (size > data.length) throw new DwgProblem(`This DWG's ${what} says it is longer than it is (damaged).`);
+  if (size > data.length) throw new DwgProblem(`its ${what} says it is longer than it is (damaged)`);
   return { body: r, size, start: r.pos };
 }

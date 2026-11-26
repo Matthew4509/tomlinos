@@ -238,7 +238,9 @@ export function entryName(o: DwgObject): string {
 
 export interface LayerRec {
   name: string;
+  /** The colour index, or -1 for a true colour (then rgb). */
   colour: number;
+  rgb: number;
   off: boolean;
   frozen: boolean;
   locked: boolean;
@@ -253,7 +255,9 @@ export function readLayer(o: DwgObject): LayerRec {
   if (o.r.ver >= V.R2000) o.h.ref(o.handle);
   if (o.r.ver >= V.R2007) o.h.ref(o.handle);
   const ltype = o.h.ref(o.handle);
-  return { name, colour, off: (flags & 2) !== 0 || colour < 0 && colour !== -1, frozen: (flags & 1) !== 0, locked: (flags & 8) !== 0, ltype };
+  // Before 2004 an off layer may also have its colour number made negative.
+  const negative = o.r.ver < V.R2004 && colour < 0;
+  return { name, colour: negative ? -colour : colour, rgb: o.r.rgb, off: (flags & 2) !== 0 || negative, frozen: (flags & 1) !== 0, locked: (flags & 8) !== 0, ltype };
 }
 
 export interface BlockRec {

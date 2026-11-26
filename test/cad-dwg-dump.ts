@@ -50,7 +50,11 @@ export function dumpDwg(bytes: Uint8Array): string[] {
     o.r.BD();
     out.push(`VPORT ${name} centre=${P2(o.r.RD2())} height=${N(height)}`);
   }
-  const model = rows('BLOCK_HEADER').map(o => ({ o, b: readBlockHeader(o) })).find(x => x.b.name.toUpperCase() === '*MODEL_SPACE')!;
+  const blockRows = rows('BLOCK_HEADER').map(o => ({ o, b: readBlockHeader(o) }));
+  const blockName = new Map(blockRows.map(x => [x.o.handle, x.b.name]));
+  const model = blockRows.find(x => x.b.name.toUpperCase() === '*MODEL_SPACE')!;
+  const owned = new Map<number, number[]>();
+  for (const o of objs.values()) if (o.entity && o.entmode === 0) owned.set(o.owner, [...(owned.get(o.owner) ?? []), o.handle]);
   const ents = p.ver >= V.R2004 ? model.b.owned : [...objs.values()].filter(o => o.entity && o.entmode === 2 && !['BLOCK', 'ENDBLK'].includes(o.name)).map(o => o.handle);
   out.push(`ENTITIES ${ents.length}`);
   for (const h of ents) {
@@ -88,6 +92,14 @@ export function dumpDwg(bytes: Uint8Array): string[] {
         case 'MTEXT':
           line += ` at=${P2(s.p)} h=${N(s.h)} attach=${s.attach} "${s.text}"`;
           break;
+        case 'INSERT':
+          line += ` block=${blockName.get(s.block)} at=${P2(s.p)} sx=${N(s.scale[0])} sy=${N(s.scale[1])} rot=${N(s.rot)}`;
+          break;
+        case 'POLYLINE': {
+          const vs = (p.ver >= V.R2004 ? s.vertices : owned.get(o.handle) ?? []).map(v => readShape(objs.get(v)!)).filter(v => v?.k === 'VERTEX');
+          line += ` closed=${s.flags & 1 ? 'True' : 'False'} n=${vs.length}` + vs.map(v => (v?.k === 'VERTEX' ? ` ${P2(v.p)}b${N(v.bulge)}` : '')).join('');
+          break;
+        }
       }
     }
     out.push(line);
@@ -97,7 +109,7 @@ export function dumpDwg(bytes: Uint8Array): string[] {
 
 /** The lines of a recorded ACadSharp dump that dumpDwg also writes. */
 export function comparable(lines: string[]): string[] {
-  return lines.filter(l => /^(VERSION|INSUNITS|LTYPE|LAYER|STYLE|DIMSTYLE|APPID|VPORT|ENTITIES|LINE|ARC|CIRCLE|ELLIPSE|LWPOLYLINE|SPLINE|POINT|TEXT|MTEXT|XLINE) /.test(l));
+  return lines.filter(l => /^(VERSION|INSUNITS|LTYPE|LAYER|STYLE|DIMSTYLE|APPID|VPORT|ENTITIES|LINE|ARC|CIRCLE|ELLIPSE|LWPOLYLINE|POLYLINE|SPLINE|POINT|TEXT|MTEXT|XLINE|RAY|SOLID|INSERT) /.test(l));
 }
 
 /** The drawing the writer tests and the recorded ACadSharp dump use: one of each kind, on layers of each kind. */

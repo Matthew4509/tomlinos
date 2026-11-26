@@ -1,0 +1,24 @@
+VERSION AC1032
+INSUNITS 4
+LTYPE ByBlock segments=0 length=0
+LTYPE ByLayer segments=0 length=0
+LTYPE Continuous segments=0 length=0
+LAYER 0 colour=7 on=True locked=False ltype=Continuous
+LAYER A colour=7 on=True locked=False ltype=Continuous
+STYLE Standard
+DIMSTYLE Standard
+APPID ACAD
+VPORT *Active centre=(0,0) height=10
+LAYOUT Layout1 block=*Paper_Space
+BLOCK *Paper_Space entities=1 base=(0,0)
+  VIEWPORT layer=0
+ENTITIES 5
+LINE layer=A (0,0)-(100,0)
+LINE layer=A (0,0)-(100,0)
+LINE layer=A (0,0)-(100,0)
+LINE layer=A colour=1 (0,0)-(100,0)
+LWPOLYLINE layer=A closed=False n=2 (0,0)b0 (5,5)b0
+NOTE Warning: ACadSharp.Tables.TextStyle table reference with handle:  | name:  not found for ACadSharp.Objects.TableStyle+CellStyle
+NOTE Warning: ACadSharp.Tables.TextStyle table reference with handle:  | name:  not found for ACadSharp.Objects.TableStyle+CellStyle
+NOTE Warning: ACadSharp.Tables.TextStyle table reference with handle:  | name:  not found for ACadSharp.Objects.TableStyle+CellStyle
+NOTE Warning: ACadSharp.Tables.TextStyle table reference with handle:  | name:  not found for ACadSharp.Objects.TableStyle+CellStyle

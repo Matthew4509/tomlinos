@@ -1,0 +1,40 @@
+VERSION AC1018
+INSUNITS 4
+LTYPE ByBlock segments=0 length=0
+LTYPE ByLayer segments=0 length=0
+LTYPE Continuous segments=0 length=0
+LTYPE DASHED segments=2 length=19.05
+LAYER 0 colour=7 on=True locked=False ltype=Continuous
+LAYER Hidden stuff colour=3 on=False locked=False ltype=Continuous
+LAYER Holes colour=5 on=True locked=True ltype=Continuous
+LAYER Walls colour=1 on=True locked=False ltype=DASHED
+STYLE Standard
+DIMSTYLE Standard
+APPID ACAD
+VPORT *Active centre=(0,0) height=10
+LAYOUT Layout1 block=*Paper_Space
+LAYOUT Model block=*Model_Space
+BLOCK *Paper_Space entities=1 base=(0,0)
+  VIEWPORT layer=0
+BLOCK PEG entities=2 base=(0,0)
+  CIRCLE layer=0 c=(0,0) r=2
+  LINE layer=0 (-3,0)-(3,0)
+ENTITIES 15
+LINE layer=Walls (0,0)-(100,50)
+CIRCLE layer=Holes c=(20,30) r=7.5
+ARC layer=Walls c=(50,50) r=10 a0=0 a1=1.570796
+ELLIPSE layer=Walls c=(10,-20) m=(30,0) ratio=0.5 t0=0 t1=3.141593
+LWPOLYLINE layer=Walls closed=True n=4 (0,0)b0 (40,0)b0.5 (40,20)b0 (0,20)b0
+POINT layer=Holes (5,5)
+TEXT layer=Hidden stuff at=(0,60) h=5 rot=0 h72=0 align=(0,0) "Hello DWG"
+MTEXT layer=Walls at=(0,80) h=4 attach=1 "Two\Plines {\Lhere}"
+POLYLINE layer=Walls closed=False n=3 (60,0)b0 (80,0)b1 (80,20)b0
+SPLINE layer=Walls deg=3 closed=False ctrl=4 fit=0 knots=8 (0,100) (10,120) (30,90) (50,110)
+INSERT layer=Holes block=PEG at=(100,100) sx=2 sy=2 rot=1.570796
+INSERT layer=Holes block=PEG at=(120,100) sx=1 sy=1 rot=0
+SOLID layer=Walls
+SOLID layer=Walls
+RAY layer=Walls
+NOTE Warning: ACadSharp.Tables.TextStyle table reference with handle:  | name:  not found for ACadSharp.Objects.TableStyle+CellStyle
+NOTE Warning: ACadSharp.Tables.TextStyle table reference with handle:  | name:  not found for ACadSharp.Objects.TableStyle+CellStyle
+NOTE Warning: ACadSharp.Tables.TextStyle table reference with handle:  | name:  not found for ACadSharp.Objects.TableStyle+CellStyle

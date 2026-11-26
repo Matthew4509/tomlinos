@@ -804,7 +804,7 @@ export function writeDwg(d: Drawing, o: DwgWriteOptions): DwgWritten {
 
 // ---- Pages ---------------------------------------------------------------------------------------------------------
 
-interface SectionOut {
+export interface SectionOut {
   name: string;
   id: number;
   data: Uint8Array;
@@ -815,7 +815,7 @@ const align = (n: number, a: number) => Math.ceil(n / a) * a;
 const PAGE = 0x7400;
 
 /** Lays the sections out in pages, with the section map, the page map and the masked file header. */
-function assemble(sections: SectionOut[]): Uint8Array {
+export function assemble(sections: SectionOut[]): Uint8Array {
   const chunks: Uint8Array[] = [];
   let addr = 0x100;
   const pageList: Array<[number, number]> = [];
