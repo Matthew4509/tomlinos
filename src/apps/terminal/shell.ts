@@ -684,11 +684,26 @@ export class TerminalShell {
       if (cmd === 'mv') {
         const why = this.machine.protectedReason(s.path);
         if (why) throw new Fail(`mv: cannot move '${s.a}': ${why}`);
+        // As rm: the folder the shell stands in (or one it is inside) stays put, or the prompt would name a folder
+        // that is no longer there.
+        if (nameKey(this.cwd) === nameKey(s.path) || nameKey(this.cwd).startsWith(nameKey(s.path) + '/')) throw new Fail(`mv: cannot move '${s.a}': you are standing in it (cd out first)`);
       }
     }
     const d = await this.stat(dest);
     this.refuseInto(d?.kind === 'folder' ? dest : parentPath(dest), `${cmd}: cannot ${cmd === 'cp' ? 'copy' : 'move'} '${sources[0].a}' to '${destArg}'`);
+    // The same name in another letter case is the same item here: mv renames it (notes.txt to NOTES.txt), cp says so.
+    if (sources.length === 1 && nameKey(sources[0].path) === nameKey(dest)) {
+      if (cmd === 'cp' || baseName(sources[0].path) === baseName(dest)) throw new Fail(`${cmd}: '${sources[0].a}' and '${destArg}' are the same file`);
+      await fs.rename(sources[0].path, baseName(dest));
+      return [];
+    }
     if (d?.kind === 'folder') {
+      // Nothing is overwritten, and nothing is quietly renamed to "name (2)": a name already there is said.
+      for (const s of sources) {
+        const name = baseName(s.path);
+        if (nameKey(parentPath(s.path)) === nameKey(dest)) throw new Fail(`${cmd}: '${s.a}' and '${joinPath(destArg, name)}' are the same file`);
+        if (await this.stat(joinPath(dest, name))) throw new Fail(`${cmd}: '${destArg}' already has something called '${name}' (nothing is overwritten here; remove it first)`);
+      }
       const paths = sources.map(s => s.path);
       if (cmd === 'cp') await fs.copy(paths, dest);
       else await fs.move(paths, dest);

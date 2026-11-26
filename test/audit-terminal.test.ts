@@ -109,14 +109,21 @@ test('T-P1-2: Tab completes a name after an escaped space', { todo: 'P1' }, asyn
   assert.equal((await sh.complete('cat Documents/My\\ Folder/in')).line, 'cat Documents/My\\ Folder/inside.txt ');
 });
 
-test('T-P1-3: echo text > "a name with spaces" writes the file instead of printing the line', { todo: 'P1' }, async () => {
+test('T-P1-3: echo text > "a name with spaces" writes the file instead of printing the line', async () => {
   const { fs, run } = await desktop();
   const out = await run('echo hi > "Documents/my notes.txt"');
   assert.deepEqual(out, []);
   assert.ok(await fs.stat('/Documents/my notes.txt'));
+  assert.deepEqual(await run("echo more >> 'Documents/my notes.txt'"), []);
+  assert.equal(await fs.readText('/Documents/my notes.txt'), 'hi\nmore\n');
+  assert.deepEqual(await run('echo two\\ words > Documents/a\\ b.txt'), []);
+  assert.equal(await fs.readText('/Documents/a b.txt'), 'two words\n');
+  // A > inside quotes is only letters.
+  assert.deepEqual(await run('echo "a > b"'), ['a > b']);
+  assert.deepEqual(await run("echo 'x >> y.txt'"), ['x >> y.txt']);
 });
 
-test('T-P1-4: mv notes.txt NOTES.txt changes the letter case (it said "already exists, remove it first")', { todo: 'P1' }, async () => {
+test('T-P1-4: mv notes.txt NOTES.txt changes the letter case (it said "already exists, remove it first")', async () => {
   const { fs, run } = await desktop();
   await fs.writeText('/Documents/notes.txt', 'x');
   await fs.mkdir('/Documents/Work');
@@ -125,15 +132,23 @@ test('T-P1-4: mv notes.txt NOTES.txt changes the letter case (it said "already e
   assert.deepEqual((await fs.list('/Documents')).map(e => e.name).sort(), ['NOTES.txt', 'work']);
 });
 
-test('T-P1-5: cp into a folder that already has the name says so (it silently made "b (2).txt"); mv a .  says something', { todo: 'P1' }, async () => {
+test('T-P1-5: cp into a folder that already has the name says so (it silently made "b (2).txt"); mv a .  says something', async () => {
   const { fs, run } = await desktop();
   await fs.writeText('/Documents/b.txt', 'x');
   const cp = await run('cp Documents/b.txt Documents');
   assert.notDeepEqual(cp, [], 'cp onto itself said nothing and made "b (2).txt"');
   assert.notDeepEqual(await run('mv Documents/b.txt Documents'), []);
+  // Into another folder that already has the name: said, and nothing copied or moved.
+  await fs.mkdir('/Desktop/Box');
+  await fs.writeText('/Desktop/Box/b.txt', 'old');
+  assert.match((await run('cp Documents/b.txt Desktop/Box'))[0] ?? '', /already has something called 'b.txt'/);
+  assert.match((await run('mv Documents/b.txt Desktop/Box'))[0] ?? '', /already has something called 'b.txt'/);
+  assert.deepEqual((await fs.list('/Desktop/Box')).map(e => e.name), ['b.txt']);
+  assert.equal(await fs.readText('/Desktop/Box/b.txt'), 'old');
+  assert.deepEqual((await fs.list('/Documents')).map(e => e.name), ['b.txt']);
 });
 
-test('T-P1-6: mv refuses to move the folder you are standing in (rm already does)', { todo: 'P1' }, async () => {
+test('T-P1-6: mv refuses to move the folder you are standing in (rm already does)', async () => {
   const { sh, run } = await desktop();
   await run('mkdir -p Documents/W/X');
   await run('cd Documents/W/X');
