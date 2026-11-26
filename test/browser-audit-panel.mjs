@@ -71,7 +71,7 @@ async function closeAll(p = page) {
   for (let i = 0; i < 40; i++) {
     const dialog = p.locator('.dialog');
     if (await dialog.count()) {
-      await dialog.getByRole('button', { name: /without saving|Leave them|Discard|Close anyway|Cancel|OK/ }).first().click().catch(() => dialog.getByRole('button').last().click());
+      await dialog.getByRole('button', { name: /without saving|without sending|Leave them|Discard|Close anyway|Cancel|OK/ }).first().click().catch(() => dialog.getByRole('button').last().click());
       continue;
     }
     const wins = p.locator('.win');

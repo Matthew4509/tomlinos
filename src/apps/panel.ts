@@ -232,7 +232,7 @@ export const panelApp: AppDef = {
       if (unsent) {
         const inSection = [...hosted].find(([, entry]) => entry.area.contains(unsent));
         show(inSection ? inSection[0] : 'overview');
-        if (!(await shell.dialogs.confirm({ title: 'Close without sending?', text: 'A chat message is typed but not sent. If you close the Panel it will be lost.', ok: 'Close without saving', danger: true, cancel: 'Keep it open' }))) {
+        if (!(await shell.dialogs.confirm({ title: 'Close without sending?', text: 'A chat message is typed but not sent. If you close the Panel it will be lost.', ok: 'Close without sending', danger: true, cancel: 'Keep it open' }))) {
           unsent.focus();
           return false;
         }
