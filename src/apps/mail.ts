@@ -504,11 +504,15 @@ async function run(app: AppHandle, acct: MailAccount): Promise<void> {
         draft.attachments = m.attachments.filter(a => !a.inline).map(a => ({ name: a.name, type: a.type, data: a.data }));
       } else {
         const me = acct.email.toLowerCase();
-        const replyTo = m.replyTo.length ? m.replyTo : m.from;
+        // A message you sent (in Sent, or from your own address) is answered to the people it went to, not to you.
+        const sentFolder = folders.find(f => f.use === 'sent')?.raw;
+        const fromMe = (sentFolder !== undefined && open.folder === sentFolder) || (m.from.length > 0 && m.from.every(a => a.email.toLowerCase() === me));
+        const mineTo = m.to.filter(a => a.email.toLowerCase() !== me);
+        const replyTo = fromMe && mineTo.length ? mineTo : m.replyTo.length ? m.replyTo : m.from;
         draft.to = replyTo.map(showAddress);
         if (kind === 'all') {
           const seen = new Set(replyTo.map(a => a.email.toLowerCase()));
-          draft.cc = [...m.to, ...m.cc].filter(a => a.email.toLowerCase() !== me && !seen.has(a.email.toLowerCase())).map(showAddress);
+          draft.cc = [...(fromMe ? [] : m.to), ...m.cc].filter(a => a.email.toLowerCase() !== me && !seen.has(a.email.toLowerCase())).map(showAddress);
         }
         draft.subject = replySubject(m.subject);
         draft.text = quoteForReply(m, plain);
