@@ -1,8 +1,9 @@
 // CAD Draft: a 2D drawing program for drawing a part out on a job and machining it at home in a CAM program. The
 // window is laid out as classic CAD/CAM programs of the early 2000s were: a menu bar (File, Edit, View, Geometry,
-// Utils, Help), two rows of small toolbar pictures, a column of tools down the left, the Layers panel, a dark blue
-// drawing area with scale marks, the snaps down the right, a command line for typed points and numbers, and a status
-// bar with the layer and the pointer's X and Y. No ribbon. Shapes are kept as exact lines, arcs, circles, ellipses
+// CAD, Utils, Help), rows of small toolbar pictures, the Select and zoom toolbar down the left, the Layers panel, a dark
+// blue drawing area with scale marks, the snaps down the right, a command line for typed points and numbers, and a
+// status bar with the layer and the pointer's X and Y. The toolbars are the desktop's own (shell/toolbars.ts): each can
+// be hidden, moved to another row or docked left or right by its grip, or from View > Toolbars, and is kept per person. No ribbon. Shapes are kept as exact lines, arcs, circles, ellipses
 // and curves in millimetres or inches; the drawing is saved as a .tcad file (JSON).
 import { css, h, on } from '../core/dom.ts';
 import { baseName, joinPath, parentPath, uniqueName } from '../fs/names.ts';
@@ -12,7 +13,8 @@ import { heldInOtherTabs, holdCopy, releaseCopy } from '../shell/recovery.ts';
 import { saveOver } from '../shell/savefile.ts';
 import type { AppDef } from '../shell/types.ts';
 import { APPS } from './catalog.ts';
-import { menuBar } from './sheet/classic-ui.ts';
+import { classicBar, type BarItem, type ClassicBar, type ToolButton, type ToolEntry } from '../shell/menubar.ts';
+import type { ToolIconId } from '../shell/toolicons.ts';
 import { boxOfShapes, chainFrom, distToShape, inWindow, itemsNear, moveShape, scaleShape, touchesBox } from './cad/edit.ts';
 import { P, add, dist, mul, normAngle, sub, unit, type Pt } from './cad/geom.ts';
 import { cadIcon, type CadIcon } from './cad/icons.ts';
@@ -59,6 +61,8 @@ interface Settings {
   print: Omit<PrintSetup, 'title'>;
   /** A recovery copy of an unsaved drawing kept every two minutes. */
   autosave: boolean;
+  /** Where the toolbars are (shell/toolbars.ts checks it when the window opens). */
+  toolbars: unknown;
 }
 
 const DEFAULT_SNAPS: SnapMode[] = ['end', 'mid', 'centre', 'intersection', 'quadrant'];
@@ -132,7 +136,7 @@ export const cadApp: AppDef = {
     app.root.classList.add('cad');
 
     // ---- Settings kept between windows -----------------------------------------------------------------------------
-    const settings: Settings = { snaps: [...DEFAULT_SNAPS], arrows: false, white: false, large: false, layersPanel: true, ortho: false, gridOn: false, gridSnap: false, dxfTextAsLines: false, dxfConstruction: false, dxfHidden: false, exportFormat: DEFAULT_DXF_VERSION, recent: [], print: readPrintSettings(null), autosave: true };
+    const settings: Settings = { snaps: [...DEFAULT_SNAPS], arrows: false, white: false, large: false, layersPanel: true, ortho: false, gridOn: false, gridSnap: false, dxfTextAsLines: false, dxfConstruction: false, dxfHidden: false, exportFormat: DEFAULT_DXF_VERSION, recent: [], print: readPrintSettings(null), autosave: true, toolbars: null };
     try {
       const saved = JSON.parse(await shell.fs.readText(SETTINGS)) as Partial<Settings>;
       if (Array.isArray(saved.snaps)) settings.snaps = saved.snaps.filter((s): s is SnapMode => SNAP_ORDER.includes(s as SnapMode));
@@ -140,6 +144,7 @@ export const cadApp: AppDef = {
       if (isDxfVersion(saved.exportFormat) || saved.exportFormat === 'svg') settings.exportFormat = saved.exportFormat;
       if (Array.isArray(saved.recent)) settings.recent = saved.recent.filter((r): r is string => typeof r === 'string').slice(0, RECENT_MAX);
       settings.print = readPrintSettings(saved.print);
+      if (saved.toolbars !== undefined) settings.toolbars = saved.toolbars;
     } catch {
       // Nothing kept yet: the usual settings.
     }
@@ -2170,80 +2175,57 @@ export const cadApp: AppDef = {
     }, signal, { passive: false });
 
     // ---- The parts of the window -------------------------------------------------------------------------------
-    const toolButtons = new Map<string, HTMLButtonElement>();
-    function btn(icon: CadIcon, title: string, run: () => void, key?: string): HTMLButtonElement {
-      const b = h('button', { type: 'button', class: 'cad-btn', title, 'aria-label': title }, cadIcon(icon));
-      on(b, 'mousedown', (e: MouseEvent) => e.preventDefault(), signal);
-      on(b, 'click', () => {
+    /** The menu and tool bar, once made (the toolbar buttons ask it to look at their getters again). */
+    let barRef: ClassicBar | null = null;
+    /** After a toolbar button: a tool that asks for typing has put the keyboard in its boxes; otherwise it goes back to the drawing. */
+    const backToDrawing = () => {
+      if (!commandRow.contains(document.activeElement)) canvas.focus({ preventScroll: true });
+    };
+    /** A toolbar button with CAD Draft's own picture. */
+    const btn = (icon: CadIcon, label: string, run: () => void, more: Partial<ToolButton> = {}): ToolButton => ({
+      id: icon, label, picture: () => cadIcon(icon), ...more,
+      action: () => {
         run();
-        // A tool that asks for typing has put the keyboard in its boxes; otherwise it goes back to the drawing.
-        if (!b.closest('.cad-snaps') && !commandRow.contains(document.activeElement)) canvas.focus({ preventScroll: true });
-      }, signal);
-      if (key) {
-        b.setAttribute('aria-pressed', 'false');
-        toolButtons.set(key, b);
-      }
-      return b;
-    }
-    const toolBtn = (icon: CadIcon, id: ToolId) => btn(icon, TOOLS[id].name, () => (toolId === id ? endTool() : startTool(id)), id);
-    const sep = () => h('span', { class: 'cad-sep', 'aria-hidden': 'true' });
+        backToDrawing();
+      },
+    });
+    /** A toolbar button with the desktop's picture for the same thing (toolicons.ts). */
+    const std = (icon: ToolIconId, label: string, run: () => void, shortcut?: string): ToolButton => ({
+      id: icon, label, icon, shortcut,
+      action: () => {
+        run();
+        backToDrawing();
+      },
+    });
+    const toolBtn = (icon: CadIcon, id: ToolId): ToolButton => btn(icon, TOOLS[id].name, () => (toolId === id ? endTool() : startTool(id)), { id, pressed: () => toolId === id });
     function syncToolButtons(): void {
-      for (const [key, b] of toolButtons) b.setAttribute('aria-pressed', String(key === 'pan' ? panMode : key === 'arrows' ? settings.arrows : key === toolId));
+      barRef?.refresh();
     }
-    const panBtn = btn('pan', 'Pan: drag to move the view (the middle button does this too)', () => {
+    function togglePan(): void {
       // A tool part-way through stays: Pan moves the view, then the tool carries on.
       panMode = !panMode;
       syncToolButtons();
       refreshPrompt();
-    }, 'pan');
-    const selectBtn = btn('select', 'Select: click items, or drag a box (to the right: wholly inside; to the left: touching)', () => {
+    }
+    function selectMode(): void {
       // A polyline or curve part-way through is finished as it is (as Done would), not thrown away.
       if (tool) enterKey();
       if (tool) endTool();
       panMode = false;
       syncToolButtons();
       refreshPrompt();
-    });
-
-    // The photo button opens the photo's menu (open, scale, line up, move, show).
-    const photoBtn = h('button', { type: 'button', class: 'cad-btn', title: 'Photo to trace: open, scale, line up, move', 'aria-label': 'Photo to trace', 'aria-haspopup': 'menu' }, cadIcon('photo'));
-    on(photoBtn, 'mousedown', (e: MouseEvent) => e.preventDefault(), signal);
-    on(photoBtn, 'click', () => {
-      const r = photoBtn.getBoundingClientRect();
+    }
+    /** The photo button opens the photo's menu (open, scale, line up, move, show) under itself. */
+    function photoMenuAtButton(): void {
+      const b = barRef?.toolbarEl('standard')?.querySelector('[data-tool="photo"]');
+      const r = b && !(b as HTMLElement).hidden ? b.getBoundingClientRect() : canvas.getBoundingClientRect();
       shell.menus.show(photoMenu(), r.left, r.bottom, { returnFocus: canvas });
-    }, signal);
-    const row1 = h('div', { class: 'cad-tb', role: 'toolbar', 'aria-label': 'Standard and drawing tools' },
-      btn('new', 'New drawing', () => void shell.openApp('cad')), btn('open', 'Open... (Ctrl+O)', () => void openDrawing()), btn('save', 'Save (Ctrl+S)', () => void save()), btn('dxfOut', 'Output a DXF for the CAM program (File > Output > CAD > DXF)', () => void outputDxf()),
-      btn('print', 'Print or save a PDF to scale (Ctrl+P)', () => void printDialog()), photoBtn, sep(),
-      btn('undo', 'Undo (Ctrl+Z)', undo), btn('redo', 'Redo (Ctrl+Y)', redo), sep(),
-      toolBtn('line', 'line'), toolBtn('polyline', 'polyline'), toolBtn('rect', 'rect'), toolBtn('circle', 'circle-cr'), toolBtn('arc', 'arc-3p'), toolBtn('ellipse', 'ellipse'),
-      toolBtn('polygon', 'polygon-in'), toolBtn('slot', 'slot'), toolBtn('spline', 'spline'), toolBtn('point', 'point'), sep(),
-      toolBtn('text', 'text'), toolBtn('textArc', 'text-arc'), toolBtn('dimLinear', 'dim-linear'), toolBtn('dimAligned', 'dim-aligned'), toolBtn('dimRadius', 'dim-radius'),
-      toolBtn('dimDiameter', 'dim-diameter'), toolBtn('dimAngle', 'dim-angle'), toolBtn('leader', 'leader'), toolBtn('textEdit', 'text-edit'));
-    const row2 = h('div', { class: 'cad-tb', role: 'toolbar', 'aria-label': 'Edit and construction tools' },
-      toolBtn('move', 'move'), toolBtn('copy', 'copy'), toolBtn('rotate', 'rotate'), toolBtn('mirror', 'mirror'), toolBtn('scale', 'scale'),
-      btn('arrayLine', 'Rectangular array: rows and columns of the chosen items', () => void arrayRect()), toolBtn('arrayPolar', 'array-polar'),
-      btn('delete', 'Delete the chosen items (Delete)', deleteSelected), toolBtn('chain', 'chain'), sep(),
-      toolBtn('xlineH', 'xline-h'), toolBtn('xlineV', 'xline-v'), toolBtn('xlineAngle', 'xline-angle'), toolBtn('xlineOffset', 'xline-offset'), sep(),
-      toolBtn('tanLine', 'tan-point'), toolBtn('tanTwo', 'tan-two'), toolBtn('circleTtr', 'circle-ttr'), toolBtn('circleTtt', 'circle-ttt'), sep(),
-      toolBtn('measure', 'measure'), toolBtn('list', 'list'));
-    const row3 = h('div', { class: 'cad-tb', role: 'toolbar', 'aria-label': 'CAD tools' },
-      toolBtn('trim', 'trim'), toolBtn('extend', 'extend'), toolBtn('breakPoint', 'break-point'), toolBtn('breakTwo', 'break-two'), sep(),
-      toolBtn('fillet', 'fillet'), toolBtn('filletAll', 'fillet-all'), toolBtn('chamfer', 'chamfer'), toolBtn('offset', 'offset'), sep(),
-      btn('join', 'Join the chosen lines and arcs into geometries', joinChosen), btn('explode', 'Explode the chosen polylines, text or dimensions into lines and arcs', explodeChosen),
-      toolBtn('closeGeo', 'close'), toolBtn('startPoint', 'start'), toolBtn('reverse', 'reverse'),
-      btn('direction', 'Show which way lines and polylines run', () => setArrows(!settings.arrows), 'arrows'), sep(),
-      toolBtn('angle', 'measure-angle'), toolBtn('area', 'area'), btn('info', 'Information about the drawing', information));
-    // Each tool is on one bar only: the left column holds choosing and the view, the rows above everything else.
-    const leftCol = h('div', { class: 'cad-col', role: 'toolbar', 'aria-orientation': 'vertical', 'aria-label': 'Choosing and the view' },
-      selectBtn, panBtn, btn('zoomFit', 'Zoom fit: the whole drawing', zoomFit), toolBtn('zoomWindow', 'zoom-window'), btn('zoomPrev', 'Zoom previous', zoomPrevious),
-      btn('zoomIn', 'Zoom in', () => zoomBy(1.5)), btn('zoomOut', 'Zoom out', () => zoomBy(1 / 1.5)));
+    }
 
     const SNAP_ICONS: Record<SnapMode, CadIcon> = {
       end: 'snapEnd', mid: 'snapMid', centre: 'snapCentre', intersection: 'snapIntersection', quadrant: 'snapQuadrant',
       nearest: 'snapNearest', perpendicular: 'snapPerpendicular', tangent: 'snapTangent', grid: 'snapGrid',
     };
-    const snapButtons = new Map<SnapMode, HTMLButtonElement>();
     function toggleSnap(m: SnapMode): void {
       if (m === 'grid') {
         settings.gridSnap = !settings.gridSnap;
@@ -2254,18 +2236,62 @@ export const cadApp: AppDef = {
       syncSnaps();
       updatePointer();
     }
-    const rightCol = h('div', { class: 'cad-col cad-snaps', role: 'toolbar', 'aria-orientation': 'vertical', 'aria-label': 'Snaps' },
-      ...SNAP_ORDER.map(m => {
-        const b = btn(SNAP_ICONS[m], `Snap: ${SNAP_NAMES[m]}`, () => toggleSnap(m));
-        b.setAttribute('aria-pressed', 'false');
-        snapButtons.set(m, b);
-        return b;
-      }));
     function syncSnaps(): void {
-      for (const [m, b] of snapButtons) b.setAttribute('aria-pressed', String(m === 'grid' ? settings.gridSnap : settings.snaps.includes(m)));
-      rightCol.classList.toggle('all-off', snapsOff);
+      barRef?.toolbarEl('snaps')?.classList.toggle('all-off', snapsOff);
+      syncToolButtons();
       refreshStatus();
     }
+
+    // The toolbars: each tool is on one of them only. Select and zoom starts down the left and Snaps down the right.
+    const toolbars: Array<{ id: string; name: string; side?: 'left' | 'right'; tools: ToolEntry[] }> = [
+      { id: 'standard', name: 'Standard', tools: [
+        std('new', 'New drawing', () => void shell.openApp('cad')), std('open', 'Open...', () => void openDrawing(), 'Ctrl+O'), std('save', 'Save', () => void save(), 'Ctrl+S'),
+        btn('dxfOut', 'Output a DXF for the CAM program (File > Output > CAD > DXF)', () => void outputDxf()),
+        std('print', 'Print or save a PDF to scale', () => void printDialog(), 'Ctrl+P'),
+        { id: 'photo', label: 'Photo to trace', picture: () => cadIcon('photo'), action: photoMenuAtButton }, '|',
+        std('undo', 'Undo', undo, 'Ctrl+Z'), std('redo', 'Redo', redo, 'Ctrl+Y'),
+      ] },
+      { id: 'draw', name: 'Draw', tools: [
+        toolBtn('line', 'line'), toolBtn('polyline', 'polyline'), toolBtn('rect', 'rect'), toolBtn('circle', 'circle-cr'), toolBtn('arc', 'arc-3p'), toolBtn('ellipse', 'ellipse'),
+        toolBtn('polygon', 'polygon-in'), toolBtn('slot', 'slot'), toolBtn('spline', 'spline'), toolBtn('point', 'point'),
+      ] },
+      { id: 'notes', name: 'Text and dimensions', tools: [
+        toolBtn('text', 'text'), toolBtn('textArc', 'text-arc'), toolBtn('dimLinear', 'dim-linear'), toolBtn('dimAligned', 'dim-aligned'), toolBtn('dimRadius', 'dim-radius'),
+        toolBtn('dimDiameter', 'dim-diameter'), toolBtn('dimAngle', 'dim-angle'), toolBtn('leader', 'leader'), toolBtn('textEdit', 'text-edit'),
+      ] },
+      { id: 'modify', name: 'Modify', tools: [
+        toolBtn('move', 'move'), toolBtn('copy', 'copy'), toolBtn('rotate', 'rotate'), toolBtn('mirror', 'mirror'), toolBtn('scale', 'scale'),
+        btn('arrayLine', 'Rectangular array: rows and columns of the chosen items', () => void arrayRect()), toolBtn('arrayPolar', 'array-polar'),
+        std('delete', 'Delete the chosen items', deleteSelected, 'Delete'), toolBtn('chain', 'chain'),
+      ] },
+      { id: 'trim', name: 'Trim and fillet', tools: [
+        toolBtn('trim', 'trim'), toolBtn('extend', 'extend'), toolBtn('breakPoint', 'break-point'), toolBtn('breakTwo', 'break-two'), '|',
+        toolBtn('fillet', 'fillet'), toolBtn('filletAll', 'fillet-all'), toolBtn('chamfer', 'chamfer'), toolBtn('offset', 'offset'),
+      ] },
+      { id: 'construction', name: 'Construction', tools: [
+        toolBtn('xlineH', 'xline-h'), toolBtn('xlineV', 'xline-v'), toolBtn('xlineAngle', 'xline-angle'), toolBtn('xlineOffset', 'xline-offset'), '|',
+        toolBtn('tanLine', 'tan-point'), toolBtn('tanTwo', 'tan-two'), toolBtn('circleTtr', 'circle-ttr'), toolBtn('circleTtt', 'circle-ttt'),
+      ] },
+      { id: 'geometries', name: 'Geometries', tools: [
+        btn('join', 'Join the chosen lines and arcs into geometries', joinChosen), btn('explode', 'Explode the chosen polylines, text or dimensions into lines and arcs', explodeChosen),
+        toolBtn('closeGeo', 'close'), toolBtn('startPoint', 'start'), toolBtn('reverse', 'reverse'),
+        btn('direction', 'Show which way lines and polylines run', () => setArrows(!settings.arrows), { pressed: () => settings.arrows }),
+      ] },
+      { id: 'measure', name: 'Measure', tools: [
+        toolBtn('measure', 'measure'), toolBtn('list', 'list'), toolBtn('angle', 'measure-angle'), toolBtn('area', 'area'), btn('info', 'Information about the drawing', information),
+      ] },
+      { id: 'view', name: 'Select and zoom', side: 'left', tools: [
+        btn('select', 'Select: click items, or drag a box (to the right: wholly inside; to the left: touching)', selectMode),
+        btn('pan', 'Pan: drag to move the view (the middle button does this too)', togglePan, { pressed: () => panMode }),
+        std('zoom-fit', 'Zoom fit: the whole drawing', zoomFit), toolBtn('zoomWindow', 'zoom-window'), btn('zoomPrev', 'Zoom previous', zoomPrevious),
+        std('zoom-in', 'Zoom in', () => zoomBy(1.5)), std('zoom-out', 'Zoom out', () => zoomBy(1 / 1.5)),
+      ] },
+      { id: 'snaps', name: 'Snaps', side: 'right', tools: SNAP_ORDER.map(m => ({
+        id: `snap-${m}`, label: `Snap: ${SNAP_NAMES[m]}`, picture: () => cadIcon(SNAP_ICONS[m]),
+        pressed: () => (m === 'grid' ? settings.gridSnap : settings.snaps.includes(m)),
+        action: () => toggleSnap(m),
+      })) },
+    ];
 
     // The Layers panel: a tick to show or hide each layer, its colour, its name (click: draw on it).
     const layerList = h('div', { class: 'cad-layer-list', role: 'list' });
@@ -2550,7 +2576,7 @@ export const cadApp: AppDef = {
       { label: 'Zoom previous', action: zoomPrevious },
       { label: 'Zoom in', action: () => zoomBy(1.5) },
       { label: 'Zoom out', action: () => zoomBy(1 / 1.5) },
-      { label: 'Pan', checked: panMode, action: () => panBtn.click() },
+      { label: 'Pan', checked: panMode, action: togglePan },
       { separator: true },
       { label: 'Grid', hint: 'F7', checked: settings.gridOn, action: toggleGrid },
       { label: 'Snap to the grid', hint: 'F9', checked: settings.gridSnap, action: () => toggleSnap('grid') },
@@ -2608,18 +2634,35 @@ export const cadApp: AppDef = {
       { label: 'Keys', action: showKeys },
       ...(shell.native ? [{ separator: true } as MenuItem, ...shell.native.help().flatMap(g => g.items.map(i => ({ label: i.label, action: i.run })))] : []),
     ];
-    const bar = menuBar(shell, signal, [
-      { label: 'File', key: 'f', items: fileMenu },
-      { label: 'Edit', key: 'e', items: editMenu },
-      { label: 'View', key: 'v', items: viewMenu },
-      { label: 'Geometry', key: 'g', items: geometryMenu },
-      { label: 'CAD', key: 'c', items: cadMenu },
-      { label: 'Utils', key: 'u', items: utilsMenu },
-      { label: 'Help', key: 'h', items: helpMenu },
-    ], { before: () => true, returnFocus: () => canvas });
+    /** The menus as the menu bar has them (each is made afresh as it opens). */
+    const barItems = (items: MenuItem[]): BarItem[] => items.map(i => (i.separator ? { separator: true } : {
+      label: i.label, shortcut: i.hint, danger: i.danger, action: i.action,
+      enabled: i.disabled ? () => false : undefined,
+      checked: i.checked === undefined ? undefined : () => !!i.checked,
+      submenu: i.submenu ? barItems(i.submenu) : undefined,
+    }));
+    const bar = classicBar({
+      menus: [
+        { label: 'File', items: () => barItems(fileMenu()) },
+        { label: 'Edit', items: () => barItems(editMenu()) },
+        { label: 'View', items: () => barItems(viewMenu()) },
+        { label: 'Geometry', items: () => barItems(geometryMenu()) },
+        { label: 'CAD', items: () => barItems(cadMenu()) },
+        { label: 'Utils', items: () => barItems(utilsMenu()) },
+        { label: 'Help', items: () => barItems(helpMenu()) },
+      ],
+      toolbars,
+    }, {
+      layer: shell.menus, signal, scope: app.root, doc: () => canvas, label: 'CAD Draft menus',
+      layout: { saved: settings.toolbars, save: v => {
+        settings.toolbars = v;
+        keepSettings();
+      } },
+    });
+    barRef = bar;
 
-    const body = h('div', { class: 'cad-body' }, leftCol, panel, canvasWrap, rightCol);
-    app.root.append(h('div', { class: 'cad-menubar' }, bar.el), h('div', { class: 'cad-tbs' }, row1, row2, row3), body, commandRow, status);
+    const body = h('div', { class: 'cad-body' }, panel, canvasWrap);
+    app.root.append(bar.el, bar.dock(body), commandRow, status);
     // On a phone the drawing gets the room (View > Layers panel opens the panel over it); a finger gets the large buttons.
     panel.hidden = !settings.layersPanel || onPhone;
     app.root.classList.toggle('cad-large', settings.large || onTouch);
@@ -2687,11 +2730,8 @@ export const cadApp: AppDef = {
       const inInput = isEntry && (e.target as HTMLInputElement).value !== '';
       const inField = e.target instanceof HTMLElement && !isEntry && e.target.closest('input, select, textarea, .dialog');
       if (inField) return;
-      if (e.altKey && !ctrl && !e.shiftKey && /^[a-z]$/.test(k) && bar.openByKey(k)) return e.preventDefault();
-      if (e.key === 'F10' && !e.altKey && !ctrl && !e.shiftKey) {
-        e.preventDefault();
-        return bar.openFirst();
-      }
+      // Alt with a letter and F10 open the menus (the bar hears them first).
+      if (e.defaultPrevented && (e.altKey || e.key === 'F10')) return;
       if (ctrl && k === 's') {
         e.preventDefault();
         return void (e.shiftKey ? saveAs() : save());
