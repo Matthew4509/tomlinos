@@ -619,18 +619,30 @@ async function run(app: AppHandle, acct: MailAccount): Promise<void> {
     }
   }
 
+  /** A message has left the open folder (deleted or moved): its counts follow it to where it went, if anywhere. */
+  function countGone(from: FolderRow, row: Row, to: FolderRow | null) {
+    if (from === folder && total > 0) total--;
+    if (!row.seen) {
+      from.unread = Math.max(0, (from.unread ?? 0) - 1);
+      if (to) to.unread = (to.unread ?? 0) + 1;
+    }
+  }
+
   async function del() {
     if (!folder || selected === null) return;
     const uid = selected;
+    const from = folder;
     const trash = folders.find(f => f.use === 'trash');
     const forGood = !trash || trash === folder;
     if (forGood && !(await shell.dialogs.confirm({ title: 'Delete for good?', text: trash ? 'This message is already in Deleted. Delete it for good? It cannot be brought back.' : 'This mailbox has no Deleted folder, so the message would be deleted for good. It cannot be brought back.', ok: 'Delete for good', danger: true }))) return;
     try {
       await client.remove(folder.raw, [uid], forGood ? '' : trash!.raw);
       const i = rows.findIndex(r => r.uid === uid);
-      rows.splice(i, 1);
-      selected = rows[Math.min(i, rows.length - 1)]?.uid ?? null;
+      if (i >= 0) countGone(from, rows[i], forGood ? null : trash!);
+      if (i >= 0) rows.splice(i, 1);
+      selected = rows[Math.min(Math.max(i, 0), rows.length - 1)]?.uid ?? null;
       open = null;
+      paintFolders();
       paintList();
       paintReader();
       status.textContent = forGood ? 'Deleted for good.' : 'Moved to Deleted.';
@@ -673,11 +685,17 @@ async function run(app: AppHandle, acct: MailAccount): Promise<void> {
     shell.menus.show(folders.filter(f => f !== folder).map(f => ({
       label: folderLabel(f),
       action: async () => {
+        const uid = selected;
+        const from = folder;
+        if (uid === null || !from) return;
         try {
-          await client.move(folder!.raw, [selected!], f.raw);
-          rows = rows.filter(x => x.uid !== selected);
+          await client.move(from.raw, [uid], f.raw);
+          const row = rows.find(x => x.uid === uid);
+          if (row) countGone(from, row, f);
+          rows = rows.filter(x => x.uid !== uid);
           selected = null;
           open = null;
+          paintFolders();
           paintList();
           paintReader();
           status.textContent = `Moved to ${folderLabel(f)}.`;
