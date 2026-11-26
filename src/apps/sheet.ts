@@ -7,7 +7,7 @@
 // Find and Replace is a panel over the grid; the filter's ▾ opens a list of values; charts float over the cells.
 import { css, h, on } from '../core/dom.ts';
 import { formatSize } from '../core/format.ts';
-import { baseName, joinPath, parentPath, splitExtension, uniqueName } from '../fs/names.ts';
+import { baseName, joinPath, nameKey, parentPath, splitExtension, uniqueName } from '../fs/names.ts';
 import type { MenuItem } from '../shell/menu.ts';
 import type { AppDef } from '../shell/types.ts';
 import type { NativeHost } from '../shell/native.ts';
@@ -1583,6 +1583,9 @@ export const sheetApp: AppDef = {
         return false;
       }
       const as = /\.xlsx$/i.test(to) ? 'xlsx' : 'sheet';
+      // Save as onto this window's own file, same kind, is a Save: it asks first about the parts an Excel file loses
+      // and about a copy changed somewhere else.
+      if (replace && path && as === kind && nameKey(to) === nameKey(path)) return saveNow();
       try {
         const version = wb.version;
         const entry = await write(await fileBytes(as));

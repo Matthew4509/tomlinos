@@ -6,7 +6,7 @@
 // The app id stays "editor" so file types, the Terminal's "nano file" and saved sessions keep working.
 import { h, on } from '../core/dom.ts';
 import { formatSize } from '../core/format.ts';
-import { baseName, parentPath } from '../fs/names.ts';
+import { baseName, nameKey, parentPath } from '../fs/names.ts';
 import { pickFile, pickSave, type FileTypeChoice } from '../shell/filepicker.ts';
 import type { AppDef } from '../shell/types.ts';
 import { detectEol, EOL_NAMES, fileBytes, fileSize, findNext, hasBom, lineCol, lineStart, replaceAll, toBox, type Eol } from './notepad/text.ts';
@@ -232,6 +232,8 @@ export const editorApp: AppDef = {
         types: SAVE_TYPES,
       }).finally(() => (naming = false));
       if (!target) return false;
+      // Save as onto this window's own file is a Save: it asks first when the file was changed somewhere else.
+      if (path && target.replace && nameKey(target.path) === nameKey(path)) return saveNow();
       try {
         const snap = snapshot();
         if (await tooBig(snap.bytes.length)) return false;
