@@ -7,6 +7,7 @@ import { h, on, svg } from '../core/dom.ts';
 import { qrMatrix, qrSvgPath } from '../core/qr.ts';
 import { AuthFailure, type PublicUser } from '../auth/api.ts';
 import { passwordField } from '../auth/gate.ts';
+import { infoTip } from '../shell/infotip.ts';
 import { saverControls } from '../shell/saverform.ts';
 import type { AppDef, AppHandle } from '../shell/types.ts';
 import { APPS } from './catalog.ts';
@@ -69,7 +70,7 @@ class AccountView {
       root.append(
         h('h2', { class: 'set-h' }, 'No accounts here'),
         h('p', {}, 'This copy of the desktop keeps its files in this browser, so there are no accounts, passwords or lock.'),
-        h('p', { class: 'hint' }, 'Accounts, two-step sign-in and the screen lock work when the desktop runs on its server. The screensaver below still works.'),
+        h('p', { class: 'hint' }, 'Accounts and the screen lock need the desktop\'s server; the screensaver below still works.'),
         this.saverSection(),
       );
       return;
@@ -110,6 +111,11 @@ class AccountView {
 
   private section(title: string, ...kids: Node[]): HTMLElement {
     return h('section', { class: 'acct-section' }, h('h2', { class: 'set-h' }, title), ...kids);
+  }
+
+  /** A section whose heading carries a "!" tip with the detail that need not be read first. */
+  private tipSection(title: string, tip: string, ...kids: Node[]): HTMLElement {
+    return h('section', { class: 'acct-section' }, h('h2', { class: 'set-h' }, `${title} `, infoTip(title, tip)), ...kids);
   }
 
   private button(label: string, run: () => void, cls = 'btn'): HTMLButtonElement {
@@ -168,8 +174,8 @@ class AccountView {
   private unlockEmailSection(user: PublicUser): HTMLElement {
     const account = this.account!;
     const state = h('p', { class: 'hint' }, user.unlockEmail ? `Set: ${user.unlockEmail}.` : 'Not set.');
-    const box = this.section('Unlock email',
-      h('p', { class: 'hint' }, 'If wrong passwords ever hold your account, the sign-in screen offers "Email me an unlock link". The link gives 3 more tries for one hour and does not change your password. One is sent until you next sign in, so nobody can flood your inbox.'),
+    const box = this.tipSection('Unlock email', 'The link gives 3 more tries for one hour and does not change your password. Only one is sent until you next sign in, so nobody can flood your inbox.',
+      h('p', { class: 'hint' }, 'Where "Email me an unlock link" sends its link if wrong passwords hold your account.'),
       state);
     box.append(this.button(user.unlockEmail ? 'Change unlock email...' : 'Set unlock email...', () => {
       const id = this.identity(user);
@@ -187,7 +193,7 @@ class AccountView {
 
   private passwordSection(user: PublicUser): HTMLElement {
     const account = this.account!;
-    const box = this.section('Password', h('p', { class: 'hint' }, 'Changing it signs you out of every other device. Forgot it? "Forgot your password?" on the sign-in screen takes your recovery key.'));
+    const box = this.tipSection('Password', 'Forgot it? "Forgot your password?" on the sign-in screen takes your recovery key.', h('p', { class: 'hint' }, 'Changing it signs you out of every other device.'));
     box.append(this.button('Change password...', () => {
       const id = this.identity(user);
       const next = passwordField({ label: 'New password', autocomplete: 'new-password', signal: this.app.signal, choosing: () => user.name });
@@ -206,11 +212,11 @@ class AccountView {
 
   private recoverySection(user: PublicUser): HTMLElement {
     const account = this.account!;
-    const box = this.section('Recovery key',
+    const box = this.tipSection('Recovery key', 'Keep it written down, printed, or in a password manager.',
       h('p', {}, user.recoveryKey
         ? `Made ${when(user.recoveryKeyMade)}. If you forget your password, it lets you choose a new one yourself${user.vault !== 'off' ? ', and it opens your encrypted files' : ''}.`
         : 'Not made yet. Make one now: without it, a forgotten password can only be reset by the owner of this desktop' + (user.admin ? ' (you: from the server itself).' : '.')),
-      h('p', { class: 'hint' }, 'It is shown once. Keep it away from this computer: written down, printed, or in a password manager.'));
+      h('p', { class: 'hint' }, 'It is shown once: keep it away from this computer.'));
     const show = h('div', { class: 'acct-rkey' });
     box.append(this.button(user.recoveryKey ? 'Make a new recovery key...' : 'Make my recovery key...', () => {
       const id = this.identity(user);
@@ -264,7 +270,7 @@ class AccountView {
           });
         }));
     }
-    box.append(h('p', { class: 'hint' }, 'Your choice, and you can change it any time. Encrypted: your password or your recovery key opens your files; lose both and nobody can open them, not even the owner. Not encrypted: the owner can always reset your password and your files stay readable.'));
+    box.append(h('p', { class: 'hint' }, 'Encrypted: only your password or recovery key opens your files; lose both and nobody can open them, not even the owner. Not encrypted: the owner can always reset your password. ', infoTip('encryption', 'Your choice, and you can change it any time. Not encrypted, your files stay readable on the server.')));
     if (state === 'off') {
       box.append(this.button('Encrypt my files...', () => {
         const id = this.identity(user);
@@ -338,7 +344,7 @@ class AccountView {
       return box;
     }
     const box = this.section('Two-step sign-in',
-      h('p', {}, 'Off. Turn it on so that a stolen password is not enough: signing in will also need a 6-digit code from an authenticator app on your phone.'));
+      h('p', {}, 'Off. Turn it on so a stolen password is not enough: signing in will also need a 6-digit code from an app on your phone.'));
     box.append(this.button('Turn on...', () => {
       const id = this.identity(user);
       this.inlineForm(box, [...id.nodes], 'Next', async () => {
@@ -389,9 +395,9 @@ class AccountView {
 
   private pinSection(user: PublicUser): HTMLElement {
     const api = this.account!.api;
-    const box = this.section('Screen PIN',
+    const box = this.tipSection('Screen PIN', 'There are only 10,000 PINs. The server checks it, and 5 wrong tries sign you out. The PIN only unlocks the screen; signing in always needs the password.',
       h('p', {}, user.pin ? 'Set. The locked screen opens with your 4-digit PIN.' : 'Not set. The locked screen opens with your password.'),
-      h('p', { class: 'hint' }, 'A 4-digit PIN is a convenience, not strong security: there are only 10,000 of them. The server checks it, and 5 wrong tries sign you out, so the password (and two-step code) is needed again. The PIN only unlocks the screen; signing in always needs the password.'));
+      h('p', { class: 'hint' }, 'PIN is for convenience. For security, we recommend a password with two-step sign-in.'));
     const pinForm = (remove: boolean) => () => {
       const id = this.identity(user);
       const pin = h('input', { type: 'password', class: 'field', inputmode: 'numeric', autocomplete: 'off', maxlength: 4, pattern: '[0-9]*' });
@@ -444,7 +450,7 @@ class AccountView {
 
   private historySection(): HTMLElement {
     const list = h('div', { class: 'acct-history' }, h('p', { class: 'hint' }, 'Loading...'));
-    const box = this.section('Sign-in history', h('p', { class: 'hint' }, 'The last 50 sign-ins and account changes. Anything you do not recognise: change your password and sign out the other devices.'), list);
+    const box = this.tipSection('Sign-in history', 'The last 50 sign-ins and account changes.', h('p', { class: 'hint' }, 'Anything you do not recognise: change your password and sign out the other devices.'), list);
     this.account!.api.history().then(({ history }) => {
       list.replaceChildren(...(history.length ? history.map(e => h('div', { class: 'acct-row' }, h('div', {}, h('div', {}, (e.times ?? 1) > 1 ? `${e.event} (${e.times} times; the latest below)` : e.event), h('div', { class: 'hint' }, `${when(e.at)} · ${deviceName(e.agent)} · ${e.ip || 'unknown address'}`)))) : [h('p', { class: 'hint' }, 'Nothing yet.')]));
     }, error => list.replaceChildren(h('p', { class: 'dialog-problem' }, error instanceof Error ? error.message : String(error))));
@@ -457,7 +463,7 @@ class AccountView {
     const api = this.account!.api;
     const list = h('div', { class: 'acct-list' }, h('p', { class: 'hint' }, 'Loading...'));
     const box = this.section('People on this desktop',
-      h('p', { class: 'hint' }, 'There is no open sign-up: only you add people. Each person has their own private files; nobody, including you, sees another person\'s files from the desktop.'),
+      h('p', { class: 'hint' }, 'Only you add people; there is no open sign-up. ', infoTip('people on this desktop', 'Each person has their own private files; nobody, including you, sees another person\'s files from the desktop.')),
       list);
     const fill = async () => {
       const { users } = await api.users();
