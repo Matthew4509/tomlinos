@@ -46,15 +46,30 @@ export const CLAUDE_MAX_INPUT = 300_000;
 export const money = (d: number): string => (d > 0 && d < 0.01 ? `$${d.toFixed(4)}` : `$${d.toFixed(2)}`);
 
 /**
+ * The turns in the order the server takes: empty ones left out, and two turns in a row from the same side made one (a
+ * question left unanswered when the page was closed mid-answer goes with the next question, its words kept).
+ */
+export function alternating(turns: ChatTurn[]): Array<{ role: 'user' | 'assistant'; content: string }> {
+  const out: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+  for (const t of turns) {
+    if (t.role === 'system' || !t.content.trim()) continue;
+    const prev = out[out.length - 1];
+    if (prev?.role === t.role) prev.content = `${prev.content}\n\n${t.content}`;
+    else out.push({ role: t.role, content: t.content });
+  }
+  return out;
+}
+
+/**
  * The conversation to send: the newest turns that fit in `maxChars`, starting with the person's turn (the server
  * refuses any other order), and at most `maxTurns` of them.
  */
 export function claudeTurns(turns: ChatTurn[], maxChars = CLAUDE_MAX_INPUT, maxTurns = 79): Array<{ role: 'user' | 'assistant'; content: string }> {
   const out: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+  const said = alternating(turns);
   let chars = 0;
-  for (let i = turns.length - 1; i >= 0; i--) {
-    const t = turns[i];
-    if (t.role === 'system') continue;
+  for (let i = said.length - 1; i >= 0; i--) {
+    const t = said[i];
     if (out.length >= maxTurns || (out.length && chars + t.content.length > maxChars)) break;
     chars += t.content.length;
     out.unshift({ role: t.role, content: t.content });

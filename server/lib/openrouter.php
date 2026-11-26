@@ -91,6 +91,10 @@ function or_models(string $dataDir, bool $fresh = false): array
 {
     $cache = ai_dir($dataDir) . '/openrouter-models.json';
     $kept = auth_read_json($cache, []);
+    // A list kept before the fees were read carries none, so it is read again rather than trusted.
+    if (is_array($kept['models'] ?? null) && $kept['models'] && !array_key_exists('call', $kept['models'][0])) {
+        $kept = [];
+    }
     if (!$fresh && is_array($kept['models'] ?? null) && time() - (int) ($kept['at'] ?? 0) < OR_MODELS_TTL) {
         return $kept['models'];
     }
@@ -115,8 +119,14 @@ function or_models(string $dataDir, bool $fresh = false): array
         if (!or_model_id_ok($id) || $in === null || $out === null) {
             continue;
         }
+        // Fees charged on top of the tokens: per request, per image or web search, and per "reasoning" token. A fee that
+        // is there but cannot be read leaves the model out, as the limit check could not count it.
+        $fees = or_fees(is_array($m['pricing'] ?? null) ? $m['pricing'] : []);
+        if ($fees === null) {
+            continue;
+        }
         $name = trim(preg_replace('/\s+/', ' ', (string) ($m['name'] ?? $id)) ?? $id);
-        $models[] = ['id' => $id, 'name' => (function_exists('mb_substr') ? mb_substr($name !== '' ? $name : $id, 0, 120) : substr($name !== '' ? $name : $id, 0, 120)), 'in' => $in, 'out' => $out, 'context' => max(0, (int) ($m['context_length'] ?? 0))];
+        $models[] = ['id' => $id, 'name' => (function_exists('mb_substr') ? mb_substr($name !== '' ? $name : $id, 0, 120) : substr($name !== '' ? $name : $id, 0, 120)), 'in' => $in, 'out' => $out, 'context' => max(0, (int) ($m['context_length'] ?? 0))] + $fees;
     }
     usort($models, static fn ($a, $b) => strcasecmp($a['name'], $b['name']));
     auth_write_json($cache, ['at' => time(), 'models' => $models]);
@@ -136,19 +146,49 @@ function or_model(string $dataDir, string $id): ?array
     return null;
 }
 
-/** Cost in millionths of a dollar from token counts and prices per million tokens. */
+/**
+ * The fees beside the token prices, from OpenRouter's pricing: "call" is what one request costs on top of its tokens
+ * (the per-request fee, and one image and one web search where those are priced), in millionths of a dollar;
+ * "reason" is the price per million "reasoning" tokens. Null when a fee is there but is not a plain number.
+ * @return array{call: int, reason: float}|null
+ */
+function or_fees(array $pricing): ?array
+{
+    $call = 0.0;
+    foreach (['request', 'image', 'web_search'] as $field) {
+        if (!isset($pricing[$field]) || $pricing[$field] === '' || $pricing[$field] === '0') {
+            continue;
+        }
+        if (!is_numeric($pricing[$field]) || (float) $pricing[$field] < 0) {
+            return null;
+        }
+        $call += (float) $pricing[$field] * 1e6;
+    }
+    $reason = 0.0;
+    if (isset($pricing['internal_reasoning']) && $pricing['internal_reasoning'] !== '' && $pricing['internal_reasoning'] !== '0') {
+        $reason = or_per_million($pricing['internal_reasoning']);
+        if ($reason === null) {
+            return null;
+        }
+    }
+
+    return ['call' => (int) ceil($call), 'reason' => $reason];
+}
+
+/** Cost in millionths of a dollar from token counts and prices per million tokens, with the per-request fee. */
 function or_cost_micro(array $model, int $in, int $out): int
 {
-    return (int) ceil($in * $model['in'] + $out * $model['out']);
+    return (int) ceil($in * $model['in'] + $out * $model['out']) + (int) ($model['call'] ?? 0);
 }
 
 /**
  * The most a request could cost: input counted generously, a token for every 2 bytes (Chinese, Japanese and Korean run
- * to about one letter, 3 bytes, a token), plus a full answer.
+ * to about one letter, 3 bytes, a token), plus a full answer, the per-request fees, and a full answer's worth of
+ * "reasoning" tokens where the model prices those apart.
  */
 function or_worst_micro(array $model, int $inputBytes): int
 {
-    return or_cost_micro($model, intdiv($inputBytes, 2) + 200, OR_MAX_OUTPUT);
+    return or_cost_micro($model, intdiv($inputBytes, 2) + 200, OR_MAX_OUTPUT) + (int) ceil(OR_MAX_OUTPUT * (float) ($model['reason'] ?? 0));
 }
 
 /** Plain words for an OpenRouter refusal. Never includes the key or the raw reply. */

@@ -7,7 +7,7 @@
 // The model is small, so what it reads is kept short, and the character carries a few example exchanges: small models
 // copy examples better than they follow rules.
 import type { FileSystem } from '../../fs/fs.ts';
-import type { ChatTurn } from './engine.ts';
+import { jobPrompt, type ChatTurn } from './engine.ts';
 
 export const PERSONA_FOLDER = '/System/AI';
 export const PROFILE_PATH = `${PERSONA_FOLDER}/character.md`;
@@ -155,6 +155,12 @@ export function addFacts(memory: string, facts: string[]): string {
   const add = facts.map(cleanFact).filter(f => f && !have.has(f.toLowerCase()) && (have.add(f.toLowerCase()), true));
   if (!add.length) return memory;
   return `${memory.replace(/\s+$/, '')}\n${add.map(f => `- ${f}`).join('\n')}\n`;
+}
+
+/** A quick job's question (Summarise, Rewrite, Ask about a file) as jobPrompt words it, also when read back from a kept thread. */
+export function isJobPrompt(content: string): boolean {
+  return [jobPrompt('summarise', ''), jobPrompt('rewrite', '')].some(head => content.startsWith(head))
+    || (content.startsWith('Here is a file:\n\n') && content.includes('\n\nQuestion about the file: '));
 }
 
 /**
@@ -306,7 +312,7 @@ async function readOrMake(fs: FileSystem, path: string, text: string): Promise<s
  * message asks her to remember something, it goes into her memory first. Her files are read each time, so a changed
  * file counts at once; if they cannot be read (a locked store), she answers from the defaults.
  */
-export async function personaTurns(fs: FileSystem | null, person: string, turns: ChatTurn[], now = new Date()): Promise<ChatTurn[]> {
+export async function personaTurns(fs: FileSystem | null, person: string, turns: Array<ChatTurn & { job?: boolean }>, now = new Date()): Promise<ChatTurn[]> {
   let profile = DEFAULT_PROFILE;
   let memory = DEFAULT_MEMORY;
   let story = DEFAULT_STORY;
@@ -316,7 +322,9 @@ export async function personaTurns(fs: FileSystem | null, person: string, turns:
         readOrMake(fs, PROFILE_PATH, DEFAULT_PROFILE), readOrMake(fs, MEMORY_PATH, DEFAULT_MEMORY), readOrMake(fs, STORY_PATH, DEFAULT_STORY),
       ]);
       const last = [...turns].reverse().find(t => t.role === 'user');
-      const fact = last ? rememberFrom(last.content) : null;
+      // Only words the person typed in the chat: never a Summarise, Rewrite or file question, whose text came from a
+      // file or the box and is not the person asking her anything.
+      const fact = last && !last.job && !isJobPrompt(last.content) ? rememberFrom(last.content) : null;
       if (fact) {
         const after = addFacts(memory, [fact]);
         if (after !== memory) await fs.writeText(MEMORY_PATH, after, { hidden: true });

@@ -29,7 +29,7 @@ import type { OpenRouterSettings } from '../assistant/openrouter.ts';
 import { baseName } from '../../fs/names.ts';
 import { pickFile } from '../../shell/filepicker.ts';
 import { isTextName } from '../notepadpro/findfiles.ts';
-import { AGENT_FOLDER, listThreads, openThread, threadLabel, threadToText, titleFrom, type AgentTurn } from './agents.ts';
+import { AGENT_FOLDER, listThreads, openThread, threadLabel, threadToText, titleFrom, type AgentThread, type AgentTurn } from './agents.ts';
 import { footWords, LiveChat, PIECE_HINT, writingWords, type Pending } from './live.ts';
 
 const GEMMA = 'gemma-2-2b-it-q4f32_1-MLC';
@@ -38,6 +38,14 @@ const SHORT_ANSWER = 200;
 
 /** An AI reached with the person's own key, which Chat can be opened on ("agents:claude"). */
 export type CloudAgent = 'claude' | 'openrouter';
+
+/**
+ * The person's answer, per thread and per service, to "Send them to <service> too?" about answers written on this
+ * device: 'all' sends them, 'only' leaves them (and the questions they answered) out. Kept for the thread object and
+ * for its file, so another view or the same thread opened again does not ask again.
+ */
+const earlierSent = new WeakMap<AgentThread, Map<CloudAgent, 'all' | 'only'>>();
+const earlierSentByFile = new Map<string, 'all' | 'only'>();
 
 /** How a question is sent: a new one; the last one again (Regenerate); or the last one cut short after the chip stopped. */
 type SendMode = 'new' | 'again' | 'short';
@@ -70,6 +78,8 @@ export function agentPane(app: AppHandle): { el: HTMLElement; shown: (want?: Clo
   /** Stop was pressed during the answer being written. */
   let stopAsked = false;
   let trouble: Trouble | null = null;
+  /** The "earlier messages" question is open: nothing else is sent meanwhile. */
+  let asking = false;
 
   const pick = h('select', { class: 'agent-pick', 'aria-label': 'Agent' });
   const starBtn = h('button', { type: 'button', class: 'chat-code agent-star', 'aria-label': 'Favourite', 'aria-pressed': 'false' }, '☆');
@@ -412,6 +422,53 @@ export function agentPane(app: AppHandle): { el: HTMLElement; shown: (want?: Clo
   }
 
   // ---- Talking ----
+  /**
+   * An answer written on this device. The kept file names only who answered, so anything not a known Claude or
+   * OpenRouter name counts as on this device (asking once too often is better than sending it unasked).
+   */
+  const onDevice = (t: AgentTurn): boolean => {
+    if (t.role !== 'assistant') return false;
+    const by = t.by ?? '';
+    const cloud = new Set<string>(['Claude', 'OpenRouter', ...(claude?.models.map(m => m.name) ?? [])]);
+    if (openrouter?.modelName) cloud.add(openrouter.modelName);
+    return !cloud.has(by);
+  };
+
+  /** The turns without the answers written on this device, and without the questions those answered. */
+  const withoutDevice = (turns: AgentTurn[]): AgentTurn[] => {
+    const out: AgentTurn[] = [];
+    for (const t of turns) {
+      if (!onDevice(t)) out.push(t);
+      else while (out.length && out[out.length - 1].role === 'user') out.pop();
+    }
+    return out;
+  };
+
+  /**
+   * Before a thread holding answers written on this device first goes to Claude or OpenRouter: whether those go too.
+   * Null when the person closed the question without choosing (nothing is sent).
+   */
+  async function earlierChoice(thread: AgentThread, agent: CloudAgent): Promise<'all' | 'only' | null> {
+    if (!thread.turns.some(onDevice)) return 'all';
+    const file = live.thread === thread ? live.file : null;
+    const key = file ? `${agent}/${file}` : '';
+    const kept = earlierSent.get(thread)?.get(agent) ?? (key ? earlierSentByFile.get(key) : undefined);
+    if (kept) return kept;
+    const service = agent === 'claude' ? 'Claude' : 'OpenRouter';
+    const choice = await shell.dialogs.ask<'all' | 'only' | null>({
+      title: 'Earlier messages',
+      text: `This chat has earlier messages answered on this device. Send them to ${service} too?`,
+      buttons: [{ label: 'Send them too', value: 'all' }, { label: 'Only this question', value: 'only', primary: true }],
+      cancel: null,
+    });
+    if (!choice || signal.aborted) return null;
+    const map = earlierSent.get(thread) ?? new Map<CloudAgent, 'all' | 'only'>();
+    map.set(agent, choice);
+    earlierSent.set(thread, map);
+    if (key) earlierSentByFile.set(key, choice);
+    return choice;
+  }
+
   const limit = async () => (connected === 'claude' || connected === 'openrouter' ? CLAUDE_MAX_INPUT : (await checkDevice()).maxInput);
 
   /**
@@ -422,12 +479,22 @@ export function agentPane(app: AppHandle): { el: HTMLElement; shown: (want?: Clo
    * graphics chip stopped).
    */
   async function send(text: string, shown = text, mode: SendMode = 'new'): Promise<void> {
-    if (busy || live.busy || !text.trim()) return;
+    if (busy || live.busy || asking || !text.trim()) return;
     if (!connected && !(await resume())) return;
     const agent = connected!;
     const device = agent.startsWith('device:');
     const by = agentName(agent);
     const thread = live.thread;
+    // Answers written on this device go to Claude or OpenRouter only when the person says so (asked once a thread).
+    let leaveOut = false;
+    if ((agent === 'claude' || agent === 'openrouter') && mode !== 'short') {
+      asking = true;
+      const choice = await earlierChoice(thread, agent).finally(() => {
+        asking = false;
+      });
+      if (!choice || busy || live.busy || connected !== agent || live.thread !== thread) return;
+      leaveOut = choice === 'only';
+    }
     busy = true;
     live.busy = true;
     trouble = null;
@@ -449,7 +516,9 @@ export function agentPane(app: AppHandle): { el: HTMLElement; shown: (want?: Clo
     const ticker = setInterval(() => live.pending === pending && live.tell('pending'), 1000);
     // A Regenerate changes nothing yet, so the kept file is left as it is.
     if (!earlier) await keep(thread);
-    let turns: ChatTurn[] = (earlier ? thread.turns.slice(0, -1) : thread.turns).map(t => ({ role: t.role, content: t.text }));
+    const said = earlier ? thread.turns.slice(0, -1) : thread.turns;
+    // A quick job's question is marked, so the built-in AI never learns a "remember" from a file's text.
+    let turns: Array<ChatTurn & { job?: boolean }> = (leaveOut ? withoutDevice(said) : said).map(t => ({ role: t.role, content: t.text, job: t.role === 'user' && live.labels.has(t) }));
     if (mode === 'short') turns = [{ role: 'user', content: `${fitText(text, Math.max(200, Math.floor((await limit()) / 2))).text}\n\nAnswer in two or three short sentences.` }];
     const show = (t: string) => {
       if (live.thread !== thread) return;
