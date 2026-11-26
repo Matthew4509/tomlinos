@@ -4,7 +4,7 @@ import { svg } from '../core/dom.ts';
 
 export type IconName =
   | 'folder' | 'file' | 'text' | 'image' | 'video' | 'music' | 'pdf'
-  | 'trash' | 'trash-full' | 'files' | 'gear' | 'info' | 'app'
+  | 'trash' | 'trash-full' | 'files' | 'gear' | 'info' | 'app' | 'key' | 'pinpad' | 'phonecode'
   | 'editor' | 'photos' | 'player' | 'pdfviewer' | 'sheet' | 'archive' | 'code' | 'chip' | 'logo' | 'user' | 'lock'
   | 'calendar' | 'contacts' | 'link' | 'keyboard' | 'terminal' | 'calculator' | 'photoedit' | 'mail' | 'planet' | 'assistant' | 'chat' | 'panel'
   | 'printer' | 'modelsearch' | 'book' | 'projects' | 'write' | 'cad'
@@ -88,6 +88,27 @@ const SHAPES: Record<IconName, Shape[]> = {
     ['rect', { x: '9', y: '20', width: '30', height: '22', rx: '4', fill: '#f2c14e', stroke: '#9a7412', 'stroke-width': '1.5' }],
     ['circle', { cx: '24', cy: '29', r: '3.2', fill: '#5a4108' }],
     ['path', { d: 'M24 31v6', stroke: '#5a4108', 'stroke-width': '2.6', 'stroke-linecap': 'round' }],
+  ],
+  // A gold key: a round bow with a hole, a shaft, and two teeth.
+  key: [
+    ['path', { d: 'M23 21.5h19v5h-3v5h-4v-5h-3v4h-4v-4h-5z', fill: '#f2c14e', stroke: '#9a7412', 'stroke-width': '1.4', 'stroke-linejoin': 'round' }],
+    ['path', { d: 'M6 24a9 9 0 1 0 18 0a9 9 0 1 0-18 0zM10 24a3 3 0 1 0 6 0a3 3 0 1 0-6 0z', 'fill-rule': 'evenodd', fill: '#f2c14e', stroke: '#9a7412', 'stroke-width': '1.5' }],
+  ],
+  // A number pad: a small screen showing four dots over three rows of keys.
+  pinpad: [
+    ['rect', { x: '9', y: '3', width: '30', height: '42', rx: '4', fill: '#e9ecf1', stroke: '#5f7290', 'stroke-width': '1.6' }],
+    ['rect', { x: '13', y: '7', width: '22', height: '8', rx: '1.5', fill: 'url(#gi-dark)' }],
+    ['path', { d: 'M17.5 11h.01M22 11h.01M26.5 11h.01M31 11h.01', stroke: '#fff', 'stroke-width': '2.6', 'stroke-linecap': 'round', fill: 'none' }],
+    ['path', { d: 'M17 21h.01M24 21h.01M31 21h.01M17 28h.01M24 28h.01M31 28h.01M17 35h.01M24 35h.01M31 35h.01M24 41h.01', stroke: '#3f7fd8', 'stroke-width': '5', 'stroke-linecap': 'round', fill: 'none' }],
+  ],
+  // A phone showing a code, with a green tick beside it.
+  phonecode: [
+    ['rect', { x: '10', y: '3', width: '22', height: '42', rx: '4', fill: 'url(#gi-dark)', stroke: '#2b3550', 'stroke-width': '1.4' }],
+    ['rect', { x: '13', y: '8', width: '16', height: '30', rx: '1.5', fill: 'url(#gi-sky)' }],
+    ['path', { d: 'M15.5 20h3M19.5 20h3M23.5 20h3M15.5 25h3M19.5 25h3M23.5 25h3', stroke: '#2a5fb8', 'stroke-width': '2.4', 'stroke-linecap': 'round', fill: 'none' }],
+    ['path', { d: 'M18 41.5h6', stroke: '#8a97ab', 'stroke-width': '1.6', 'stroke-linecap': 'round', fill: 'none' }],
+    ['circle', { cx: '36', cy: '33', r: '8', fill: 'url(#gi-green)', stroke: '#22713a', 'stroke-width': '1.3' }],
+    ['path', { d: 'M32.3 33.2l2.6 2.6 4.9-5.3', stroke: '#fff', 'stroke-width': '2.2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', fill: 'none' }],
   ],
   info: [
     ['circle', { cx: '24', cy: '24', r: '19', fill: 'url(#gi-blue)', stroke: '#2f5fa5', 'stroke-width': '1.5' }],

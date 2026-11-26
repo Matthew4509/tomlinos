@@ -7,6 +7,7 @@ import { h, on, svg } from '../core/dom.ts';
 import { qrMatrix, qrSvgPath } from '../core/qr.ts';
 import { AuthFailure, type PublicUser } from '../auth/api.ts';
 import { passwordField } from '../auth/gate.ts';
+import { icon, type IconName } from '../shell/icons.ts';
 import { infoTip } from '../shell/infotip.ts';
 import { saverControls } from '../shell/saverform.ts';
 import type { AppDef, AppHandle } from '../shell/types.ts';
@@ -118,6 +119,20 @@ class AccountView {
     return h('section', { class: 'acct-section' }, h('h2', { class: 'set-h' }, `${title} `, infoTip(title, tip)), ...kids);
   }
 
+  /**
+   * A sign-in option as a tile, in the look of the Settings tiles: its picture on the left, then the title (with its "!"
+   * tip), the state and the short notes, and its buttons on the right. Forms and anything else appended to the tile later
+   * open under the text, the full width of the tile.
+   */
+  private tile(pic: IconName, title: string, tip: string | null, text: Node[], actions: Node[]): HTMLElement {
+    return h('section', { class: 'acct-tile' },
+      h('span', { class: 'bin-tile-pic acct-tile-pic', 'aria-hidden': 'true' }, icon(pic, 40)),
+      h('div', { class: 'acct-tile-text' },
+        h('h2', { class: 'set-h' }, ...(tip ? [`${title} `, infoTip(title, tip)] : [title])),
+        ...text),
+      h('div', { class: 'acct-buttons acct-tile-act' }, ...actions));
+  }
+
   private button(label: string, run: () => void, cls = 'btn'): HTMLButtonElement {
     const b = h('button', { type: 'button', class: cls }, label);
     on(b, 'click', run, this.app.signal);
@@ -173,11 +188,8 @@ class AccountView {
   /** Where "Email me an unlock link" sends its one-time link, when wrong passwords have held this account. */
   private unlockEmailSection(user: PublicUser): HTMLElement {
     const account = this.account!;
-    const state = h('p', { class: 'hint' }, user.unlockEmail ? `Set: ${user.unlockEmail}.` : 'Not set.');
-    const box = this.tipSection('Unlock email', 'The link gives 3 more tries for one hour and does not change your password. Only one is sent until you next sign in, so nobody can flood your inbox.',
-      h('p', { class: 'hint' }, 'Where "Email me an unlock link" sends its link if wrong passwords hold your account.'),
-      state);
-    box.append(this.button(user.unlockEmail ? 'Change unlock email...' : 'Set unlock email...', () => {
+    const state = h('p', { class: 'acct-state' }, user.unlockEmail ? `Set: ${user.unlockEmail}.` : 'Not set.');
+    const set = this.button(user.unlockEmail ? 'Change unlock email...' : 'Set unlock email...', () => {
       const id = this.identity(user);
       const email = h('input', { type: 'email', class: 'field', autocomplete: 'email', maxlength: 254, spellcheck: 'false' });
       this.inlineForm(box, [h('label', { class: 'gate-row' }, h('span', { class: 'gate-label' }, 'Email address (leave empty to remove it)'), email), ...id.nodes], 'Save', async () => {
@@ -185,7 +197,10 @@ class AccountView {
         state.textContent = r.user.unlockEmail ? `Set: ${r.user.unlockEmail}.` : 'Not set.';
         this.app.shell.toast(r.user.unlockEmail ? 'Unlock email saved.' : 'Unlock email removed.');
       });
-    }));
+    });
+    const box = this.tile('mail', 'Unlock email', 'The link gives 3 more tries for one hour and does not change your password. Only one is sent until you next sign in, so nobody can flood your inbox.',
+      [state, h('p', { class: 'hint' }, 'Where "Email me an unlock link" sends its link if wrong passwords hold your account.')],
+      [set]);
     return box;
   }
 
@@ -193,8 +208,7 @@ class AccountView {
 
   private passwordSection(user: PublicUser): HTMLElement {
     const account = this.account!;
-    const box = this.tipSection('Password', 'Forgot it? "Forgot your password?" on the sign-in screen takes your recovery key.', h('p', { class: 'hint' }, 'Changing it signs you out of every other device.'));
-    box.append(this.button('Change password...', () => {
+    const change = this.button('Change password...', () => {
       const id = this.identity(user);
       const next = passwordField({ label: 'New password', autocomplete: 'new-password', signal: this.app.signal, choosing: () => user.name });
       this.inlineForm(box, [...id.nodes, next.row], 'Change password', async () => {
@@ -204,7 +218,9 @@ class AccountView {
         if (wrap && account.files.keys) account.files.apply({ ...account.files.keys, ...wrap, stale: false });
         this.app.shell.toast(r.endedOthers ? `Password changed. ${r.endedOthers} other device${r.endedOthers === 1 ? ' was' : 's were'} signed out.` : 'Password changed.');
       });
-    }));
+    });
+    const box = this.tile('lock', 'Password', 'Forgot it? "Forgot your password?" on the sign-in screen takes your recovery key.',
+      [h('p', { class: 'hint' }, 'Changing it signs you out of every other device.')], [change]);
     return box;
   }
 
@@ -212,20 +228,24 @@ class AccountView {
 
   private recoverySection(user: PublicUser): HTMLElement {
     const account = this.account!;
-    const box = this.tipSection('Recovery key', 'Keep it written down, printed, or in a password manager.',
-      h('p', {}, user.recoveryKey
-        ? `Made ${when(user.recoveryKeyMade)}. If you forget your password, it lets you choose a new one yourself${user.vault !== 'off' ? ', and it opens your encrypted files' : ''}.`
-        : 'Not made yet. Make one now: without it, a forgotten password can only be reset by the owner of this desktop' + (user.admin ? ' (you: from the server itself).' : '.')),
-      h('p', { class: 'hint' }, 'It is shown once: keep it away from this computer.'));
     const show = h('div', { class: 'acct-rkey' });
-    box.append(this.button(user.recoveryKey ? 'Make a new recovery key...' : 'Make my recovery key...', () => {
+    const make = this.button(user.recoveryKey ? 'Make a new recovery key...' : 'Make my recovery key...', () => {
       const id = this.identity(user);
       this.inlineForm(box, [...(user.recoveryKey ? [h('p', { class: 'hint' }, 'The old key stops working.')] : []), ...id.nodes], 'Make recovery key', async () => {
         const key = await account.files.makeRecoveryKey(id.password(), id.code());
         this.showKeyOnce(box, show, key);
         return false;
       });
-    }), show);
+    });
+    const box = this.tile('key', 'Recovery key', 'Keep it written down, printed, or in a password manager.', user.recoveryKey
+      ? [h('p', { class: 'acct-state' }, `Made ${when(user.recoveryKeyMade)}.`),
+        h('p', {}, `If you forget your password, it lets you choose a new one yourself${user.vault !== 'off' ? ', and it opens your encrypted files' : ''}.`),
+        h('p', { class: 'hint' }, 'It is shown once: keep it away from this computer.')]
+      : [h('p', { class: 'acct-state' }, 'Not made yet.'),
+        h('p', {}, 'Make one now: without it, a forgotten password can only be reset by the owner of this desktop' + (user.admin ? ' (you: from the server itself).' : '.')),
+        h('p', { class: 'hint' }, 'It is shown once: keep it away from this computer.')],
+      [make]);
+    box.append(show);
     return box;
   }
 
@@ -320,10 +340,11 @@ class AccountView {
   private twoStepSection(user: PublicUser): HTMLElement {
     const api = this.account!.api;
     if (user.totp) {
-      const box = this.section('Two-step sign-in',
-        h('p', {}, 'On. Signing in needs your password and the 6-digit code from your authenticator app.'),
-        h('p', { class: 'hint' }, `${user.recoveryLeft} of 10 recovery codes left. Each works once, if your phone is lost.`));
-      box.append(h('div', { class: 'acct-buttons' },
+      const box: HTMLElement = this.tile('phonecode', 'Two-step sign-in', null, [
+        h('p', { class: 'acct-state' }, 'On.'),
+        h('p', {}, 'Signing in needs your password and the 6-digit code from your authenticator app.'),
+        h('p', { class: 'hint' }, `${user.recoveryLeft} of 10 recovery codes left. Each works once, if your phone is lost.`),
+      ], [
         this.button('Make new recovery codes...', () => {
           const id = this.identity(user);
           this.inlineForm(box, [h('p', { class: 'hint' }, 'The old codes stop working.'), ...id.nodes], 'Make new codes', async () => {
@@ -340,19 +361,22 @@ class AccountView {
             this.account!.setUser(r.user);
             this.app.shell.toast('Two-step sign-in is off.');
           }, true);
-        })));
+        }),
+      ]);
       return box;
     }
-    const box = this.section('Two-step sign-in',
-      h('p', {}, 'Off. Turn it on so a stolen password is not enough: signing in will also need a 6-digit code from an app on your phone.'));
-    box.append(this.button('Turn on...', () => {
+    const turnOn = this.button('Turn on...', () => {
       const id = this.identity(user);
       this.inlineForm(box, [...id.nodes], 'Next', async () => {
         const begun = await api.totpBegin(id.password(), id.code());
         this.showSetup(box, begun.secret, begun.uri);
         return false;
       });
-    }));
+    });
+    const box = this.tile('phonecode', 'Two-step sign-in', null, [
+      h('p', { class: 'acct-state' }, 'Off.'),
+      h('p', {}, 'Turn it on so a stolen password is not enough: signing in will also need a 6-digit code from an app on your phone.'),
+    ], [turnOn]);
     return box;
   }
 
@@ -395,9 +419,6 @@ class AccountView {
 
   private pinSection(user: PublicUser): HTMLElement {
     const api = this.account!.api;
-    const box = this.tipSection('Screen PIN', 'There are only 10,000 PINs. The server checks it, and 5 wrong tries sign you out. The PIN only unlocks the screen; signing in always needs the password.',
-      h('p', {}, user.pin ? 'Set. The locked screen opens with your 4-digit PIN.' : 'Not set. The locked screen opens with your password.'),
-      h('p', { class: 'hint' }, 'PIN is for convenience. For security, we recommend a password with two-step sign-in.'));
     const pinForm = (remove: boolean) => () => {
       const id = this.identity(user);
       const pin = h('input', { type: 'password', class: 'field', inputmode: 'numeric', autocomplete: 'off', maxlength: 4, pattern: '[0-9]*' });
@@ -411,7 +432,11 @@ class AccountView {
         this.app.shell.toast(remove ? 'PIN removed.' : 'PIN saved.');
       }, remove);
     };
-    box.append(h('div', { class: 'acct-buttons' }, this.button(user.pin ? 'Change PIN...' : 'Set a PIN...', pinForm(false)), ...(user.pin ? [this.button('Remove PIN...', pinForm(true))] : [])));
+    const box = this.tile('pinpad', 'Screen PIN', 'There are only 10,000 PINs. The server checks it, and 5 wrong tries sign you out. The PIN only unlocks the screen; signing in always needs the password.', [
+      h('p', { class: 'acct-state' }, user.pin ? 'Set.' : 'Not set.'),
+      h('p', {}, user.pin ? 'The locked screen opens with your 4-digit PIN.' : 'The locked screen opens with your password.'),
+      h('p', { class: 'hint' }, 'PIN is for convenience. For security, we recommend a password with two-step sign-in.'),
+    ], [this.button(user.pin ? 'Change PIN...' : 'Set a PIN...', pinForm(false)), ...(user.pin ? [this.button('Remove PIN...', pinForm(true))] : [])]);
     return box;
   }
 
