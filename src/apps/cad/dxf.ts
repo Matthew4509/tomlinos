@@ -18,7 +18,8 @@ import {
   COLOUR_NAMES, CONSTRUCTION, CadProblem, DIMENSIONS, GEOMETRY, MAX_TEXT_LENGTH, TEXT, TYPE_NAMES, newDrawing, outlineOf, piecesOf, shapeBox,
   type Drawing, type Ent, type Layer, type LineType, type Shape, type Units,
 } from './model.ts';
-import { arcLetters, dimParts, defaultStyle, type NoteText, type TextShape } from './notes.ts';
+import { arcLetters, dimParts, defaultStyle, textShapeStrokes, type NoteText, type TextShape } from './notes.ts';
+import { boxAsText, boxGoesAsLines } from './textbox.ts';
 
 // ---- Arcs for curves -----------------------------------------------------------------------------------------------
 
@@ -699,6 +700,11 @@ function buildDxf(d: Drawing, o: DxfOptions, version: DxfVersion, ascii: boolean
     });
   };
   const textShape = (layer: string, t: TextShape) => {
+    if (t.box && !t.arc) {
+      // A box only made bigger stays text; stretched or bent, its letters go out as the lines they are drawn with.
+      const plain = boxAsText(t);
+      return plain ? text(layer, plain) : strokes(layer, textShapeStrokes(t));
+    }
     if (!t.arc) return text(layer, { text: t.text, p: t.p, h: t.h, angle: t.angle, align: t.align });
     for (const l of arcLetters(t)) if (l.ch.trim()) text(layer, { text: l.ch, p: l.at, h: t.h, angle: l.angle, align: 'left' as Align });
   };
@@ -988,6 +994,8 @@ function buildDxf(d: Drawing, o: DxfOptions, version: DxfVersion, ascii: boolean
   if (modern && ents.some(e => e.type === 'ellipse' || e.type === 'spline')) notes.push('Ellipses and curves are written as true ellipses and curves (a curve as the exact cubic spline CAD Draft draws).');
   if (d.ents.some(e => e.type === 'dim')) notes.push('Dimensions are written as plain lines and text.');
   if (d.ents.some(e => e.type === 'text') && !o.textAsLines) notes.push('Text is written as text: the other program draws it in its own letters, so its width may differ a little.');
+  const bent = ents.filter(e => e.type === 'text' && boxGoesAsLines(e)).length;
+  if (bent && !o.textAsLines) notes.push(`${bent} stretched or bent text box${bent === 1 ? ' is' : 'es are'} written as polylines in CAD Draft's own letters (the other program's letters could not follow a stretch or a bend).`);
   if (leftHidden) notes.push(`${leftHidden} item${leftHidden === 1 ? '' : 's'} on hidden layers left out.`);
   if (leftXlines) notes.push(`${leftXlines} construction line${leftXlines === 1 ? '' : 's'} left out.`);
   if (!modern && d.layers.some(l => /[a-z]/.test(l.name))) notes.push('Layer names are written in capitals (R12 has no small letters).');

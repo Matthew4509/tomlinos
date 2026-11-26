@@ -12,7 +12,8 @@ import { DXF_LINE_TYPES, type DxfOptions } from '../dxf.ts';
 import { textStrokes } from '../font.ts';
 import { P, TAU, curveThrough, isFull, normAngle, rotatePt, type Box, type Pt } from '../geom.ts';
 import { shapeBox, type Drawing, type LineType } from '../model.ts';
-import { arcLetters, dimParts, type NoteText } from '../notes.ts';
+import { arcLetters, dimParts, textShapeStrokes, type NoteText } from '../notes.ts';
+import { boxAsText, boxGoesAsLines } from '../textbox.ts';
 
 /** AutoCAD's colour numbers for CAD Draft's named layer colours (as the DXF output uses). */
 const ACI: Record<string, number> = {
@@ -443,7 +444,15 @@ export function writeDwg(d: Drawing, o: DwgWriteOptions): DwgWritten {
         });
         break;
       case 'text':
-        if (!e.arc) text(layer, { text: e.text, p: e.p, h: e.h, angle: e.angle, align: e.align });
+        if (e.box && !e.arc) {
+          // A box only made bigger stays text; stretched or bent, its letters go out as the lines they are drawn with.
+          const plain = boxAsText(e);
+          if (plain) text(layer, plain);
+          else for (const s of textShapeStrokes(e)) {
+            if (s.length === 2) line(layer, s[0], s[1]);
+            else if (s.length > 2) poly(layer, s, s.map(() => 0), false);
+          }
+        } else if (!e.arc) text(layer, { text: e.text, p: e.p, h: e.h, angle: e.angle, align: e.align });
         else for (const l of arcLetters(e)) if (l.ch.trim()) text(layer, { text: l.ch, p: l.at, h: e.h, angle: l.angle, align: 'left' });
         break;
       case 'dim': {
@@ -795,6 +804,8 @@ export function writeDwg(d: Drawing, o: DwgWriteOptions): DwgWritten {
   if (d.ents.some(e => e.type === 'ellipse')) notes.push('Ellipses are written as true ellipses.');
   if (d.ents.some(e => e.type === 'dim')) notes.push('Dimensions are written as plain lines and text.');
   if (d.ents.some(e => e.type === 'text') && !o.textAsLines) notes.push('Text is written as text: the other program draws it in its own letters, so its width may differ a little.');
+  const bent = ents.filter(e => e.type === 'text' && boxGoesAsLines(e)).length;
+  if (bent && !o.textAsLines) notes.push(`${bent} stretched or bent text box${bent === 1 ? ' is' : 'es are'} written as polylines in CAD Draft's own letters (the other program's letters could not follow a stretch or a bend).`);
   if (leftHidden) notes.push(`${leftHidden} item${leftHidden === 1 ? '' : 's'} on hidden layers left out.`);
   if (leftXlines) notes.push(`${leftXlines} construction line${leftXlines === 1 ? '' : 's'} left out.`);
   else if (o.construction && ents.some(e => e.type === 'xline')) notes.push('Construction lines are written as endless construction lines (XLINE).');

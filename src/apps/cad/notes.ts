@@ -3,13 +3,16 @@
 // the drawing, not part of the shape: snaps, trim, extend and offset leave them alone.
 import { lineWidth, letterAdvances, letterStrokes, textStrokes, LINE_SPACING, type Align } from './font.ts';
 import { P, TAU, add, angleOf, dirOf, dist, dot, mid, mul, normAngle, perp, polar, rotatePt, sub, unit, type Piece, type Pt } from './geom.ts';
+import { boxStrokes, distToBoxText, type TextBox } from './textbox.ts';
 
 export type DimKind = 'linear' | 'aligned' | 'radius' | 'diameter' | 'angle' | 'leader';
 
 /**
  * A text: its first line's foot at p (left end, middle or right end, by `align`), h high (the capitals), turned by
  * `angle`. With `arc`, its letters follow a circle round c instead: centred, started or ended at p, reading
- * clockwise along the outside (cw) or anticlockwise along the inside.
+ * clockwise along the outside (cw) or anticlockwise along the inside. With `box` (and no arc), the words fill a box:
+ * p is its bottom-left corner, `angle` its turn, h the capital height that fills its height (worked out again when
+ * the box changes), and `align` how the lines line up inside it; the box may be bent (textbox.ts).
  */
 export interface TextShape {
   type: 'text';
@@ -19,6 +22,7 @@ export interface TextShape {
   angle: number;
   align: Align;
   arc?: { c: Pt; r: number; cw: boolean };
+  box?: TextBox;
 }
 
 /**
@@ -103,12 +107,14 @@ function strokesToPieces(strokes: Pt[][]): Piece[] {
 
 /** The strokes of a text as lists of points (what a cutter would follow). */
 export function textShapeStrokes(t: TextShape): Pt[][] {
+  if (t.box && !t.arc) return boxStrokes(t);
   if (!t.arc) return textStrokes(t.text, t.p, t.h, t.angle, t.align);
   return arcLetters(t).flatMap(l => letterStrokes(l.ch, l.at, t.h, l.angle));
 }
 
 /** How far q is from a text's box (0 inside it): a text is picked anywhere over its letters, not only on a stroke. */
 export function distToText(t: TextShape, q: Pt): number {
+  if (t.box && !t.arc) return distToBoxText(t, q);
   if (t.arc) {
     let best = Infinity;
     for (const l of arcLetters(t)) best = Math.min(best, distToBox(rotatePt(q, l.at, -l.angle), l.at, 0, lineWidth(l.ch, t.h), -0.33 * t.h, t.h));

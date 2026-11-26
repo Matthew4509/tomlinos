@@ -29,7 +29,10 @@ import { explode, join } from './cad/modify.ts';
 import { DEFAULT_DXF_VERSION, DXF_VERSIONS, DXF_VERSION_LIST, allFinite, decodeText, isDxfVersion, readDxf, withExtension, writeDxf, type DxfVersion } from './cad/dxf.ts';
 import { writeSvg } from './cad/svg.ts';
 import type { Align } from './cad/font.ts';
-import { defaultStyle, dimParts, textShapeStrokes, type DimShape } from './cad/notes.ts';
+import { defaultStyle, dimParts, textShapeStrokes, type DimShape, type TextShape } from './cad/notes.ts';
+import {
+  WARP_NAMES, WARP_PRESETS, asBox, bendGuides, boxFrame, boxToWorld, dragGrip, envelopeOutline, gripAt, gripsOf, isFlat, presetWarp, type Grip, type Warp, type WarpPreset,
+} from './cad/textbox.ts';
 import { MAX_SCALE, MIN_SCALE, fitView, render, toWorld, type View } from './cad/view.ts';
 import { OPACITIES, PHOTO_SIDE, photoBox, photoScale, pixelMatrix, placePhoto, planStraighten, warpPixels, type Photo } from './cad/photo.ts';
 import { CAD_PAPERS, CAD_SCALES, DEFAULT_SETUP, PT, drawCadPage, planPrint, scaleText, type CadPaper, type PageExtras, type PrintPlan, type PrintSetup } from './cad/print.ts';
@@ -276,6 +279,10 @@ export const cadApp: AppDef = {
     let snapAt = 0;
     let hover: number | null = null;
     let box: { a: Pt; b: Pt; crossing: boolean } | null = null;
+    /** The text box being bent by hand (its envelope's control points show as handles), if any. */
+    let bendId: number | null = null;
+    /** A text box handle being dragged: the handle, where the drag began (screen and drawing), the text as it was, and as it is now. */
+    let gripDrag: { grip: Grip; start: Pt; from: Pt; was: Ent & TextShape; now: TextShape | null } | null = null;
 
     const layerMap = () => new Map(drawing.layers.map(l => [l.name, l]));
     const layerOf = (name: string) => drawing.layers.find(l => l.name === name);
@@ -420,6 +427,8 @@ export const cadApp: AppDef = {
       },
       askPolar,
       askText,
+      askWarp,
+      bendByHand,
       askDim,
       style: () => drawing.style,
       noteLayer(kind) {
@@ -506,6 +515,12 @@ export const cadApp: AppDef = {
       }
     }
     function cancel(): void {
+      if (!tool && bendId !== null) {
+        bendId = null;
+        say('Bending by hand: ended (the text box stays chosen).');
+        paint();
+        return;
+      }
       if (tool) endTool();
       else if (selected.size) {
         selected.clear();
@@ -690,6 +705,15 @@ export const cadApp: AppDef = {
       const closed = made.filter(m => m.shape.type === 'poly' && m.shape.closed).length;
       ctx.select(drawing.ents.slice(-made.length).map(e => e.id));
       say(`${removed.length} items joined into ${made.length} geometr${made.length === 1 ? 'y' : 'ies'} (${closed} closed)${leftOut ? `; ${leftOut} left as they were (ellipses, curves, circles or closed shapes are not joined)` : ''}.`);
+    }
+    /** Warp or bend the one chosen text (not one round an arc); with none chosen, a tool asks for it. */
+    function warpChosen(byHand: boolean): void {
+      const sel = chosenEnts();
+      const t = sel.length === 1 && sel[0].type === 'text' && !sel[0].arc ? sel[0] : null;
+      if (!t) return startTool(byHand ? 'text-bend' : 'text-warp');
+      if (tool) endTool();
+      if (byHand) bendByHand(t);
+      else void askWarp(t);
     }
     function explodeChosen(): void {
       const picks = chosenEnts().filter(e => e.type === 'poly' || isNote(e));
@@ -888,37 +912,181 @@ export const cadApp: AppDef = {
         : h('textarea', { class: 'field cad-words', rows: '3', 'aria-label': 'Words', spellcheck: 'false' });
       if (!o.arc) words.value = o.text;
       const height = numberRow(`Height of the capitals (${unitWord()})`, Number(f(o.h)));
-      const rows: HTMLElement[] = [h('label', { class: 'cad-row cad-row-top' }, h('span', {}, 'Words'), words), height.row];
+      const rows: HTMLElement[] = [h('label', { class: 'cad-row cad-row-top' }, h('span', {}, 'Words'), words)];
+      // A text box's letters are as high as the box makes them.
+      if (!o.box) rows.push(height.row);
       let angle: { input: HTMLInputElement; row: HTMLElement } | null = null;
       const alignSel = h('select', { class: 'field', 'aria-label': 'Line up' },
-        h('option', { value: 'left' }, o.arc ? 'Starts at the point' : 'Left end at the point'),
-        h('option', { value: 'centre' }, 'Middle at the point'),
-        h('option', { value: 'right' }, o.arc ? 'Ends at the point' : 'Right end at the point'));
+        h('option', { value: 'left' }, o.box ? 'Lines to the left' : o.arc ? 'Starts at the point' : 'Left end at the point'),
+        h('option', { value: 'centre' }, o.box ? 'Lines in the middle' : 'Middle at the point'),
+        h('option', { value: 'right' }, o.box ? 'Lines to the right' : o.arc ? 'Ends at the point' : 'Right end at the point'));
       alignSel.value = o.align ?? 'left';
       const readSel = h('select', { class: 'field', 'aria-label': 'Reads' },
         h('option', { value: 'cw' }, 'Clockwise, round the outside (over the top)'),
         h('option', { value: 'ccw' }, 'Anticlockwise, along the inside (under the bottom)'));
       readSel.value = o.cw === false ? 'ccw' : 'cw';
       if (!o.plain) {
-        if (!o.arc) {
+        if (!o.arc && !o.box) {
           angle = numberRow('Angle (degrees, anticlockwise)', Number(f(((o.angle ?? 0) * 180) / Math.PI)));
           rows.push(angle.row);
         }
         rows.push(h('label', { class: 'cad-row' }, h('span', {}, 'Line up'), alignSel));
         if (o.arc) rows.push(h('label', { class: 'cad-row' }, h('span', {}, 'Reads'), readSel));
       }
+      if (o.box) rows.push(h('p', { class: 'dialog-detail' }, 'The words fill the box. Choose the box, then drag its square handles to stretch it (Shift keeps its proportions), the round one above it to turn it, or inside it to move it.'));
       rows.push(h('p', { class: 'dialog-detail' }, 'Drawn in CAD Draft’s own single-line letters (each letter one stroke wide, as an engraving cutter follows it). Type %%d for °, %%c for Ø, %%p for ±.'));
       return askForm<TextAnswer>(o.title, rows, () => {
         const t = decodeText(words.value.replace(/\r/g, '').replace(/\s+$/, ''));
         if (!t.trim()) return 'Type some words.';
         if (t.length > 10000) return 'At most 10,000 letters.';
-        const hv = parseNumber(height.input.value);
+        const hv = o.box ? o.h : parseNumber(height.input.value);
         if (hv === null || !(hv > 0)) return 'The height must be a number above 0.';
         const av = angle ? parseNumber(angle.input.value) : 0;
         if (av === null) return 'The angle must be a number of degrees.';
         return { text: t, h: hv, angle: angle ? normAngle((av * Math.PI) / 180) : o.angle ?? 0, align: (o.plain ? 'left' : alignSel.value) as Align, cw: readSel.value === 'cw' };
       });
     }
+    // ---- Text boxes: their frame and handles, the Warp box, bending by hand --------------------------------------
+    /** The one chosen item when it is a text box that can be changed (no tool running): it shows its frame and handles. */
+    function framedText(): (Ent & TextShape) | null {
+      if (tool || selected.size !== 1) {
+        if (tool || !selected.has(bendId ?? -1)) bendId = null;
+        return null;
+      }
+      const [id] = selected;
+      const e = live().find(x => x.id === id);
+      if (!e || e.type !== 'text' || !e.box || e.arc) {
+        bendId = null;
+        return null;
+      }
+      if (bendId !== null && bendId !== e.id) bendId = null;
+      return e;
+    }
+    function frameScene(): { outline: Pt[][]; guides: Pt[][]; handles: Array<{ p: Pt; round: boolean }> } | null {
+      const e = framedText();
+      if (!e) return null;
+      const t = gripDrag?.now ?? e;
+      const px = 1 / view.scale;
+      const byHand = bendId === e.id;
+      const handles = gripsOf(t, byHand, px).map(g => ({ p: g.p, round: g.grip.kind !== 'size' }));
+      if (byHand) return { outline: [envelopeOutline(t)], guides: bendGuides(t), handles };
+      const b = t.box!;
+      const outline = [boxFrame(t)];
+      if (!isFlat(b.warp)) outline.push(envelopeOutline(t));
+      const turn = handles[handles.length - 1].p;
+      return { outline, guides: [[boxToWorld(t, P(b.w / 2, b.h)), turn]], handles };
+    }
+    /** Starts bending a text by hand: a plain text becomes a text box first, with its letters where they were. */
+    function bendByHand(e: Ent & TextShape): void {
+      if (e.arc) return problem('Text round an arc cannot be bent: use a plain text or a text box.');
+      if (!e.box) {
+        const { id: _id, layer: _layer, ...shape } = e;
+        ctx.change([{ id: e.id, shape: asBox(shape) }], []);
+      }
+      selected.clear();
+      selected.add(e.id);
+      bendId = e.id;
+      refreshStatus();
+      say('Bend by hand: drag the round handles (four along the bottom curve, four along the top); the letters follow. Esc ends.');
+      paint();
+    }
+    async function askWarp(e: Ent & TextShape): Promise<void> {
+      if (e.arc) return problem('Text round an arc cannot be warped: use a plain text or a text box.');
+      const { id: _id, layer: _layer, ...shape } = e;
+      const base = asBox(shape);
+      const cur = base.box!.warp;
+      const presets: WarpPreset[] = cur?.preset === 'custom' ? [...WARP_PRESETS, 'custom'] : WARP_PRESETS;
+      const presetSel = h('select', { class: 'field', 'aria-label': 'Shape' }, ...presets.map(p => h('option', { value: p }, WARP_NAMES[p])));
+      presetSel.value = cur?.preset ?? 'none';
+      const strength = h('input', { type: 'range', min: '-100', max: '100', step: '1', value: String(cur && cur.preset !== 'custom' && cur.preset !== 'none' ? cur.strength : 50), 'aria-label': 'Strength' });
+      const shownValue = h('span', { class: 'cad-warp-value' });
+      const preview = h('canvas', { width: '320', height: '150', 'aria-label': 'Preview of the bent words' });
+      css(preview, { display: 'block', maxWidth: '100%', background: '#ffffff', border: '1px solid #808080' });
+      const warpNow = (): Warp | undefined => {
+        const p = presetSel.value as WarpPreset;
+        if (p === 'custom') return cur;
+        return p === 'none' ? undefined : presetWarp(p, Number(strength.value));
+      };
+      const draw = () => {
+        const p = presetSel.value;
+        strength.disabled = p === 'none' || p === 'custom';
+        shownValue.textContent = strength.disabled ? '' : ` ${strength.value}`;
+        const c = preview.getContext('2d');
+        if (!c) return;
+        const warp = warpNow();
+        const { warp: _w, ...flatBox } = base.box!;
+        const t: TextShape = { ...base, p: P(0, 0), angle: 0, box: warp ? { ...flatBox, warp } : flatBox };
+        const strokes = textShapeStrokes(t);
+        const edge = envelopeOutline(t);
+        let x0 = Infinity;
+        let x1 = -Infinity;
+        let y0 = Infinity;
+        let y1 = -Infinity;
+        for (const q of [...edge, ...strokes.flat()]) {
+          x0 = Math.min(x0, q.x);
+          x1 = Math.max(x1, q.x);
+          y0 = Math.min(y0, q.y);
+          y1 = Math.max(y1, q.y);
+        }
+        const W = preview.width;
+        const H = preview.height;
+        const k = Math.min((W - 20) / Math.max(x1 - x0, 1e-9), (H - 20) / Math.max(y1 - y0, 1e-9));
+        const ox = (W - (x1 - x0) * k) / 2;
+        const oy = (H - (y1 - y0) * k) / 2;
+        const at = (q: Pt) => P(ox + (q.x - x0) * k, H - oy - (q.y - y0) * k);
+        const trace = (pts: Pt[]) => pts.forEach((q, i) => {
+          const s2 = at(q);
+          if (i) c.lineTo(s2.x, s2.y);
+          else c.moveTo(s2.x, s2.y);
+        });
+        c.fillStyle = '#ffffff';
+        c.fillRect(0, 0, W, H);
+        c.strokeStyle = '#a0a0a0';
+        c.lineWidth = 1;
+        c.setLineDash([4, 3]);
+        c.beginPath();
+        trace(edge);
+        c.closePath();
+        c.stroke();
+        c.setLineDash([]);
+        c.strokeStyle = '#1d4fb8';
+        c.lineWidth = 1.2;
+        c.beginPath();
+        for (const st of strokes) trace(st);
+        c.stroke();
+      };
+      on(presetSel, 'change', draw, signal);
+      on(strength, 'input', draw, signal);
+      const body = h('div', { class: 'cad-dialog' },
+        h('label', { class: 'cad-row' }, h('span', {}, 'Shape'), presetSel),
+        h('label', { class: 'cad-row' }, h('span', {}, 'Strength (-100 to 100)'), strength, shownValue),
+        preview,
+        h('p', { class: 'dialog-detail' }, 'The words bend inside their box. Shape by hand shows the top and bottom curves with handles to drag, starting from the shape chosen here.'));
+      draw();
+      let answer: 'ok' | 'hand' | false;
+      try {
+        answer = await shell.dialogs.ask<'ok' | 'hand' | false>({ title: 'Warp text', body, buttons: [{ label: 'OK', value: 'ok', primary: true }, { label: 'Shape by hand', value: 'hand' }, { label: 'Cancel', value: false }], cancel: false, focus: () => presetSel });
+      } finally {
+        setTimeout(keyboardBack, 0);
+      }
+      if (!answer) return;
+      // The text may have gone while the box was open (Undo, another window's change).
+      const still = drawing.ents.find(x => x.id === e.id);
+      if (!still || still.type !== 'text' || still.arc) return;
+      const warp = warpNow();
+      const { warp: _old, ...plainBox } = base.box!;
+      const next: TextShape = { ...base, box: warp && !isFlat(warp) ? { ...plainBox, warp } : plainBox };
+      ctx.change([{ id: e.id, shape: next }], []);
+      selected.clear();
+      selected.add(e.id);
+      refreshStatus();
+      if (answer === 'hand') {
+        const now = drawing.ents.find(x => x.id === e.id);
+        if (now && now.type === 'text') bendByHand(now);
+      } else say(warp && !isFlat(warp) ? `Text bent: ${WARP_NAMES[warp.preset]}${warp.preset === 'custom' ? '' : ` ${warp.strength}`}.` : 'Text is flat again (still a text box).');
+      paint();
+    }
+
     async function askDim(d: DimShape): Promise<{ text: string; h: number; dp: number } | null> {
       const leader = d.kind === 'leader';
       const words = h('input', { type: 'text', class: 'field', value: d.text, 'aria-label': 'Words', autocomplete: 'off' });
@@ -1747,7 +1915,7 @@ export const cadApp: AppDef = {
         'Typed points: X and Y in their boxes (an empty box is 0), or in the X box x,y   @dx,dy (from the last point)   @length<angle. Numbers may be sums, such as 600/2+15.',
         'CAD menu: trim, extend, break (at a point or between two), fillet and chamfer (two lines or arcs, one corner of a polyline, or every corner), offset (lines, arcs, circles and polylines of them; not ellipses or curves), join lines and arcs into closed geometries, close, set the start point, reverse, explode, and arrows showing which way each runs.',
         'Layers: show, hide, lock, rename, colour, line type, delete, move items onto a layer. Utils: measure a distance or an angle, area and perimeter, list an item, information about the drawing.',
-        'Text (Geometry > Text): words in CAD Draft’s own single-line letters, any height and angle, lined up left, middle or right, several lines, or round an arc or circle. CAD > Explode turns text into lines a cutter can follow.',
+        'Text (Geometry > Text): words in CAD Draft’s own single-line letters, any height and angle, lined up left, middle or right, several lines, or round an arc or circle. A text box (Geometry > Text > Text box, or type tb): drag a box and the words fill it; choose it to stretch it by its square handles (Shift keeps its proportions), turn it by the round one, or drag inside to move it. Warp text bends the words (arch, arcs, bulge, pinch, wave, flag, rise, perspective), and Edit the shape by hand gives the top and bottom curves handles to drag. A stretched or bent box goes into a DXF, SVG or DWG as lines. CAD > Explode turns text into lines a cutter can follow.',
         'Dimensions (Utils > Dimensions): linear (across or up), horizontal, vertical, aligned, radius, diameter, angle and leader notes, on the Dimensions layer. They measure their own points: move or scale one and its number follows (they are not tied to the shapes they measure). Double-click text or a dimension to change it.',
         'DXF: File > Open reads DXF of any release saved as text (from CAM programs, AutoCAD and others); File > Output > CAD > DXF writes a DXF for the CAM program (R12, 2000, 2004, 2007, 2010, 2013 or 2018; the last one chosen is offered next time) or an SVG at full size, a group per layer, for laser and vinyl cutters and Inkscape. What a DXF holds that CAD Draft does not draw (hatches, pictures, 3D) is listed when it opens.',
         'Photo to trace (View > Photo to trace, or the photo button): open a phone photo under the drawing, scale it by clicking two marks a known distance apart (a tape measure in the photo) and typing that distance, line up an edge that should run straight, move it, and draw over it. It stays in the .tcad, can be hidden or made fainter, and never goes into a DXF. A photo taken at a slant: Straighten a slanted photo, then click the four corners of something rectangular lying flat in it (a benchtop, a door, a sheet of A4 at 297 x 210 mm) in order round its edge and type its real width and height; it is redrawn square and to scale. Only what lies flat on that surface comes out true: anything standing up from it (a splashback, a tap) leans.',
@@ -1914,7 +2082,9 @@ export const cadApp: AppDef = {
             preview = [];
           }
         }
+        if (gripDrag?.now) preview = [gripDrag.now];
         render(c, w, hgt, view, {
+          frame: frameScene(),
           ents: drawing.ents, layers: layerMap(), selected, hover, preview, snap: snaps.length && pointerIn ? snaps[snapAt % snaps.length] : null,
           box, grid: gridSpacing, gridOn: settings.gridOn, white: settings.white, units: drawing.units, arrows: settings.arrows, photo: photoScene(),
         });
@@ -2041,6 +2211,16 @@ export const cadApp: AppDef = {
       }
       if (e.button !== 0) return;
       canvas.setPointerCapture(e.pointerId);
+      // A chosen text box: its handles stretch, turn or bend it, and a drag inside it moves it.
+      const framed = framedText();
+      if (framed) {
+        const w = toWorld(view, canvasW(), canvasH(), s);
+        const grip = gripAt(framed, bendId === framed.id, w, 1 / view.scale, (e.pointerType === 'touch' ? 14 : 7) / view.scale);
+        if (grip) {
+          gripDrag = { grip, start: s, from: w, was: framed, now: null };
+          return;
+        }
+      }
       down = { screen: s, world: toWorld(view, canvasW(), canvasH(), s), shift: e.shiftKey || e.ctrlKey };
     }, signal);
     on(canvas, 'pointermove', (e: PointerEvent) => {
@@ -2058,6 +2238,20 @@ export const cadApp: AppDef = {
       if (panning) {
         view = { ...panning.view, cx: panning.view.cx - (s.x - panning.x) / view.scale, cy: panning.view.cy + (s.y - panning.y) / view.scale };
         cursor = toWorld(view, canvasW(), canvasH(), s);
+        refreshXY();
+        paint();
+        return;
+      }
+      if (gripDrag) {
+        if (gripDrag.now || dist(gripDrag.start, s) > (e.pointerType === 'touch' ? 10 : 3)) {
+          const g = gripDrag;
+          const onGrid = settings.gridSnap && !snapsOff && g.grip.kind !== 'turn';
+          const toGrid = (q: Pt) => P(Math.round(q.x / gridSpacing) * gridSpacing, Math.round(q.y / gridSpacing) * gridSpacing);
+          // On the grid, a move goes by whole grid steps from where it was picked up.
+          const from = onGrid && g.grip.kind === 'move' ? toGrid(g.from) : g.from;
+          const next = dragGrip(g.was, g.grip, from, onGrid ? toGrid(cursor) : cursor, e.shiftKey);
+          if (allFinite(next)) g.now = next;
+        }
         refreshXY();
         paint();
         return;
@@ -2086,6 +2280,17 @@ export const cadApp: AppDef = {
         panning = null;
         canvas.classList.remove('panning');
         updatePointer();
+        return;
+      }
+      if (gripDrag) {
+        const g = gripDrag;
+        gripDrag = null;
+        if (g.now) {
+          ctx.change([{ id: g.was.id, shape: g.now }], []);
+          const kind = g.grip.kind;
+          say(kind === 'move' ? 'Text box moved.' : kind === 'turn' ? 'Text box turned.' : kind === 'bend' ? 'Text bent by hand.' : 'Text box resized.');
+        } else if (g.grip.kind === 'move') clickSelect(s, e.shiftKey || e.ctrlKey);
+        paint();
         return;
       }
       if (!down || e.button !== 0) return;
@@ -2122,6 +2327,7 @@ export const cadApp: AppDef = {
       if (pinch && fingers.size < 2) endPinch();
       down = null;
       box = null;
+      gripDrag = null;
       if (panning) {
         panning = null;
         canvas.classList.remove('panning');
@@ -2257,7 +2463,7 @@ export const cadApp: AppDef = {
         toolBtn('polygon', 'polygon-in'), toolBtn('slot', 'slot'), toolBtn('spline', 'spline'), toolBtn('point', 'point'),
       ] },
       { id: 'notes', name: 'Text and dimensions', tools: [
-        toolBtn('text', 'text'), toolBtn('textArc', 'text-arc'), toolBtn('dimLinear', 'dim-linear'), toolBtn('dimAligned', 'dim-aligned'), toolBtn('dimRadius', 'dim-radius'),
+        toolBtn('text', 'text'), toolBtn('textArc', 'text-arc'), toolBtn('textBox', 'text-box'), btn('textWarp', 'Warp text...', () => warpChosen(false)), toolBtn('dimLinear', 'dim-linear'), toolBtn('dimAligned', 'dim-aligned'), toolBtn('dimRadius', 'dim-radius'),
         toolBtn('dimDiameter', 'dim-diameter'), toolBtn('dimAngle', 'dim-angle'), toolBtn('leader', 'leader'), toolBtn('textEdit', 'text-edit'),
       ] },
       { id: 'modify', name: 'Modify', tools: [
@@ -2601,7 +2807,12 @@ export const cadApp: AppDef = {
       sub_('Polygon', [item('polygon-in'), item('polygon-out')]),
       item('slot'), item('spline'), item('point'),
       { separator: true },
-      sub_('Text', [item('text'), item('text-arc'), item('text-edit')]),
+      sub_('Text', [
+        item('text'), item('text-arc'), item('text-box'), item('text-edit'),
+        { separator: true },
+        { label: 'Warp text...', action: () => warpChosen(false) },
+        { label: 'Edit the shape by hand', checked: bendId !== null, action: () => warpChosen(true) },
+      ]),
       { separator: true },
       sub_('Construction lines', [item('xline-h'), item('xline-v'), item('xline-angle'), item('xline-2p'), item('xline-offset')]),
       sub_('Tangent lines', [item('tan-point'), item('tan-two')]),

@@ -7,6 +7,7 @@ import {
 } from './geom.ts';
 import { defaultStyle, dimLabel, notePieces, type DimShape, type NoteStyle, type TextShape } from './notes.ts';
 import { readPhoto, type Photo } from './photo.ts';
+import { WARP_NAMES, isFlat, readBox } from './textbox.ts';
 
 export type Units = 'mm' | 'inch';
 
@@ -367,7 +368,9 @@ export function describe(e: Ent, u: Units): string[] {
       lines.push(`Through ${fmtPt(e.p, u)} at ${deg(normAngle(angleOf(e.d)))}`);
       break;
     case 'text': {
-      const where = e.arc
+      const where = e.box && !e.arc
+        ? `in a box ${fmt(e.box.w, u)} x ${fmt(e.box.h, u)} ${unitName} from its bottom-left corner, turned ${deg(normAngle(e.angle))}${isFlat(e.box.warp) ? '' : `, bent: ${WARP_NAMES[e.box.warp!.preset]}${e.box.warp!.preset === 'custom' ? '' : ` ${e.box.warp!.strength}`}`}`
+        : e.arc
         ? `round a circle of radius ${fmt(e.arc.r, u)} centred ${fmtPt(e.arc.c, u)}, reading ${e.arc.cw ? 'clockwise along the outside' : 'anticlockwise along the inside'}`
         : `turned ${deg(normAngle(e.angle))}, lined up ${e.align === 'centre' ? 'on its middle' : `on its ${e.align} end`}`;
       lines.push(`“${e.text.replace(/\n/g, ' / ')}”`, `At ${fmtPt(e.p, u)}, ${fmt(e.h, u)} ${unitName} high, ${where}`);
@@ -523,6 +526,11 @@ export function readTcad(text: string): { drawing: Drawing; skipped: number; dam
               const a = r.arc as Record<string, unknown>;
               if (!(num(a.r) > 0)) throw new CadProblem('a text round a circle in it has no radius');
               t.arc = { c: pt(a.c), r: num(a.r), cw: a.cw !== false };
+            } else if (r.box !== undefined) {
+              // Words that fill a box (and may be bent): a drawing from before boxes has none and opens as it was.
+              const box = readBox(r.box);
+              if (typeof box === 'string') throw new CadProblem(box);
+              if (box) t.box = box;
             }
             s = t;
             break;

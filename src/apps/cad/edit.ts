@@ -7,6 +7,7 @@ import {
 } from './geom.ts';
 import { endsOf, outlineOf, shapeBox, type Ent, type Shape } from './model.ts';
 import { distToText, readable } from './notes.ts';
+import { boxToWorld, flipWarpAcross, flipWarpUp } from './textbox.ts';
 
 /** Applies a point change to every point of a shape that is a point (not a length or a direction). */
 function mapPoints(s: Shape, f: (p: Pt) => Pt): Shape {
@@ -58,6 +59,7 @@ export function rotateShape<S extends Shape>(s: S, c: Pt, angle: number): S {
 export function mirrorShape<S extends Shape>(s: S, a: Pt, b: Pt): S {
   const axis = angleOf(sub(b, a));
   const moved = mapPoints(s, p => mirrorPt(p, a, b));
+  const boxMid = s.type === 'text' && s.box && !s.arc ? mirrorPt(boxToWorld(s, P(s.box.w / 2, s.box.h / 2)), a, b) : null;
   switch (moved.type) {
     case 'arc': {
       const a0 = normAngle(2 * axis - moved.a1);
@@ -77,6 +79,13 @@ export function mirrorShape<S extends Shape>(s: S, a: Pt, b: Pt): S {
       const a = normAngle(angleOf(mirrorDir(P(Math.cos(moved.angle), Math.sin(moved.angle)), axis)));
       const r = readable(a);
       const flip = Math.abs(r - a) > 1e-9;
+      if (moved.box && boxMid) {
+        // A box keeps its size round its middle's mirror image; its bend is seen upside down, or back to front if the
+        // box turned round to keep reading the right way up.
+        const bx = moved.box;
+        const warp = bx.warp ? (flip ? flipWarpAcross(bx.warp) : flipWarpUp(bx.warp)) : undefined;
+        return { ...moved, angle: r, p: sub(boxMid, rotatePt(P(bx.w / 2, bx.h / 2), P(0, 0), r)), box: warp ? { ...bx, warp } : bx } as S;
+      }
       return { ...moved, angle: r, align: flip && moved.align !== 'centre' ? (moved.align === 'left' ? 'right' : 'left') : moved.align } as S;
     }
     case 'dim': {
@@ -98,8 +107,15 @@ export function scaleShape<S extends Shape>(s: S, c: Pt, k: number): S {
       return { ...moved, r: moved.r * k } as S;
     case 'ellipse':
       return { ...moved, m: mul(moved.m, k) } as S;
-    case 'text':
+    case 'text': {
+      if (moved.box && !moved.arc) {
+        // A box grows from the same place; scaled by a minus number it is turned half round about the centre.
+        const bx = { ...moved.box, w: moved.box.w * Math.abs(k), h: moved.box.h * Math.abs(k) };
+        const p = k < 0 ? add(c, mul(sub(boxToWorld(s as Extract<Shape, { type: 'text' }>, P(moved.box.w, moved.box.h)), c), k)) : moved.p;
+        return { ...moved, p, h: moved.h * Math.abs(k), angle: k < 0 ? normAngle(moved.angle + Math.PI) : moved.angle, box: bx } as S;
+      }
       return { ...moved, h: moved.h * Math.abs(k), ...(moved.arc ? { arc: { ...moved.arc, r: moved.arc.r * Math.abs(k) } } : {}) } as S;
+    }
     case 'dim':
       return { ...moved, h: moved.h * Math.abs(k), arrow: moved.arrow * Math.abs(k) } as S;
     default:
