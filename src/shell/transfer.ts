@@ -6,6 +6,7 @@ import { h, on } from '../core/dom.ts';
 import { formatSize, plural } from '../core/format.ts';
 import { zipStore, type ZipEntry } from '../core/zip.ts';
 import { cleanName, joinPath, nameKey, splitPath, uniqueName } from '../fs/names.ts';
+import { destinationReason } from './actions.ts';
 import { describeError } from './dialogs.ts';
 import type { Failure } from './trash.ts';
 import type { Shell } from './types.ts';
@@ -33,9 +34,9 @@ export function planUpload(existing: string[], items: Array<{ kind: 'file' | 'di
   const dirMap = new Map<string, string[]>();
   const dirs: string[][] = [];
   const keyOf = (parts: string[]) => parts.map(nameKey).join('\0');
-  const claim = (parent: string[], wanted: string): string => {
+  const claim = (parent: string[], wanted: string, folder = false): string => {
     const list = used.get(keyOf(parent)) ?? [];
-    const name = uniqueName(cleanName(wanted), list);
+    const name = uniqueName(cleanName(wanted), list, folder);
     list.push(name);
     used.set(keyOf(parent), list);
     return name;
@@ -49,7 +50,7 @@ export function planUpload(existing: string[], items: Array<{ kind: 'file' | 'di
         clean = known;
         continue;
       }
-      clean = [...clean, claim(clean, original[i])];
+      clean = [...clean, claim(clean, original[i], true)];
       dirMap.set(prefix, clean);
       dirs.push(clean);
     }
@@ -220,6 +221,11 @@ export class Transfers {
   }
 
   async upload(picked: Picked[], destFolder: string, problems: Failure[] = []): Promise<void> {
+    const refused = destinationReason(destFolder);
+    if (refused) {
+      await this.shell.dialogs.alert('Cannot upload here', refused);
+      return;
+    }
     const failures: Failure[] = [...problems];
     let saved = 0;
     const job = new Job(this.host, 'Uploading');

@@ -77,10 +77,11 @@ export function splitExtension(name: string): [string, string] {
 }
 
 /** The first of "name", "name (2)", "name (3)"... not already taken. A name near the 255-byte limit is shortened to make room. */
-export function uniqueName(name: string, taken: Iterable<string>): string {
+export function uniqueName(name: string, taken: Iterable<string>, folder = false): string {
   const used = new Set([...taken].map(nameKey));
   if (!used.has(nameKey(name))) return name;
-  const [base, ext] = splitExtension(name);
+  // A folder's dot is part of its name ("Project v1.5 (2)"), not a file ending.
+  const [base, ext] = folder ? [name, ''] : splitExtension(name);
   const bytes = new TextEncoder();
   for (let n = 2; ; n++) {
     const tail = ` (${n})${ext}`;

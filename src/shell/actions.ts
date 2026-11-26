@@ -24,6 +24,15 @@ export function protectedReason(path: string): string | null {
   return null;
 }
 
+/**
+ * Why nothing may be put into `folder`, or null. The desktop's own System folder takes nothing from a person: what was
+ * put there could never be deleted, moved, copied or downloaded again.
+ */
+export function destinationReason(folder: string): string | null {
+  const parts = splitPath(folder);
+  return parts.length && nameKey(parts[0]) === 'system' ? 'The System folder belongs to the desktop itself; nothing can be put there. Choose another folder.' : null;
+}
+
 export class FileActions {
   private shell: Shell;
 
@@ -41,6 +50,11 @@ export class FileActions {
 
   /** A new folder or empty text file with a free name; returns its entry so the view can start renaming it. */
   async create(kind: 'folder' | 'text' | 'sheet' | 'link', folder: string): Promise<Entry | null> {
+    const refused = destinationReason(folder);
+    if (refused) {
+      await this.shell.dialogs.alert('Cannot make that here', refused);
+      return null;
+    }
     try {
       if (kind === 'link') {
         const address = await this.shell.dialogs.prompt({ title: 'New web link', label: 'Web address (starting https://)', ok: 'Next', check: v => (webAddress(v) ? null : 'Type a full web address, starting https:// or http://') });
@@ -51,7 +65,7 @@ export class FileActions {
         return await this.shell.fs.writeFile(joinPath(folder, name), new TextEncoder().encode(`[InternetShortcut]\r\nURL=${url.href}\r\n`), { mustBeNew: true });
       }
       const taken = (await this.shell.fs.list(folder, true)).map(e => e.name);
-      if (kind === 'folder') return await this.shell.fs.mkdir(joinPath(folder, uniqueName('New folder', taken)));
+      if (kind === 'folder') return await this.shell.fs.mkdir(joinPath(folder, uniqueName('New folder', taken, true)));
       // The spreadsheet's code loads only when a spreadsheet is made or opened, not with the page.
       if (kind === 'sheet') {
         const { Workbook } = await import('../apps/sheet/workbook.ts');
@@ -189,6 +203,11 @@ export class FileActions {
   async paste(destFolder: string): Promise<void> {
     const clip = this.shell.clipboard;
     if (!clip) return;
+    const refused = destinationReason(destFolder);
+    if (refused) {
+      await this.shell.dialogs.alert('Cannot paste here', refused);
+      return;
+    }
     try {
       if (clip.mode === 'copy') {
         await this.shell.fs.copy(clip.paths, destFolder);
@@ -208,6 +227,11 @@ export class FileActions {
    */
   async moveInto(paths: string[], destFolder: string): Promise<void> {
     const fs = this.shell.fs;
+    const refused = destinationReason(destFolder);
+    if (refused) {
+      await this.shell.dialogs.alert('Cannot move there', refused);
+      return;
+    }
     const failures: Failure[] = [];
     for (const path of paths) {
       const name = baseName(path);

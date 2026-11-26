@@ -86,9 +86,21 @@ function picker(shell: Shell, options: PickOptions, save: SaveOptions | null, fo
       }, abort.signal);
       return row;
     }));
+    // From the list itself (Tab lands there), the arrow keys, Home and End reach the rows.
     if (!entries.length) list.append(h('p', { class: 'pick-empty' }, accept.size ? 'Nothing here of the right kind.' : 'This folder is empty.'));
     list.dispatchEvent(new Event('change', { bubbles: true }));
   }
+
+  on(list, 'keydown', (event: KeyboardEvent) => {
+    if (event.target !== list) return;
+    const rows = [...list.querySelectorAll<HTMLElement>('.pick-row')];
+    if (!rows.length || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const picked = rows.find(r => r.getAttribute('aria-selected') === 'true');
+    const row = event.key === 'End' || (event.key === 'ArrowUp' && !picked) ? rows[rows.length - 1] : event.key === 'Home' || !picked ? rows[0] : picked;
+    row.click();
+    row.focus();
+  }, abort.signal);
 
   function choose(row: HTMLElement, e: Entry) {
     for (const r of list.querySelectorAll('.pick-row')) r.setAttribute('aria-selected', String(r === row));

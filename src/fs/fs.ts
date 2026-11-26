@@ -480,7 +480,7 @@ export class FileSystem {
         const dest = await c.folder(destKey);
         const clash = findEntry(dest, entry.name);
         if (clash && !options.keepBoth) throw new FsError(`"${toFolder}" already has something called "${clash.name}". Nothing was moved.`);
-        const placed = clash ? { ...entry, name: uniqueName(entry.name, dest.entries.map(e => e.name)) } : entry;
+        const placed = clash ? { ...entry, name: uniqueName(entry.name, dest.entries.map(e => e.name), entry.kind === 'folder') } : entry;
         dest.entries.push(placed);
         c.saveFolder(destKey, dest);
         moved.push({ ...placed });
@@ -502,7 +502,7 @@ export class FileSystem {
           throw new FsError(`"${entry.name}" cannot be copied into itself.`);
         }
         const dest = await c.folder(destKey);
-        const copy = await this.copyEntry(c, entry, uniqueName(entry.name, dest.entries.map(e => e.name)));
+        const copy = await this.copyEntry(c, entry, uniqueName(entry.name, dest.entries.map(e => e.name), entry.kind === 'folder'));
         dest.entries.push(copy);
         c.saveFolder(destKey, dest);
         copies.push({ ...copy });

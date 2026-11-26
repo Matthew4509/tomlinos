@@ -9,6 +9,7 @@ import { createFolderView } from '../shell/foldview.ts';
 import { icon } from '../shell/icons.ts';
 import { MAX_HITS, searchFiles } from '../shell/search.ts';
 import type { AppDef } from '../shell/types.ts';
+import { destinationReason } from '../shell/actions.ts';
 import { APPS } from './catalog.ts';
 
 export const explorerApp: AppDef = {
@@ -61,6 +62,8 @@ export const explorerApp: AppDef = {
         nodes.push(h('span', { class: 'crumb-sep', 'aria-hidden': 'true' }, '›'), make(part, joinPath(...parts.slice(0, i + 1))));
       });
       crumbs.replaceChildren(...nodes);
+      // A deep path keeps the folder you are in visible: the bar shows its end, as a file manager does.
+      requestAnimationFrame(() => (crumbs.scrollLeft = crumbs.scrollWidth));
       const title = parts.length ? parts[parts.length - 1] : 'This desktop';
       app.setTitle(title);
       app.setIcon(parts.length ? 'folder' : 'files');
@@ -77,11 +80,14 @@ export const explorerApp: AppDef = {
     // ---- Search ----
     let searching: AbortController | null = null;
     function endSearch(): void {
+      const was = searching !== null || !results.hidden;
       searching?.abort();
       searching = null;
       results.hidden = true;
       results.replaceChildren();
       body.hidden = false;
+      // The status bar goes back to the folder's own count, not the last "found" line.
+      if (was) void view.refresh();
     }
     async function runSearch(): Promise<void> {
       const query = search.value.trim();
@@ -222,26 +228,42 @@ export const explorerApp: AppDef = {
       } else if (event.key === 'Enter') {
         event.preventDefault();
         const typed = address.value.trim().replace(/^This desktop/i, '');
+        // While a message about the path is up, the box stays open with what was typed, ready to correct.
+        const tell = async (say: () => Promise<void>) => {
+          asking = true;
+          try {
+            await say();
+          } finally {
+            asking = false;
+          }
+          css(crumbs, { display: 'none' });
+          css(address, { display: null });
+          address.focus();
+        };
         let target: string;
         try {
           target = joinPath(typed);
+          const refused = destinationReason(target);
+          if (refused) return await tell(() => shell.dialogs.alert('That folder is not for files', refused));
           const entry = await shell.fs.stat(target);
           if (target !== '/' && entry?.kind !== 'folder') {
-            await shell.dialogs.alert('No such folder', entry ? `“${target}” is a file, not a folder.` : `There is no folder called “${target}”.`, 'Check the spelling, or click a folder in the list.');
-            address.focus();
-            return;
+            return await tell(() => shell.dialogs.alert('No such folder', entry ? `“${target}” is a file, not a folder.` : `There is no folder called “${target}”.`, 'Check the spelling, or click a folder in the list.'));
           }
+          // The folder's names as they are spelt, not as typed ("/documents" opens "Documents").
+          const parts = splitPath(target);
+          const real: string[] = [];
+          for (let i = 0; i < parts.length; i++) real.push((await shell.fs.stat(joinPath(...parts.slice(0, i + 1))))?.name ?? parts[i]);
+          target = joinPath(...real);
         } catch (error) {
-          await shell.report('Could not open that path', error);
-          address.focus();
-          return;
+          return await tell(() => shell.report('Could not open that path', error));
         }
         stopEditing();
         go(target);
         view.focus();
       }
     }, app.signal);
-    on(address, 'blur', () => stopEditing(), app.signal);
+    let asking = false;
+    on(address, 'blur', () => !asking && stopEditing(), app.signal);
     on(uploadBtn, 'click', (event: MouseEvent) => shell.transfers.choose(event.shiftKey ? 'folder' : 'files', path), app.signal);
     on(downloadBtn, 'click', () => {
       const chosen = view.selectedPaths();
