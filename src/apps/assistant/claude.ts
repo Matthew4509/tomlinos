@@ -6,7 +6,7 @@ import { h, on } from '../../core/dom.ts';
 import type { ServiceApi } from '../../net/service.ts';
 import type { DialogLayer } from '../../shell/dialogs.ts';
 import type { ChatTurn } from './engine.ts';
-import { keyTile, showCostLog } from './keytile.ts';
+import { confirmRemoveKey, keyTile, showCostLog } from './keytile.ts';
 
 export interface ClaudeModel {
   id: string;
@@ -199,6 +199,7 @@ export function claudeSection(api: ServiceApi | null, dialogs: DialogLayer, sign
   if (api) {
     on(tile.el, 'click', () => void openDialog(), signal);
     on(forgetBtn, 'click', async () => {
+      if (!(await confirmRemoveKey(dialogs, 'Claude'))) return;
       formMsg.textContent = 'Removing...';
       try {
         await api.call('forget', { body: {} });

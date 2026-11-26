@@ -871,6 +871,7 @@ await step('your own Claude key in Settings › AI: checked before it is kept, n
 
   await c.getByRole('button', { name: 'Claude settings...' }).click();
   await c.getByRole('button', { name: 'Remove my key' }).click();
+  await page.locator('.dialog', { hasText: 'Remove your Claude key?' }).getByRole('button', { name: 'Remove', exact: true }).click();
   await state().filter({ hasText: 'No key saved yet' }).waitFor({ timeout: 10000 });
   ok(await c.getByRole('button', { name: 'Use Claude' }).isDisabled(), 'removed: Use Claude is off');
   // The three refusals asked for above (a key of the wrong shape, a refused key, the $0 limit) show in the browser's
@@ -893,6 +894,7 @@ const setClaudeKey = async key => {
     await c.locator('.ai-device').filter({ hasText: 'ending wxyz' }).waitFor({ timeout: 15000 });
   } else {
     await c.getByRole('button', { name: 'Remove my key' }).click();
+    await page.locator('.dialog', { hasText: 'Remove your Claude key?' }).getByRole('button', { name: 'Remove', exact: true }).click();
     await c.locator('.ai-device').filter({ hasText: 'No key saved yet' }).waitFor({ timeout: 10000 });
   }
   await closeAll();

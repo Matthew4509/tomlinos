@@ -227,12 +227,14 @@ function appstore_fetch_zip(array $app, string $to): void
 }
 
 /** Downloads, checks and unpacks one app onto this server (new, or a newer version). Returns its record. */
-function appstore_download(array $app, string $dataDir, string $webRoot): array
+/** $commit, when given, runs once the download is checked and unpacked, just before it goes into place (the owner's
+ * two-step code is used up there); when it throws, what was unpacked is thrown away and nothing is changed. */
+function appstore_download(array $app, string $dataDir, string $webRoot, ?callable $commit = null): array
 {
-    return appstore_locked($dataDir, static fn (): array => appstore_download_locked($app, $dataDir, $webRoot));
+    return appstore_locked($dataDir, static fn (): array => appstore_download_locked($app, $dataDir, $webRoot, $commit));
 }
 
-function appstore_download_locked(array $app, string $dataDir, string $webRoot): array
+function appstore_download_locked(array $app, string $dataDir, string $webRoot, ?callable $commit = null): array
 {
     foreach (['zip' => 'zip (opens the app)', 'openssl' => 'openssl (secure downloads)'] as $ext => $why) {
         if (!extension_loaded($ext)) {
@@ -255,6 +257,14 @@ function appstore_download_locked(array $app, string $dataDir, string $webRoot):
         appstore_unpack($app, $zipPath, $fresh);
     } finally {
         @unlink($zipPath);
+    }
+    if ($commit !== null) {
+        try {
+            $commit();
+        } catch (Throwable $e) {
+            appstore_rmdir($fresh);
+            throw $e;
+        }
     }
     // Into place: the old copy is moved aside, not deleted, until the list of apps on this server is saved too.
     appstore_rmdir($old);
@@ -343,13 +353,17 @@ function appstore_unpack(array $app, string $zipPath, string $to): void
 }
 
 /** Deletes an app from this server. People who had added it simply no longer see it. */
-function appstore_delete(string $id, string $dataDir, string $webRoot): void
+/** $commit, when given, runs just before the app's folder goes (see appstore_download). */
+function appstore_delete(string $id, string $dataDir, string $webRoot, ?callable $commit = null): void
 {
-    appstore_locked($dataDir, static function () use ($id, $dataDir, $webRoot): void {
+    appstore_locked($dataDir, static function () use ($id, $dataDir, $webRoot, $commit): void {
         $here = appstore_here($dataDir, $webRoot);
         $folder = "$webRoot/apps/$id";
         $going = "$folder.deleting";
         appstore_rmdir($going);
+        if ($commit !== null) {
+            $commit();
+        }
         if (is_dir($folder) && !@rename($folder, $going)) {
             throw new RuntimeException('The app could not be deleted (its folder is in use). Nothing was changed. Try again.');
         }

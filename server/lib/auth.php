@@ -975,17 +975,7 @@ function confirm_identity(string $dataDir, array $user, array $body, bool $spend
     $proof = [];
     if (!empty($user['totp']['enabled'])) {
         $proof = auth_code_proof($dataDir, $user, body_str($body, 'code'));
-        if ($proof === null || ($spend && !auth_locked($dataDir, static function () use ($dataDir, $user, $proof): bool {
-            $users = auth_users($dataDir);
-            $spent = isset($users[$user['id']]) ? auth_proof_spend($users[$user['id']], $proof) : null;
-            if ($spent === null) {
-                return false;
-            }
-            $users[$user['id']] = $spent;
-            auth_save_users($dataDir, $users);
-
-            return true;
-        }))) {
+        if ($proof === null || ($spend && !auth_proof_use($dataDir, $user, $proof))) {
             api_fail(403, AUTH_CODE_USED);
         }
     }
@@ -1033,6 +1023,53 @@ function auth_proof_spend(array $u, array $proof): ?array
     }
 
     return $u;
+}
+
+/**
+ * Uses up a proof from confirm_identity($spend = false) on its own, under the accounts lock, for a change that is not a
+ * write to the accounts (a store app, a system update, an AI model, Chat's settings). Called after every check that can
+ * refuse the change and just before the change itself, so a refused change keeps the code. False when the code was
+ * used meanwhile (by another request). An empty proof (two-step off) changes nothing and is true.
+ */
+function auth_proof_use(string $dataDir, array $user, array $proof): bool
+{
+    if (!$proof) {
+        return true;
+    }
+
+    return auth_locked($dataDir, static function () use ($dataDir, $user, $proof): bool {
+        $users = auth_users($dataDir);
+        $spent = isset($users[$user['id']]) ? auth_proof_spend($users[$user['id']], $proof) : null;
+        if ($spent === null) {
+            return false;
+        }
+        $users[$user['id']] = $spent;
+        auth_save_users($dataDir, $users);
+
+        return true;
+    });
+}
+
+/** As auth_proof_use, but refuses the request (403) when the code was used meanwhile. */
+function auth_proof_use_or_fail(string $dataDir, array $user, array $proof): void
+{
+    if (!auth_proof_use($dataDir, $user, $proof)) {
+        api_fail(403, AUTH_CODE_USED);
+    }
+}
+
+/**
+ * For a library step that spends the proof at its point of no return (lib/appstore.php, lib/updater.php): a callable
+ * that uses the proof up, or throws a RuntimeException with code 403 when it was used meanwhile, so the step undoes what
+ * it staged and the endpoint answers 403.
+ */
+function auth_proof_spender(string $dataDir, array $user, array $proof): callable
+{
+    return static function () use ($dataDir, $user, $proof): void {
+        if (!auth_proof_use($dataDir, $user, $proof)) {
+            throw new RuntimeException(AUTH_CODE_USED, 403);
+        }
+    };
 }
 
 /** Uses up one of a person's recovery codes, under the lock. False when it is not one of their unused codes. */

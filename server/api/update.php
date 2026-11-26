@@ -59,7 +59,10 @@ $body = api_body();
 require_admin($user);
 // Replacing the site's own code, or putting an earlier version back, is as far-reaching as it gets: the owner's own
 // password (and code) first, as adding a person does, so someone at the owner's unlocked, unattended desktop cannot.
-confirm_identity($root, $user, $body);
+// The two-step code is checked here but used up only once the change will go ahead (the release is downloaded and its
+// fingerprint checked; a Go back has a version to put back), so a refused change keeps the code.
+$proof = confirm_identity($root, $user, $body, false);
+$spend = auth_proof_spender($root, $user, $proof);
 @set_time_limit(300);
 try {
     if ($op === 'install') {
@@ -67,13 +70,13 @@ try {
         if (!update_newer($r['version'], update_current_version())) {
             api_fail(409, 'This TOMLIN OS is already up to date.');
         }
-        api_json(['version' => update_install($r, $webRoot)]);
+        api_json(['version' => update_install($r, $webRoot, $spend)]);
     }
-    $v = update_rollback();
+    $v = update_rollback(null, $spend);
     if ($v === null) {
         api_fail(409, 'There is no earlier version kept to go back to.');
     }
     api_json(['version' => $v]);
 } catch (RuntimeException $e) {
-    api_fail(502, $e->getMessage());
+    api_fail($e->getCode() === 403 ? 403 : 502, $e->getMessage());
 }

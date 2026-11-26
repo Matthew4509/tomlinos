@@ -324,14 +324,18 @@ function update_reset_cache(): void
     }
 }
 
-/** Downloads, checks and installs the release. Returns the version now running. Throws RuntimeException. */
-function update_install(array $release, string $webRoot): string
+/**
+ * Downloads, checks and installs the release. Returns the version now running. Throws RuntimeException. $commit, when
+ * given, runs once the download matches its signed fingerprint, just before anything is installed (the owner's two-step
+ * code is used up there); when it throws, nothing is changed.
+ */
+function update_install(array $release, string $webRoot, ?callable $commit = null): string
 {
     if ($missing = update_missing($webRoot)) {
         throw new RuntimeException(implode(' ', $missing) . ' Update by unzipping in cPanel instead.');
     }
 
-    return update_locked(static function (string $dir) use ($release, $webRoot): string {
+    return update_locked(static function (string $dir) use ($release, $webRoot, $commit): string {
         if (($back = update_recover($dir)) !== null) {
             throw new RuntimeException("An earlier update was cut off part-way, so $back was put back first. Press Install again.");
         }
@@ -351,6 +355,9 @@ function update_install(array $release, string $webRoot): string
             }
             if ($n === false || $n > UPDATE_MAX_ZIP || !hash_equals($release['sha256'], (string) @hash_file('sha256', $zipPath))) {
                 throw new RuntimeException('The downloaded update did not match its signed fingerprint, so it was thrown away. Nothing was changed.');
+            }
+            if ($commit !== null) {
+                $commit();
             }
 
             return update_apply_zip($zipPath, $webRoot, $dir);
@@ -599,16 +606,24 @@ function update_host_settings(string $target, string $webRoot, string $new): ?st
  * Puts the last backup back (or finishes an install or Go back that was cut off). Returns the version restored, or null
  * when there is no backup. Throws RuntimeException when a file could not be put back; the backup is then kept.
  */
-function update_rollback(?string $priv = null): ?string
+function update_rollback(?string $priv = null, ?callable $commit = null): ?string
 {
-    return update_locked(static function (string $dir) use ($priv): ?string {
+    return update_locked(static function (string $dir) use ($priv, $commit): ?string {
         $op = update_operation($dir);
         if ($op !== null && $op['op'] !== 'finish') {
+            if ($commit !== null) {
+                $commit();
+            }
+
             return update_recover($dir, $priv);
         }
         update_recover($dir, $priv);
         if (!is_file($dir . '/backup/manifest.json')) {
             return null;
+        }
+        // $commit (the owner's two-step code used up) only once there is a version to go back to.
+        if ($commit !== null) {
+            $commit();
         }
         update_set_operation($dir, ['op' => 'rollback']);
 

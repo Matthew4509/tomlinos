@@ -153,6 +153,33 @@ export function createFolderView(o: ViewOptions): FolderView {
   // folder whose modified time changed (something was moved into it) keeps the element under the pointer.
   const signature = (item: Item) => JSON.stringify([item.kind, iconFor(item), listMode(), item.kind === 'virtual' && !!item.virtual!.dropBin]);
 
+  /** The list view's headings, in the columns' order. Each one sorts by its column; again reverses. Folders stay first. */
+  const HEADINGS: Array<[SortKey, string]> = [['name', 'Name'], ['size', 'Size'], ['type', 'Type'], ['date', 'Modified']];
+  function sortHeadings(): HTMLElement {
+    // Hidden from screen readers like before: View › Sort by does the same from the keyboard.
+    const head = h('div', { class: 'fv-head', 'aria-hidden': 'true' }, ...HEADINGS.map(([key, label]) =>
+      h('button', { type: 'button', class: 'fv-sort', tabindex: -1, 'data-sort': key, title: `Sort by ${label.toLowerCase()} (click again to reverse)` },
+        h('span', {}, label), h('span', { class: 'fv-sort-mark' }))));
+    // Not a click on the empty part of the view: no selection band, no clearing what is selected.
+    on(head, 'pointerdown', (event: PointerEvent) => event.stopPropagation(), signal);
+    on(head, 'click', (event: MouseEvent) => {
+      const key = (event.target as HTMLElement).closest<HTMLElement>('.fv-sort')?.dataset.sort as SortKey | undefined;
+      if (!key) return;
+      const p = prefs();
+      shell.session.setView(o.path(), { ...p, sort: key, desc: p.sort === key ? !p.desc : false });
+      void refresh();
+    }, signal);
+    return head;
+  }
+  function paintHeadings(head: HTMLElement): void {
+    const { sort, desc } = prefs();
+    for (const b of head.querySelectorAll<HTMLElement>('.fv-sort')) {
+      const mark = b.querySelector('.fv-sort-mark')!;
+      const text = b.dataset.sort === sort ? (desc ? '▼' : '▲') : '';
+      if (mark.textContent !== text) mark.textContent = text;
+    }
+  }
+
   function render(): void {
     const hadFocus = host.contains(document.activeElement);
     els.clear();
@@ -165,7 +192,8 @@ export function createFolderView(o: ViewOptions): FolderView {
 
     const next: Node[] = [];
     if (listMode()) {
-      listHead ??= h('div', { class: 'fv-head', 'aria-hidden': 'true' }, h('span', {}, 'Name'), h('span', {}, 'Size'), h('span', {}, 'Type'), h('span', {}, 'Modified'));
+      listHead ??= sortHeadings();
+      paintHeadings(listHead);
       next.push(listHead);
     }
     const live = new Set<string>();

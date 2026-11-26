@@ -57,6 +57,16 @@ export function keyTile(kind: 'claude' | 'openrouter', title: string, enabled: b
   };
 }
 
+/** "Remove my key" asks first, naming the provider: the key is never shown again, so it would have to be pasted anew. */
+export function confirmRemoveKey(dialogs: DialogLayer, provider: string): Promise<boolean> {
+  return dialogs.confirm({
+    title: `Remove your ${provider} key?`,
+    text: `Your ${provider} key is deleted from this TOMLIN OS, and ${provider} cannot be asked until you paste a key again. The key itself still works at ${provider}.`,
+    ok: 'Remove',
+    danger: true,
+  });
+}
+
 /** The month's cost log in its own pop-up: numbers only, as the server keeps them. */
 export function showCostLog(dialogs: DialogLayer, api: ServiceApi, title: string): void {
   const logBody = h('tbody');
