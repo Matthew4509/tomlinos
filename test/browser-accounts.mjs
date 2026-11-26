@@ -148,11 +148,165 @@ await step('a PIN is set (password and two-step code asked first)', async () => 
   await w.getByText('Set. The locked screen opens with your 4-digit PIN.').waitFor();
   // The lock steps below are about the spreadsheet disguise (the Reader is the default screensaver).
   await w.locator('.acct-tab', { hasText: 'Screensaver and lock' }).click();
-  // The choice is written a moment later; wait for that write, so the lock below (and the reload while locked) keep it.
+  const saverStep = w.locator('.saver-step').nth(0);
+  await saverStep.locator('.mini-tile[data-value="sheet"]').click();
+  // A tile is only a choice: nothing is written until Save.
+  let posts = 0;
+  const count = r => r.url().includes('store.php') && r.request().method() === 'POST' && posts++;
+  page.on('response', count);
+  await settle(1500);
+  page.off('response', count);
+  eq(posts, 0, 'picking a tile writes nothing');
+  // The choice is written a moment after Save; wait for that write, so the lock below (and the reload while locked) keep it.
   const written = page.waitForResponse(r => r.url().includes('store.php') && r.request().method() === 'POST', { timeout: 15000 });
-  await w.locator('select:has(option[value="sheet"])').selectOption('sheet');
+  await saverStep.getByRole('button', { name: 'Save the screensaver' }).click();
   eq((await written).status(), 200, 'the screensaver choice is saved');
   await settle(300);
+});
+
+// ---- The pictures to pick from (src/shell/saverminis.ts) ---------------------------------------------------------
+const SHOTS = process.env.LOCKLOOK_SHOTS ?? '';
+const acct = () => page.locator('.win', { has: page.locator('.account') });
+const tileIn = (stepEl, value) => stepEl.locator(`.mini-tile[data-value="${value}"]`);
+const inUse = stepEl => stepEl.locator('.mini-tile', { has: page.locator('.mini-use:not([hidden])') }).getAttribute('data-value');
+const checked = stepEl => stepEl.locator('.mini-tile[aria-checked="true"]').getAttribute('data-value');
+/** Preview, then the way out of the spreadsheet to the lock screen: its heading. Closes the preview after. */
+const previewHeading = async () => {
+  await acct().getByRole('button', { name: 'Preview', exact: true }).click();
+  await page.locator('#layer-lock .fake-sheet').waitFor({ timeout: 10000 });
+  await page.keyboard.press('Escape');
+  const h1 = await page.locator('#layer-lock .gate h1').innerText();
+  // The lock screen covers the preview's own bar; its Sign out, in a preview, only ends the preview.
+  await page.locator('#layer-lock .gate').getByRole('button', { name: 'Sign out' }).click();
+  await page.locator('#layer-lock').waitFor({ state: 'hidden' });
+  return h1;
+};
+const shoot = async (stepEl, name) => {
+  if (!SHOTS) return;
+  await acct().getByRole('button', { name: 'Maximise' }).click();
+  await stepEl.scrollIntoViewIfNeeded();
+  await settle(300);
+  await stepEl.screenshot({ path: `${SHOTS}/${name}-light.png` });
+  const was = await page.evaluate(() => document.documentElement.dataset.theme);
+  await page.evaluate(() => (document.documentElement.dataset.theme = 'dark'));
+  await settle(200);
+  await stepEl.screenshot({ path: `${SHOTS}/${name}-dark.png` });
+  await page.evaluate(t => (document.documentElement.dataset.theme = t), was);
+  await acct().getByRole('button', { name: 'Restore' }).click();
+};
+
+await step('screensaver tiles: four pictures, the saved one In use; Save is off until the pick differs; the sheet picture follows its title as it is typed', async () => {
+  const s = acct().locator('.saver-step').nth(0);
+  eq(await s.locator('.mini-tile .mini-name > span:first-child').allInnerTexts(), ['Spreadsheet', 'Reader', 'Clock', 'Blank screen'], 'tile names');
+  eq(await s.locator('[role=radiogroup] [role=radio]').count(), 4, 'a radio group of four');
+  eq(await inUse(s), 'sheet', 'the saved one is In use');
+  ok(await s.getByText('Saved.').isVisible(), 'Save said Saved.');
+  ok(await s.getByRole('button', { name: 'Save the screensaver' }).isDisabled(), 'Save is off with nothing to save');
+  eq(await s.locator('.mini-view [tabindex], .mini-view input, .mini-view button').count(), 0, 'nothing in a picture can be focused');
+  eq(await tileIn(s, 'sheet').locator('.mini-sheet-title').innerText(), 'Q3 Budget - Spreadsheet', 'the sheet picture has its title');
+  await tileIn(s, 'sheet').locator('.mini-cell', { hasText: 'Operating budget' }).waitFor();
+  ok(/\d/.test(await tileIn(s, 'clock').locator('.saver-time').innerText()), 'the clock picture shows the time');
+  await s.getByLabel('Its title').fill('Warehouse count');
+  eq(await tileIn(s, 'sheet').locator('.mini-sheet-title').innerText(), 'Warehouse count - Spreadsheet', 'live title');
+  ok(await s.getByRole('button', { name: 'Save the screensaver' }).isEnabled(), 'a new title can be saved');
+  await s.getByLabel('Its title').fill('');
+  ok(await s.getByRole('button', { name: 'Save the screensaver' }).isDisabled(), 'back as saved: Save off again');
+  await tileIn(s, 'clock').click();
+  eq(await checked(s), 'clock', 'picked');
+  ok(await s.locator('.saver-sub').first().isHidden(), 'the sheet fields only show with the spreadsheet picked');
+  eq(await inUse(s), 'sheet', 'still the spreadsheet In use');
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('Enter');
+  eq(await checked(s), 'sheet', 'picked back with the keys');
+  ok(await s.getByRole('button', { name: 'Save the screensaver' }).isDisabled(), 'picked back: nothing to save');
+  await shoot(s, 'saver-tiles');
+});
+
+await step('lock screen tiles: three pictures with the real words; picking one changes nothing until Save, then Preview shows it', async () => {
+  const s = acct().locator('.saver-step').nth(1);
+  eq(await s.locator('.mini-tile .mini-name > span:first-child').allInnerTexts(), ['TOMLIN OS', 'Plain', 'My own words'], 'tile names');
+  eq(await inUse(s), 'default', 'TOMLIN OS In use');
+  const def = await tileIn(s, 'default').locator('.mini-view').innerText();
+  ok(def.includes('TOMLIN OS') && def.includes('Locked') && def.includes('Alex is signed in'), 'the TOMLIN OS picture has the names: ' + def);
+  const plain = await tileIn(s, 'plain').locator('.mini-view').innerText();
+  ok(plain.includes('Session timed out') && !plain.includes('Alex') && !plain.includes('TOMLIN'), 'the plain picture has no names: ' + plain);
+  ok(await s.locator('.saver-sub').isHidden(), 'no word fields unless My own words is picked');
+  ok(await s.getByRole('button', { name: 'Save the lock screen' }).isDisabled(), 'Save off');
+  await tileIn(s, 'plain').click();
+  eq(await tileIn(s, 'plain').getAttribute('aria-checked'), 'true', 'picked');
+  eq(await inUse(s), 'default', 'not In use yet');
+  eq(await previewHeading(), 'Locked', 'unsaved: Preview still shows the saved look');
+  const written = page.waitForResponse(r => r.url().includes('store.php') && r.request().method() === 'POST', { timeout: 15000 });
+  await s.getByRole('button', { name: 'Save the lock screen' }).click();
+  eq((await written).status(), 200, 'written');
+  eq(await inUse(s), 'plain', 'In use moved');
+  eq(await previewHeading(), 'Session timed out', 'Preview shows the saved plain look');
+});
+
+await step('My own words: the picture follows the words as they are typed; they are kept only by Save; Settings stays in step', async () => {
+  const s = acct().locator('.saver-step').nth(1);
+  await tileIn(s, 'custom').click();
+  ok(await s.locator('.saver-sub').isVisible(), 'word fields show');
+  await s.getByLabel('Heading').fill('Budget portal');
+  await s.getByLabel('Button').fill('Enter');
+  eq(await tileIn(s, 'custom').locator('h1').innerText(), 'Budget portal', 'live heading');
+  eq(await tileIn(s, 'custom').locator('.gate-go').innerText(), 'Enter', 'live button');
+  let posts = 0;
+  const count = r => r.url().includes('store.php') && r.request().method() === 'POST' && posts++;
+  page.on('response', count);
+  await s.getByLabel('Heading').press('Tab');
+  await settle(1500);
+  page.off('response', count);
+  eq(posts, 0, 'typing the words writes nothing');
+  eq(await previewHeading(), 'Session timed out', 'unsaved words are not shown by Preview');
+  await s.getByRole('button', { name: 'Save the lock screen' }).click();
+  eq(await inUse(s), 'custom', 'In use moved');
+  eq(await previewHeading(), 'Budget portal', 'Preview shows the saved words');
+  await shoot(s, 'tiles');
+  // The same form in Settings follows a Save made in My account.
+  await openApp('settings');
+  const set = page.locator('.win', { has: page.locator('.set-ai') });
+  const ss = set.locator('.saver-step').nth(1);
+  await ss.waitFor();
+  eq(await inUse(ss), 'custom', 'Settings shows the same look In use');
+  eq(await ss.getByLabel('Heading').inputValue(), 'Budget portal', 'and the same words');
+  await set.getByRole('button', { name: 'Close' }).first().click();
+});
+
+await step('keyboard: one Tab stop; the arrows move, Space picks; Save keeps it and an open Settings follows', async () => {
+  await openApp('settings');
+  const set = page.locator('.win', { has: page.locator('.set-ai') });
+  const ss = set.locator('.saver-step').nth(1);
+  await ss.waitFor();
+  // My account back in front.
+  await page.locator('.task', { hasText: 'My account' }).click();
+  const s = acct().locator('.saver-step').nth(1);
+  eq(await s.locator('.mini-tile[tabindex="0"]').count(), 1, 'one Tab stop');
+  await tileIn(s, 'custom').focus();
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowLeft');
+  eq(await page.evaluate(() => document.activeElement?.getAttribute('data-value')), 'default', 'the arrows moved the focus');
+  eq(await checked(s), 'custom', 'but did not pick');
+  eq(await s.locator('.mini-tile[tabindex="0"]').count(), 1, 'still one Tab stop');
+  await page.keyboard.press('Space');
+  eq(await checked(s), 'default', 'Space picked');
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('Enter');
+  eq(await checked(s), 'plain', 'Enter picked');
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press(' ');
+  eq(await checked(s), 'default', 'back to TOMLIN OS');
+  await page.keyboard.press('Tab');
+  eq(await page.evaluate(() => document.activeElement?.classList.contains('mini-tile')), false, 'Tab leaves the row');
+  eq(await inUse(ss), 'custom', 'Settings: unchanged before Save');
+  await s.getByRole('button', { name: 'Save the lock screen' }).click();
+  eq(await inUse(s), 'default', 'TOMLIN OS In use again');
+  eq(await inUse(ss), 'default', 'the open Settings moved In use too');
+  eq(await checked(ss), 'default', 'and its pick');
+  eq(await previewHeading(), 'Locked', 'Preview shows it');
+  await set.getByRole('button', { name: 'Close' }).first().click();
+  await settle(1200);
 });
 
 await step('Lock now hides the desktop, changes the tab title, and the server refuses files until the PIN', async () => {

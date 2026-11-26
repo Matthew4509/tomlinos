@@ -187,7 +187,8 @@ await step('set a PIN and the spreadsheet screensaver', async () => {
   await w.locator('.acct-tab', { hasText: 'Screensaver and lock' }).click();
   // Other tabs of this person's were saving too: a clash (409) is retried, so wait for the save that went through.
   const written = page.waitForResponse(r => r.url().includes('store.php') && r.request().method() === 'POST' && r.status() === 200, { timeout: 15000 });
-  await w.locator('select:has(option[value="sheet"])').selectOption('sheet');
+  await w.locator('.saver-step').nth(0).locator('.mini-tile[data-value="sheet"]').click();
+  await w.getByRole('button', { name: 'Save the screensaver' }).click();
   await written;
   await w.getByRole('button', { name: 'Close' }).click();
 });

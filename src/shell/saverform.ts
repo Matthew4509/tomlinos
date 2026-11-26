@@ -1,114 +1,222 @@
 // The screensaver and lock controls. One copy, shown in two places: Settings (where people look first: right-click the
-// desktop > Desktop Settings) and My account. Both write the same session.lock, so they always agree.
+// desktop > Desktop Settings) and My account. Both write the same session.lock, and each tells the other when it saved,
+// so they always agree.
 //
-// Laid out as a guide, with a preview: 1 what shows when you step away (the
-// spreadsheet's kind and title, or the reader), 2 how the lock screen looks (default, plain or your own words), 3 try it
-// (Preview locks nothing), 4 how to get back in, which changes with the choices. Then when it starts and the keys.
+// Laid out as a guide: 1 what shows when you step away and 2 how the lock screen looks, each a row of small pictures of
+// the real thing to pick from (a pick is only a choice until that step's Save keeps it; leaving without saving changes
+// nothing), 3 try it (Preview locks nothing), 4 how to get back in, which changes with the choices. Then when it starts
+// and the keys, which keep themselves as soon as they change.
+import { Bus } from '../core/bus.ts';
 import { h, on } from '../core/dom.ts';
 import { localStatus } from '../core/local.ts';
 import { READER_PATH } from '../auth/lock.ts';
-import { IDLE_CHOICES, LOCK_WORDS_MAX, SHEET_KINDS, type LockWords, type SheetKind } from './session.ts';
+import { blankMini, clockMini, lockMini, readerMini, sheetMini, tileGroup } from './saverminis.ts';
+import { IDLE_CHOICES, LOCK_WORDS_MAX, SHEET_KINDS, type LockSettings, type LockWords, type SheetKind } from './session.ts';
 import type { Shell } from './types.ts';
 
+/** Which part of session.lock one copy of the form just saved, so the other copy (Settings or My account) catches up. */
+const saved = new Bus<{ from: object; part: 'saver' | 'look' | 'other' }>();
+
+const tidy = (text: string) => text.replace(/\s+/g, ' ').trim().slice(0, LOCK_WORDS_MAX);
+
 export function saverControls(shell: Shell, signal: AbortSignal): Node[] {
+  const me = {};
   const lock = shell.session.data.lock;
   const canLock = shell.lock.canLock;
+  const user = () => shell.account?.user() ?? null;
   const idle = h('select', { class: 'field' }, ...IDLE_CHOICES.map(m => h('option', { value: m }, m === 0 ? 'Never' : m === 60 ? 'After 1 hour' : `After ${m} minute${m === 1 ? '' : 's'}`)));
-  idle.value = String(lock.idle);
-  const saver = h('select', { class: 'field' },
-    h('option', { value: 'sheet' }, 'Spreadsheet (looks like ordinary work)'),
-    h('option', { value: 'reader' }, 'Reader (a book; "Log in for more" to get back)'),
-    h('option', { value: 'clock' }, 'Clock'),
-    h('option', { value: 'blank' }, 'Blank screen'));
-  saver.value = lock.saver;
+  const lockBox = h('input', { type: 'checkbox', disabled: !canLock });
+  const panic = h('input', { type: 'checkbox' });
+  const hintBox = h('input', { type: 'checkbox' });
+  const showOthers = () => {
+    idle.value = String(lock.idle);
+    lockBox.checked = lock.lock && canLock;
+    panic.checked = lock.panic;
+    hintBox.checked = lock.hint === true;
+  };
+  showOthers();
+  const wayBack = h('p', { class: 'hint saver-way' });
+
+  // ---- 1. What shows when you step away
   const kind = h('select', { class: 'field' }, ...SHEET_KINDS.map(k => h('option', { value: k.id }, k.name)));
-  kind.value = lock.sheet.kind;
   const sheetTitle = h('input', { type: 'text', class: 'field', maxlength: LOCK_WORDS_MAX, spellcheck: false });
-  sheetTitle.value = lock.sheet.title;
+  const showSheet = () => {
+    kind.value = lock.sheet.kind;
+    sheetTitle.value = lock.sheet.title;
+  };
+  showSheet();
   const sheetRow = h('div', { class: 'saver-sub' },
     h('label', { class: 'bin-set' }, 'Kind of work ', kind),
     h('label', { class: 'bin-set' }, 'Its title ', sheetTitle));
   const readerNote = h('p', { class: 'hint', hidden: true });
+  /** Whether this copy has the Reader: unknown until asked; without it the spreadsheet shows in its place. */
+  let hasReader: boolean | null = null;
+  let clockView: AbortController | null = null;
+  signal.addEventListener('abort', () => clockView?.abort(), { once: true });
+  const sheetNow = () => sheetMini(kind.value as SheetKind, tidy(sheetTitle.value));
+  const savers = tileGroup<LockSettings['saver']>('Screensaver', [
+    { value: 'sheet', name: 'Spreadsheet', draw: sheetNow },
+    { value: 'reader', name: 'Reader', draw: () => (hasReader === false ? sheetNow() : readerMini()) },
+    {
+      value: 'clock', name: 'Clock', draw: () => {
+        clockView?.abort();
+        clockView = new AbortController();
+        return clockMini(clockView.signal);
+      },
+    },
+    { value: 'blank', name: 'Blank screen', draw: blankMini },
+  ], lock.saver, signal, () => paint());
+  const saverDirty = () => savers.value !== lock.saver
+    || (savers.value === 'sheet' && (kind.value !== lock.sheet.kind || tidy(sheetTitle.value) !== lock.sheet.title));
 
-  const look = h('select', { class: 'field' },
-    h('option', { value: 'default' }, 'TOMLIN OS (the name and yours)'),
-    h('option', { value: 'plain' }, 'Plain ("Session timed out", no names)'),
-    h('option', { value: 'custom' }, 'My own words'));
-  look.value = lock.look;
-  const wordField = (key: keyof LockWords) => {
-    const f = h('input', { type: 'text', class: 'field', maxlength: LOCK_WORDS_MAX, spellcheck: false });
-    f.value = lock.words[key];
-    return f;
+  // ---- 2. The lock screen
+  const wordField = () => h('input', { type: 'text', class: 'field', maxlength: LOCK_WORDS_MAX, spellcheck: false });
+  const words = { title: wordField(), user: wordField(), pass: wordField(), button: wordField() };
+  const keys = Object.keys(words) as Array<keyof LockWords>;
+  const showWords = () => {
+    for (const k of keys) words[k].value = lock.words[k];
   };
-  const words = { title: wordField('title'), user: wordField('user'), pass: wordField('pass'), button: wordField('button') };
+  showWords();
+  /** The words as they would be kept: tidied, and an emptied one keeps the word it had. */
+  const typedWords = (): LockWords => {
+    const w = { ...lock.words };
+    for (const k of keys) w[k] = tidy(words[k].value) || lock.words[k];
+    return w;
+  };
   const wordsRow = h('div', { class: 'saver-sub' },
     h('label', { class: 'bin-set' }, 'Heading ', words.title),
     h('label', { class: 'bin-set' }, 'User name label ', words.user),
     h('label', { class: 'bin-set' }, 'Password label ', words.pass),
     h('label', { class: 'bin-set' }, 'Button ', words.button));
+  const looks = tileGroup<LockSettings['look']>('Lock screen', [
+    { value: 'default', name: 'TOMLIN OS', draw: () => lockMini('default', lock.words, user()) },
+    { value: 'plain', name: 'Plain', draw: () => lockMini('plain', lock.words, user()) },
+    { value: 'custom', name: 'My own words', draw: () => lockMini('custom', typedWords(), user()) },
+  ], lock.look, signal, () => paint());
+  const lookDirty = () => looks.value !== lock.look
+    || (looks.value === 'custom' && keys.some(k => typedWords()[k] !== lock.words[k]));
 
-  const lockBox = h('input', { type: 'checkbox', disabled: !canLock });
-  lockBox.checked = lock.lock && canLock;
-  const panic = h('input', { type: 'checkbox' });
-  panic.checked = lock.panic;
-  const hintBox = h('input', { type: 'checkbox' });
-  hintBox.checked = lock.hint === true;
-  const wayBack = h('p', { class: 'hint saver-way' });
-
-  function paint(): void {
-    sheetRow.hidden = saver.value !== 'sheet';
-    sheetTitle.placeholder = SHEET_KINDS.find(k => k.id === kind.value)?.title ?? '';
-    wordsRow.hidden = look.value !== 'custom';
-    readerNote.hidden = saver.value !== 'reader';
-    const w = look.value === 'custom' ? lock.words : null;
-    const title = w ? `"${w.title}"` : look.value === 'plain' ? '"Session timed out"' : 'the TOMLIN OS lock screen';
-    const pin = shell.account?.user().pin;
-    wayBack.textContent = !canLock
-      ? 'Locking needs the desktop running on its server with accounts; here the screensaver only covers the screen.'
-      : saver.value === 'sheet'
-        ? `On the spreadsheet: ${pin ? 'type your PIN and press Enter (nothing appears while you type), or ' : ''}press Escape or the spreadsheet's close button (✕) to get ${title}, then your ${pin ? 'PIN or password' : 'password'}.`
-        : saver.value === 'reader'
-          ? `On the reader: press "Log in for more" in its top corner, then type your user name (${shell.account?.user().name ?? 'the one you sign in with'}) and your password. Escape does nothing there, so it gives nothing away.`
-          : `Move the mouse or press a key to get ${title}, then your ${pin ? 'PIN or password' : 'password'}.`;
-  }
-
-  const save = () => {
-    lock.idle = Number(idle.value);
-    if (lock.saver !== saver.value) lock.chosen = true;
-    lock.saver = saver.value as typeof lock.saver;
-    lock.sheet = { kind: kind.value as SheetKind, title: sheetTitle.value.replace(/\s+/g, ' ').trim().slice(0, LOCK_WORDS_MAX) };
-    lock.look = look.value as typeof lock.look;
-    for (const k of Object.keys(words) as Array<keyof LockWords>) lock.words[k] = words[k].value.replace(/\s+/g, ' ').trim().slice(0, LOCK_WORDS_MAX) || lock.words[k];
-    lock.lock = lockBox.checked;
-    lock.panic = panic.checked;
-    lock.hint = hintBox.checked;
-    shell.session.touch();
-    shell.applyLockHint();
-    paint();
-  };
-  for (const el of [idle, saver, kind, look, lockBox, panic, hintBox]) on(el, 'change', save, signal);
-  for (const el of [sheetTitle, ...Object.values(words)]) on(el, 'change', save, signal);
-  const button = (label: string, run: () => void, cls = 'btn') => {
-    const b = h('button', { type: 'button', class: cls }, label);
+  const button = (label: string, run: () => void, cls = 'btn', attrs: Record<string, string> = {}) => {
+    const b = h('button', { type: 'button', class: cls, ...attrs }, label);
     on(b, 'click', run, signal);
     return b;
   };
+  /** A Save button with its "Saved." beside it, which goes again after a moment. */
+  const saveRow = (what: string, run: () => void) => {
+    const done = h('span', { class: 'hint mini-saved', role: 'status' });
+    let timer = 0;
+    const b = button('Save', () => {
+      run();
+      done.textContent = 'Saved.';
+      clearTimeout(timer);
+      timer = window.setTimeout(() => (done.textContent = ''), 2500);
+    }, 'btn primary', { 'aria-label': `Save the ${what}` });
+    signal.addEventListener('abort', () => clearTimeout(timer), { once: true });
+    return { b, row: h('div', { class: 'acct-buttons mini-save' }, b, done) };
+  };
+  const saveSaver = saveRow('screensaver', () => {
+    if (lock.saver !== savers.value) lock.chosen = true;
+    lock.saver = savers.value;
+    if (savers.value === 'sheet') lock.sheet = { kind: kind.value as SheetKind, title: tidy(sheetTitle.value) };
+    sheetTitle.value = lock.sheet.title;
+    kept('saver');
+  });
+  const saveLook = saveRow('lock screen', () => {
+    lock.look = looks.value;
+    if (looks.value === 'custom') lock.words = typedWords();
+    showWords();
+    kept('look');
+  });
+
+  function kept(part: 'saver' | 'look' | 'other'): void {
+    shell.session.touch();
+    shell.applyLockHint();
+    saved.emit({ from: me, part });
+    paint();
+  }
+
+  function paint(): void {
+    savers.inUse(lock.saver);
+    looks.inUse(lock.look);
+    sheetRow.hidden = savers.value !== 'sheet';
+    sheetTitle.placeholder = SHEET_KINDS.find(k => k.id === kind.value)?.title ?? '';
+    readerNote.hidden = savers.value !== 'reader';
+    wordsRow.hidden = looks.value !== 'custom';
+    saveSaver.b.disabled = !saverDirty();
+    saveLook.b.disabled = !lookDirty();
+    // The way back is the saved one's: what Preview shows, and what a lock will show.
+    const w = lock.look === 'custom' ? lock.words : null;
+    const title = w ? `"${w.title}"` : lock.look === 'plain' ? '"Session timed out"' : 'the TOMLIN OS lock screen';
+    const pin = user()?.pin;
+    wayBack.textContent = !canLock
+      ? 'Locking needs the desktop running on its server with accounts; here the screensaver only covers the screen.'
+      : lock.saver === 'sheet'
+        ? `On the spreadsheet: ${pin ? 'type your PIN and press Enter (nothing appears while you type), or ' : ''}press Escape or the spreadsheet's close button (✕) to get ${title}, then your ${pin ? 'PIN or password' : 'password'}.`
+        : lock.saver === 'reader'
+          ? `On the reader: press "Log in for more" in its top corner, then type your user name (${user()?.name ?? 'the one you sign in with'}) and your password. Escape does nothing there, so it gives nothing away.`
+          : `Move the mouse or press a key to get ${title}, then your ${pin ? 'PIN or password' : 'password'}.`;
+  }
+
+  // The sheet's kind and title and the custom words are kept by their step's Save; the pictures follow them as they change.
+  const sheetChanged = () => {
+    savers.redraw('sheet');
+    if (hasReader === false) savers.redraw('reader');
+    paint();
+  };
+  on(kind, 'change', sheetChanged, signal);
+  on(sheetTitle, 'input', sheetChanged, signal);
+  for (const el of Object.values(words)) {
+    on(el, 'input', () => {
+      looks.redraw('custom');
+      paint();
+    }, signal);
+  }
+
+  // Everything else keeps itself as soon as it changes.
+  const saveOthers = () => {
+    lock.idle = Number(idle.value);
+    lock.lock = lockBox.checked;
+    lock.panic = panic.checked;
+    lock.hint = hintBox.checked;
+    kept('other');
+  };
+  for (const el of [idle, lockBox, panic, hintBox]) on(el, 'change', saveOthers, signal);
+
+  // The other copy saved: show what it kept. A pick not yet saved here, in the part it saved, gives way to it.
+  saved.on(({ from, part }) => {
+    if (from === me) return;
+    if (part === 'saver') {
+      savers.pick(lock.saver);
+      showSheet();
+      savers.redraw();
+    } else if (part === 'look') {
+      looks.pick(lock.look);
+      showWords();
+      looks.redraw();
+    } else showOthers();
+    paint();
+  }, signal);
+
   // A copy without the Reader shows the spreadsheet in its place; say so rather than let the preview surprise.
   void localStatus(READER_PATH).then(status => {
-    readerNote.textContent = status === 200
+    hasReader = status === 200;
+    readerNote.textContent = hasReader
       ? 'The book opens where the Reader was last left.'
       : 'The Reader is not in this copy of TOMLIN OS yet: the spreadsheet shows in its place until it is.';
+    if (!hasReader) savers.redraw('reader');
   });
   paint();
   const step = (n: number, title: string, ...kids: Node[]) => h('div', { class: 'saver-step' }, h('h3', { class: 'saver-step-h' }, `${n}. ${title}`), ...kids);
   return [
     h('p', { class: 'hint' }, 'Set up how your screen hides when you step away, so anyone passing sees ordinary work, not TOMLIN OS.'),
     step(1, 'What shows when you step away',
-      h('label', { class: 'bin-set' }, 'Screensaver ', saver), sheetRow, readerNote),
+      h('p', { class: 'hint' }, 'Pick a screensaver, then press Save.'),
+      savers.el, sheetRow, readerNote, saveSaver.row),
     step(2, 'The lock screen',
-      h('label', { class: 'bin-set' }, 'Looks like ', look), wordsRow),
+      h('p', { class: 'hint' }, 'Pick how the lock screen looks, then press Save.'),
+      looks.el, wordsRow, saveLook.row),
     step(3, 'Try it',
-      h('p', { class: 'hint' }, 'Preview shows exactly what others will see. Nothing is locked: any way back, or "Close preview", ends it.'),
+      h('p', { class: 'hint' }, 'Preview shows exactly what others will see (what is saved). Nothing is locked: any way back, or "Close preview", ends it.'),
       h('div', { class: 'acct-buttons' }, button('Preview', () => shell.lock.preview(), 'btn primary'))),
     step(4, 'How to get back in', wayBack),
     h('h3', { class: 'saver-step-h' }, 'When it starts'),

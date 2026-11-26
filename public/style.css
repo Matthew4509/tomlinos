@@ -1223,6 +1223,57 @@ textarea.field { resize: vertical; font: inherit; }
 .saver-sub { margin-left: 12px; }
 .saver-sub[hidden] { display: none; }
 .saver-way { margin: 0; }
+/* The guide's picture tiles (src/shell/saverminis.ts): the real screensaver or lock screen drawn on a 640 x 400 screen and
+   scaled to a fifth (200 x 125). They sit side by side and wrap under each other in a narrow window or on a phone. */
+.mini-tiles { display: flex; flex-wrap: wrap; gap: 12px; margin: 4px 0 10px; }
+.mini-tile { flex: 0 0 auto; display: flex; flex-direction: column; gap: 6px; width: 208px; padding: 3px; border: 2px solid transparent; border-radius: 8px; cursor: pointer; touch-action: manipulation; }
+.mini-tile:hover { border-color: var(--line); }
+.mini-tile[aria-checked="true"] { border-color: var(--accent); background: var(--sel-soft); }
+.mini-tile:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.mini-view { position: relative; width: 200px; height: 125px; overflow: hidden; border: 1px solid var(--line); border-radius: 4px; background: #000; pointer-events: none; }
+.mini-screen { position: absolute; left: 0; top: 0; transform: scale(.3125); transform-origin: 0 0; overflow: hidden; font: 13px/1.35 var(--font); color: var(--ink); }
+.mini-name { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 13px; font-weight: 600; padding: 0 2px 2px; }
+.mini-use { flex: none; font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 10px; background: var(--accent); color: var(--accent-ink); }
+.mini-use[hidden] { display: none; }
+.mini-save { align-items: center; }
+.mini-saved { font-size: 12px; }
+@media (max-width: 480px) { .mini-tile { width: 100%; max-width: 208px; } }
+/* Inside a picture the real classes draw it; only what fills the whole screen there is set down to the small screen. */
+.mini-screen .gate { position: absolute; z-index: auto; overflow: hidden; }
+.mini-screen .saver-time { font-size: 90px; }
+.mini-screen .saver-date { font-size: 22px; }
+.mini-screen .clock-box { transition: none; }
+.mini-screen .mini-field { display: block; }
+.mini-screen .lock-pin.mini-field { width: 100%; }
+.mini-screen .gate-show, .mini-screen .gate-buttons .btn { display: inline-flex; align-items: center; }
+.mini-screen .fake-sheet { display: flex; flex-direction: column; }
+.mini-screen .mini-box { display: inline-block; flex: none; height: 24px; line-height: 20px; }
+.mini-screen .formula-input.mini-box { flex: 1; }
+.mini-sheet-title { white-space: nowrap; }
+.mini-screen .fake-close { display: inline-flex; align-items: center; justify-content: center; }
+.mini-grid-wrap { flex: 1; min-height: 0; overflow: hidden; background: #fff; }
+.mini-grid { display: grid; grid-auto-rows: 20px; grid-template-rows: 24px; font: 13px "Segoe UI", Arial, Helvetica, sans-serif; color: #000; }
+.mini-head { background: #f0f0f0; border-right: 1px solid #d9d9d9; border-bottom: 1px solid #d9d9d9; color: #444; text-align: center; line-height: 19px; }
+.mini-cell { position: relative; padding: 0 3px; border-right: 1px solid #d9d9d9; border-bottom: 1px solid #d9d9d9; white-space: nowrap; overflow: hidden; line-height: 19px; }
+.mini-cell.mini-num { text-align: right; }
+.mini-cell.mini-b { font-weight: 700; }
+.mini-cell.mini-bb { border-bottom-color: #000; }
+.mini-cell.mini-spill { overflow: visible; z-index: 1; border-right-color: transparent; }
+/* The Reader, as reader/reader.css draws it: the book's column on the left and the page; its words drawn as lines. */
+.mini-reader { position: absolute; inset: 0; display: grid; grid-template-columns: 180px 1fr; background: #e7ebe8; }
+.mini-r-column { display: flex; flex-direction: column; gap: 9px; padding: 0 18px 12px; background: linear-gradient(172deg, #23423b 0%, #142823 100%); border-right: 1px solid #0e1d19; }
+.mini-r-ribbon { width: 16px; height: 26px; margin-left: 4px; background: #8fd1bb; clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 75%, 0 100%); }
+.mini-r-book { height: 18px; width: 80%; margin-top: 8px; border-radius: 3px; background: #eef4f0; }
+.mini-r-author { height: 10px; width: 55%; margin-bottom: 10px; border-radius: 3px; background: #b8cbc3; }
+.mini-r-chapter { height: 8px; width: 85%; border-radius: 3px; background: rgba(184, 203, 195, .55); }
+.mini-r-chapter:nth-child(4) { background: #eef4f0; box-shadow: -8px 0 0 #8fd1bb; }
+.mini-r-paper { display: flex; flex-direction: column; background: #fcfbf7; min-width: 0; }
+.mini-r-heading { height: 20px; width: 45%; margin: 22px 30px 14px; border-radius: 3px; background: #1d2320; }
+.mini-r-flow { flex: 1; display: flex; flex-direction: column; gap: 13px; padding: 14px 40px 0 30px; border-top: 1px solid #e2e4de; }
+.mini-r-line { height: 8px; border-radius: 3px; background: #b9bdb8; }
+.mini-r-line.mini-short, .mini-r-chapter.mini-short { width: 55%; }
+.mini-r-bottom { display: flex; justify-content: space-between; padding: 12px 30px 14px; border-top: 1px solid #e2e4de; }
+.mini-r-btn { width: 110px; height: 30px; border: 1px solid #e2e4de; border-radius: 999px; background: #fff; }
 
 /* ---- Glass: a dark see-through taskbar, a round glowing orb, light glassy title bars. Its own orb, no maker's logo. -- */
 .theme-swatch[data-theme-sample="glass"] .swatch-chip { background: linear-gradient(#a9d6f7, #2f6aa8 55%, #16324f); }
