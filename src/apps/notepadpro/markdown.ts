@@ -96,7 +96,8 @@ export function renderMarkdown(text: string, parser: MarkdownParser): MdNode[] {
       }
       case 'FencedCode':
       case 'CodeBlock': {
-        const code = children(node).filter(c => c.name === 'CodeText').map(c => slice(c.from, c.to)).join('\n');
+        // Each piece may end with its own line break (indented code, code in a quote or list): one break between lines.
+        const code = children(node).filter(c => c.name === 'CodeText').map(c => slice(c.from, c.to).replace(/\n$/, '')).join('\n');
         return [{ tag: 'pre', kids: [{ tag: 'code', kids: [code] }] }];
       }
       case 'InlineCode': {

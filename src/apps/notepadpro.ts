@@ -26,6 +26,47 @@ export function loadCodeMirror(): Promise<Bundle> {
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+const EOL_SHORT: Record<Eol, string> = { '\r\n': 'CRLF', '\n': 'LF', '\r': 'CR' };
+
+/** The file's size once saved: UTF-8 bytes, each line ending as it will be written, and the BOM if it has one. */
+function savedSize(doc: any, d: { eol: Eol; bom: boolean }): number {
+  let bytes = d.bom ? 3 : 0;
+  for (const iter = doc.iter(); !iter.next().done;) {
+    const t: string = iter.value;
+    if (iter.lineBreak) {
+      bytes += d.eol.length;
+      continue;
+    }
+    for (let i = 0; i < t.length; i++) {
+      const c = t.charCodeAt(i);
+      if (c < 0x80) bytes += 1;
+      else if (c < 0x800) bytes += 2;
+      else if (c >= 0xd800 && c < 0xdc00) {
+        bytes += 4;
+        i++;
+      } else bytes += 3;
+    }
+  }
+  return bytes;
+}
+
+/** A pattern replacement for one match, as String.replace reads it: $$, $&, $`, $', $1..$99 and $<name>. */
+function expand(template: string, m: RegExpMatchArray, text: string): string {
+  return template.replace(/\$(\$|&|`|'|\d{1,2}|<([^>]*)>)/g, (all, what: string, name: string | undefined) => {
+    if (what === '$') return '$';
+    if (what === '&') return m[0];
+    if (what === '`') return text.slice(0, m.index);
+    if (what === "'") return text.slice((m.index ?? 0) + m[0].length);
+    if (name !== undefined) return m.groups ? m.groups[name] ?? '' : all;
+    // "$12" is group 12 if there is one, otherwise group 1 then a "2".
+    const two = Number(what);
+    if (what.length === 2 && two < m.length && two > 0) return m[two] ?? '';
+    const one = Number(what[0]);
+    if (one > 0 && one < m.length) return (m[one] ?? '') + what.slice(1);
+    return all;
+  });
+}
+
 interface Doc {
   id: number;
   path: string | null;
@@ -233,15 +274,17 @@ async function run(app: AppHandle, cm: Bundle, arg: string | undefined): Promise
     const state = view.state;
     const sel = state.selection.main;
     const line = state.doc.lineAt(sel.head);
+    // Columns count letters (an emoji is one), and the size is the file's size on saving: UTF-8 bytes, line endings included.
+    const col = [...line.text.slice(0, sel.head - line.from)].length + 1;
     const chosen = state.selection.ranges.reduce((n: number, r: any) => n + (r.to - r.from), 0);
     const count = markers(state).length;
     status.textContent = [
-      `Ln ${line.number}, Col ${sel.head - line.from + 1}${chosen ? `, ${chosen} chosen` : ''}`,
-      `${plural(state.doc.lines, 'line')}, ${formatSize(state.doc.length)}`,
+      `Ln ${line.number}, Col ${col}${chosen ? `, ${chosen} chosen` : ''}`,
+      `${plural(state.doc.lines, 'line')}, ${formatSize(savedSize(state.doc, d))}`,
       langById(d.lang).label, EOL_NAMES[d.eol], 'UTF-8', `${zoom}%`,
       count ? plural(count, 'bookmark') : '',
     ].filter(Boolean).join('  ·  ');
-    eolBtn.textContent = d.eol === '\r\n' ? 'CRLF' : 'LF';
+    eolBtn.textContent = EOL_SHORT[d.eol];
     langSelect.value = d.lang;
     if (changed && d.lang === 'markdown' && preview) {
       clearTimeout(previewTimer);
@@ -405,10 +448,19 @@ async function run(app: AppHandle, cm: Bundle, arg: string | undefined): Promise
     }
   }
 
-  async function save(): Promise<boolean> {
+  /** One save per tab at a time: a second Save waits for the first, so it replaces the copy the first one made. */
+  const saving = new Map<Doc, Promise<boolean>>();
+  function save(): Promise<boolean> {
     const d = active;
-    if (!d) return false;
-    if (!d.path) return saveAs();
+    if (!d) return Promise.resolve(false);
+    const next = (saving.get(d) ?? Promise.resolve(true)).then(() => saveDoc(d), () => saveDoc(d));
+    saving.set(d, next);
+    void next.finally(() => saving.get(d) === next && saving.delete(d));
+    return next;
+  }
+
+  async function saveDoc(d: Doc): Promise<boolean> {
+    if (!d.path) return d === active ? saveAs() : false;
     try {
       const snap = snapshot(d);
       const entry = await saveOver(shell, d.path, snap.bytes, d.fileId);
@@ -542,10 +594,11 @@ async function run(app: AppHandle, cm: Bundle, arg: string | undefined): Promise
       re.lastIndex = 0;
       const n = [...text.matchAll(re)].length;
       if (!n) continue;
-      const next = text.replace(re, withText);
       total += n;
       files++;
-      d.state = d.state.update({ changes: { from: 0, to: d.state.doc.length, insert: next } }).state;
+      // One change per match, so bookmarks, folds and the caret on the lines around them stay where they were.
+      const changes = [...text.matchAll(re)].map(m => ({ from: m.index, to: m.index + m[0].length, insert: fRegex.checked ? expand(withText, m, text) : fReplace.value }));
+      d.state = d.state.update({ changes }).state;
     }
     if (active) view.setState(active.state);
     fNote.textContent = total ? `Replaced ${plural(total, 'match', 'matches')} in ${plural(files, 'tab')}. Nothing is saved until you save each tab.` : `Cannot find “${fQuery.value}” in the open tabs.`;
@@ -592,7 +645,8 @@ async function run(app: AppHandle, cm: Bundle, arg: string | undefined): Promise
   on(langSelect, 'change', () => setLang(langSelect.value), app.signal);
   on(eolBtn, 'click', () => {
     if (!active) return;
-    active.eol = active.eol === '\n' ? '\r\n' : '\n';
+    // LF, CRLF, CR in turn: an old Mac file can be kept as it is.
+    active.eol = active.eol === '\n' ? '\r\n' : active.eol === '\r\n' ? '\r' : '\n';
     refresh();
     shell.toast(`“${active.name}” will save with ${EOL_NAMES[active.eol]} line endings.`);
   }, app.signal);

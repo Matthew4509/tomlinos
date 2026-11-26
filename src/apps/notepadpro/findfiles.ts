@@ -48,8 +48,9 @@ export function searchText(text: string, query: string, options: FindOptions, li
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) && hits.length < limit) {
     if (m[0] === '') {
-      // An empty match (a pattern like "a*") is skipped, and the search moves on, so it cannot loop forever.
-      re.lastIndex++;
+      // An empty match (a pattern like "a*") is skipped, and the search moves on, so it cannot loop forever. It moves
+      // on a whole letter: with the "u" flag, a step into the middle of an emoji is put back to its start, for ever.
+      re.lastIndex = m.index + ((text.codePointAt(m.index) ?? 0) > 0xffff ? 2 : 1);
       continue;
     }
     let lo = 0;
@@ -98,13 +99,15 @@ export async function findInFolder(fs: FileSystem, folder: string, query: string
         out.skipped++;
         continue;
       }
-      if (++out.files > MAX_FILES) {
+      if (out.files >= MAX_FILES) {
         out.stopped = `Stopped after ${MAX_FILES} files. Search a smaller folder to see the rest.`;
         return false;
       }
+      out.files++;
       let text: string;
       try {
-        text = new TextDecoder('utf-8', { fatal: true }).decode(await fs.readFile(child));
+        // Line endings as the editor holds them (\n only), so a hit's offsets select the same text there.
+        text = new TextDecoder('utf-8', { fatal: true }).decode(await fs.readFile(child)).replace(/\r\n?/g, '\n');
       } catch {
         out.skipped++;
         continue;
