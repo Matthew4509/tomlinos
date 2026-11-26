@@ -285,10 +285,8 @@ body.is-dragging .win-body { pointer-events: none; }
 .set-h { font-size: 14px; margin: 14px 0 6px; }
 .set-h:first-child { margin-top: 0; }
 .set-sub { font-size: 13px; margin: 10px 0 4px; }
-.set-ai .ai-cloud { margin-top: 14px; }
 .set-ai .bin-set { display: flex; align-items: center; gap: 6px; }
 .set-ai .bin-set .field { flex: 1; min-width: 0; max-width: 100%; }
-.set-ai .ai-cloud h2 { font-size: 13px; }
 .ai-mylist-head { font-size: 13px; margin: 14px 0 4px; }
 .ai-mylist { display: grid; gap: 2px; margin: 4px 0 8px; }
 .ai-mylist-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 3px 0; border-bottom: 1px solid var(--line); }
@@ -1837,10 +1835,32 @@ textarea.field { resize: vertical; font: inherit; }
 .ai-foot { margin-top: 6px; font-size: 12px; color: var(--ink-soft); }
 .ai-foot:empty { display: none; }
 .ai-input { flex: 1; min-height: 60px; max-height: 180px; resize: vertical; padding: 8px; font: 14px/1.4 system-ui, sans-serif; border: 1px solid var(--line); border-radius: 6px; }
-.ai-cloud { margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--line); }
-.ai-cloud h2 { margin: 0 0 6px; }
-.ai-cloud-form { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: #fafaf7; }
-.ai-cloud-form[hidden], .ai-cloud-log[hidden] { display: none; }
+.ai-cloud-log[hidden] { display: none; }
+/* Settings › AI: Claude and OpenRouter as two tiles side by side (one under the other in a narrow window), in the look of
+   the Settings tiles; each opens its settings in a pop-up (.ai-key-dialog). */
+.ai-keys-head { margin-top: 16px; }
+.ai-keys { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin: 4px 0 6px; }
+.ai-tile { display: flex; align-items: center; gap: 12px; min-width: 0; min-height: 64px; padding: 10px 12px; text-align: left; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--ink); cursor: pointer; }
+.ai-tile:hover:not(:disabled) { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.ai-tile:disabled { cursor: default; opacity: .75; }
+.ai-tile-icon { flex: none; }
+.ai-tile-fill { fill: #c96442; }
+.ai-tile-mark { fill: #fff; }
+.ai-tile-openrouter .ai-tile-fill { fill: #4b6bd6; }
+.ai-tile-line { fill: none; stroke: #4b6bd6; stroke-width: 2.5; }
+.ai-tile-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ai-tile-title { font-weight: 700; font-size: 13px; }
+.ai-tile-state { font-size: 12px; font-weight: 700; color: var(--ink-soft); }
+.ai-tile.set .ai-tile-state { color: #1d7a34; }
+.ai-tile-detail { font-size: 12px; color: var(--ink-soft); overflow-wrap: anywhere; }
+.ai-tile-state[hidden], .ai-tile-detail[hidden] { display: none; }
+:root[data-theme="dark"] .ai-tile.set .ai-tile-state { color: #7fd38f; }
+.dialog:has(.ai-key-dialog) { width: min(560px, 100%); }
+.ai-key-dialog .ai-row > span:first-child { flex: none; min-width: 9em; }
+.ai-key-about { margin: 0 0 8px; }
+.ai-key-state { margin: 0 0 6px; font-size: 13px; font-weight: 700; }
+.ai-key-dialog .row-buttons { margin-top: 10px; }
+.ai-key-dialog.ai-cloud-log { margin-top: 0; max-height: 60vh; }
 .ai-cloud-hint { font-size: 12px; color: var(--ink-soft); margin: 4px 0; }
 .ai-cloud-msg { font-size: 13px; margin: 8px 0 0; }
 .ai-cloud-msg:empty { display: none; }
