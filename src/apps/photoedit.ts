@@ -690,6 +690,8 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     try {
       const before = edits;
       const at = doc.history.mark();
+      // Layers (or text, or a mask) put into a flat file: the file is saved, the picture as it is here is not.
+      const flatLayers = extensionOf(dest) !== 'ora' && (doc.layers.length > 1 || doc.layers.some(l => l.text || l.mask));
       const data = await encode(extensionOf(dest));
       const entry = how === 'opened'
         ? await saveOver(shell, dest, data, loadedId)
@@ -698,12 +700,14 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       path = dest;
       loadedId = entry.id;
       if (opened?.path === dest) opened = null;
-      if (edits === before) {
+      if (edits === before && !flatLayers) {
         dirty = false;
         clean = at;
       } else clean = null;
       refresh();
-      shell.toast(`Saved “${entry.name}” (${formatSize(entry.size)}).`);
+      shell.toast(flatLayers
+        ? `Saved “${entry.name}” (${formatSize(entry.size)}) as one flat picture. The layers are not saved: save as .ora to keep them.`
+        : `Saved “${entry.name}” (${formatSize(entry.size)}).`);
       return true;
     } catch (error) {
       await shell.report('Could not save the picture', error);

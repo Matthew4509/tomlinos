@@ -193,6 +193,31 @@ await step('PE-P1-3 undo back to the saved picture says saved again; redo says n
   await W().locator('.pe-status', { hasText: 'not saved' }).waitFor({ timeout: 3000 });
 });
 
+// PE-P1-1: "Save flat" of a picture with layers marked it fully saved, so closing lost the layers with no question.
+await step('PE-P1-1 Save flat of a picture with layers: still "not saved", and closing asks', async () => {
+  await closeAllPe();
+  await openPe();
+  await W().getByRole('button', { name: 'New layer' }).click();
+  await tool('Brush');
+  await dragPic([100, 100], [200, 120]);
+  await saveAsName('flat-layers.png');
+  await page.locator('.dialog', { hasText: 'Layers are not kept in this file' }).getByRole('button', { name: 'Save flat' }).click();
+  const t = await page.locator('.toast', { hasText: 'Saved “flat-layers.png”' }).last().innerText({ timeout: 10000 });
+  ok(/layers are not saved/i.test(t), 'toast says the layers are not saved: ' + t);
+  await W().locator('.pe-status', { hasText: 'not saved' }).waitFor({ timeout: 3000 });
+  await W().getByRole('button', { name: 'Close', exact: true }).first().click();
+  const lose = page.locator('.dialog').getByRole('button', { name: 'Close without saving' });
+  ok(await lose.waitFor({ timeout: 3000 }).then(() => true, () => false), 'closing asked first');
+  await lose.click();
+  // One layer saved flat is fully saved (nothing is lost).
+  await openPe();
+  await tool('Brush');
+  await dragPic([100, 100], [200, 120]);
+  await saveAsName('one-layer.png');
+  await page.locator('.toast', { hasText: 'Saved “one-layer.png”' }).waitFor({ timeout: 10000 });
+  await W().locator('.pe-status:not(:has-text("not saved"))', { hasText: 'one-layer.png' }).waitFor({ timeout: 3000 });
+});
+
 await step('no errors in the page', async () => {
   eq(problems.filter(p => !/status of 404/.test(p)), [], 'problems');
 });

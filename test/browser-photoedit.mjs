@@ -226,11 +226,14 @@ await step('Save as PNG asks before dropping the layers; Save flat writes one pi
   await page.locator('.dialog').getByRole('button', { name: 'Save flat' }).click();
   await page.locator('.toast', { hasText: 'Saved “flat.png”' }).waitFor();
   ok((await W().locator('.pe-status').innerText()).includes('flat.png'), 'now flat.png');
-  // A second Ctrl+S to the same file does not ask again.
+  // A second Ctrl+S to the same file does not ask again. The layers are still only here, so it stays "not saved".
   await tool('Brush');
   await dragPic([10, 290], [30, 290]);
+  const saves = await page.locator('.toast', { hasText: 'Saved “flat.png”' }).count();
   await page.keyboard.press('Control+s');
-  await W().locator('.pe-status:not(:has-text("not saved"))', { hasText: 'flat.png' }).waitFor({ timeout: 10000 });
+  await page.waitForFunction(n => [...document.querySelectorAll('.toast')].filter(t => t.textContent.includes('Saved “flat.png”')).length > n, saves, { timeout: 10000 });
+  ok(!(await page.locator('.dialog', { hasText: 'Layers are not kept in this file' }).count()), 'not asked again');
+  await W().locator('.pe-status', { hasText: 'not saved' }).waitFor({ timeout: 3000 });
 });
 
 await step('Levels (histogram, Auto), Curves (point added), Hue, Balance, Threshold, Posterise, Desaturate apply and undo', async () => {
