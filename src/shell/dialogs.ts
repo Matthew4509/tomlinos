@@ -1,5 +1,6 @@
 // Modal dialogs: a message, a question, a name to type, an error. Each one is a promise that settles when the
 // person answers. Focus is kept inside the dialog while it is open and goes back to where it was afterwards.
+import { AuthFailure } from '../auth/api.ts';
 import { h, on } from '../core/dom.ts';
 import { FsError } from '../fs/errors.ts';
 import { StoreConflict, StoreError } from '../store/store.ts';
@@ -23,9 +24,10 @@ export interface AskOptions<T> {
   focus?: () => HTMLElement | null;
 }
 
-/** Turns anything thrown into words for the person: the fault and its reason, never a stack trace. */
+/** Turns anything thrown into words for the person: the fault and its reason, never a stack trace. A refusal from the
+ *  server (a wrong password, a check that failed, a switched-off feature) is shown in the server's own words. */
 export function describeError(error: unknown): string {
-  if (error instanceof FsError || error instanceof StoreError || error instanceof StoreConflict) return error.message;
+  if (error instanceof FsError || error instanceof StoreError || error instanceof StoreConflict || error instanceof AuthFailure) return error.message;
   console.error(error);
   return 'Something unexpected went wrong inside the desktop. Your files were not changed by it. Reload the page and try again.';
 }
