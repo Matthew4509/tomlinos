@@ -20,7 +20,7 @@ import { createRecovery } from '../shell/recovery.ts';
 import { factsOf, openedFile, overOpened, type OpenedFile } from './photoedit/fileinfo.ts';
 import { BLUR, convolve3, floodFill, greyscale, hexToRgba, invert, keepShape, mixPixel, rgbToHex, sepia, SHARPEN } from './photoedit/pixels.ts';
 import { Doc, makeCanvas, makeLayer, makeMask, maskToAlpha, paintText, surfaceOf, textBounds, type Layer } from './photoedit/doc.ts';
-import { clipRect, group, PixelPatch, TILE, unionRect, type Rect } from './photoedit/history.ts';
+import { clipRect, group, PixelPatch, TILE, unionRect, type HistoryMark, type Rect } from './photoedit/history.ts';
 import { combine, cropMask, ellipseMask, feather, flipMaskIn, invertMask, polygonMask, rectMask, wandMask, type Combine, type Mask, type Point } from './photoedit/selection.ts';
 import { blurSharpenDab, cloneDab, DabPath, dabRect, dodgeBurnDab, healDab, makeCarry, makeStroke, smudgeDab, type Carry, type Dab, type StrokeState } from './photoedit/retouch.ts';
 import { blendInfo, copyName, moveItem, nextName, noRoomForLayer } from './photoedit/layers.ts';
@@ -75,6 +75,9 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
   let path: string | null = null;
   let loadedId = '';
   let dirty = false;
+  /** Where the undo history stood when the picture was last saved or opened (null: no such place, as after a flat
+   *  save of layers), so undoing or redoing back to it is "saved" again. */
+  let clean: HistoryMark | null = null;
   /** Counts changes, so a change made while a save is on its way stays marked unsaved. */
   let edits = 0;
   const maskCount = () => doc.layers.filter(l => l.mask).length;
@@ -290,7 +293,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
   }
 
   doc.onStep = () => {
-    dirty = true;
+    dirty = !doc.history.isAt(clean);
     edits++;
     refresh();
   };
@@ -370,7 +373,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     if (doc.history.redo()) changed();
   }
   function changed() {
-    dirty = true;
+    dirty = !doc.history.isAt(clean);
     edits++;
     panel.refresh();
     refresh();
@@ -391,6 +394,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     path = null;
     loadedId = '';
     dirty = false;
+    clean = doc.history.mark();
     recoveredName = null;
     recoveredFolder = null;
     opened = null;
@@ -511,6 +515,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       path = p;
       loadedId = entry.id;
       dirty = false;
+      clean = doc.history.mark();
       recoveredName = null;
       recoveredFolder = null;
       flatAgreed.clear();
@@ -684,6 +689,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     saving = true;
     try {
       const before = edits;
+      const at = doc.history.mark();
       const data = await encode(extensionOf(dest));
       const entry = how === 'opened'
         ? await saveOver(shell, dest, data, loadedId)
@@ -692,7 +698,10 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       path = dest;
       loadedId = entry.id;
       if (opened?.path === dest) opened = null;
-      if (edits === before) dirty = false;
+      if (edits === before) {
+        dirty = false;
+        clean = at;
+      } else clean = null;
       refresh();
       shell.toast(`Saved “${entry.name}” (${formatSize(entry.size)}).`);
       return true;
@@ -1951,6 +1960,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       path = null;
       loadedId = '';
       dirty = true;
+      clean = null;
       flatAgreed.clear();
       panel.refresh();
       fit();
@@ -2306,6 +2316,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       recoveredFolder = was.path ? parentPath(was.path) : null;
       // It starts unsaved: Save asks where.
       dirty = true;
+      clean = null;
       edits++;
       panel.refresh();
       fit();

@@ -196,3 +196,33 @@ test('several steps can be joined into one (a paste, a colour window that turned
   h.squash(h.pushes, 'nothing');
   assert.equal(h.undoList.length, 1);
 });
+
+test('PE-P1-3 the history knows its saved place: undo back to it is saved again, past it or after a branch is not', () => {
+  const step = (label: string) => ({ label, bytes: 10, undo: () => undefined, redo: () => undefined });
+  const h = new History(1000);
+  const start = h.mark();
+  assert.ok(h.isAt(start), 'nothing done yet');
+  h.push(step('a'));
+  assert.ok(!h.isAt(start));
+  h.undo();
+  assert.ok(h.isAt(start), 'undone back to the start');
+  h.redo();
+  const saved = h.mark();
+  h.push(step('b'));
+  assert.ok(!h.isAt(saved));
+  h.undo();
+  assert.ok(h.isAt(saved), 'undone back to the save');
+  h.undo();
+  assert.ok(!h.isAt(saved), 'undone past the save');
+  h.redo();
+  h.push(step('c'));
+  assert.ok(!h.isAt(saved), 'a new step after the save');
+  assert.ok(!h.isAt(null), 'no saved place (a flat save of layers)');
+  // Once the oldest steps are let go of (over the cap), undoing everything is not the start any more.
+  const small = new History(15);
+  const begin = small.mark();
+  small.push(step('x'));
+  small.push(step('y'));
+  while (small.undo());
+  assert.ok(!small.isAt(begin), 'the first step was let go of');
+});

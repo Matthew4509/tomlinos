@@ -117,6 +117,12 @@ export class PixelPatch {
   }
 }
 
+/** A place in the history (see History.mark). */
+export interface HistoryMark {
+  top: Step | null;
+  dropped: number;
+}
+
 /** A list of steps for undo and redo, trimmed from the oldest end when it holds more than `cap` bytes. */
 export class History {
   readonly undoList: Step[] = [];
@@ -139,7 +145,26 @@ export class History {
     this.undoList.push(step);
     this.redoList.length = 0;
     // The newest step is always kept, even alone over the cap: the person just did it.
-    while (this.undoList.length > 1 && this.bytes > this.cap) this.undoList.shift();
+    while (this.undoList.length > 1 && this.bytes > this.cap) {
+      this.undoList.shift();
+      this.dropped++;
+    }
+  }
+
+  /** Oldest steps let go of to stay under the cap, so far (undoing everything then no longer reaches the start). */
+  dropped = 0;
+
+  /** Where the history stands now: compare it with an earlier mark() to know whether undo and redo came back to it. */
+  mark(): HistoryMark {
+    return { top: this.undoList[this.undoList.length - 1] ?? null, dropped: this.dropped };
+  }
+
+  /** True when the picture is as it was at `m` (an earlier mark()), reached by undo or redo. */
+  isAt(m: HistoryMark | null): boolean {
+    if (!m) return false;
+    const top = this.undoList[this.undoList.length - 1] ?? null;
+    // With no step left, the start counts only if no older step was let go of since.
+    return top === m.top && (top !== null || this.dropped === m.dropped);
   }
 
   undo(): Step | null {

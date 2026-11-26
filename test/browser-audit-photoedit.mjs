@@ -166,6 +166,33 @@ for (const [w, hh] of [[480, 360], [560, 420]]) {
   });
 }
 
+// PE-P1-3: drawing and then undoing back to the picture as it was opened still said "not saved".
+await step('PE-P1-3 undo back to the saved picture says saved again; redo says not saved', async () => {
+  await closeAllPe();
+  await openPe();
+  ok(!(await status()).includes('not saved'), 'a new window starts saved: ' + (await status()));
+  await tool('Brush');
+  await dragPic([100, 100], [200, 120]);
+  await W().locator('.pe-status', { hasText: 'not saved' }).waitFor({ timeout: 3000 });
+  await W().locator('.pe-stage').focus();
+  await page.keyboard.press('Control+z');
+  await W().locator('.pe-status:not(:has-text("not saved"))').waitFor({ timeout: 3000 });
+  await page.keyboard.press('Control+y');
+  await W().locator('.pe-status', { hasText: 'not saved' }).waitFor({ timeout: 3000 });
+  // After a save: a change, then Undo, is the saved picture again.
+  await saveAsName('undo-clean.png');
+  await page.locator('.toast', { hasText: 'Saved “undo-clean.png”' }).waitFor({ timeout: 10000 });
+  await W().locator('.pe-status:not(:has-text("not saved"))', { hasText: 'undo-clean.png' }).waitFor({ timeout: 3000 });
+  await dragPic([300, 300], [350, 320]);
+  await W().locator('.pe-status', { hasText: 'not saved' }).waitFor({ timeout: 3000 });
+  await W().locator('.pe-stage').focus();
+  await page.keyboard.press('Control+z');
+  await W().locator('.pe-status:not(:has-text("not saved"))').waitFor({ timeout: 3000 });
+  // Undo past the saved place is a change again.
+  await page.keyboard.press('Control+z');
+  await W().locator('.pe-status', { hasText: 'not saved' }).waitFor({ timeout: 3000 });
+});
+
 await step('no errors in the page', async () => {
   eq(problems.filter(p => !/status of 404/.test(p)), [], 'problems');
 });
