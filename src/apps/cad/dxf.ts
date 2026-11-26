@@ -1,14 +1,17 @@
-// DXF, the hand-over format: CAD Draft writes AutoCAD Release 12 DXF (the oldest, plainest kind, which CAM programs
-// of every age read) and reads DXF of any release saved as text. Written: layers with their colours and line types,
-// lines, arcs, circles, polylines with their arcs as bulges, points, and text; ellipses and curves become polylines
-// of arcs within a few thousandths of a millimetre (R12 has no ellipse or spline); dimensions become plain lines and
-// text. Read: lines, arcs, circles, polylines (old and light), ellipses, splines (as arcs), points, text and
-// paragraph text, construction lines, and blocks and dimensions taken apart into their pieces; anything else is
-// counted in a "left out" list, never dropped silently.
+// DXF, the hand-over format: CAD Draft writes AutoCAD DXF R12 (the oldest, plainest kind, which CAM programs of every
+// age read) or 2000, 2004, 2007, 2010, 2013 or 2018, all from one writer, and reads DXF of any release saved as text.
+// Written: layers with their colours and line types, lines, arcs, circles, polylines with their arcs as bulges, points,
+// and text; dimensions become plain lines and text (no DIMENSION items). R12 has no ellipse or spline, so ellipses and
+// curves become polylines of arcs within a few thousandths of a millimetre; 2000 and later write true ellipses, each
+// curve as the exact cubic spline it is, light polylines, construction lines as XLINEs and text of several lines as
+// MTEXT, with handles, owners, classes, the tables and objects AutoCAD looks for, UTF-8 from 2007 and \U+ codes
+// before. Read: lines, arcs, circles, polylines (old and light), ellipses, splines (our own back as curves through
+// points, others as arcs), points, text and paragraph text, construction lines, and blocks and dimensions taken apart
+// into their pieces; anything else is counted in a "left out" list, never dropped silently.
 import { moveShape, mirrorShape, rotateShape, scaleShape } from './edit.ts';
 import { textStrokes, type Align } from './font.ts';
 import {
-  P, TAU, add, angleOf, at, circumcircle, cross, dirOf, dist, domain, isFull, mul, normAngle, perp, rotatePt, sub, unit,
+  P, TAU, add, angleOf, at, circumcircle, cross, curveThrough, dirOf, dist, domain, isFull, mul, normAngle, perp, rotatePt, sub, unit,
   type Box, type Piece, type Pt,
 } from './geom.ts';
 import {
@@ -160,6 +163,8 @@ function aciOf(hex: string): number {
 // ---- Writing ---------------------------------------------------------------------------------------------------------
 
 export interface DxfOptions {
+  /** The release written (R12 when not given). */
+  version?: DxfVersion;
   /** Text as TEXT items (the CAM program's own letters), or as lines in CAD Draft's letters. */
   textAsLines: boolean;
   /** Construction lines as long lines across the drawing (R12 has no endless line). */
@@ -218,13 +223,17 @@ function cp1252(s: string): Uint8Array {
   return new Uint8Array(out);
 }
 
+/** Is the letter one of Windows' Western set (cp1252)? */
+function inCp1252(ch: string): boolean {
+  const c = ch.codePointAt(0)!;
+  return c < 0x80 || (c >= 0xa0 && c <= 0xff) || '€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ'.includes(ch);
+}
+
 /** The letters in s that a cp1252 file cannot hold (each becomes ?), without repeats. */
 export function lettersLost(s: string): string[] {
   const lost = new Set<string>();
   for (const ch of s) {
-    const c = ch.codePointAt(0)!;
-    if (c < 0x80 || (c >= 0xa0 && c <= 0xff)) continue;
-    if (!'€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ'.includes(ch)) lost.add(ch);
+    if (!inCp1252(ch)) lost.add(ch);
   }
   return [...lost];
 }
@@ -237,12 +246,98 @@ export interface DxfWritten {
   count: number;
 }
 
-/** The drawing as an R12 DXF file. */
-export function writeDxf(d: Drawing, o: DxfOptions): DxfWritten {
+/** The DXF releases written, oldest first, each with the version code its header gives and its name in lists. */
+export const DXF_VERSIONS = {
+  R12: { acad: 'AC1009', label: 'DXF R12' },
+  '2000': { acad: 'AC1015', label: 'DXF 2000' },
+  '2004': { acad: 'AC1018', label: 'DXF 2004' },
+  '2007': { acad: 'AC1021', label: 'DXF 2007' },
+  '2010': { acad: 'AC1024', label: 'DXF 2010' },
+  '2013': { acad: 'AC1027', label: 'DXF 2013' },
+  '2018': { acad: 'AC1032', label: 'DXF 2018' },
+} as const;
+export type DxfVersion = keyof typeof DXF_VERSIONS;
+export const DXF_VERSION_LIST = Object.keys(DXF_VERSIONS) as DxfVersion[];
+/** What Output offers first: 2000 is the oldest release with handles, light polylines, ellipses and curves, and every CAM program of the last twenty years reads it. */
+export const DEFAULT_DXF_VERSION: DxfVersion = '2000';
+export const isDxfVersion = (v: unknown): v is DxfVersion => typeof v === 'string' && Object.hasOwn(DXF_VERSIONS, v);
+
+/** A name a 2000 or later DXF accepts as a layer: none of < > / \ " : ; ? * | = , ` or control signs, at most 255 long. */
+export function modernName(name: string): string {
+  const n = name.replace(/[<>/\\":;?*|=,`\u0000-\u001f]/g, '_').trim().slice(0, 255);
+  return n || 'Layer';
+}
+
+/** Every UTF-16 unit of a letter as AutoCAD's \U+XXXX code (what a file older than 2007 holds beyond its code page). */
+const uCodes = (ch: string): string => {
+  let s = '';
+  for (let i = 0; i < ch.length; i++) s += `\\U+${ch.charCodeAt(i).toString(16).toUpperCase().padStart(4, '0')}`;
+  return s;
+};
+
+/** Words for a TEXT or MTEXT of a 2000 or later DXF. `ascii`: every letter beyond plain ASCII as a \U+ code. */
+function modernWords(s: string, utf8: boolean, ascii: boolean, mtext: boolean): string {
+  let t = mtext ? s.replace(/[\\{}]/g, c => `\\${c}`) : s.replace(/\\(?=U\+[0-9a-fA-F]{4})/g, '\\U+005C');
+  t = t.replace(/%%/g, '%%%%%%');
+  t = mtext ? t.replace(/\r\n|\r|\n/g, '\\P') : t.replace(/[\r\n]+/g, ' ');
+  return encodeName(t, utf8, ascii);
+}
+
+/** A name or words: as they are in a UTF-8 file; letters beyond the code page as \U+ codes in an older one. */
+function encodeName(s: string, utf8: boolean, ascii: boolean): string {
+  if (utf8) return s;
+  let out = '';
+  for (const ch of s) out += (ascii ? ch.charCodeAt(0) < 0x80 : inCp1252(ch)) ? ch : uCodes(ch);
+  return out;
+}
+
+/** MTEXT words cut into the 250-letter pieces a DXF holds per line; no piece ends in a space (a reader may trim it) or half a letter pair. */
+function mtextPieces(s: string): string[] {
   const out: string[] = [];
+  let rest = s;
+  while (rest.length > 250) {
+    let cut = 250;
+    while (cut > 1 && (/\s/.test(rest[cut - 1]) || /[\ud800-\udbff]/.test(rest[cut - 1]))) cut--;
+    out.push(rest.slice(0, cut));
+    rest = rest.slice(cut);
+  }
+  out.push(rest);
+  return out;
+}
+
+/** Group codes whose values are whole numbers. */
+const intCode = (c: number): boolean => (c >= 60 && c < 100) || (c >= 170 && c < 180) || (c >= 270 && c < 300) || (c >= 370 && c < 390) || (c >= 400 && c < 410) || (c >= 1060 && c <= 1071);
+
+/** The drawing as a DXF file: R12 (the default) or a 2000 to 2018 release. */
+export function writeDxf(d: Drawing, o: DxfOptions): DxfWritten {
+  const version = o.version ?? 'R12';
+  if (version === 'R12' || DXF_VERSIONS[version].acad >= 'AC1021') return buildDxf(d, o, version, false);
+  // A 2000 or 2004 file is read as Windows' Western letters, but a reader may try UTF-8 first: if these bytes happen
+  // to be good UTF-8 as well (a "Ã©" in some words), every letter beyond ASCII is written as a \U+ code instead.
+  const first = buildDxf(d, o, version, false);
+  if (!first.bytes.some(b => b >= 0x80)) return first;
+  try {
+    new TextDecoder('utf-8', { fatal: true }).decode(first.bytes);
+  } catch {
+    return first;
+  }
+  return buildDxf(d, o, version, true);
+}
+
+function buildDxf(d: Drawing, o: DxfOptions, version: DxfVersion, ascii: boolean): DxfWritten {
+  const modern = version !== 'R12';
+  const acad = DXF_VERSIONS[version].acad;
+  const utf8 = acad >= 'AC1021';
+  const since2004 = acad >= 'AC1018';
+  const since2007 = utf8;
+  const body: string[] = [];
+  let out = body;
   const tag = (code: number, value: string | number) => {
-    out.push(String(code), typeof value === 'number' ? (Number.isInteger(value) && code >= 60 && code < 100 ? String(value) : dxfNum(value)) : value);
+    out.push(String(code), typeof value === 'number' ? (Number.isInteger(value) && intCode(code) ? String(value) : dxfNum(value)) : value);
   };
+  // Handles (2000 and later): every table, record, block, item and object has its own, in hexadecimal.
+  let nextHandle = 1;
+  const newHandle = (): string => (nextHandle++).toString(16).toUpperCase();
   const tol = arcTolerance(d.units);
   const k = d.units === 'mm' ? 1 : 1 / 25.4;
   const layerOn = new Map(d.layers.map(l => [l.name, l.on]));
@@ -250,21 +345,24 @@ export function writeDxf(d: Drawing, o: DxfOptions): DxfWritten {
   const leftHidden = d.ents.filter(e => !o.hidden && !layerOn.get(e.layer)).length;
   const leftXlines = d.ents.filter(e => (o.hidden || layerOn.get(e.layer)) && !o.construction && e.type === 'xline').length;
 
-  // Layer names R12 accepts, kept apart if two come out the same.
+  // Layer names the release accepts, kept apart if two come out the same (2000 and later: whatever the capitals).
   const names = new Map<string, string>();
   const used = new Set<string>(['0']);
+  const nameOf = modern ? modernName : r12Name;
   for (const l of d.layers) {
     if (l.name === '0') {
       names.set('0', '0');
       continue;
     }
-    let n = r12Name(l.name);
-    for (let i = 2; used.has(n); i++) n = `${r12Name(l.name).slice(0, 28)}_${i}`;
-    used.add(n);
+    let n = nameOf(l.name);
+    const key = (s: string) => (modern ? s.toUpperCase() : s);
+    for (let i = 2; used.has(key(n)); i++) n = `${nameOf(l.name).slice(0, modern ? 250 : 28)}_${i}`;
+    used.add(key(n));
     names.set(l.name, n);
   }
-  // Beyond capitals, a name R12 cannot hold (a space, a bracket, too long) is changed: those are listed.
-  const renamed = d.layers.filter(l => names.get(l.name) !== l.name.toUpperCase()).map(l => `${l.name} → ${names.get(l.name)}`);
+  // R12: beyond capitals, a name it cannot hold (a space, a bracket, too long) is changed. Later: any change at all.
+  const renamed = d.layers.filter(l => names.get(l.name) !== (modern ? l.name : l.name.toUpperCase())).map(l => `${l.name} → ${names.get(l.name)}`);
+  const layerName = (n: string) => (modern ? encodeName(n, utf8, ascii) : n);
 
   // The box round everything (construction lines are drawn across it).
   let box: Box | null = null;
@@ -274,14 +372,566 @@ export function writeDxf(d: Drawing, o: DxfOptions): DxfWritten {
   }
   const ext = box ?? { x0: 0, y0: 0, x1: 0, y1: 0 };
 
+  // The handles of the tables, their fixed records, the two blocks and the objects (2000 and later).
+  const H = modern
+    ? {
+      vportT: newHandle(), ltypeT: newHandle(), layerT: newHandle(), styleT: newHandle(), viewT: newHandle(), ucsT: newHandle(), appidT: newHandle(), dimT: newHandle(), brT: newHandle(),
+      vport: newHandle(), ltByBlock: newHandle(), ltByLayer: newHandle(), style: newHandle(), appid: newHandle(), dim: newHandle(), brModel: newHandle(), brPaper: newHandle(),
+      blkModel: newHandle(), endModel: newHandle(), blkPaper: newHandle(), endPaper: newHandle(),
+      root: newHandle(), groups: newHandle(), layouts: newHandle(), mlineStyles: newHandle(), mlineStd: newHandle(), plotStyles: newHandle(), plotNormal: newHandle(), layoutModel: newHandle(), layout1: newHandle(),
+    }
+    : null;
+  const ltHandles = new Map<LineType, string>();
+  if (modern) for (const lt of Object.keys(DXF_LINE_TYPES) as LineType[]) ltHandles.set(lt, newHandle());
+  const ltName = (lt: LineType) => (modern && lt === 'continuous' ? 'Continuous' : DXF_LINE_TYPES[lt].name);
+  /** A table's head (2000 and later: its handle, no owner, and its class). */
+  const table = (name: string, handle: string | undefined, count: number) => {
+    tag(0, 'TABLE');
+    tag(2, name);
+    if (H) {
+      tag(5, handle!);
+      tag(330, '0');
+      tag(100, 'AcDbSymbolTable');
+    }
+    tag(70, count);
+  };
+  /** A table record's head (2000 and later: handle, owner and classes). */
+  const record = (type: string, handle: string, owner: string, cls: string) => {
+    tag(0, type);
+    tag(type === 'DIMSTYLE' ? 105 : 5, handle);
+    tag(330, owner);
+    tag(100, 'AcDbSymbolTableRecord');
+    tag(100, cls);
+  };
+  const styleName = modern ? 'Standard' : 'STANDARD';
+
+  // ---- Classes and tables -------------------------------------------------------------------------------------------
+  if (H) {
+    tag(0, 'SECTION');
+    tag(2, 'CLASSES');
+    for (const [dxf, cpp, n] of [['ACDBDICTIONARYWDFLT', 'AcDbDictionaryWithDefault', 1], ['ACDBPLACEHOLDER', 'AcDbPlaceHolder', 1], ['LAYOUT', 'AcDbLayout', 2]] as const) {
+      tag(0, 'CLASS');
+      tag(1, dxf);
+      tag(2, cpp);
+      tag(3, 'ObjectDBX Classes');
+      tag(90, 0);
+      if (since2004) tag(91, n);
+      tag(280, 0);
+      tag(281, 0);
+    }
+    tag(0, 'ENDSEC');
+  }
+
+  tag(0, 'SECTION');
+  tag(2, 'TABLES');
+  if (H) {
+    table('VPORT', H.vportT, 1);
+    record('VPORT', H.vport, H.vportT, 'AcDbViewportTableRecord');
+    tag(2, '*Active');
+    tag(70, 0);
+    const w = Math.max(ext.x1 - ext.x0, 1);
+    const ht = Math.max(ext.y1 - ext.y0, 1);
+    for (const [code, v] of [[10, 0], [20, 0], [11, 1], [21, 1], [12, (ext.x0 + ext.x1) / 2], [22, (ext.y0 + ext.y1) / 2], [13, 0], [23, 0], [14, 10 * k], [24, 10 * k], [15, 10 * k], [25, 10 * k],
+      [16, 0], [26, 0], [36, 1], [17, 0], [27, 0], [37, 0], [40, Math.max(ht, w / 1.5) * 1.1], [41, 1.5], [42, 50], [43, 0], [44, 0], [50, 0], [51, 0]] as const) tag(code, v);
+    for (const [code, v] of [[71, 0], [72, 100], [73, 1], [74, 3], [75, 0], [76, 0], [77, 0], [78, 0], [281, 0], [65, 1]] as const) tag(code, v);
+    for (const [code, v] of [[110, 0], [120, 0], [130, 0], [111, 1], [121, 0], [131, 0], [112, 0], [122, 1], [132, 0]] as const) tag(code, v);
+    tag(79, 0);
+    tag(146, 0);
+    tag(0, 'ENDTAB');
+  }
+  table('LTYPE', H?.ltypeT, Object.keys(DXF_LINE_TYPES).length + (H ? 2 : 0));
+  if (H) {
+    for (const [name, handle] of [['ByBlock', H.ltByBlock], ['ByLayer', H.ltByLayer]]) {
+      record('LTYPE', handle, H.ltypeT, 'AcDbLinetypeTableRecord');
+      tag(2, name);
+      tag(70, 0);
+      tag(3, '');
+      tag(72, 65);
+      tag(73, 0);
+      tag(40, 0);
+    }
+  }
+  for (const [id, lt] of Object.entries(DXF_LINE_TYPES) as Array<[LineType, (typeof DXF_LINE_TYPES)[LineType]]>) {
+    if (H) record('LTYPE', ltHandles.get(id)!, H.ltypeT, 'AcDbLinetypeTableRecord');
+    else tag(0, 'LTYPE');
+    tag(2, ltName(id));
+    tag(70, 0);
+    tag(3, lt.text);
+    tag(72, 65);
+    tag(73, lt.mm.length);
+    tag(40, lt.mm.reduce((t, v) => t + Math.abs(v), 0) * k);
+    for (const v of lt.mm) {
+      tag(49, v * k);
+      if (H) tag(74, 0);
+    }
+  }
+  tag(0, 'ENDTAB');
+  const ownZero = d.layers.find(l => l.name === '0');
+  table('LAYER', H?.layerT, d.layers.length + (ownZero ? 0 : 1));
+  const layerRow = (name: string, colour: number, on: boolean, locked: boolean, lt: string) => {
+    if (H) record('LAYER', newHandle(), H.layerT, 'AcDbLayerTableRecord');
+    else tag(0, 'LAYER');
+    tag(2, name);
+    tag(70, locked ? 4 : 0);
+    tag(62, on ? colour : -colour);
+    tag(6, lt);
+    if (H) {
+      tag(370, -3);
+      tag(390, H.plotNormal);
+    }
+  };
+  if (!ownZero) layerRow('0', 7, true, false, ltName('continuous'));
+  for (const l of d.layers) layerRow(layerName(names.get(l.name)!), aciOf(l.colour), l.on, l.locked, ltName(l.lineType));
+  tag(0, 'ENDTAB');
+  table('STYLE', H?.styleT, 1);
+  if (H) record('STYLE', H.style, H.styleT, 'AcDbTextStyleTableRecord');
+  else tag(0, 'STYLE');
+  tag(2, styleName);
+  tag(70, 0);
+  tag(40, 0);
+  tag(41, 1);
+  tag(50, 0);
+  tag(71, 0);
+  tag(42, d.style.textH);
+  tag(3, 'txt');
+  tag(4, '');
+  tag(0, 'ENDTAB');
+  if (H) {
+    table('VIEW', H.viewT, 0);
+    tag(0, 'ENDTAB');
+    table('UCS', H.ucsT, 0);
+    tag(0, 'ENDTAB');
+    table('APPID', H.appidT, 1);
+    record('APPID', H.appid, H.appidT, 'AcDbRegAppTableRecord');
+    tag(2, 'ACAD');
+    tag(70, 0);
+    tag(0, 'ENDTAB');
+    table('DIMSTYLE', H.dimT, 1);
+    tag(100, 'AcDbDimStyleTable');
+    tag(71, 1);
+    tag(340, H.dim);
+    record('DIMSTYLE', H.dim, H.dimT, 'AcDbDimStyleTableRecord');
+    tag(2, 'Standard');
+    tag(70, 0);
+    tag(41, d.style.arrow);
+    tag(140, d.style.dimH);
+    tag(271, d.style.dp);
+    tag(340, H.style);
+    tag(0, 'ENDTAB');
+    table('BLOCK_RECORD', H.brT, 2);
+    for (const [name, handle, layout] of [['*Model_Space', H.brModel, H.layoutModel], ['*Paper_Space', H.brPaper, H.layout1]]) {
+      record('BLOCK_RECORD', handle, H.brT, 'AcDbBlockTableRecord');
+      tag(2, name);
+      tag(340, layout);
+      if (since2007) {
+        tag(70, d.units === 'mm' ? 4 : 1);
+        tag(280, 1);
+        tag(281, 0);
+      }
+    }
+    tag(0, 'ENDTAB');
+  }
+  tag(0, 'ENDSEC');
+
+  tag(0, 'SECTION');
+  tag(2, 'BLOCKS');
+  if (H) {
+    for (const [name, br, begin, end, paper] of [['*Model_Space', H.brModel, H.blkModel, H.endModel, false], ['*Paper_Space', H.brPaper, H.blkPaper, H.endPaper, true]] as const) {
+      tag(0, 'BLOCK');
+      tag(5, begin);
+      tag(330, br);
+      tag(100, 'AcDbEntity');
+      if (paper) tag(67, 1);
+      tag(8, '0');
+      tag(100, 'AcDbBlockBegin');
+      tag(2, name);
+      tag(70, 0);
+      tag(10, 0);
+      tag(20, 0);
+      tag(30, 0);
+      tag(3, name);
+      tag(1, '');
+      tag(0, 'ENDBLK');
+      tag(5, end);
+      tag(330, br);
+      tag(100, 'AcDbEntity');
+      if (paper) tag(67, 1);
+      tag(8, '0');
+      tag(100, 'AcDbBlockEnd');
+    }
+  }
+  tag(0, 'ENDSEC');
+
+  // ---- Items --------------------------------------------------------------------------------------------------------
+  tag(0, 'SECTION');
+  tag(2, 'ENTITIES');
+  let count = 0;
+  let curves = 0;
+  /** An item's head: its type and layer; 2000 and later also its handle, owner (model space) and classes. */
+  const head = (type: string, layer: string, ...classes: string[]) => {
+    tag(0, type);
+    if (H) {
+      tag(5, newHandle());
+      tag(330, H.brModel);
+      tag(100, 'AcDbEntity');
+    }
+    tag(8, layer);
+    if (H) for (const c of classes) tag(100, c);
+  };
+  const line = (layer: string, a: Pt, b: Pt) => {
+    head('LINE', layer, 'AcDbLine');
+    tag(10, a.x);
+    tag(20, a.y);
+    tag(30, 0);
+    tag(11, b.x);
+    tag(21, b.y);
+    tag(31, 0);
+    count++;
+  };
+  const poly = (layer: string, pts: Pt[], bulges: number[], closed: boolean) => {
+    if (pts.length < 2) return;
+    if (H) {
+      head('LWPOLYLINE', layer, 'AcDbPolyline');
+      tag(90, pts.length);
+      tag(70, closed ? 1 : 0);
+      tag(43, 0);
+      pts.forEach((p, i) => {
+        tag(10, p.x);
+        tag(20, p.y);
+        if (Math.abs(bulges[i] ?? 0) > 1e-12) tag(42, bulges[i]);
+      });
+      count++;
+      return;
+    }
+    tag(0, 'POLYLINE');
+    tag(8, layer);
+    tag(66, 1);
+    tag(10, 0);
+    tag(20, 0);
+    tag(30, 0);
+    tag(70, closed ? 1 : 0);
+    pts.forEach((p, i) => {
+      tag(0, 'VERTEX');
+      tag(8, layer);
+      tag(10, p.x);
+      tag(20, p.y);
+      tag(30, 0);
+      if (Math.abs(bulges[i] ?? 0) > 1e-12) tag(42, bulges[i]);
+    });
+    tag(0, 'SEQEND');
+    tag(8, layer);
+    count++;
+  };
+  const arc = (layer: string, c: Pt, r: number, a0: number, a1: number) => {
+    const full = isFull(a0, a1);
+    head(full ? 'CIRCLE' : 'ARC', layer, 'AcDbCircle');
+    tag(10, c.x);
+    tag(20, c.y);
+    tag(30, 0);
+    tag(40, r);
+    if (!full) {
+      if (H) tag(100, 'AcDbArc');
+      tag(50, (normAngle(a0) * 180) / Math.PI);
+      tag(51, (normAngle(a1) * 180) / Math.PI);
+    }
+    count++;
+  };
+  const strokes = (layer: string, list: Pt[][]) => {
+    for (const s of list) {
+      if (s.length === 2) line(layer, s[0], s[1]);
+      else poly(layer, s, s.map(() => 0), false);
+    }
+  };
+  /** Text of more than one line as MTEXT (2000 and later): its first line's foot at t.p, rows 1.6 heights apart as on screen. */
+  const mtext = (layer: string, t: NoteText) => {
+    const up = perp(dirOf(t.angle));
+    const top = add(t.p, mul(up, t.h));
+    head('MTEXT', layer, 'AcDbMText');
+    tag(10, top.x);
+    tag(20, top.y);
+    tag(30, 0);
+    tag(40, t.h);
+    tag(41, 0);
+    tag(71, t.align === 'left' ? 1 : t.align === 'centre' ? 2 : 3);
+    tag(72, 1);
+    const pieces = mtextPieces(modernWords(t.text, utf8, ascii, true));
+    for (const p of pieces.slice(0, -1)) tag(3, p);
+    tag(1, pieces[pieces.length - 1]);
+    tag(7, styleName);
+    tag(11, Math.cos(t.angle));
+    tag(21, Math.sin(t.angle));
+    tag(31, 0);
+    // AutoCAD sets rows 5/3 of a height apart at a spacing of 1: 0.96 of that is the 1.6 heights CAD Draft uses.
+    tag(73, 2);
+    tag(44, 0.96);
+    count++;
+  };
+  const text = (layer: string, t: NoteText) => {
+    if (o.textAsLines) return strokes(layer, textStrokes(t.text, t.p, t.h, t.angle, t.align));
+    const rows = t.text.split('\n');
+    if (H && rows.length > 1) return mtext(layer, t);
+    rows.forEach((row, i) => {
+      if (!row.trim()) return;
+      if (H && row.length > 250) return mtext(layer, { ...t, text: row, p: rotatePt(P(t.p.x, t.p.y - i * 1.6 * t.h), t.p, t.angle) });
+      const foot = rotatePt(P(t.p.x, t.p.y - i * 1.6 * t.h), t.p, t.angle);
+      head('TEXT', layer, 'AcDbText');
+      tag(10, foot.x);
+      tag(20, foot.y);
+      tag(30, 0);
+      tag(40, t.h);
+      tag(1, H ? modernWords(row, utf8, ascii, false) : r12Text(row));
+      if (Math.abs(t.angle) > 1e-12) tag(50, (normAngle(t.angle) * 180) / Math.PI);
+      if (t.align !== 'left') {
+        tag(72, t.align === 'centre' ? 1 : 2);
+        tag(11, foot.x);
+        tag(21, foot.y);
+        tag(31, 0);
+      }
+      if (H) tag(100, 'AcDbText');
+      count++;
+    });
+  };
+  const textShape = (layer: string, t: TextShape) => {
+    if (!t.arc) return text(layer, { text: t.text, p: t.p, h: t.h, angle: t.angle, align: t.align });
+    for (const l of arcLetters(t)) if (l.ch.trim()) text(layer, { text: l.ch, p: l.at, h: t.h, angle: l.angle, align: 'left' as Align });
+  };
+
+  for (const e of ents) {
+    const layer = layerName(names.get(e.layer) ?? '0');
+    switch (e.type) {
+      case 'line':
+        line(layer, e.a, e.b);
+        break;
+      case 'arc':
+      case 'circle': {
+        const [p] = piecesOf(e) as Array<Extract<Piece, { k: 'arc' }>>;
+        arc(layer, p.c, p.r, p.a0, p.a1);
+        break;
+      }
+      case 'poly':
+        poly(layer, e.pts, e.bulges, e.closed);
+        break;
+      case 'ellipse':
+      case 'spline': {
+        if (H && e.type === 'ellipse') {
+          head('ELLIPSE', layer, 'AcDbEllipse');
+          tag(10, e.c.x);
+          tag(20, e.c.y);
+          tag(30, 0);
+          tag(11, e.m.x);
+          tag(21, e.m.y);
+          tag(31, 0);
+          tag(210, 0);
+          tag(220, 0);
+          tag(230, 1);
+          tag(40, e.ratio);
+          const full = isFull(e.t0, e.t1);
+          tag(41, full ? 0 : e.t0);
+          tag(42, full ? TAU : e.t1);
+          count++;
+          break;
+        }
+        if (H && e.type === 'spline') {
+          // The curve is cubic pieces end to end: one cubic B-spline whose inside knots are each three deep is
+          // exactly those pieces (control points: each piece's four, the shared ends once).
+          const bez = curveThrough(e.fit, e.closed);
+          if (bez.length) {
+            const ctrl = [bez[0].p[0], ...bez.flatMap(b => [b.p[1], b.p[2], b.p[3]])];
+            const knots = [0, 0, 0, 0, ...bez.slice(1).flatMap((_, i) => [i + 1, i + 1, i + 1]), bez.length, bez.length, bez.length, bez.length];
+            head('SPLINE', layer, 'AcDbSpline');
+            tag(210, 0);
+            tag(220, 0);
+            tag(230, 1);
+            tag(70, 8);
+            tag(71, 3);
+            tag(72, knots.length);
+            tag(73, ctrl.length);
+            tag(74, 0);
+            tag(42, 1e-10);
+            tag(43, 1e-10);
+            for (const kv of knots) tag(40, kv);
+            for (const c of ctrl) {
+              tag(10, c.x);
+              tag(20, c.y);
+              tag(30, 0);
+            }
+            count++;
+          }
+          break;
+        }
+        const closed = e.type === 'ellipse' ? isFull(e.t0, e.t1) : e.closed;
+        const pl = piecesToPoly(piecesOf(e), closed, tol);
+        poly(layer, pl.pts, pl.bulges, pl.closed);
+        curves++;
+        break;
+      }
+      case 'point':
+        head('POINT', layer, 'AcDbPoint');
+        tag(10, e.p.x);
+        tag(20, e.p.y);
+        tag(30, 0);
+        count++;
+        break;
+      case 'xline': {
+        if (H) {
+          head('XLINE', layer, 'AcDbXline');
+          tag(10, e.p.x);
+          tag(20, e.p.y);
+          tag(30, 0);
+          tag(11, e.d.x);
+          tag(21, e.d.y);
+          tag(31, 0);
+          count++;
+          break;
+        }
+        const reach = Math.max(ext.x1 - ext.x0, ext.y1 - ext.y0, 100 * k) * 1.5 + dist(e.p, P((ext.x0 + ext.x1) / 2, (ext.y0 + ext.y1) / 2));
+        line(layer, sub(e.p, mul(e.d, reach)), add(e.p, mul(e.d, reach)));
+        break;
+      }
+      case 'text':
+        textShape(layer, e);
+        break;
+      case 'dim': {
+        const parts = dimParts(e);
+        for (const p of parts.pieces) {
+          if (p.k === 'seg') line(layer, p.a, p.b);
+          else if (p.k === 'arc') arc(layer, p.c, p.r, p.a0, p.a1);
+        }
+        for (const t of parts.texts) text(layer, t);
+        break;
+      }
+    }
+  }
+  tag(0, 'ENDSEC');
+
+  // ---- Objects (2000 and later): the dictionaries and layouts AutoCAD looks for -------------------------------------
+  if (H) {
+    tag(0, 'SECTION');
+    tag(2, 'OBJECTS');
+    const dict = (handle: string, owner: string, entries: Array<[string, string]>, type = 'DICTIONARY') => {
+      tag(0, type);
+      tag(5, handle);
+      if (owner !== '0') {
+        tag(102, '{ACAD_REACTORS');
+        tag(330, owner);
+        tag(102, '}');
+      }
+      tag(330, owner);
+      tag(100, 'AcDbDictionary');
+      tag(281, 1);
+      for (const [name, h] of entries) {
+        tag(3, name);
+        tag(350, h);
+      }
+    };
+    dict(H.root, '0', [['ACAD_GROUP', H.groups], ['ACAD_LAYOUT', H.layouts], ['ACAD_MLINESTYLE', H.mlineStyles], ['ACAD_PLOTSTYLENAME', H.plotStyles]]);
+    dict(H.groups, H.root, []);
+    dict(H.layouts, H.root, [['Layout1', H.layout1], ['Model', H.layoutModel]]);
+    dict(H.mlineStyles, H.root, [['Standard', H.mlineStd]]);
+    dict(H.plotStyles, H.root, [['Normal', H.plotNormal]], 'ACDBDICTIONARYWDFLT');
+    tag(100, 'AcDbDictionaryWithDefault');
+    tag(340, H.plotNormal);
+    tag(0, 'ACDBPLACEHOLDER');
+    tag(5, H.plotNormal);
+    tag(102, '{ACAD_REACTORS');
+    tag(330, H.plotStyles);
+    tag(102, '}');
+    tag(330, H.plotStyles);
+    tag(0, 'MLINESTYLE');
+    tag(5, H.mlineStd);
+    tag(102, '{ACAD_REACTORS');
+    tag(330, H.mlineStyles);
+    tag(102, '}');
+    tag(330, H.mlineStyles);
+    tag(100, 'AcDbMlineStyle');
+    tag(2, 'Standard');
+    tag(70, 0);
+    tag(3, '');
+    tag(62, 256);
+    tag(51, 90);
+    tag(52, 90);
+    tag(71, 2);
+    for (const off of [0.5, -0.5]) {
+      tag(49, off);
+      tag(62, 256);
+      tag(6, 'BYLAYER');
+    }
+    for (const [handle, name, order, br] of [[H.layoutModel, 'Model', 0, H.brModel], [H.layout1, 'Layout1', 1, H.brPaper]] as const) {
+      tag(0, 'LAYOUT');
+      tag(5, handle);
+      tag(102, '{ACAD_REACTORS');
+      tag(330, H.layouts);
+      tag(102, '}');
+      tag(330, H.layouts);
+      tag(100, 'AcDbPlotSettings');
+      tag(1, '');
+      tag(2, 'none_device');
+      tag(4, '');
+      tag(6, '');
+      for (const code of [40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 140, 141]) tag(code, 0);
+      tag(142, 1);
+      tag(143, 1);
+      tag(70, order === 0 ? 1712 : 688);
+      tag(72, d.units === 'mm' ? 1 : 0);
+      tag(73, 0);
+      tag(74, 5);
+      tag(7, '');
+      tag(75, 16);
+      tag(147, 1);
+      tag(148, 0);
+      tag(149, 0);
+      tag(76, 0);
+      tag(77, 2);
+      tag(78, 300);
+      tag(100, 'AcDbLayout');
+      tag(1, name);
+      tag(70, 1);
+      tag(71, order);
+      tag(10, 0);
+      tag(20, 0);
+      tag(11, order === 0 ? 12 * 25.4 * k : 420 * k);
+      tag(21, order === 0 ? 9 * 25.4 * k : 297 * k);
+      tag(12, 0);
+      tag(22, 0);
+      tag(32, 0);
+      tag(14, ext.x0);
+      tag(24, ext.y0);
+      tag(34, 0);
+      tag(15, ext.x1);
+      tag(25, ext.y1);
+      tag(35, 0);
+      tag(146, 0);
+      tag(13, 0);
+      tag(23, 0);
+      tag(33, 0);
+      tag(16, 1);
+      tag(26, 0);
+      tag(36, 0);
+      tag(17, 0);
+      tag(27, 1);
+      tag(37, 0);
+      tag(76, 0);
+      tag(330, br);
+    }
+    tag(0, 'ENDSEC');
+  }
+  tag(0, 'EOF');
+
+  // ---- The header, last because its $HANDSEED must be above every handle given out --------------------------------
+  const header: string[] = [];
+  out = header;
   tag(0, 'SECTION');
   tag(2, 'HEADER');
   tag(9, '$ACADVER');
-  tag(1, 'AC1009');
+  tag(1, acad);
+  if (modern) {
+    tag(9, '$DWGCODEPAGE');
+    tag(3, 'ANSI_1252');
+  }
   // R12 has no units of its own. An inch drawing says so the way later DXFs do ($INSUNITS 1), so it opens again in
   // inches here and in programs that read it; a millimetre drawing writes nothing extra (millimetres is what a DXF
-  // that does not say is read as).
-  if (d.units === 'inch') {
+  // that does not say is read as). 2000 and later say both, with $MEASUREMENT for metric or imperial.
+  if (d.units === 'inch' && !modern) {
     tag(9, '$INSUNITS');
     tag(70, 1);
   }
@@ -304,214 +954,45 @@ export function writeDxf(d: Drawing, o: DxfOptions): DxfWritten {
   tag(10, ext.x1);
   tag(20, ext.y1);
   tag(9, '$TEXTSTYLE');
-  tag(7, 'STANDARD');
+  tag(7, styleName);
   tag(9, '$CLAYER');
-  tag(8, names.get(d.current) ?? '0');
-  tag(0, 'ENDSEC');
-
-  tag(0, 'SECTION');
-  tag(2, 'TABLES');
-  tag(0, 'TABLE');
-  tag(2, 'LTYPE');
-  tag(70, Object.keys(DXF_LINE_TYPES).length);
-  for (const lt of Object.values(DXF_LINE_TYPES)) {
-    tag(0, 'LTYPE');
-    tag(2, lt.name);
-    tag(70, 0);
-    tag(3, lt.text);
-    tag(72, 65);
-    tag(73, lt.mm.length);
-    tag(40, lt.mm.reduce((t, v) => t + Math.abs(v), 0) * k);
-    for (const v of lt.mm) tag(49, v * k);
-  }
-  tag(0, 'ENDTAB');
-  tag(0, 'TABLE');
-  tag(2, 'LAYER');
-  const ownZero = d.layers.find(l => l.name === '0');
-  tag(70, d.layers.length + (ownZero ? 0 : 1));
-  const layerRow = (name: string, colour: number, on: boolean, locked: boolean, lt: string) => {
-    tag(0, 'LAYER');
-    tag(2, name);
-    tag(70, locked ? 4 : 0);
-    tag(62, on ? colour : -colour);
-    tag(6, lt);
-  };
-  if (!ownZero) layerRow('0', 7, true, false, 'CONTINUOUS');
-  for (const l of d.layers) layerRow(names.get(l.name)!, aciOf(l.colour), l.on, l.locked, DXF_LINE_TYPES[l.lineType].name);
-  tag(0, 'ENDTAB');
-  tag(0, 'TABLE');
-  tag(2, 'STYLE');
-  tag(70, 1);
-  tag(0, 'STYLE');
-  tag(2, 'STANDARD');
-  tag(70, 0);
-  tag(40, 0);
-  tag(41, 1);
-  tag(50, 0);
-  tag(71, 0);
-  tag(42, d.style.textH);
-  tag(3, 'txt');
-  tag(4, '');
-  tag(0, 'ENDTAB');
-  tag(0, 'ENDSEC');
-
-  tag(0, 'SECTION');
-  tag(2, 'BLOCKS');
-  tag(0, 'ENDSEC');
-
-  tag(0, 'SECTION');
-  tag(2, 'ENTITIES');
-  let count = 0;
-  let curves = 0;
-  const line = (layer: string, a: Pt, b: Pt) => {
-    tag(0, 'LINE');
-    tag(8, layer);
-    tag(10, a.x);
-    tag(20, a.y);
-    tag(30, 0);
-    tag(11, b.x);
-    tag(21, b.y);
-    tag(31, 0);
-    count++;
-  };
-  const poly = (layer: string, pts: Pt[], bulges: number[], closed: boolean) => {
-    if (pts.length < 2) return;
-    tag(0, 'POLYLINE');
-    tag(8, layer);
-    tag(66, 1);
-    tag(10, 0);
-    tag(20, 0);
-    tag(30, 0);
-    tag(70, closed ? 1 : 0);
-    pts.forEach((p, i) => {
-      tag(0, 'VERTEX');
-      tag(8, layer);
-      tag(10, p.x);
-      tag(20, p.y);
-      tag(30, 0);
-      if (Math.abs(bulges[i] ?? 0) > 1e-12) tag(42, bulges[i]);
-    });
-    tag(0, 'SEQEND');
-    tag(8, layer);
-    count++;
-  };
-  const arc = (layer: string, c: Pt, r: number, a0: number, a1: number) => {
-    if (isFull(a0, a1)) {
-      tag(0, 'CIRCLE');
-      tag(8, layer);
-      tag(10, c.x);
-      tag(20, c.y);
-      tag(30, 0);
-      tag(40, r);
-    } else {
-      tag(0, 'ARC');
-      tag(8, layer);
-      tag(10, c.x);
-      tag(20, c.y);
-      tag(30, 0);
-      tag(40, r);
-      tag(50, (normAngle(a0) * 180) / Math.PI);
-      tag(51, (normAngle(a1) * 180) / Math.PI);
-    }
-    count++;
-  };
-  const strokes = (layer: string, list: Pt[][]) => {
-    for (const s of list) {
-      if (s.length === 2) line(layer, s[0], s[1]);
-      else poly(layer, s, s.map(() => 0), false);
-    }
-  };
-  const text = (layer: string, t: NoteText) => {
-    if (o.textAsLines) return strokes(layer, textStrokes(t.text, t.p, t.h, t.angle, t.align));
-    t.text.split('\n').forEach((row, i) => {
-      if (!row.trim()) return;
-      const foot = rotatePt(P(t.p.x, t.p.y - i * 1.6 * t.h), t.p, t.angle);
-      tag(0, 'TEXT');
-      tag(8, layer);
-      tag(10, foot.x);
-      tag(20, foot.y);
-      tag(30, 0);
-      tag(40, t.h);
-      tag(1, r12Text(row));
-      if (Math.abs(t.angle) > 1e-12) tag(50, (normAngle(t.angle) * 180) / Math.PI);
-      if (t.align !== 'left') {
-        tag(72, t.align === 'centre' ? 1 : 2);
-        tag(11, foot.x);
-        tag(21, foot.y);
-        tag(31, 0);
-      }
-      count++;
-    });
-  };
-  const textShape = (layer: string, t: TextShape) => {
-    if (!t.arc) return text(layer, { text: t.text, p: t.p, h: t.h, angle: t.angle, align: t.align });
-    for (const l of arcLetters(t)) if (l.ch.trim()) text(layer, { text: l.ch, p: l.at, h: t.h, angle: l.angle, align: 'left' as Align });
-  };
-
-  for (const e of ents) {
-    const layer = names.get(e.layer) ?? '0';
-    switch (e.type) {
-      case 'line':
-        line(layer, e.a, e.b);
-        break;
-      case 'arc':
-      case 'circle': {
-        const [p] = piecesOf(e) as Array<Extract<Piece, { k: 'arc' }>>;
-        arc(layer, p.c, p.r, p.a0, p.a1);
-        break;
-      }
-      case 'poly':
-        poly(layer, e.pts, e.bulges, e.closed);
-        break;
-      case 'ellipse':
-      case 'spline': {
-        const closed = e.type === 'ellipse' ? isFull(e.t0, e.t1) : e.closed;
-        const pl = piecesToPoly(piecesOf(e), closed, tol);
-        poly(layer, pl.pts, pl.bulges, pl.closed);
-        curves++;
-        break;
-      }
-      case 'point':
-        tag(0, 'POINT');
-        tag(8, layer);
-        tag(10, e.p.x);
-        tag(20, e.p.y);
-        tag(30, 0);
-        count++;
-        break;
-      case 'xline': {
-        const reach = Math.max(ext.x1 - ext.x0, ext.y1 - ext.y0, 100 * k) * 1.5 + dist(e.p, P((ext.x0 + ext.x1) / 2, (ext.y0 + ext.y1) / 2));
-        line(layer, sub(e.p, mul(e.d, reach)), add(e.p, mul(e.d, reach)));
-        break;
-      }
-      case 'text':
-        textShape(layer, e);
-        break;
-      case 'dim': {
-        const parts = dimParts(e);
-        for (const p of parts.pieces) {
-          if (p.k === 'seg') line(layer, p.a, p.b);
-          else if (p.k === 'arc') arc(layer, p.c, p.r, p.a0, p.a1);
-        }
-        for (const t of parts.texts) text(layer, t);
-        break;
-      }
-    }
+  tag(8, layerName(names.get(d.current) ?? '0'));
+  if (modern) {
+    tag(9, '$CELTYPE');
+    tag(6, 'ByLayer');
+    tag(9, '$DIMSTYLE');
+    tag(2, 'Standard');
+    tag(9, '$LUNITS');
+    tag(70, 2);
+    tag(9, '$INSUNITS');
+    tag(70, d.units === 'mm' ? 4 : 1);
+    tag(9, '$MEASUREMENT');
+    tag(70, d.units === 'mm' ? 1 : 0);
+    tag(9, '$PSTYLEMODE');
+    tag(290, 1);
+    tag(9, '$HANDSEED');
+    tag(5, newHandle());
   }
   tag(0, 'ENDSEC');
-  tag(0, 'EOF');
 
-  const notes: string[] = [`${count} item${count === 1 ? '' : 's'} written (AutoCAD R12 DXF, ${d.units === 'mm' ? 'millimetres' : 'inches'}: 600 in the drawing is 600 in the file).`];
+  const unitsName = d.units === 'mm' ? 'millimetres' : 'inches';
+  const notes: string[] = [`${count} item${count === 1 ? '' : 's'} written (${modern ? `AutoCAD ${version}` : 'AutoCAD R12'} DXF, ${unitsName}: 600 in the drawing is 600 in the file).`];
   if (curves) notes.push(`${curves} ellipse${curves === 1 ? '' : 's'} or curve${curves === 1 ? '' : 's'} written as polylines of arcs, each within ${tol} ${d.units === 'mm' ? 'mm' : 'in'} of the true shape.`);
+  if (modern && ents.some(e => e.type === 'ellipse' || e.type === 'spline')) notes.push('Ellipses and curves are written as true ellipses and curves (a curve as the exact cubic spline CAD Draft draws).');
   if (d.ents.some(e => e.type === 'dim')) notes.push('Dimensions are written as plain lines and text.');
   if (d.ents.some(e => e.type === 'text') && !o.textAsLines) notes.push('Text is written as text: the other program draws it in its own letters, so its width may differ a little.');
   if (leftHidden) notes.push(`${leftHidden} item${leftHidden === 1 ? '' : 's'} on hidden layers left out.`);
   if (leftXlines) notes.push(`${leftXlines} construction line${leftXlines === 1 ? '' : 's'} left out.`);
-  if (d.layers.some(l => /[a-z]/.test(l.name))) notes.push('Layer names are written in capitals (R12 has no small letters).');
-  if (renamed.length) notes.push(`Layer names R12 cannot hold were changed: ${renamed.join(', ')}.`);
-  const textOut = out.join('\r\n') + '\r\n';
-  const lost = lettersLost(textOut);
-  if (lost.length) notes.push(`${lost.length} letter${lost.length === 1 ? '' : 's'} R12 cannot hold (${lost.slice(0, 8).join(' ')}${lost.length > 8 ? ' ...' : ''}) could not be written and became ? in the file.`);
+  if (!modern && d.layers.some(l => /[a-z]/.test(l.name))) notes.push('Layer names are written in capitals (R12 has no small letters).');
+  if (renamed.length) notes.push(`Layer names ${modern ? 'a DXF' : 'R12'} cannot hold were changed: ${renamed.join(', ')}.`);
+  const textOut = header.join('\r\n') + '\r\n' + body.join('\r\n') + '\r\n';
+  if (utf8) return { text: textOut, bytes: new TextEncoder().encode(textOut), notes, count };
+  if (!modern) {
+    const lost = lettersLost(textOut);
+    if (lost.length) notes.push(`${lost.length} letter${lost.length === 1 ? '' : 's'} R12 cannot hold (${lost.slice(0, 8).join(' ')}${lost.length > 8 ? ' ...' : ''}) could not be written and became ? in the file.`);
+  } else if (/\\U\+[0-9A-F]{4}/.test(textOut)) {
+    notes.push(`Letters beyond Windows' Western set are written as \\U+ codes (a ${version} DXF is not UTF-8): AutoCAD and most programs show them as they are.`);
+  }
   return { text: textOut, bytes: cp1252(textOut), notes, count };
 }
 
@@ -533,6 +1014,9 @@ const num = (r: Rec, code: number, dflt = 0): number => {
 const nums = (r: Rec, code: number): number[] => r.tags.filter(t => t[0] === code).map(t => Number(t[1])).filter(Number.isFinite);
 const ptOf = (r: Rec, x: number, dflt = P(0, 0)): Pt => (get(r, x) === undefined ? dflt : P(num(r, x), num(r, x + 10)));
 
+/** A name with AutoCAD's \U+XXXX codes (how a file older than 2007 holds letters beyond its code page) as the letters. */
+const uDecode = (s: string): string => s.replace(/\\U\+([0-9a-fA-F]{4})/g, (_, h: string) => String.fromCharCode(parseInt(h, 16)));
+
 /** The words in a TEXT, with AutoCAD's codes turned back into the signs they stand for. */
 export function decodeText(s: string): string {
   return s
@@ -551,15 +1035,55 @@ export function decodeText(s: string): string {
 /** The words in a paragraph text (MTEXT) with its formatting codes taken out; \P is a new line. */
 export function decodeMtext(s: string): string {
   // A drawing keeps 10,000 letters of a text (longer is cut and said); the codes around them are cut at ten times that
-  // first, so a crafted text of megabytes of codes cannot keep the patterns below busy for seconds.
-  let t = s.slice(0, MAX_TEXT_LENGTH * 10).replace(/\\[ACcFfHhpQqTtWw][^;\\]*;/g, '');
-  t = t.replace(/\\S([^;^#/]*)[\^#/]([^;]*);/g, '$1/$2');
-  t = t.replace(/\\[LlOoKk]/g, '');
-  t = t.replace(/\\P/g, '\n').replace(/\\~/g, ' ').replace(/\\N/g, '\n');
-  t = t.replace(/\\\\/g, '\u0000').replace(/\\\{/g, '\u0001').replace(/\\\}/g, '\u0002');
-  t = t.replace(/[{}]/g, '');
-  t = t.replace(/\u0000/g, '\\').replace(/\u0001/g, '{').replace(/\u0002/g, '}');
-  return decodeText(t);
+  // first, so a crafted text of megabytes of codes cannot keep the reading below busy for seconds.
+  const src = s.slice(0, MAX_TEXT_LENGTH * 10);
+  // Read left to right, so an escaped backslash (\\) is never taken as the start of a code after it ("\\P" is a
+  // backslash and a P, not a new line). A backslash written out stands as \u0000 until the %% codes are read.
+  let t = '';
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i];
+    if (c === '{' || c === '}') {
+      i++;
+      continue;
+    }
+    if (c !== '\\' || i + 1 >= src.length) {
+      t += c;
+      i++;
+      continue;
+    }
+    const n = src[i + 1];
+    if (n === '\\') t += '\u0000';
+    else if (n === '{' || n === '}') t += n;
+    else if (n === 'P' || n === 'N') t += '\n';
+    else if (n === '~') t += ' ';
+    else if ('LlOoKk'.includes(n)) {
+      // Underline, overline and strike-through on or off: nothing to keep.
+    } else if (n === 'U' && /^\+[0-9a-fA-F]{4}$/.test(src.slice(i + 2, i + 7))) {
+      t += String.fromCharCode(parseInt(src.slice(i + 3, i + 7), 16));
+      i += 7;
+      continue;
+    } else if ('ACcFfHhpQqTtWwS'.includes(n)) {
+      // A code with a value up to its semicolon (font, height, colour, width...): left out. \S is a stacked
+      // fraction, kept as "top/bottom". Without a semicolon (a value cut short) it is kept as it stands.
+      let end = i + 2;
+      while (end < src.length && src[end] !== ';' && !(n !== 'S' && src[end] === '\\')) end++;
+      if (src[end] !== ';') {
+        t += c + n;
+        i += 2;
+        continue;
+      }
+      if (n === 'S') {
+        const v = src.slice(i + 2, end);
+        const at = v.search(/[\^#/]/);
+        t += at >= 0 ? `${v.slice(0, at)}/${v.slice(at + 1)}` : v;
+      }
+      i = end + 1;
+      continue;
+    } else t += c + n;
+    i += 2;
+  }
+  return decodeText(t).replace(/\u0000/g, '\\');
 }
 
 const LEFT_OUT_NAMES: Record<string, string> = {
@@ -708,7 +1232,7 @@ export function readDxf(bytes: Uint8Array): DxfRead {
   const fullNameOf = new Map<string, string>();
   for (const r of tables) {
     if (r.type !== 'LAYER') continue;
-    const full = (get(r, 2) ?? '').trim();
+    const full = uDecode(get(r, 2) ?? '').trim();
     const name = full.slice(0, 64);
     // Two names that differ only after the 64th letter end up as one layer: said below.
     if (name && fullNameOf.has(name) && fullNameOf.get(name) !== full) joinedLayers.push(name);
@@ -765,7 +1289,7 @@ export function readDxf(bytes: Uint8Array): DxfRead {
       const r = recs[n++];
       if (total > MAX_ITEMS) throw new CadProblem(`it holds more than ${MAX_ITEMS.toLocaleString('en-GB')} items`);
       // Cut and trimmed as the layer names are, so every item stays on its layer when the drawing is saved and opened.
-      const layer = (get(r, 8) ?? '0').trim().slice(0, 64) || '0';
+      const layer = uDecode(get(r, 8) ?? '0').trim().slice(0, 64) || '0';
       const own = num(r, 62, 256);
       if (r.type !== 'SEQEND' && r.type !== 'VERTEX') {
         if ((own !== 256 && own !== 0) || get(r, 420) !== undefined) ownColours++;
@@ -880,6 +1404,11 @@ export function readDxf(bytes: Uint8Array): DxfRead {
           break;
         }
         case 'SPLINE': {
+          const own = ownCurveOf(r);
+          if (own) {
+            put(own);
+            break;
+          }
           const shape = splineOf(r, tol);
           if (shape === 'fit') {
             const fy = r.tags.filter(x => x[0] === 21);
@@ -1111,6 +1640,46 @@ export function allFinite(v: unknown): boolean {
   if (Array.isArray(v)) return v.every(allFinite);
   if (v && typeof v === 'object') return Object.values(v).every(allFinite);
   return true;
+}
+
+/**
+ * A SPLINE that is exactly one of CAD Draft's curves through points (as a 2000 or later DXF from here writes it: cubic,
+ * every inside knot three deep, so each span is one cubic piece, with the pieces' pulls those CAD Draft gives the
+ * points it runs through), read back as that curve; null for any other.
+ */
+function ownCurveOf(r: Rec): Shape | null {
+  if (num(r, 71, 3) !== 3 || r.tags.some(t => t[0] === 11)) return null;
+  const weights = nums(r, 41);
+  if (weights.some(w => Math.abs(w - 1) > 1e-12)) return null;
+  const knots = nums(r, 40);
+  const xs = r.tags.filter(t => t[0] === 10).map(t => Number(t[1]));
+  const ys = r.tags.filter(t => t[0] === 20).map(t => Number(t[1]));
+  const n = (xs.length - 1) / 3;
+  if (!Number.isInteger(n) || n < 1 || ys.length !== xs.length || knots.length !== xs.length + 4) return null;
+  const k0 = knots[0];
+  const span = knots[knots.length - 1] - k0;
+  if (!(span > 0)) return null;
+  for (let j = 0; j < knots.length; j++) {
+    const want = j < 4 ? 0 : j >= knots.length - 4 ? n : Math.floor((j - 1) / 3);
+    if (Math.abs((knots[j] - k0) / span * n - want) > 1e-9) return null;
+  }
+  const ctrl = xs.map((x, j) => P(x, ys[j]));
+  if (!ctrl.every(p => Number.isFinite(p.x) && Number.isFinite(p.y))) return null;
+  const ends = ctrl.filter((_, j) => j % 3 === 0);
+  let size = 1;
+  for (const p of ctrl) size = Math.max(size, Math.abs(p.x), Math.abs(p.y));
+  const near = 1e-8 * size;
+  const tryFit = (fit: Pt[], closed: boolean): Shape | null => {
+    const bez = curveThrough(fit, closed);
+    if (bez.length !== n) return null;
+    for (let j = 0; j < n; j++) for (let q = 1; q < 3; q++) if (dist(bez[j].p[q], ctrl[3 * j + q]) > near) return null;
+    return { type: 'spline', fit, closed };
+  };
+  if (n >= 3 && dist(ends[0], ends[n]) <= near) {
+    const closed = tryFit(ends.slice(0, -1), true);
+    if (closed) return closed;
+  }
+  return tryFit(ends, false);
 }
 
 /** A SPLINE as a polyline of arcs from its control points; 'fit' when it has only fit points; null when unreadable. */
