@@ -9,6 +9,8 @@ import { newKey } from '../store/store.ts';
 export const TRASH_DIR = '/System/Trash';
 const META_PATH = '/System/trash.json';
 const FALLBACK_FOLDER = '/Documents';
+/** How long an empty slot is left alone before it is tidied away: one may be filling in another tab or device. */
+const EMPTY_SLOT_GRACE = 10 * 60 * 1000;
 
 export interface BinItem {
   /** The slot's folder name; identifies the item in every call below. */
@@ -118,6 +120,9 @@ export class RecycleBin {
   }
 
   /** What is in the bin, newest first. */
+  /** Slots made by put() whose item is still on its way in: empty for a moment, and never to be tidied away. */
+  private filling = new Set<string>();
+
   async list(): Promise<BinItem[]> {
     const slots = await this.slotFolders();
     const meta = await this.readMeta();
@@ -125,8 +130,11 @@ export class RecycleBin {
     for (const slot of slots) {
       const inside = (await this.fs.list(`${TRASH_DIR}/${slot.name}`, true))[0];
       if (!inside) {
-        // An empty slot (a restore that moved its item out but could not tidy up) is removed when seen, so the count is right.
-        await this.fs.remove([`${TRASH_DIR}/${slot.name}`]).catch(() => {});
+        // An empty slot (a restore that moved its item out but could not tidy up) is removed when seen, so the count is
+        // right. Not one being filled now, here or in another tab or device (a slot made in the last minutes): removing
+        // it would take the item being deleted with it once its move lands.
+        const fresh = Date.now() - slot.modified < EMPTY_SLOT_GRACE;
+        if (!this.filling.has(slot.name) && !fresh) await this.fs.remove([`${TRASH_DIR}/${slot.name}`]).catch(() => {});
         continue;
       }
       const info = meta.items.find(i => i.slot === slot.name);
@@ -157,6 +165,7 @@ export class RecycleBin {
     for (const path of paths) {
       const name = baseName(path);
       const slot = newKey();
+      this.filling.add(slot);
       try {
         await this.fs.mkdir(`${TRASH_DIR}/${slot}`, { hidden: true });
         try {
@@ -169,6 +178,8 @@ export class RecycleBin {
         added.push({ slot, name, from: joinPath(path), deleted: now });
       } catch (error) {
         failures.push({ name, reason: error instanceof Error ? error.message : String(error) });
+      } finally {
+        this.filling.delete(slot);
       }
     }
     if (added.length) await this.changeMeta(meta => void meta.items.push(...added));
