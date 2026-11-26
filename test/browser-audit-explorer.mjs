@@ -290,12 +290,19 @@ await step('E-P1-2: list view shows a long name with an ellipsis, not cut mid-le
 });
 
 await step('E-P1-3: list view column headings sort when clicked', async () => {
-  const head = ew().locator('.fv-head span', { hasText: 'Size' });
+  // The folders here are all size 0, so Size sorts them by name; a second click reverses that.
+  const head = ew().locator('.fv-head .fv-sort', { hasText: 'Size' });
   const before = await names();
   await head.click().catch(() => {});
   await settle(300);
+  ok((await head.innerText().catch(() => '')).includes('▲'), 'clicking "Size" in the list heading does nothing');
+  await head.click();
+  await settle(300);
   const after = await names();
-  ok(JSON.stringify(before) !== JSON.stringify(after) || (await head.getAttribute('role')) === 'button', 'clicking "Size" in the list heading does nothing');
+  ok(JSON.stringify(before) !== JSON.stringify(after), 'clicking "Size" again does not reverse the order: ' + after.join(' | '));
+  await ew().locator('.fv-head .fv-sort', { hasText: 'Name' }).click();
+  await settle(300);
+  eq(await names(), before, 'Name puts the order back');
   await ew().locator('.explorer-view').focus();
   await page.keyboard.press('ContextMenu');
   await menuPick(['View', 'Icons']);

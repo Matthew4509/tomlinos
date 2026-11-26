@@ -40,6 +40,39 @@ export function encodeCommit(ops: StoreOp[]): Uint8Array {
   return body;
 }
 
+/** Said when a 200 answer did not come from the store (a proxy, a network sign-in page, a captive portal). */
+const NOT_THE_STORE =
+  "The answer did not come from this desktop's server (a network sign-in page or a proxy may be in the way), so it could not be read just now. Nothing was changed. Try again; if it keeps happening, check the connection.";
+
+function mediaType(res: Response): string {
+  return (res.headers.get('Content-Type') ?? '').split(';')[0].trim().toLowerCase();
+}
+
+/**
+ * Whether a 200 answer to a read is really the store's: store.php always sends its blob as octet-stream with the
+ * record's version in X-Store-Version. Anything else (an HTML page from a proxy or a captive portal) is never taken as
+ * the file's bytes, or an app could open that page as the file and save it over the real one.
+ */
+function isStoreRecord(res: Response): boolean {
+  return mediaType(res) === 'application/octet-stream' && !!res.headers.get('X-Store-Version');
+}
+
+/** The JSON of a 200 answer, or the plain "not the store" error when it is not JSON (an HTML page, say). */
+async function storeJson(res: Response, message = NOT_THE_STORE): Promise<Record<string, unknown>> {
+  if (mediaType(res) === 'application/json') {
+    try {
+      const body = await res.json();
+      if (body && typeof body === 'object') return body as Record<string, unknown>;
+    } catch {
+      // Falls through to the plain message.
+    }
+  }
+  throw new StoreError(message);
+}
+
+const SAVE_NOT_CONFIRMED =
+  "The answer did not come from this desktop's server (a network sign-in page or a proxy may be in the way), so this may not have been saved. Save again; if it keeps happening, check the connection.";
+
 async function serverMessage(res: Response): Promise<string> {
   try {
     const body = await res.json();
@@ -85,6 +118,7 @@ export class ServerStore implements Store {
     const res = await this.send(`${this.api}?key=${encodeURIComponent(key)}`, { method: 'GET' });
     if (res.status === 404) return null;
     if (!res.ok) throw await this.failure(res);
+    if (!isStoreRecord(res)) throw new StoreError(NOT_THE_STORE);
     const version = res.headers.get('X-Store-Version') ?? '';
     return { version, data: new Uint8Array(await res.arrayBuffer()) };
   }
@@ -93,7 +127,7 @@ export class ServerStore implements Store {
   async keys(): Promise<string[]> {
     const res = await this.send(`${this.api}?op=keys`, { method: 'GET' });
     if (!res.ok) throw await this.failure(res);
-    const keys = (await res.json()).keys;
+    const keys = (await storeJson(res)).keys;
     return Array.isArray(keys) ? keys.filter((k: unknown): k is string => typeof k === 'string') : [];
   }
 
@@ -122,6 +156,6 @@ export class ServerStore implements Store {
       throw new StoreConflict(body.keys ?? []);
     }
     if (!res.ok) throw await this.failure(res);
-    return (await res.json()).versions ?? {};
+    return ((await storeJson(res, SAVE_NOT_CONFIRMED)).versions as Record<string, string> | undefined) ?? {};
   }
 }

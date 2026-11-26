@@ -29,7 +29,7 @@ import type { OpenRouterSettings } from '../assistant/openrouter.ts';
 import { baseName } from '../../fs/names.ts';
 import { pickFile } from '../../shell/filepicker.ts';
 import { isTextName } from '../notepadpro/findfiles.ts';
-import { AGENT_FOLDER, listThreads, openThread, threadLabel, threadToText, titleFrom, type AgentThread, type AgentTurn } from './agents.ts';
+import { AGENT_FOLDER, listThreads, openThread, threadFromText, threadLabel, threadToText, titleFrom, type AgentThread, type AgentTurn } from './agents.ts';
 import { footWords, LiveChat, PIECE_HINT, writingWords, type Pending } from './live.ts';
 
 const GEMMA = 'gemma-2-2b-it-q4f32_1-MLC';
@@ -93,6 +93,7 @@ export function agentPane(app: AppHandle): { el: HTMLElement; shown: (want?: Clo
   const recent = h('select', { class: 'agent-pick', 'aria-label': 'Recent threads' });
   const newBtn = h('button', { type: 'button', class: 'chat-code' }, 'New thread');
   const saveBtn = h('button', { type: 'button', class: 'chat-code', title: 'Save a copy of this thread somewhere else' }, 'Save as...');
+  const openBtn = h('button', { type: 'button', class: 'chat-code', title: 'Open a thread saved with Save as... as a new thread' }, 'Open a saved thread...');
   const deleteBtn = h('button', { type: 'button', class: 'chat-code', title: 'Move this thread to the Recycle Bin' }, 'Delete');
   // Quick jobs on text in the box, or on a text file.
   const sumBtn = h('button', { type: 'button', class: 'chat-code', title: 'Summarise the text in the box, or a file you choose' }, 'Summarise');
@@ -108,7 +109,7 @@ export function agentPane(app: AppHandle): { el: HTMLElement; shown: (want?: Clo
   const form = h('form', { class: 'chat-say' }, box, sendBtn, stopBtn);
   const el = h('div', { class: 'agent-pane', hidden: true },
     h('div', { class: 'agent-bar' }, pick, starBtn, connectBtn, disconnectBtn, keyBtn, idleLabel),
-    h('div', { class: 'agent-bar' }, recent, newBtn, saveBtn, deleteBtn),
+    h('div', { class: 'agent-bar' }, recent, newBtn, openBtn, saveBtn, deleteBtn),
     h('div', { class: 'agent-bar' }, sumBtn, rewriteBtn, askFileBtn),
     note, progress, list, form);
 
@@ -244,7 +245,7 @@ export function agentPane(app: AppHandle): { el: HTMLElement; shown: (want?: Clo
     stopBtn.hidden = !busy;
     sumBtn.disabled = rewriteBtn.disabled = askFileBtn.disabled = !canSend();
     saveBtn.disabled = deleteBtn.disabled = busy || live.busy || !live.file;
-    newBtn.disabled = busy || live.busy;
+    newBtn.disabled = openBtn.disabled = busy || live.busy;
     recent.disabled = busy || live.busy;
     paintStar();
   }
@@ -802,6 +803,35 @@ ${text}`;
     } catch (error) {
       await shell.report('Could not save the copy', error);
     }
+  }, signal);
+  // A thread saved with Save as... (Markdown or plain text, the same words) comes back as a new thread, kept in
+  // AI chats under its own name; the file chosen is only read.
+  on(openBtn, 'click', async () => {
+    if (busy || live.busy) return;
+    const path = await pickFile(shell, { title: 'Open a saved thread', folder: '/Documents', types: [{ label: 'Saved threads', ext: ['md', 'txt'] }, { label: 'All files', ext: [] }] });
+    if (!path) return;
+    let thread: AgentThread;
+    try {
+      const text = new TextDecoder('utf-8', { fatal: true }).decode(await shell.fs.readFile(path));
+      thread = threadFromText(text, baseName(path).replace(/\.(md|txt)$/i, ''));
+    } catch (error) {
+      await shell.report('Could not open that thread', error);
+      return;
+    }
+    if (!thread.turns.length) {
+      await shell.dialogs.alert('Not a saved thread', `“${baseName(path)}” has no messages in the form Save as... writes (each one starts with a “### You” or “### AI” line), so nothing was opened.`);
+      return;
+    }
+    if (busy || live.busy) return;
+    live.open(thread);
+    try {
+      await live.keep(shell.fs, thread);
+      await fillRecent();
+      setNote(`“${baseName(path)}” opened as a new thread.`);
+    } catch (error) {
+      setNote(`This thread could not be kept in ${AGENT_FOLDER}: ${error instanceof Error ? error.message : 'unknown error'}. Save as... still works.`);
+    }
+    renderControls();
   }, signal);
   on(stopBtn, 'click', () => {
     if (busy) stopAsked = true;

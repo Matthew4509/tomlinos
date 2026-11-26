@@ -6,7 +6,7 @@ import { h, on } from '../../core/dom.ts';
 import type { ServiceApi } from '../../net/service.ts';
 import type { DialogLayer } from '../../shell/dialogs.ts';
 import { money } from './claude.ts';
-import { keyTile, showCostLog } from './keytile.ts';
+import { confirmRemoveKey, keyTile, showCostLog } from './keytile.ts';
 
 export interface OpenRouterSettings {
   hasKey: boolean;
@@ -195,6 +195,7 @@ export function openRouterSection(api: ServiceApi | null, dialogs: DialogLayer, 
     }, signal);
     on(modelSelect, 'change', paintModelNote, signal);
     on(forgetBtn, 'click', async () => {
+      if (!(await confirmRemoveKey(dialogs, 'OpenRouter'))) return;
       formMsg.textContent = 'Removing...';
       try {
         await api.call('forget', { body: {} });

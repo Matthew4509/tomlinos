@@ -386,7 +386,8 @@ export const explorerApp: AppDef = {
         view.focus();
       } else if (event.key === 'Enter') {
         event.preventDefault();
-        const typed = address.value.trim().replace(/^This desktop/i, '');
+        // "Documents\Letters" as Windows writes it is taken as "Documents/Letters" (no name may hold a \ anyway).
+        const typed = address.value.trim().replace(/\\/g, '/').replace(/^This desktop/i, '');
         // While a message about the path is up, the box stays open with what was typed, ready to correct.
         const tell = async (say: () => Promise<void>) => {
           asking = true;

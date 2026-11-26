@@ -165,7 +165,8 @@ switch ("$method $op") {
                 // Filling the server's disk reaches beyond the owner's own account: the owner's own password (and code)
                 // first, so someone at the owner's unlocked, unattended desktop cannot start it. Asked once, here: a
                 // save with a plan was already confirmed, and only finishes what the owner asked for.
-                confirm_identity($root, $user, $body);
+                // The two-step code is used up only once the save will go ahead (the plan made, the room there).
+                $proof = confirm_identity($root, $user, $body, false);
                 $plan = models_make_plan($id);
                 $need = 0;
                 foreach ($plan['files'] as $f) {
@@ -175,6 +176,7 @@ switch ("$method $op") {
                 if ($free !== false && $free < $need + 50 * 1024 * 1024) {
                     api_fail(507, sprintf('This server has %s free, and this model needs %s (and a little room to spare). Free some space, or leave it unsaved: browsers then fetch it from Hugging Face.', round($free / 1048576) . ' MB', round($need / 1048576) . ' MB'));
                 }
+                auth_proof_use_or_fail($root, $user, $proof);
                 models_write_atomic(models_plan_path($root, $id), json_encode($plan));
                 auth_history_add($root, (string) $user['id'], 'Started saving the AI model ' . MODEL_CATALOG[$id]['name'] . ' to this TOMLIN OS');
             }
@@ -204,11 +206,13 @@ switch ("$method $op") {
         $id = body_str($body, 'id');
         $name = MODEL_RETIRED[$id] ?? MODEL_CATALOG[$idFrom($body)]['name'];
         // Taking a model away from everyone on this TOMLIN OS: the owner's own password (and code) first.
-        confirm_identity($root, $user, $body);
+        // The two-step code is used up only once the remove will go ahead (no save of it running).
+        $proof = confirm_identity($root, $user, $body, false);
         $lock = is_dir($root . '/models') ? fopen($root . '/models/' . $id . '.lock', 'c') : null;
         if ($lock === false || ($lock && !flock($lock, LOCK_EX | LOCK_NB))) {
             api_fail(409, 'This model is being saved right now. Stop the save first, then remove it.');
         }
+        auth_proof_use_or_fail($root, $user, $proof);
         try {
             models_remove($dir, $id);
         } catch (Throwable) {

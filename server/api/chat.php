@@ -501,8 +501,10 @@ try {
         }
         // Everyone's messages: the owner's own password (and code) first, so someone at the owner's unlocked, unattended
         // desktop cannot delete them.
-        confirm_identity($root, $me, $body);
-        chat_locked($root, static function (string $dir) use ($days): void {
+        // The two-step code is used up only once the change goes ahead (under Chat's lock, just before the write).
+        $proof = confirm_identity($root, $me, $body, false);
+        chat_locked($root, static function (string $dir) use ($days, $root, $me, $proof): void {
+            auth_proof_use_or_fail($root, $me, $proof);
             auth_write_json("$dir/settings.json", ['vanishDays' => $days]);
             // Older messages go from every conversation now, not only when each is next opened.
             chat_sweep_vanished($dir, true);
@@ -513,8 +515,9 @@ try {
     if ($op === 'reset') {
         require_admin($me);
         // Everyone loses General's old messages: the owner's own password (and code) first, as above.
-        confirm_identity($root, $me, $body);
-        $epoch = chat_locked($root, static function (string $dir): int {
+        $proof = confirm_identity($root, $me, $body, false);
+        $epoch = chat_locked($root, static function (string $dir) use ($root, $me, $proof): int {
+            auth_proof_use_or_fail($root, $me, $proof);
             $general = auth_read_json("$dir/general.json", ['epoch' => 1, 'wraps' => []]);
             $general = ['epoch' => (int) $general['epoch'] + 1, 'wraps' => []];
             auth_write_json("$dir/general.json", $general);

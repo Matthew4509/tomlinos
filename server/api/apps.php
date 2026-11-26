@@ -47,7 +47,10 @@ $body = api_body();
 require_admin($user);
 // Putting code on this server or taking an app away from everyone reaches beyond the owner's own account: the owner's
 // own password (and code) first, as adding a person does, so someone at the owner's unlocked, unattended desktop cannot.
-confirm_identity($root, $user, $body);
+// The two-step code is checked here but used up only at the point of no return (after the download is checked and
+// unpacked, or just before the folder goes), so a change refused before then keeps the code.
+$proof = confirm_identity($root, $user, $body, false);
+$spend = auth_proof_spender($root, $user, $proof);
 $id = (string) ($body['id'] ?? '');
 if (!appstore_valid_id($id)) {
     api_fail(400, 'That is not an app\'s name.');
@@ -55,7 +58,7 @@ if (!appstore_valid_id($id)) {
 @set_time_limit(300);
 try {
     if ($op === 'delete') {
-        appstore_delete($id, $root, $webRoot);
+        appstore_delete($id, $root, $webRoot, $spend);
         api_json(['apps' => array_values(appstore_here($root, $webRoot))]);
     }
     $app = null;
@@ -67,8 +70,8 @@ try {
     if ($app === null) {
         api_fail(404, 'The app store has no app by that name (any more).');
     }
-    appstore_download($app, $root, $webRoot);
+    appstore_download($app, $root, $webRoot, $spend);
     api_json(['apps' => array_values(appstore_here($root, $webRoot))]);
 } catch (RuntimeException $e) {
-    api_fail(502, $e->getMessage());
+    api_fail($e->getCode() === 403 ? 403 : 502, $e->getMessage());
 }

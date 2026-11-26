@@ -190,8 +190,14 @@ button, input, select { font: inherit; color: inherit; }
 .view-list { display: block; }
 .view-list .item { display: grid; grid-template-columns: minmax(120px, 3fr) 1fr 1.2fr 1.6fr; gap: 8px; align-items: center; padding: 3px 8px; border-radius: 0; }
 .view-list .item-icon { display: none; }
-.view-list .item-name { display: flex; -webkit-line-clamp: none; text-align: left; white-space: nowrap; }
+/* A long name ends in "…" (block, not flex, so text-overflow applies); the row's tooltip has the whole name. */
+.view-list .item-name { display: block; min-width: 0; -webkit-line-clamp: none; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fv-head { display: grid; grid-template-columns: minmax(120px, 3fr) 1fr 1.2fr 1.6fr; gap: 8px; padding: 4px 8px; font-weight: 700; background: var(--face-hi); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 2; }
+/* The headings sort: click one to sort by it, again to reverse; the arrow shows which and which way. */
+.fv-sort { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 4px; min-width: 0; cursor: pointer; font: inherit; font-weight: 700; color: inherit; border-radius: 2px; }
+.fv-sort:hover { text-decoration: underline; }
+.fv-sort:focus-visible { outline: 2px solid var(--sel); outline-offset: 1px; }
+.fv-sort-mark { font-size: 12px; color: var(--ink-soft); }
 .item-col { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-soft); }
 .rename { width: 100%; min-width: 60px; padding: 1px 3px; border: 1px solid var(--sel); background: #fff; color: var(--ink); text-align: center; text-shadow: none; }
 .rename[aria-invalid="true"] { border-color: var(--danger); box-shadow: 0 0 0 1px var(--danger); }
@@ -422,7 +428,7 @@ body.is-dragging .win-body { pointer-events: none; }
   .menu-item { min-height: 40px; }
   .start-list .start-item, .start-group { min-height: 40px; }
   .view-list .item, .fv-head { grid-template-columns: minmax(100px, 3fr) 1fr; }
-  .view-list .item .item-col:nth-of-type(n+2), .fv-head span:nth-child(n+3) { display: none; }
+  .view-list .item .item-col:nth-of-type(n+2), .fv-head > :nth-child(n+3) { display: none; }
   .bin-head, .bin-row { grid-template-columns: minmax(100px, 3fr) 2fr; }
   .bin-head span:nth-child(n+3), .bin-row > .bin-col:nth-child(n+3) { display: none; }
 }
@@ -932,8 +938,9 @@ body.is-dragging .win-body { pointer-events: none; }
 .reader-login-row .field { color: #2f2718; background: #fff; }
 .reader-login-problem { margin: 0; min-height: 1em; color: #9a3412; font-size: 13px; }
 .reader-login-buttons { display: flex; justify-content: flex-end; gap: 8px; }
-/* A preview (the setup guide): always a way back, above whatever shows. */
-.lock-preview-bar { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 2; display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 16px;
+/* A preview (the setup guide): always a way back, above whatever shows (the lock screen's .gate is z-index 9500 in the
+   same layer, so the bar sits above that too). */
+.lock-preview-bar { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 9600; display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 16px;
   border-radius: 22px; background: rgba(20, 24, 32, .88); color: #fff; font-size: 13px; box-shadow: 0 4px 18px rgba(0, 0, 0, .35); }
 .fake-titlebar { display: flex; align-items: center; gap: 8px; padding: 4px 10px; background: #1e7a45; color: #fff; font-size: 13px; }
 .fake-close { margin-left: auto; width: 30px; height: 22px; border: 0; border-radius: 3px; background: none; color: #fff; font-size: 14px; cursor: pointer; }
