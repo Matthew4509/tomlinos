@@ -39,6 +39,20 @@ export const projectsApp: AppDef = {
     let view: View = { kind: 'list' };
     /** A form is open (editing a project, the settings): a change from elsewhere does not redraw it away. */
     let busyForm = false;
+    /** True while the open form (Edit, Settings) holds typing that is not saved. */
+    let formChanged: (() => boolean) | null = null;
+    const markForm = () => app.setDirty(!!formChanged?.());
+    /** Before leaving an open form with unsaved typing: asks, and says whether to go on. */
+    async function leaveForm(): Promise<boolean> {
+      if (!formChanged?.()) return true;
+      const ok = await shell.dialogs.confirm({ title: 'Discard your changes?', text: 'What you typed here is not saved. If you leave, it is lost.', ok: 'Discard', danger: true, cancel: 'Keep editing' });
+      if (ok) {
+        formChanged = null;
+        app.setDirty(false);
+      }
+      return ok;
+    }
+    app.onClose(() => leaveForm());
 
     const addBtn = h('button', { type: 'button', class: 'tool wide' }, 'Add project');
     const apptBtn = h('button', { type: 'button', class: 'tool wide' }, 'Appointment');
@@ -91,6 +105,8 @@ export const projectsApp: AppDef = {
       const done = projects.filter(p => p.finished).length;
       finishedBtn.textContent = view.kind === 'finished' ? 'Back to projects' : `Finished (${done})`;
       busyForm = false;
+      formChanged = null;
+      app.setDirty(false);
       if (view.kind === 'project') {
         const p = find(view.uid);
         if (p) drawProject(p, view.from);
@@ -199,6 +215,8 @@ export const projectsApp: AppDef = {
         const problem = h('p', { class: 'dialog-problem', role: 'alert' });
         const save = h('button', { type: 'button', class: 'btn primary' }, 'Save');
         const cancel = h('button', { type: 'button', class: 'btn' }, 'Cancel');
+        formChanged = () => nameIn.value !== p.name || siteIn.value !== p.site || notesIn.value !== p.notes;
+        for (const input of [nameIn, siteIn, notesIn]) on(input, 'input', markForm, signal);
         head = h('div', { class: 'proj-edit' },
           h('label', { class: 'form-row' }, 'Name ', nameIn),
           h('label', { class: 'form-row' }, 'Site ', siteIn),
@@ -217,7 +235,7 @@ export const projectsApp: AppDef = {
         on(head, 'keydown', (e: KeyboardEvent) => {
           if (e.key === 'Escape') {
             e.stopPropagation();
-            draw();
+            void leaveForm().then(ok => ok && draw());
           }
         }, signal);
         queueMicrotask(() => nameIn.focus());
@@ -268,6 +286,13 @@ export const projectsApp: AppDef = {
       const save = h('button', { type: 'button', class: 'btn primary' }, 'Save settings');
       const cancel = h('button', { type: 'button', class: 'btn' }, 'Cancel');
       const reset = h('button', { type: 'button', class: 'btn' }, 'Back to the defaults');
+      const shape = () => JSON.stringify([timeIn.value, hoursIn.value, daySel.value, remindSel.value, actions]);
+      const start = shape();
+      formChanged = () => shape() !== start || newIn.value.trim() !== '';
+      for (const input of [timeIn, hoursIn, daySel, remindSel, newIn]) {
+        on(input, 'input', markForm, signal);
+        on(input, 'change', markForm, signal);
+      }
 
       const paintActions = (focusKey?: string) => {
         list.replaceChildren(...actions.map((a, i) => {
@@ -326,14 +351,18 @@ export const projectsApp: AppDef = {
           await writeSettings(shell.fs, next);
           settings = next;
           shell.toast('My Projects settings saved.');
-          go({ kind: 'list' });
+          formChanged = null;
+          void go({ kind: 'list' });
         } catch (error) {
           await shell.report('Could not save the settings', error);
         } finally {
           save.disabled = false;
         }
       }, signal);
-      on(cancel, 'click', () => go({ kind: 'list' }), signal);
+      on(cancel, 'click', () => {
+        formChanged = null;
+        go({ kind: 'list' });
+      }, signal);
       paintActions();
       body.replaceChildren(h('div', { class: 'proj-settings' },
         h('h2', { class: 'proj-heading' }, 'Settings'),
@@ -351,7 +380,9 @@ export const projectsApp: AppDef = {
         h('div', { class: 'row-buttons' }, save, cancel, reset)));
     }
 
-    function go(next: View): void {
+    /** Goes to another view; typing not yet saved in an open form is asked about first. */
+    async function go(next: View): Promise<void> {
+      if (!(await leaveForm())) return;
       view = next;
       draw();
       body.scrollTop = 0;
@@ -385,6 +416,7 @@ export const projectsApp: AppDef = {
     }
 
     on(addBtn, 'click', async () => {
+      if (!(await leaveForm())) return;
       const name = h('input', { type: 'text', class: 'field', maxlength: 200, 'aria-label': 'Name', autocomplete: 'off' });
       const site = h('input', { type: 'text', class: 'field', maxlength: 500, 'aria-label': 'Site', placeholder: 'optional, such as example.com', autocomplete: 'off' });
       const notes = h('textarea', { class: 'field', rows: 3, maxlength: 20000, 'aria-label': 'Notes' });
