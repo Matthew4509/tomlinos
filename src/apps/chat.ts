@@ -34,7 +34,7 @@ export const chatApp: AppDef = {
     const { shell, signal } = app;
     app.root.classList.add('chat-app');
     if (!shell.account) {
-      app.root.append(h('p', { class: 'app-message' }, 'Chat is for the people who sign in to this TOMLIN OS, so it needs TOMLIN OS running on its server with accounts. Here, files are kept in this browser only.'));
+      app.root.append(h('p', { class: 'app-message' }, 'Chat needs TOMLIN OS running on its server with accounts; this copy keeps its files in this browser only.'));
       return;
     }
     const chat = ChatSession.for(shell);
@@ -138,7 +138,7 @@ export const chatApp: AppDef = {
         const words = c === 'general'
           ? alone
             ? owner
-              ? 'Only you have an account here, so General is a place for notes to yourself for now. Everyone you add to this desktop joins it, and can be messaged under Direct.'
+              ? 'Only you are here for now, so General is for notes to yourself. Everyone you add joins it, and can be messaged under Direct.'
               : 'Only you have an account here so far. Everyone the owner adds to this desktop joins General.'
             : 'No messages yet. Say hello.'
           : 'No messages yet.';
@@ -179,7 +179,7 @@ export const chatApp: AppDef = {
       lock.title = plain.length
         ? `Messages are encrypted on the way and on the server, but not end to end: ${names.join(' and ')} files are not encrypted, so that chat key is kept readable on this server. Turn on file encryption in My account to close this gap.`
         : c === 'general'
-          ? 'Only people given the General key can open its messages, and the server keeps them scrambled. Someone added later is given it too, and can read the messages still kept from before.'
+          ? 'Only people given the General key can open its messages; the server keeps them scrambled. Someone added later gets the key too, and can read the messages still kept.'
           : 'Only the people in this conversation can open its messages. The server keeps them scrambled.';
     }
 

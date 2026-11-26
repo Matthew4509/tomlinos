@@ -139,8 +139,8 @@ export async function checkDevice(): Promise<DeviceCheck> {
   return {
     webgpu: true, chip, memoryGb, phone, maxInput: oldChip ? OLD_CHIP_MAX_INPUT : MAX_INPUT_CHARS,
     advice: oldChip
-      ? `This device's graphics chip (${chip}) is an older kind: the built-in AI runs, slowly, and only on short text (a few sentences); longer text can make the chip stop.`
-      : weak ? `This device can run the built-in AI, but it is small (${memoryGb ?? '?'} GB, ${phone ? 'a phone or tablet' : chip}): it may be slow, or may not start. On a phone, Claude or ChatGPT in the browser does more; save the result into TOMLIN OS.` : `This device can run the built-in AI on its ${chip}.`,
+      ? `This device's graphics chip (${chip}) is an older kind: the built-in AI runs slowly, and only on a few sentences; longer text can make the chip stop.`
+      : weak ? `This device can run the built-in AI, but it is small (${memoryGb ?? '?'} GB, ${phone ? 'a phone or tablet' : chip}), so it may be slow or not start.` : `This device can run the built-in AI on its ${chip}.`,
   };
 }
 

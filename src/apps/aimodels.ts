@@ -5,6 +5,7 @@
 // hfsearch.ts has the rule). An added model is fetched from Hugging Face by this browser when started; it is never
 // saved on the server (the owner's Save is for the built-in models only).
 import { h, on } from '../core/dom.ts';
+import { infoTip } from '../shell/infotip.ts';
 import { formatSize } from '../core/format.ts';
 import type { AppDef } from '../shell/types.ts';
 import { APPS } from './catalog.ts';
@@ -58,9 +59,9 @@ export const aiModelsApp: AppDef = {
     app.root.append(
       form,
       h('div', { class: 'aim-body' },
-        h('p', { class: 'hint aim-warn' }, 'These models are made and uploaded by other people. TOMLIN OS checks only that its engine can run one, not what it says or how good it is. Read a model\'s card (its licence, and whether it is made for chat) before you add it. An added model downloads from Hugging Face into this browser when you start it.'),
-        h('h2', { class: 'aim-head' }, 'Good places to start'),
-        h('p', { class: 'hint' }, 'A few well-known models for each kind of computer. A smaller model answers sooner; a larger one answers better but needs more graphics memory. You can search for anything above.'),
+        h('p', { class: 'hint aim-warn' }, 'These models are made by other people, and TOMLIN OS checks only that it can run one. Read a model\'s card (its licence, and whether it is made for chat) before you add it. ', infoTip('models from Hugging Face', 'TOMLIN OS does not check what a model says or how good it is. An added model downloads from Hugging Face into this browser when you start it.')),
+        h('h2', { class: 'aim-head' }, 'Good places to start ', infoTip('good places to start', 'A smaller model answers sooner; a larger one answers better but needs more graphics memory. You can search for anything above.')),
+        h('p', { class: 'hint' }, 'A few well-known models for each kind of computer.'),
         startBox,
         h('h2', { class: 'aim-head' }, 'My models'), mineBox,
         h('h2', { class: 'aim-head' }, 'Found on Hugging Face'), results, more),
