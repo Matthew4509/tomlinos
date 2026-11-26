@@ -9,6 +9,9 @@ import type { AppDef } from '../shell/types.ts';
 import { ArchiveError, readArchive, type ArchiveEntry } from './archive/read.ts';
 import { APPS } from './catalog.ts';
 
+/** Folders inside folders an extract makes, at most: a deeper entry is left out (and said), not a near-endless walk. */
+const MAX_DEPTH = 64;
+
 const MAX_ARCHIVE_BYTES = 300 * 1024 * 1024;
 
 interface Row {
@@ -68,7 +71,8 @@ export const archiveApp: AppDef = {
         if (!under(e, here)) continue;
         const name = e.parts[here.length];
         const folder = e.folder || e.parts.length > here.length + 1;
-        const key = nameKey(name) + (folder ? '/' : '');
+        // Folders whose names fold together are one folder; files keep a row each, as they are extracted each under a name.
+        const key = folder ? nameKey(name) + '/' : '\0' + name;
         const row = byKey.get(key) ?? { name, folder, size: 0 };
         if (!e.folder) row.size += e.size;
         byKey.set(key, row);
@@ -118,12 +122,17 @@ export const archiveApp: AppDef = {
       if (name === null) return;
       allBtn.disabled = someBtn.disabled = true;
       let done = 0;
+      let deep = 0;
       const made = new Set<string>();
+      // The names given out in each folder: two entries whose names come to the same one there ("a.txt" and "A.TXT",
+      // "q?.txt" and "q_.txt", "café" written two ways) get " (2)" rather than one writing over the other.
+      const given = new Map<string, string[]>();
       try {
         const target = (await shell.fs.mkdir(joinPath(folder, name))).name;
         const root = joinPath(folder, target);
         const ensure = async (parts: string[]) => {
           for (let i = 1; i <= parts.length; i++) {
+            if (app.signal.aborted) return;
             const key = keyOf(parts.slice(0, i));
             if (made.has(key)) continue;
             await shell.fs.ensureFolder(joinPath(root, ...parts.slice(0, i)));
@@ -132,17 +141,28 @@ export const archiveApp: AppDef = {
         };
         for (const e of pick) {
           if (app.signal.aborted) return;
+          if (e.parts.length > MAX_DEPTH) {
+            deep++;
+            continue;
+          }
           if (e.folder) {
             await ensure(e.parts);
             continue;
           }
-          await ensure(e.parts.slice(0, -1));
+          const dir = e.parts.slice(0, -1);
+          await ensure(dir);
+          if (app.signal.aborted) return;
+          const names = given.get(keyOf(dir)) ?? [];
+          const fileName = uniqueName(e.parts[e.parts.length - 1], names);
+          names.push(fileName);
+          given.set(keyOf(dir), names);
           status.textContent = `Extracting ${done + 1} of ${pick.filter(p => !p.folder).length}: ${e.parts.join('/')}`;
-          await shell.fs.writeFile(joinPath(root, ...e.parts), await e.read());
+          await shell.fs.writeFile(joinPath(root, ...dir, fileName), await e.read(), { mustBeNew: true });
           done++;
         }
-        status.textContent = `Extracted ${plural(done, 'file')} into “${target}”.`;
-        shell.toast(`Extracted ${plural(done, 'file')} into “${target}”.`, { label: 'Open folder', run: () => void shell.openPath(root) });
+        const left = deep ? ` ${plural(deep, 'item')} nested more than ${MAX_DEPTH} folders deep ${deep === 1 ? 'was' : 'were'} left out.` : '';
+        status.textContent = `Extracted ${plural(done, 'file')} into “${target}”.${left}`;
+        shell.toast(`Extracted ${plural(done, 'file')} into “${target}”.${left}`, { label: 'Open folder', run: () => void shell.openPath(root) });
       } catch (error) {
         status.textContent = `Stopped after ${plural(done, 'file')}.`;
         if (error instanceof ArchiveError) await shell.dialogs.alert('Could not extract everything', `${error.message} ${plural(done, 'file')} before it were extracted.`);
