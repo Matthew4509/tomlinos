@@ -5,7 +5,7 @@
 //
 // Also the tile row itself: a radio group (one Tab stop; arrow keys move, Space or Enter picks) whose pick is only a
 // choice until the guide's Save button keeps it.
-import { css, h, on } from '../core/dom.ts';
+import { css, h, on, svg } from '../core/dom.ts';
 import type { PublicUser } from '../auth/api.ts';
 import { KINDS, sheetTitle } from '../auth/sheetkinds.ts';
 import { icon } from './icons.ts';
@@ -124,6 +124,30 @@ export function clockMini(signal: AbortSignal): HTMLElement {
 }
 
 export const blankMini = (): HTMLElement => h('div', { class: 'saver saver-blank' });
+
+/** Where to press on a picture's 640 x 400 screen: "Log in for more" on the reader, the close button on the spreadsheet. */
+export const RING_AT = {
+  reader: { cx: 565, cy: 24, rx: 80, ry: 23 },
+  sheet: { cx: 614, cy: 15, rx: 28, ry: 14 },
+} as const;
+
+/** A red ring drawn over a picture, round the place to press. */
+export function ringMini(at: { cx: number; cy: number; rx: number; ry: number }): SVGElement {
+  return svg('svg', { class: 'mini-ring', viewBox: `0 0 ${MINI_W} ${MINI_H}`, width: MINI_W, height: MINI_H, 'aria-hidden': 'true', focusable: 'false' },
+    svg('ellipse', { cx: at.cx, cy: at.cy, rx: at.rx, ry: at.ry, fill: 'none', stroke: '#d62020', 'stroke-width': 7 }));
+}
+
+/** A clock with a padlock on it, the picture beside the screensaver and lock screen settings (40 x 40, like the icons). */
+export function clockLockPic(size = 40): SVGElement {
+  return svg('svg', { viewBox: '0 0 48 48', width: size, height: size, 'aria-hidden': 'true', focusable: 'false', class: 'icon' },
+    svg('circle', { cx: 20, cy: 20, r: 16, fill: 'url(#gi-paper)', stroke: '#2f5fa5', 'stroke-width': 3 }),
+    svg('path', { d: 'M20 9v2M20 29v2M9 20h2M29 20h2', stroke: '#5f7290', 'stroke-width': 2, 'stroke-linecap': 'round' }),
+    svg('path', { d: 'M20 20V12M20 20l6 4', fill: 'none', stroke: '#1f2740', 'stroke-width': 2.5, 'stroke-linecap': 'round' }),
+    svg('circle', { cx: 20, cy: 20, r: 1.8, fill: '#1f2740' }),
+    svg('path', { d: 'M30 31v-4a5 5 0 0 1 10 0v4', fill: 'none', stroke: '#7d8aa0', 'stroke-width': 3, 'stroke-linecap': 'round' }),
+    svg('rect', { x: 26, y: 30, width: 18, height: 14, rx: 3, fill: '#f2c14e', stroke: '#9a7412', 'stroke-width': 1.5 }),
+    svg('circle', { cx: 35, cy: 36, r: 2.2, fill: '#5a4108' }));
+}
 
 export interface Tile<T extends string> {
   value: T;
