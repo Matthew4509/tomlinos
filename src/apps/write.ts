@@ -11,7 +11,7 @@ import { inertMarkup } from '../core/inert.ts';
 import { pictureTooBig } from '../core/imagesize.ts';
 import { baseName, joinPath, parentPath, splitExtension, uniqueName } from '../fs/names.ts';
 import type { MenuItem } from '../shell/menu.ts';
-import { pickFile, pickSave, type FileTypeChoice } from '../shell/filepicker.ts';
+import { pickFile, pickSave, savePdfAs, type FileTypeChoice } from '../shell/filepicker.ts';
 import { saveOver } from '../shell/savefile.ts';
 import { createRecovery } from '../shell/recovery.ts';
 import type { AppDef, AppHandle } from '../shell/types.ts';
@@ -52,6 +52,23 @@ const OPEN_TYPES: FileTypeChoice[] = [
   { label: 'LibreOffice document', ext: ['odt'] },
   { label: 'Markdown', ext: ['md', 'markdown'] },
   { label: 'Plain text', ext: ['txt'] },
+];
+/** Insert picture: every picture first, then each kind. */
+const PICTURE_CHOICES: FileTypeChoice[] = [
+  { label: 'All pictures', ext: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'] },
+  { label: 'PNG picture', ext: ['png'] },
+  { label: 'JPEG picture', ext: ['jpg', 'jpeg'] },
+  { label: 'GIF picture', ext: ['gif'] },
+  { label: 'WebP picture', ext: ['webp'] },
+  { label: 'Bitmap picture', ext: ['bmp'] },
+];
+/** Mail merge lists: every list Write reads first, then each kind. */
+const LIST_TYPES: FileTypeChoice[] = [
+  { label: 'All lists', ext: ['xlsx', 'sheet', 'csv', 'tsv'] },
+  { label: 'Excel workbook', ext: ['xlsx'] },
+  { label: 'Spreadsheet', ext: ['sheet'] },
+  { label: 'CSV (comma separated)', ext: ['csv'] },
+  { label: 'Tab separated', ext: ['tsv'] },
 ];
 
 /**
@@ -1101,7 +1118,7 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
     }
   }
   async function pictureFromDesktop(): Promise<void> {
-    const chosen = await pickFile(shell, { title: 'Insert a picture', folder: '/Pictures', accept: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'], ok: 'Insert' });
+    const chosen = await pickFile(shell, { title: 'Insert a picture', folder: '/Pictures', accept: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'], ok: 'Insert', types: PICTURE_CHOICES });
     if (!chosen) {
       view.focus();
       return;
@@ -1343,7 +1360,19 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
   const takeSnapshot = () => snapshot(dom, paper, page, box(), pageCount, [...furniture.querySelectorAll<HTMLElement>('.wp-notes')]);
   const print = () => {
     settle();
-    void printPreview(shell, takeSnapshot, page, baseLabel(), `${baseLabel()}.pdf`).then(() => view.focus());
+    void printPreview(shell, takeSnapshot, page, baseLabel(), `${baseLabel()}.pdf`, docFolder()).then(() => view.focus());
+  };
+  /** The folder Save as and Save PDF as start in: the document's own, else where it came from, else Documents. */
+  const docFolder = (): string => (path ? parentPath(path) : folderHint ?? '/Documents');
+  /** File > Save PDF as...: the pages as they are on screen, saved where the person chooses. */
+  const savePdf = async (): Promise<void> => {
+    settle();
+    try {
+      await savePdfAs(shell, { folder: docFolder(), name: `${baseLabel()}.pdf` }, () => pdfOf(takeSnapshot(), baseLabel()));
+    } catch (error) {
+      await shell.report('Could not make the PDF', error);
+    }
+    view.focus();
   };
 
   // ---- Footnotes, word count, spelling ---------------------------------------------------------------------------------
@@ -1424,7 +1453,7 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
   }
   /** Letters from a list: a spreadsheet (.xlsx, .sheet, .csv), its first row naming the columns. */
   async function listFromSheet(): Promise<void> {
-    const chosen = await pickFile(shell, { title: 'Choose a list (a spreadsheet)', folder: '/Documents', accept: ['xlsx', 'sheet', 'csv', 'tsv'], ok: 'Use it' });
+    const chosen = await pickFile(shell, { title: 'Choose a list (a spreadsheet)', folder: '/Documents', accept: ['xlsx', 'sheet', 'csv', 'tsv'], ok: 'Use it', types: LIST_TYPES });
     if (!chosen) {
       view.focus();
       return;
@@ -1502,7 +1531,7 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
       hold.remove();
     }
   }
-  /** The letters: one per row, each on a new page; into a new document (saved in Documents) or one PDF. */
+  /** The letters: one per row, each on a new page; into a new document (saved in Documents) or one PDF (saved where the person chooses). */
   async function makeLetters(asPdf: boolean): Promise<void> {
     if (!mergeList?.rows.length) {
       await shell.dialogs.alert('Choose a list first', 'Mailings > From Contacts, or From a spreadsheet. Each row of the list makes one letter.');
@@ -1534,14 +1563,7 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
       // The PDF: the letters are laid out on a sheet of their own, out of sight, and read from there. The letter on screen
       // stays as it is, so typing while the PDF is made goes into it.
       const bytes = await pdfOf(lettersSnapshot(merged), name);
-      let taken: string[] = [];
-      try {
-        taken = (await shell.fs.list('/Documents', true)).map(e => e.name);
-      } catch {
-        // Writing says so if Documents is not there.
-      }
-      const entry = await shell.fs.writeFile(joinPath('/Documents', uniqueName(`${name}.pdf`, taken)), bytes, { mustBeNew: true });
-      shell.toast(`Made ${mergeList.rows.length} letters in “${entry.name}” (Documents).`, { label: 'Open', run: () => void shell.openPath(joinPath('/Documents', entry.name)) });
+      await savePdfAs(shell, { title: `Save ${mergeList.rows.length} letters as a PDF`, folder: docFolder(), name: `${name}.pdf` }, () => bytes);
     } catch (error) {
       await shell.report('Could not make the letters', error);
     }
@@ -1925,7 +1947,7 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
         sized(250, group('List', btn('From Contacts', 'One letter for each person in Contacts', () => void listFromContacts(), 'text-rb'), btn('From a spreadsheet...', 'One letter for each row of a spreadsheet (its first row names the columns)', () => void listFromSheet(), 'text-rb'), listLabel)),
         group('Fields', menuBtn('Insert field', 'Insert a field: filled in from each row', fieldItems)),
         sized(220, group('Preview', btn('◂', 'Previous row', () => preview(-1)), btn('Preview', 'Show a row’s values in the fields (press again for the field names)', () => preview(0), 'text-rb'), btn('▸', 'Next row', () => preview(1)), previewLabel)),
-        group('Finish', btn('Letters as a document', 'Make one letter per row in a new document (saved in Documents)', () => void makeLetters(false), 'text-rb'), btn('Letters as a PDF', 'Make one letter per row in one PDF (saved in Documents)', () => void makeLetters(true), 'text-rb')),
+        group('Finish', btn('Letters as a document', 'Make one letter per row in a new document (saved in Documents)', () => void makeLetters(false), 'text-rb'), btn('Letters as a PDF', 'Make one letter per row in one PDF, saved where you choose', () => void makeLetters(true), 'text-rb')),
       ];
     }
     if (t === 'view') {
@@ -1987,6 +2009,7 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
     { label: 'Download as Word document (.docx)', action: () => void download() },
     { separator: true },
     { label: 'Print and PDF...', hint: 'Ctrl+P', action: print },
+    { label: 'Save PDF as...', action: () => void savePdf() },
   ];
   const fileBtn = h('button', { type: 'button', class: 'file-tab', 'aria-haspopup': 'true' }, 'File');
   on(fileBtn, 'click', () => {

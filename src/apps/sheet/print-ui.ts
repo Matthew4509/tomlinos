@@ -2,7 +2,7 @@
 // repeat, header and footer), Print (a preview of every page with the common settings beside it), printing through the
 // browser, and a PDF made here (downloaded, or saved in Documents). The pages themselves are drawn by print.ts.
 import { h, on } from '../../core/dom.ts';
-import { joinPath, uniqueName } from '../../fs/names.ts';
+import { savePdfAs } from '../../shell/filepicker.ts';
 import type { SheetContext } from './charts-ui.ts';
 import { SvgPainter } from './paint.ts';
 import { PdfDocument } from './pdf.ts';
@@ -15,6 +15,8 @@ import { readRanges } from './rules-ui.ts';
 export interface PrintContext extends SheetContext {
   /** The file's name, for the header and footer (&F) and the PDF's name. */
   fileLabel(): string;
+  /** The folder Save PDF as starts in: the workbook's own, else Documents. */
+  folder(): string;
 }
 
 /** Margins as their preset's name, or "custom". */
@@ -301,7 +303,8 @@ export async function downloadPdf(ctx: PrintContext): Promise<void> {
   }
 }
 
-export async function savePdfInDocuments(ctx: PrintContext): Promise<void> {
+/** Save PDF as...: asks where (starting in the workbook's folder), then saves the PDF there. */
+export async function savePdfAsFile(ctx: PrintContext): Promise<void> {
   const { shell } = ctx;
   try {
     const bytes = await pdfOf(ctx);
@@ -309,14 +312,7 @@ export async function savePdfInDocuments(ctx: PrintContext): Promise<void> {
       await shell.dialogs.alert('Nothing to put in a PDF', 'This sheet is empty. Type something in it (or set a print area) first.');
       return;
     }
-    let taken: string[] = [];
-    try {
-      taken = (await shell.fs.list('/Documents', true)).map(e => e.name);
-    } catch {
-      // Writing says so if Documents is not there.
-    }
-    const entry = await shell.fs.writeFile(joinPath('/Documents', uniqueName(pdfName(ctx), taken)), bytes, { mustBeNew: true });
-    shell.toast(`Saved “${entry.name}” in Documents.`, { label: 'Open', run: () => void shell.openPath(joinPath('/Documents', entry.name)) });
+    await savePdfAs(shell, { folder: ctx.folder(), name: pdfName(ctx) }, () => bytes);
   } catch (error) {
     await shell.report('Could not save the PDF', error);
   }
@@ -410,7 +406,7 @@ export async function printPreview(ctx: PrintContext): Promise<void> {
       void shell.dialogs.ask<'print' | 'pdf' | 'save' | null>({
         title: `Print: ${wb.sheets[wb.active].name}`,
         body,
-        buttons: [{ label: 'Print', value: 'print', primary: true }, { label: 'Download PDF', value: 'pdf' }, { label: 'Save PDF in Documents', value: 'save' }, { label: 'Close', value: null }],
+        buttons: [{ label: 'Print', value: 'print', primary: true }, { label: 'Download PDF', value: 'pdf' }, { label: 'Save PDF as...', value: 'save' }, { label: 'Close', value: null }],
         cancel: null,
         focus: () => paper,
       }).then(resolve);
@@ -430,7 +426,7 @@ export async function printPreview(ctx: PrintContext): Promise<void> {
     done.abort();
     if (answer === 'print') printNow(ctx);
     else if (answer === 'pdf') await downloadPdf(ctx);
-    else if (answer === 'save') await savePdfInDocuments(ctx);
+    else if (answer === 'save') await savePdfAsFile(ctx);
     break;
   }
   grid.focus();

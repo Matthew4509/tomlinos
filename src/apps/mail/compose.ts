@@ -118,7 +118,7 @@ export const composeApp: AppDef = {
     }
 
     async function attach() {
-      const path = await pickFile(shell, { title: 'Attach a file', folder: '/Documents' });
+      const path = await pickFile(shell, { title: 'Attach a file', folder: '/Documents', types: [{ label: 'All files', ext: [] }] });
       if (!path) return;
       try {
         const e = await shell.fs.stat(path);

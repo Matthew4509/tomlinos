@@ -4,7 +4,7 @@
 // own typefaces; the PDF draws it with the typefaces every PDF reader has (Helvetica, Times, Courier), each word at its
 // place on the line, so a line never runs longer than it does on screen. Characters those typefaces lack show as "?".
 import { h, on, svg } from '../../core/dom.ts';
-import { joinPath, uniqueName } from '../../fs/names.ts';
+import { savePdfAs } from '../../shell/filepicker.ts';
 import type { Shell } from '../../shell/types.ts';
 import { cssFamily, fontKind, type FontKind } from '../sheet/fonts.ts';
 import { pdfCannotShow, PdfDocument, type PdfPage } from '../sheet/pdf.ts';
@@ -309,19 +309,8 @@ export function printNow(snap: Snapshot, page: PageSetup): void {
   }
 }
 
-export async function savePdfInDocuments(shell: Shell, bytes: Uint8Array, name: string): Promise<void> {
-  let taken: string[] = [];
-  try {
-    taken = (await shell.fs.list('/Documents', true)).map(e => e.name);
-  } catch {
-    // Writing says so if Documents is not there.
-  }
-  const entry = await shell.fs.writeFile(joinPath('/Documents', uniqueName(name, taken)), bytes, { mustBeNew: true });
-  shell.toast(`Saved “${entry.name}” in Documents.`, { label: 'Open', run: () => void shell.openPath(joinPath('/Documents', entry.name)) });
-}
-
-/** File > Print: a preview of every page, then Print, a PDF to download, or a PDF saved in Documents. */
-export async function printPreview(shell: Shell, take: () => Snapshot, page: PageSetup, title: string, pdfName: string): Promise<void> {
+/** File > Print: a preview of every page, then Print, a PDF to download, or Save PDF as... (starting in `folder`). */
+export async function printPreview(shell: Shell, take: () => Snapshot, page: PageSetup, title: string, pdfName: string, folder: string): Promise<void> {
   const done = new AbortController();
   let snap = take();
   let index = 0;
@@ -356,7 +345,7 @@ export async function printPreview(shell: Shell, take: () => Snapshot, page: Pag
   const answer = await shell.dialogs.ask<'print' | 'pdf' | 'save' | null>({
     title: `Print: ${title}`,
     body,
-    buttons: [{ label: 'Print', value: 'print', primary: true }, { label: 'Download PDF', value: 'pdf' }, { label: 'Save PDF in Documents', value: 'save' }, { label: 'Close', value: null }],
+    buttons: [{ label: 'Print', value: 'print', primary: true }, { label: 'Download PDF', value: 'pdf' }, { label: 'Save PDF as...', value: 'save' }, { label: 'Close', value: null }],
     cancel: null,
   });
   done.abort();
@@ -365,9 +354,8 @@ export async function printPreview(shell: Shell, take: () => Snapshot, page: Pag
   if (answer === 'print') printNow(snap, page);
   else {
     try {
-      const bytes = await pdfOf(snap, title);
-      if (answer === 'pdf') shell.transfers.save(pdfName, bytes);
-      else await savePdfInDocuments(shell, bytes, pdfName);
+      if (answer === 'pdf') shell.transfers.save(pdfName, await pdfOf(snap, title));
+      else await savePdfAs(shell, { folder, name: pdfName }, () => pdfOf(snap, title));
     } catch (error) {
       await shell.report('Could not make the PDF', error);
     }

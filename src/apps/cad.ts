@@ -8,7 +8,7 @@
 import { css, h, on } from '../core/dom.ts';
 import { baseName, joinPath, parentPath, uniqueName } from '../fs/names.ts';
 import type { MenuItem } from '../shell/menu.ts';
-import { pickFile, pickSave, type FileTypeChoice } from '../shell/filepicker.ts';
+import { PDF_TYPES, pickFile, pickSave, type FileTypeChoice } from '../shell/filepicker.ts';
 import { heldInOtherTabs, holdCopy, releaseCopy } from '../shell/recovery.ts';
 import { saveOver } from '../shell/savefile.ts';
 import type { AppDef } from '../shell/types.ts';
@@ -1297,7 +1297,7 @@ export const cadApp: AppDef = {
     }
     async function openPhoto(): Promise<void> {
       if (drawing.photo && !(await shell.dialogs.confirm({ title: 'Replace the photo?', text: 'This drawing has a photo under it already. The new one takes its place (Undo brings the old one back).', ok: 'Replace it', cancel: 'Cancel' }))) return;
-      const chosen = await pickFile(shell, { title: 'Open a photo to trace over', folder: path ? parentPath(path) : folderHint ?? '/Pictures', accept: PHOTO_EXTS, ok: 'Open' });
+      const chosen = await pickFile(shell, { title: 'Open a photo to trace over', folder: path ? parentPath(path) : folderHint ?? '/Pictures', accept: PHOTO_EXTS, ok: 'Open', types: [{ label: 'All photos', ext: PHOTO_EXTS }, { label: 'JPEG picture', ext: ['jpg', 'jpeg'] }, { label: 'PNG picture', ext: ['png'] }, { label: 'WebP picture', ext: ['webp'] }, { label: 'HEIC photo', ext: ['heic', 'heif'] }, { label: 'GIF picture', ext: ['gif'] }, { label: 'Bitmap picture', ext: ['bmp'] }] });
       setTimeout(keyboardBack, 0);
       if (!chosen) return;
       if (/\.(heic|heif)$/i.test(chosen)) {
@@ -1583,7 +1583,7 @@ export const cadApp: AppDef = {
         } catch {
           // Saving will say the folder is gone.
         }
-        const chosen = await pickSave(shell, { title: 'Save a PDF to scale', folder, name: uniqueName(`${stemOf(label)}.pdf`, taken), accept: ['pdf'], ok: 'Save' });
+        const chosen = await pickSave(shell, { title: 'Save a PDF to scale', folder, name: uniqueName(`${stemOf(label)}.pdf`, taken), ok: 'Save', types: PDF_TYPES });
         setTimeout(keyboardBack, 0);
         if (!chosen) return;
         let target = chosen.path;

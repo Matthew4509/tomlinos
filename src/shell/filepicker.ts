@@ -847,3 +847,26 @@ export async function pickSave(shell: Shell, options: SaveOptions): Promise<{ pa
     options = { ...options, folder: parentPath(path), name: baseName(path) };
   }
 }
+
+/** The file-type drop-down for a PDF. */
+export const PDF_TYPES: FileTypeChoice[] = [{ label: 'PDF document', ext: ['pdf'] }];
+
+/**
+ * Save PDF as...: asks where and under what name (starting in `folder`, with a name not yet taken there), then makes
+ * the PDF and writes it. The toast says which folder it went in. Returns false when cancelled.
+ */
+export async function savePdfAs(shell: Shell, options: { title?: string; folder: string; name: string }, make: () => Promise<Uint8Array> | Uint8Array): Promise<boolean> {
+  let taken: string[] = [];
+  try {
+    taken = (await shell.fs.list(options.folder, true)).map(e => e.name);
+  } catch {
+    // The window starts somewhere else if the folder is gone.
+  }
+  const chosen = await pickSave(shell, { title: options.title ?? 'Save PDF as', folder: options.folder, name: uniqueName(options.name, taken), ok: 'Save', types: PDF_TYPES });
+  if (!chosen) return false;
+  const bytes = await make();
+  const entry = await shell.fs.writeFile(chosen.path, bytes, chosen.replace ? {} : { mustBeNew: true });
+  const where = parentPath(chosen.path);
+  shell.toast(`Saved “${entry.name}” in ${where === '/' ? 'the top folder' : where}.`, { label: 'Open', run: () => void shell.openPath(chosen.path) });
+  return true;
+}
