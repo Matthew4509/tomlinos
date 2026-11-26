@@ -167,6 +167,16 @@ export const panelApp: AppDef = {
         },
         onReopen: () => undefined,
       };
+      // Mail in the ticket shape writes in place, beside the open message: Delete pressed on one of the writing area's
+      // buttons (Discard, Send) is not Mail's Delete, which would remove the open message. Typing keeps its Delete.
+      if (appId === 'mail') {
+        area.addEventListener('keydown', (e: KeyboardEvent) => {
+          const t = e.target;
+          if (e.key !== 'Delete' || !(t instanceof Element) || !t.closest('.mail-compose')) return;
+          if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || (t instanceof HTMLElement && t.isContentEditable)) return;
+          e.stopPropagation();
+        }, { capture: true, signal: abort.signal });
+      }
       const def = shell.apps().find(a => a.id === appId);
       if (!def) area.append(h('p', { class: 'app-message' }, 'That app is not installed on this desktop.'));
       else {
