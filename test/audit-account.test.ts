@@ -174,6 +174,20 @@ test('ACC-P1-1 (the same order elsewhere): a change refused after the identity c
     assert.equal((await owner.call('pin', { ...id, pin: null })).status, 403, 'a used recovery code is refused');
   });
 
+test('ACC-P1-2: the lock screen takes a recovery code in place of the authenticator code, once',
+  { skip: noPhp }, async () => {
+    clearBrakes();
+    const before = (await owner.call('status')).json.user.recoveryLeft;
+    assert.equal((await owner.call('lock', {})).json.locked, true);
+    const un = await owner.call('unlock', { password: PASS, code: recovery[4] });
+    assert.equal(un.status, 200, JSON.stringify(un.json));
+    assert.equal(un.json.locked, false);
+    assert.equal(un.json.user.recoveryLeft, before - 1, 'the recovery code was used up');
+    assert.equal((await owner.call('lock', {})).json.locked, true);
+    assert.equal((await owner.call('unlock', { password: PASS, code: recovery[4] })).status, 403, 'a used recovery code is refused');
+    assert.equal((await owner.call('unlock', { password: PASS, code: await nextCode(secret) })).json.locked, false);
+  });
+
 test('ACC-P1-3: "Forgot your password?" refused for a weak new password can be tried again with the same recovery code',
   { skip: noPhp, todo: 'P1' }, async () => {
     clearBrakes();

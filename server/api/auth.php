@@ -368,13 +368,21 @@ try {
                 api_fail(401, 'Too many unlock tries, so you have been signed out to keep the desktop safe. Sign in with your password.', ['auth' => 'signin', 'signedOut' => true]);
             }
             $pin = body_str($body, 'pin');
+            $how = null;
             if ($pin !== '') {
                 $ok = !empty($user['pin']) && preg_match(AUTH_PIN_RE, $pin) && auth_check_pin($dataDir, $pin, $user['pin']);
             } else {
                 $ok = password_verify(body_str($body, 'password'), $user['hash']);
                 if ($ok && !empty($user['totp']['enabled'])) {
-                    $step = auth_totp_check($user['totp']['secret'], body_str($body, 'code'), (int) ($user['totp']['last'] ?? 0));
+                    // As at sign-in, an unused recovery code is taken in place of the authenticator's code (and used up),
+                    // so a lost phone does not mean signing out.
+                    $code = body_str($body, 'code');
+                    $step = auth_totp_check($user['totp']['secret'], $code, (int) ($user['totp']['last'] ?? 0));
                     $ok = $step !== null && auth_totp_use($dataDir, $user['id'], $step);
+                    if (!$ok && auth_recovery_use($dataDir, $user['id'], $code)) {
+                        $ok = true;
+                        $how = 'Unlocked with a recovery code (' . count(auth_users($dataDir)[$user['id']]['recovery'] ?? []) . ' left)';
+                    }
                 }
             }
             if (!$ok) {
@@ -391,6 +399,10 @@ try {
             $session = auth_session_update($dataDir, $token, static fn (array $s): array => ['locked' => false, 'fails' => 0] + $s);
             if ($session === null) {
                 api_fail(401, 'You are signed out. Sign in again to carry on.', ['auth' => 'signin']);
+            }
+            if ($how !== null) {
+                auth_history_add($dataDir, $user['id'], $how);
+                $user = auth_users($dataDir)[$user['id']] ?? $user;
             }
             api_json(signed_in_answer($user, $session));
         }

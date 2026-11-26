@@ -434,7 +434,7 @@ export class LockScreen {
     const user = this.o.user();
     const name = h('input', { type: 'text', class: 'field', autocomplete: 'username', spellcheck: false });
     const pass = h('input', { type: 'password', class: 'field', autocomplete: 'current-password' });
-    const code = user?.totp ? h('input', { type: 'text', class: 'field', autocomplete: 'one-time-code', inputmode: 'numeric', maxlength: 6 }) : null;
+    const code = user?.totp ? h('input', { type: 'text', class: 'field', autocomplete: 'one-time-code', autocapitalize: 'off', spellcheck: 'false', maxlength: 20 }) : null;
     const problem = h('p', { class: 'reader-login-problem', role: 'alert' }, message);
     const go = h('button', { type: 'submit', class: 'btn primary' }, words.button);
     const cancel = h('button', { type: 'button', class: 'btn' }, 'Cancel');
@@ -524,9 +524,9 @@ export class LockScreen {
       read = () => this.tryPin(pin.value);
     } else {
       const pass = passwordField({ label: secret.pass, autocomplete: 'current-password', signal });
-      const code = h('input', { type: 'text', class: 'field gate-input', autocomplete: 'one-time-code', inputmode: 'numeric', maxlength: 6, 'aria-label': 'Two-step code' });
+      const code = h('input', { type: 'text', class: 'field gate-input', autocomplete: 'one-time-code', autocapitalize: 'off', spellcheck: 'false', maxlength: 20, 'aria-label': 'Two-step code' });
       form.append(pass.row);
-      if (user?.totp) form.append(h('label', { class: 'gate-row' }, h('span', { class: 'gate-label' }, 'Two-step code'), code));
+      if (user?.totp) form.append(h('label', { class: 'gate-row' }, h('span', { class: 'gate-label' }, 'Two-step code (or a recovery code)'), code));
       read = () => this.tryPassword(pass.input.value, code.value.trim());
     }
     form.append(problem, h('div', { class: 'gate-buttons' }, ...(user?.pin ? [other] : []), signOut, go));

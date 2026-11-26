@@ -355,9 +355,9 @@ export function unlockFirst(host: HTMLElement, api: AuthApi, status: AuthStatus)
         attempt = () => api.unlockPin(pin.value);
       } else {
         const pass = passwordField({ label: 'Password', autocomplete: 'current-password', signal });
-        const code = h('input', { type: 'text', class: 'field gate-input', autocomplete: 'one-time-code', inputmode: 'numeric', maxlength: 6, 'aria-label': 'Two-step code' });
+        const code = h('input', { type: 'text', class: 'field gate-input', autocomplete: 'one-time-code', autocapitalize: 'off', spellcheck: 'false', maxlength: 20, 'aria-label': 'Two-step code' });
         form.append(pass.row);
-        if (user.totp) form.append(h('label', { class: 'gate-row' }, h('span', { class: 'gate-label' }, 'Two-step code'), code));
+        if (user.totp) form.append(h('label', { class: 'gate-row' }, h('span', { class: 'gate-label' }, 'Two-step code (or a recovery code)'), code));
         attempt = () => api.unlockPassword(pass.input.value, code.value.trim());
       }
       form.append(problem, h('div', { class: 'gate-buttons' }, ...(user.pin ? [other] : []), out, go));
