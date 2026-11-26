@@ -54,6 +54,26 @@ export const taskManagerApp: AppDef = {
       status.textContent = plural(wins.length, 'window') + ' open';
     }
     const chosenWin = () => shell.windows.list().find(w => w.id === chosen);
+    // The list by keyboard: arrows, Home and End pick a row, Enter switches to it (Delete ends it, below).
+    on(list, 'keydown', (e: KeyboardEvent) => {
+      const wins = shell.windows.list().filter(w => w.id !== app.id);
+      if (!wins.length) return;
+      const at = wins.findIndex(w => w.id === chosen);
+      let next = -1;
+      if (e.key === 'ArrowDown') next = at < 0 ? 0 : Math.min(wins.length - 1, at + 1);
+      else if (e.key === 'ArrowUp') next = at < 0 ? wins.length - 1 : Math.max(0, at - 1);
+      else if (e.key === 'Home') next = 0;
+      else if (e.key === 'End') next = wins.length - 1;
+      else if (e.key === 'Enter' && at >= 0) {
+        e.preventDefault();
+        shell.windows.focus(wins[at]);
+        return;
+      } else return;
+      e.preventDefault();
+      chosen = wins[next].id;
+      paintApps();
+      list.querySelectorAll<HTMLElement>('.tm-row')[next]?.scrollIntoView({ block: 'nearest' });
+    }, app.signal);
     on(switchBtn, 'click', () => {
       const w = chosenWin();
       if (w) shell.windows.focus(w);
