@@ -2,7 +2,7 @@
 // Run: npm test
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { detectEol, fileBytes, findNext, hasBom, lineCol, lineStart, replaceAll, toBox, toFile } from '../src/apps/notepad/text.ts';
+import { detectEol, fileBytes, fileSize, findNext, hasBom, lineCol, lineStart, replaceAll, toBox, toFile } from '../src/apps/notepad/text.ts';
 
 test('a Windows file keeps its CRLF endings through the text box', () => {
   const file = 'one\r\ntwo\r\nthree';
@@ -45,4 +45,11 @@ test('the invisible mark (a BOM) at the start of a UTF-8 file is noticed and put
   assert.equal(hasBom(Uint8Array.from([0x68, 0x69])), false);
   assert.deepEqual(fileBytes('hi', '\n', true), marked);
   assert.deepEqual(fileBytes('a\nb', '\r\n', false), new TextEncoder().encode('a\r\nb'));
+});
+
+test('N-P1-2: the quick size count agrees with the saved bytes (no full encode a key)', () => {
+  const samples = ['', 'plain', 'a\nb\nc', 'café', '€ and 😀 and 中文', 'lone \ud800 half', 'end half \udc00', '😀'.repeat(3) + '\n'];
+  for (const text of samples) for (const eol of ['\n', '\r\n', '\r'] as const) for (const bom of [false, true]) {
+    assert.equal(fileSize(text, eol, bom), fileBytes(text, eol, bom).length, JSON.stringify({ text, eol, bom }));
+  }
 });

@@ -7,7 +7,7 @@ import { h, on } from '../core/dom.ts';
 import { formatSize } from '../core/format.ts';
 import { baseName, joinPath, nameProblem, parentPath, uniqueName } from '../fs/names.ts';
 import type { AppDef } from '../shell/types.ts';
-import { detectEol, EOL_NAMES, fileBytes, findNext, hasBom, lineCol, lineStart, replaceAll, toBox, type Eol } from './notepad/text.ts';
+import { detectEol, EOL_NAMES, fileBytes, fileSize, findNext, hasBom, lineCol, lineStart, replaceAll, toBox, type Eol } from './notepad/text.ts';
 import { APPS } from './catalog.ts';
 import { saveOver } from '../shell/savefile.ts';
 
@@ -63,14 +63,31 @@ export const editorApp: AppDef = {
       findBar, area, status);
 
     const dirty = () => area.value !== saved || eol !== savedEol;
-    const refresh = () => {
-      app.setDirty(dirty());
-      app.setTitle(path ? baseName(path) : 'Untitled');
-      const { line, col } = lineCol(area.value, area.selectionStart);
-      const lines = area.value.split('\n').length;
-      const size = fileBytes(area.value, eol, bom).length;
+    const drawStatus = () => {
+      const text = area.value;
+      const { line, col } = lineCol(text, area.selectionStart);
+      const lines = text.split('\n').length;
+      const size = fileSize(text, eol, bom);
       status.textContent = `Ln ${line}, Col ${col}  ·  ${lines} line${lines === 1 ? '' : 's'}, ${formatSize(size)}  ·  ${EOL_NAMES[eol]}  ·  UTF-8  ·  ${zoom}%${dirty() ? '  ·  not saved' : ''}`;
       eolBtn.textContent = EOL_SHORT[eol];
+    };
+    // Counting lines and bytes goes over the whole text, and even reading a long text box's text back costs the browser
+    // milliseconds, so in a long file a key only marks the window changed (at once: the close guard needs it), and the
+    // exact check and the status bar follow once typing pauses.
+    let statusTimer = 0;
+    let long = false;
+    app.signal.addEventListener('abort', () => clearTimeout(statusTimer), { once: true });
+    const settle = () => {
+      app.setDirty(dirty());
+      drawStatus();
+      long = area.value.length > 200_000;
+    };
+    const refresh = (event?: Event) => {
+      app.setTitle(path ? baseName(path) : 'Untitled');
+      clearTimeout(statusTimer);
+      if (!long || !event) return settle(); // a save, zoom or line-ending switch shows at once
+      if (event?.type === 'input') app.setDirty(true);
+      statusTimer = window.setTimeout(settle, 150);
     };
     const setZoom = (z: number) => {
       zoom = z;

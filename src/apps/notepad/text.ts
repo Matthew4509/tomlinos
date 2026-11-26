@@ -34,6 +34,22 @@ export function fileBytes(text: string, eol: Eol, bom: boolean): Uint8Array {
   return bytes;
 }
 
+/** How many bytes fileBytes would give, counted without building them (a quick size for the status bar and the limit). */
+export function fileSize(text: string, eol: Eol, bom: boolean): number {
+  let n = bom ? 3 : 0;
+  const crlf = eol === '\r\n';
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (c < 0x80) n += crlf && c === 10 ? 2 : 1;
+    else if (c < 0x800) n += 2;
+    else if (c >= 0xd800 && c <= 0xdbff && (text.charCodeAt(i + 1) & 0xfc00) === 0xdc00) {
+      n += 4;
+      i++;
+    } else n += 3; // a lone half of a pair is saved as the 3-byte replacement mark, as TextEncoder does
+  }
+  return n;
+}
+
 /** 1-based line and column of an offset. */
 export function lineCol(text: string, offset: number): { line: number; col: number } {
   const before = text.slice(0, offset);

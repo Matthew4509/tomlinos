@@ -187,21 +187,31 @@ await step('FAULT: Find in a long file brings the match into view', async () => 
   ok(top > 1000, 'textarea scrollTop after find: ' + top);
 });
 
-await step('typing in a 2 MB file stays quick (under 30 ms a key)', async () => {
+// N-P1-2. What is timed is Notepad's own work on each key (its input and keyup handlers). The browser's own change to a
+// 1.5 MB text box (setRangeText) is timed beside it and only printed: in headless Chrome it alone is about 45 ms.
+await step('N-P1-2: typing in a 1.5 MB file: Notepad\'s own work is under 10 ms a key (no full encode a key)', async () => {
   const n = await openInNotepad('long');
   await page.waitForFunction(() => (document.querySelector('.editor textarea')?.value.length ?? 0) > 100000);
-  const ms = await n.locator('textarea').evaluate(a => {
+  const { mine, browser } = await n.locator('textarea').evaluate(a => {
     a.focus();
-    const t0 = performance.now();
+    let mine = 0;
+    let browser = 0;
     for (let i = 0; i < 20; i++) {
+      const t0 = performance.now();
       a.setRangeText('x', a.selectionStart, a.selectionStart, 'end');
+      const t1 = performance.now();
       a.dispatchEvent(new Event('input'));
       a.dispatchEvent(new KeyboardEvent('keyup'));
+      mine += performance.now() - t1;
+      browser += t1 - t0;
     }
-    return (performance.now() - t0) / 20;
+    return { mine: mine / 20, browser: browser / 20 };
   });
-  console.log('       ms per key: ' + ms.toFixed(1));
-  ok(ms < 30, 'ms per key ' + ms.toFixed(1));
+  console.log(`       ms per key: Notepad ${mine.toFixed(1)}, the browser's own text change ${browser.toFixed(1)}`);
+  ok(mine < 10, 'Notepad ms per key ' + mine.toFixed(1));
+  await n.locator('.editor-status', { hasText: 'not saved' }).waitFor({ timeout: 5000 }).catch(() => {});
+  const said = await n.locator('.editor-status').innerText();
+  ok(said.includes('not saved'),'the status bar did not catch up once typing paused: ' + said);
 });
 
 await step('FAULT: at its smallest size the window still shows some of the text with the find bar open', async () => {
