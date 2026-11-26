@@ -217,3 +217,19 @@ export function boxOfShapes(shapes: Shape[]): Box | null {
   }
   return boxOf(pts);
 }
+
+/**
+ * A shape with its sizes changed to other units (k: 1/25.4 to inches, 25.4 to millimetres). A dimension keeps its
+ * fineness: an inch is 25.4 mm, so it gets one decimal place more in inches (600 mm at 2 places is 23.622 in, not
+ * 23.62) and one fewer in millimetres. An angle keeps its places (degrees do not change).
+ */
+export function toUnits(s: Shape, k: number): Shape {
+  const t = scaleShape(s, P(0, 0), k);
+  if (t.type !== 'dim' || t.kind === 'leader' || t.kind === 'angle') return t;
+  return { ...t, dp: unitPlaces(t.dp, k) };
+}
+
+/** The decimal places a length shown to dp places takes in the other units (k as for toUnits). */
+export function unitPlaces(dp: number, k: number): number {
+  return Math.max(0, Math.min(8, dp + (k < 1 ? 1 : k > 1 ? -1 : 0)));
+}

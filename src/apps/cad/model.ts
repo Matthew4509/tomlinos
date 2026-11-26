@@ -400,7 +400,7 @@ export function tooBigToSave(d: Drawing): string | null {
   let points = 0;
   for (const e of d.ents) points += e.type === 'poly' ? e.pts.length : e.type === 'spline' ? e.fit.length : 0;
   if (points > MAX_POINTS) return `This drawing's polylines and curves have ${points.toLocaleString('en-GB')} points; a CAD Draft drawing opens again with up to ${MAX_POINTS.toLocaleString('en-GB')}. Delete some, or split it into two drawings, then save.`;
-  if (d.layers.length > MAX_LAYERS) return `This drawing has ${d.layers.length.toLocaleString('en-GB')} layers; a CAD Draft drawing opens again with up to ${MAX_LAYERS.toLocaleString('en-GB')}. Delete the ones not needed (the … beside a layer › Delete the layer), then save.`;
+  if (d.layers.length > MAX_LAYERS) return `This drawing has ${d.layers.length.toLocaleString('en-GB')} layers; a CAD Draft drawing opens again with up to ${MAX_LAYERS.toLocaleString('en-GB')}. Delete the ones not needed (Edit > Delete empty layers clears every empty one at once), then save.`;
   const long = d.ents.filter(e => (e.type === 'text' || e.type === 'dim') && e.text.length > MAX_TEXT).length;
   if (long) return `${long === 1 ? 'A text or dimension' : `${long.toLocaleString('en-GB')} texts or dimensions`} in this drawing ${long === 1 ? 'has' : 'have'} more than ${MAX_TEXT.toLocaleString('en-GB')} letters, the most one opens again with. Shorten ${long === 1 ? 'it' : 'them'}, then save.`;
   return null;
@@ -501,7 +501,10 @@ export function readTcad(text: string): { drawing: Drawing; skipped: number; dam
           case 'poly': {
             const p = pts(r.pts, 2);
             const b = Array.isArray(r.bulges) ? r.bulges.map(num) : [];
-            s = { type: 'poly', pts: p, bulges: p.map((_, i) => (Math.abs(b[i] ?? 0) <= 1e6 ? (b[i] ?? 0) : 0)), closed: r.closed === true };
+            // A bulge is kept as saved, however near a full circle it makes its arc; only one so big the arc's size is
+            // beyond any number is refused (and counted as damaged), never quietly straightened.
+            if (b.some(x => Math.abs(x) > 1e100)) throw new CadProblem('a polyline in it has an arc of impossible size');
+            s = { type: 'poly', pts: p, bulges: p.map((_, i) => b[i] ?? 0), closed: r.closed === true };
             break;
           }
           case 'spline':

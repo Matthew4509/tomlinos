@@ -206,8 +206,8 @@ await step('rule 8: a recovery copy left behind is offered once, and opening it 
     const lines = await w.locator('.cad-said').allInnerTexts();
     if (lines.some(l => l.startsWith('Recovered'))) holding++;
   }
-  if (holding !== 1 || answered > 1) info(`CD-6 (P1): the copy was offered ${answered} times (${offers} at once) and is open in ${holding} windows (${JSON.stringify(titles)})`);
   ok(holding >= 1, 'the recovered drawing did not open at all');
+  ok(holding === 1 && answered === 1 && offers === 1, `CD-6: the copy was offered ${answered} times (${offers} at once) and is open in ${holding} windows (${JSON.stringify(titles)})`);
   await closeAll();
 });
 
@@ -229,10 +229,88 @@ await step('rule 6: at 375 px the window fits, nothing scrolls sideways, and eve
   }).map(e => e.getAttribute('aria-label')));
   ok(!off.length, `toolbars off screen that cannot be scrolled to: ${JSON.stringify(off)}`);
   ok(await W().locator('.cbar-title[data-menu="File"]').isVisible(), 'the File menu cannot be seen');
+  // More toolbar buttons past the edge: a » at the strip's right edge says so, and a press scrolls the strip on.
+  const strip = W().locator('.cbar-dock-top');
+  const overflows = await strip.evaluate(e => e.scrollWidth > e.clientWidth + 2);
+  if (overflows) {
+    const onward = W().locator('.cad-strip-more');
+    ok(await onward.isVisible(), 'the toolbar strip runs on past the edge with nothing to show it');
+    const box2 = await onward.boundingBox();
+    ok(box2 && box2.x + box2.width <= 376 && box2.width >= 20, `the » is not at the right edge: ${JSON.stringify(box2)}`);
+    const before = await strip.evaluate(e => e.scrollLeft);
+    await onward.click();
+    await page.waitForTimeout(600);
+    ok((await strip.evaluate(e => e.scrollLeft)) > before, 'pressing » did not scroll the toolbars on');
+  } else info('at 375 px every toolbar fitted, so the » was not tried');
   await cmd('line', '0,0', '50,0', '');
   ok((await said(4)).includes('Line'), `typing a line at 375 px: ${await said(4)}`);
   await closeAll();
   await page.setViewportSize({ width: 1280, height: 800 });
+});
+
+await step('CAD-P1-1: a radius typed as 12,5 makes a circle of radius 12.5 (not one through the point 12,5)', async () => {
+  await openCad();
+  await cmd('circle', '0,0', '12,5');
+  const s = await said(4);
+  ok(/Read “12,5” as the number 12\.5/.test(s), `the decimal comma was not read as a number: ${s}`);
+  ok(!/Cannot:/.test(await said(1)), `the circle was refused: ${s}`);
+  await closeAll();
+});
+
+await step('CAD-P1-2 and CAD-P1-6: drawing on a hidden layer says so and offers to show it; deleting a locked layer’s items keeps them', async () => {
+  await openCad();
+  // Hide the current layer from the Layers panel (its tick), then draw on it.
+  if (!(await W().locator('.cad-panel').isVisible())) await menu('View', 'Layers panel');
+  const target = W().locator('.cad-layer', { has: page.locator('.cad-layer-name.current') }).first();
+  await target.locator('.cad-tick').click();
+  ok((await target.locator('.cad-tick').getAttribute('aria-checked')) === 'false', 'the current layer was not hidden');
+  await cmd('line', '0,0', '30,0', '');
+  const toast = page.locator('.toast', { hasText: 'which is hidden' });
+  await toast.first().waitFor({ timeout: 4000 });
+  await toast.first().getByRole('button', { name: 'Show it' }).click();
+  await page.waitForTimeout(300);
+  ok((await target.locator('.cad-tick').getAttribute('aria-checked')) === 'true', 'Show it did not show the layer');
+  // Lock the layer and try Edit > Delete a layer's items on it.
+  await target.locator('.cad-lock').click();
+  await menu('Edit', 'Delete a layer’s items...');
+  const d = page.locator('.dialog', { hasText: 'Delete every item on this layer' });
+  await d.waitFor();
+  await d.getByRole('button', { name: 'Delete them' }).click();
+  await page.waitForTimeout(300);
+  ok(/locked, so its 1 item was kept/.test(await said(2)), `a locked layer's items were not kept: ${await said(2)}`);
+  await closeAll();
+});
+
+await step('CD-13: Escape during a text-box handle drag puts the box back', async () => {
+  await openCad();
+  await cmd('tb', '0,0', '100,40');
+  const ask = page.locator('.dialog', { has: page.locator('textarea.cad-words') });
+  await ask.waitFor({ timeout: 4000 });
+  await ask.locator('textarea.cad-words').fill('Hello');
+  await ask.getByRole('button', { name: 'OK' }).click();
+  await page.waitForTimeout(300);
+  await menu('View', 'Zoom fit');
+  await page.waitForTimeout(300);
+  const c = await W().locator('.cad-canvas').boundingBox();
+  const mid = { x: c.x + c.width / 2, y: c.y + c.height / 2 };
+  // Dragged from inside the box (a move), Escape before letting go: the box goes back, nothing is changed.
+  await page.mouse.move(mid.x, mid.y);
+  await page.mouse.down();
+  await page.mouse.move(mid.x + 60, mid.y + 30, { steps: 5 });
+  await page.keyboard.press('Escape');
+  await page.mouse.move(mid.x + 90, mid.y + 40, { steps: 3 });
+  await page.mouse.up();
+  await page.waitForTimeout(200);
+  const after = await said(3);
+  ok(after.includes('Text box put back as it was.') && !after.includes('Text box moved.'), `Escape did not put the box back: ${after}`);
+  // The same drag without Escape does move it (so the drag above was on the box).
+  await page.mouse.move(mid.x, mid.y);
+  await page.mouse.down();
+  await page.mouse.move(mid.x + 60, mid.y + 30, { steps: 5 });
+  await page.mouse.up();
+  await page.waitForTimeout(200);
+  ok((await said(1)).includes('Text box moved.'), `the check drag did not move the box: ${await said(3)}`);
+  await closeAll();
 });
 
 if (problems.length) {

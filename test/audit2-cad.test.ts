@@ -1,15 +1,17 @@
 // Round-2 audit of CAD Draft (app id "cad"): its rules tried on the drawing model, the .tcad file, the measurements and
-// the DXF, DWG and SVG readers and writers. A failing test names a P0 still open; P1 notes are todo.
+// the DXF, DWG and SVG readers and writers. A failing test names a fault still open.
 // Run: node --test test/audit2-cad.test.ts
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { P } from '../src/apps/cad/geom.ts';
 import { newDrawing, readTcad, writeTcad, type Ent, type Shape } from '../src/apps/cad/model.ts';
-import { areaOf } from '../src/apps/cad/modify.ts';
+import { areaOf, whyNoArea } from '../src/apps/cad/modify.ts';
 import { asBox, dragGrip, presetWarp } from '../src/apps/cad/textbox.ts';
-import { mirrorShape, scaleShape } from '../src/apps/cad/edit.ts';
+import { mirrorShape, scaleShape, toUnits } from '../src/apps/cad/edit.ts';
 import type { TextShape } from '../src/apps/cad/notes.ts';
-import { DXF_VERSION_LIST, readDxf, writeDxf } from '../src/apps/cad/dxf.ts';
+import { DXF_VERSION_LIST, countOf, readDxf, writeDxf } from '../src/apps/cad/dxf.ts';
+import { decimalComma, parseNumber } from '../src/apps/cad/input.ts';
+import { dimLabel } from '../src/apps/cad/notes.ts';
 import { writeDwg } from '../src/apps/cad/dwg/write.ts';
 import { readDwg } from '../src/apps/cad/dwg/read.ts';
 import { writeSvg } from '../src/apps/cad/svg.ts';
@@ -82,7 +84,7 @@ test('CD-2: a closed polyline that crosses itself (a bow tie of two 1 x 2 triang
   assert.ok(a === null || Math.abs(a - 2) < 1e-9, `area given: ${a}`);
 });
 
-test('CD-3: a closed curve through points has an area (Area says it is not closed)', { todo: 'P1' }, () => {
+test('CD-3: a closed curve through points has an area (Area said it is not closed)', () => {
   const s: Shape = { type: 'spline', fit: [P(0, 0), P(10, 0), P(10, 10), P(0, 10)], closed: true };
   assert.notEqual(areaOf(s), null);
 });
@@ -109,7 +111,7 @@ test('rule 2: lines, arcs, ellipses and curves keep their numbers and units thro
   }
 });
 
-test('CD-9: a coordinate with more than ten decimals keeps them through a DXF (123.456789012345 does not come back as 123.4567890123)', { todo: 'P2' }, () => {
+test('CD-9: a coordinate with more than ten decimals keeps them through a DXF (123.456789012345 does not come back as 123.4567890123)', () => {
   const d = newDrawing('mm');
   d.ents = [{ type: 'line', a: P(0, 0), b: P(123.456789012345, 0), id: 1, layer: 'Geometry' } as Ent];
   const r = readDxf(writeDxf(d, { version: '2018', textAsLines: false, construction: false, hidden: false }).bytes);
@@ -117,14 +119,14 @@ test('CD-9: a coordinate with more than ten decimals keeps them through a DXF (1
   assert.ok(l.type === 'line' && l.b.x === 123.456789012345);
 });
 
-test('CD-10: text of two lines comes back from a DWG as one text of two lines (as from a 2000+ DXF), not two texts', { todo: 'P2' }, () => {
+test('CD-10: text of two lines comes back from a DWG as one text of two lines (as from a 2000+ DXF), not two texts', { todo: 'P2: held, the DWG writer has no MTEXT yet (said in the output notes instead)' }, () => {
   const d = newDrawing('mm');
   d.ents = [{ ...plain({ text: 'two\nlines' }), id: 1, layer: 'Text' } as Ent];
   const r = readDwg(writeDwg(d, { textAsLines: false, construction: false, hidden: false }).bytes);
   assert.deepEqual(r.drawing.ents.filter(e => e.type === 'text').map(e => (e as TextShape).text), ['two\nlines']);
 });
 
-test('CD-11: words ending in spaces keep them through a DXF (right-aligned text does not move)', { todo: 'P2' }, () => {
+test('CD-11: words ending in spaces keep them through a DXF (right-aligned text does not move)', () => {
   const d = newDrawing('mm');
   d.ents = [{ ...plain({ text: 'total  ', align: 'right' }), id: 1, layer: 'Text' } as Ent];
   const r = readDxf(writeDxf(d, { version: '2018', textAsLines: false, construction: false, hidden: false }).bytes);
@@ -172,7 +174,7 @@ test('CD-8: a DXF listing 60,000 layers (1.6 MB) opens or is refused within 3 se
   assert.ok(ms < 3000, `reading took ${ms} ms`);
 });
 
-test('CD-4: a DXF coordinate that is not a number (NaN, 1e400) is refused or counted, not silently read as 0', { todo: 'P1' }, () => {
+test('CD-4: a DXF coordinate that is not a number (NaN, 1e400) is refused or counted, not silently read as 0', () => {
   const r = readDxf(dxfOf([], [...lineAt('NaN'), ...lineAt('1e400')]));
   const quiet = r.drawing.ents.length === 2 && r.leftOut === 0 && !r.report.some(l => /not a number|damaged|left out/i.test(l));
   assert.ok(!quiet, `both lines were drawn from x = 0 and nothing was said: ${r.report.join(' / ')}`);
@@ -198,7 +200,7 @@ test('rule 4: a damaged DWG (bytes changed at random, 400 tries) is always refus
   assert.ok(Date.now() - t < 20000);
 });
 
-test('CD-7: a DXF with more layers than a drawing keeps (1,200) can still be saved: the empty ones can be cleared at once', { todo: 'P1' }, () => {
+test('CD-7: a DXF with more layers than a drawing keeps (1,200) can still be saved: the empty ones can be cleared at once', () => {
   // Reading it gives 1,200 layers; Save then refuses ("Delete the ones not needed") and there is no way to clear empty
   // layers other than one at a time. Here: the read keeps no more than a drawing can save, or says how to.
   const tables = ['0', 'TABLE', '2', 'LAYER'];
@@ -206,4 +208,87 @@ test('CD-7: a DXF with more layers than a drawing keeps (1,200) can still be sav
   tables.push('0', 'ENDTAB');
   const r = readDxf(dxfOf([], ['0', 'POINT', '8', 'L1', '10', '0', '20', '0'], tables));
   assert.ok(r.drawing.layers.length <= 1000 || r.report.some(l => /layer/i.test(l) && /1,000|empty/i.test(l)));
+  assert.ok(r.report.some(l => /Delete empty layers/.test(l)), 'the open report does not say how to clear the empty layers');
+});
+
+// ---- Round-2 P1/P2 fixes ---------------------------------------------------------------------------------------------
+
+test('CD-3: a closed curve through points gets its true area (a curve through a circle\'s points is near the circle)', () => {
+  const n = 24;
+  const fit = Array.from({ length: n }, (_, i) => P(10 * Math.cos((i / n) * 2 * Math.PI), 10 * Math.sin((i / n) * 2 * Math.PI)));
+  const a = areaOf({ type: 'spline', fit, closed: true });
+  assert.ok(a !== null && Math.abs(a - Math.PI * 100) < 0.5, `area ${a}`);
+  assert.equal(areaOf({ type: 'spline', fit, closed: false }), null);
+});
+
+test('Area: a closed polyline that crosses itself is said to cross itself, not to be open', () => {
+  const bow: Shape = { type: 'poly', pts: [P(0, 0), P(2, 2), P(2, 0), P(0, 2)], bulges: [0, 0, 0, 0], closed: true };
+  assert.equal(areaOf(bow), null);
+  assert.equal(whyNoArea(bow), 'crosses');
+  assert.equal(whyNoArea({ type: 'line', a: P(0, 0), b: P(1, 0) }), 'open');
+});
+
+test('CD-4: NaN and 1e400 coordinates leave their items out, counted in the open report', () => {
+  const r = readDxf(dxfOf([], [...lineAt('NaN'), ...lineAt('1e400'), ...lineAt('5')]));
+  assert.equal(r.drawing.ents.length, 1);
+  assert.equal(r.leftOut, 2);
+  assert.ok(r.report.some(l => /2 items with a number that is not a number/.test(l)), r.report.join(' / '));
+});
+
+test('CD-12: the open report counts curves through points in plain English (not "curve through pointss")', () => {
+  assert.equal(countOf(2, 'curve through points'), '2 curves through points');
+  assert.equal(countOf(1, 'curve through points'), '1 curve through points');
+  assert.equal(countOf(3, 'line of no length'), '3 lines of no length');
+  assert.equal(countOf(2, '3D body'), '2 3D bodies');
+  assert.equal(countOf(2, 'filled triangle or square (SOLID)'), '2 filled triangles or squares (SOLID)');
+  const d = newDrawing('mm');
+  d.ents = [0, 1].map(i => ({ type: 'spline', fit: [P(i, 0), P(i + 5, 5), P(i + 10, 0)], closed: false, id: i + 1, layer: 'Geometry' }) as Ent);
+  const r = readDxf(writeDxf(d, { version: '2018', textAsLines: false, construction: false, hidden: false }).bytes);
+  assert.ok(!r.report.join(' ').includes('pointss'), r.report.join(' / '));
+});
+
+test('CD-14: a polyline bulge over 1e6 (an arc a hair short of a full circle) is kept through a .tcad, not straightened', () => {
+  const d = newDrawing('mm');
+  d.ents = [{ type: 'poly', pts: [P(0, 0), P(1, 0)], bulges: [5e6, 0], closed: false, id: 1, layer: 'Geometry' } as Ent];
+  const back = readTcad(writeTcad(d));
+  const p = back.drawing.ents[0];
+  assert.ok(p.type === 'poly' && p.bulges[0] === 5e6);
+});
+
+test('CD-15: a literal \\U+0041 typed in text comes back as typed from an R12 DXF and a DWG (not as A)', () => {
+  const d = newDrawing('mm');
+  d.ents = [{ ...plain({ text: 'code \\U+0041 here' }), id: 1, layer: 'Text' } as Ent];
+  const opts = { textAsLines: false, construction: false, hidden: false };
+  for (const r of [readDxf(writeDxf(d, { ...opts, version: 'R12' }).bytes), readDwg(writeDwg(d, opts).bytes)]) {
+    assert.deepEqual(r.drawing.ents.filter(e => e.type === 'text').map(e => (e as TextShape).text), ['code \\U+0041 here']);
+  }
+});
+
+test('CD-10: a DWG output of text of two lines says, in its notes, that it opens again as separate texts', () => {
+  const d = newDrawing('mm');
+  d.ents = [{ ...plain({ text: 'two\nlines' }), id: 1, layer: 'Text' } as Ent, { ...plain({ text: 'one line' }), id: 2, layer: 'Text' } as Ent];
+  const w = writeDwg(d, { textAsLines: false, construction: false, hidden: false });
+  assert.ok(w.notes.some(n => /^1 text of more than one line is written as one text a line/.test(n)), w.notes.join(' / '));
+  d.ents = [d.ents[1]];
+  assert.ok(!writeDwg(d, { textAsLines: false, construction: false, hidden: false }).notes.some(n => /more than one line/.test(n)));
+});
+
+test('CAD-P1-1: 12,5 typed for a size reads as twelve and a half; 12,5.0 and 12, 5 do not', () => {
+  assert.equal(decimalComma('12,5'), 12.5);
+  assert.equal(decimalComma('-0,75'), -0.75);
+  assert.equal(decimalComma('12,5.0'), null);
+  assert.equal(decimalComma('12, 5'), null);
+  assert.equal(decimalComma('12'), null);
+  assert.equal(parseNumber('12,5'), null);
+});
+
+test('CAD-P1-5: mm to inch gives a dimension one more decimal place (600 mm shows 23.622, not 23.62), and back again', () => {
+  const dim: Shape = { type: 'dim', kind: 'aligned', pts: [P(0, 0), P(600, 0), P(300, 20)], dir: 0, h: 3.5, arrow: 2.5, dp: 2, text: '' };
+  const inch = toUnits(dim, 1 / 25.4);
+  assert.ok(inch.type === 'dim' && inch.dp === 3 && dimLabel(inch) === '23.622', JSON.stringify(inch));
+  const back = toUnits(inch, 25.4);
+  assert.ok(back.type === 'dim' && back.dp === 2 && dimLabel(back) === '600');
+  const angle: Shape = { type: 'dim', kind: 'angle', pts: [P(0, 0), P(10, 0), P(0, 10), P(5, 5)], dir: 0, h: 3.5, arrow: 2.5, dp: 1, text: '' };
+  const a = toUnits(angle, 1 / 25.4);
+  assert.ok(a.type === 'dim' && a.dp === 1, 'an angle keeps its places');
 });

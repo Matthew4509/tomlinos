@@ -45,7 +45,7 @@ export function dwgName(name: string): string {
 }
 
 /** Text as a TEXT holds it: a %% typed in the words is kept as two % signs (AutoCAD reads %%%). */
-const dwgText = (s: string) => s.replace(/%%/g, '%%%%%%').replace(/[\r\n]+/g, ' ');
+const dwgText = (s: string) => s.replace(/\\(?=U\+[0-9a-fA-F]{4})/g, '\\U+005C').replace(/%%/g, '%%%%%%').replace(/[\r\n]+/g, ' ');
 
 // ---- Objects -------------------------------------------------------------------------------------------------------
 
@@ -295,6 +295,8 @@ export function writeDwg(d: Drawing, o: DwgWriteOptions): DwgWritten {
   const owned: number[] = [];
   let count = 0;
   let curves = 0;
+  /** Texts of more than one line, written a TEXT a line. */
+  let splitTexts = 0;
   const put = (type: number, layer: string, rest: Build) => {
     const h = handle();
     owned.push(h);
@@ -354,7 +356,10 @@ export function writeDwg(d: Drawing, o: DwgWriteOptions): DwgWritten {
       }
       return;
     }
-    t.text.split('\n').forEach((row, i) => {
+    const rows = t.text.split('\n');
+    // A DWG from here has no paragraph text (MTEXT) yet: each line goes as a TEXT of its own, and is said in the notes.
+    if (rows.filter(r => r.trim()).length > 1) splitTexts++;
+    rows.forEach((row, i) => {
       if (!row.trim()) return;
       const foot = rotatePt(P(t.p.x, t.p.y - i * 1.6 * t.h), t.p, t.angle);
       const rot = Math.abs(t.angle) > 1e-12 ? normAngle(t.angle) : 0;
@@ -804,6 +809,7 @@ export function writeDwg(d: Drawing, o: DwgWriteOptions): DwgWritten {
   if (d.ents.some(e => e.type === 'ellipse')) notes.push('Ellipses are written as true ellipses.');
   if (d.ents.some(e => e.type === 'dim')) notes.push('Dimensions are written as plain lines and text.');
   if (d.ents.some(e => e.type === 'text') && !o.textAsLines) notes.push('Text is written as text: the other program draws it in its own letters, so its width may differ a little.');
+  if (splitTexts) notes.push(`${splitTexts} text${splitTexts === 1 ? '' : 's'} of more than one line ${splitTexts === 1 ? 'is' : 'are'} written as one text a line (a DWG from CAD Draft has no paragraph text yet), so ${splitTexts === 1 ? 'it opens' : 'they open'} again as separate texts. A DXF 2000 or later keeps ${splitTexts === 1 ? 'it' : 'them'} whole.`);
   const bent = ents.filter(e => e.type === 'text' && boxGoesAsLines(e)).length;
   if (bent && !o.textAsLines) notes.push(`${bent} stretched or bent text box${bent === 1 ? ' is' : 'es are'} written as polylines in CAD Draft's own letters (the other program's letters could not follow a stretch or a bend).`);
   if (leftHidden) notes.push(`${leftHidden} item${leftHidden === 1 ? '' : 's'} on hidden layers left out.`);

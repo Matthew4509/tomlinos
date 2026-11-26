@@ -12,7 +12,7 @@ import { boxOfShapes, chainFrom, mirrorShape, moveShape, pieceNear, rotateShape,
 import { CONSTRUCTION, ellipse, isNote, pieceLength, piecesOf, polygon, rectangle, slot, type Ent, type Shape, type Units } from './model.ts';
 import { placePart, type Part } from './parts.ts';
 import { movePhoto, planStraighten, scaleFromTwo, straightenTurn, turnPhoto, type Photo } from './photo.ts';
-import { areaOf, breakAt, breakBetween, chamfer, closeShape, cornerBetween, extend, fillet, offset, polyCorners, reverse, setStart, trim } from './modify.ts';
+import { areaOf, whyNoArea, breakAt, breakBetween, chamfer, closeShape, cornerBetween, extend, fillet, offset, polyCorners, reverse, setStart, trim } from './modify.ts';
 
 export interface Want {
   point?: boolean;
@@ -1238,6 +1238,7 @@ function areaTool(ctx: ToolCtx): Tool {
     make(g) {
       const { e } = picked(g[0]);
       const a = areaOf(e);
+      if (a === null && whyNoArea(e) === 'crosses') return fail(ctx, 'That shape crosses itself, so it has no single inside to measure. Break it where it crosses into separate closed shapes and measure each.');
       if (a === null) return fail(ctx, 'That shape is not closed, so it has no area. Join its parts into one closed geometry first (CAD > Join).');
       const perimeter = piecesOf(e).reduce((t, p) => t + pieceLength(p), 0);
       ctx.say(`Area ${ctx.fmt(a)}   perimeter ${ctx.fmt(perimeter)}`);

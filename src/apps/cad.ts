@@ -15,10 +15,10 @@ import type { AppDef } from '../shell/types.ts';
 import { APPS } from './catalog.ts';
 import { classicBar, type BarItem, type ClassicBar, type ToolButton, type ToolEntry } from '../shell/menubar.ts';
 import type { ToolIconId } from '../shell/toolicons.ts';
-import { boxOfShapes, chainFrom, distToShape, inWindow, itemsNear, moveShape, scaleShape, touchesBox } from './cad/edit.ts';
+import { boxOfShapes, chainFrom, distToShape, inWindow, itemsNear, moveShape, toUnits, touchesBox, unitPlaces } from './cad/edit.ts';
 import { P, add, dist, mul, normAngle, sub, unit, type Pt } from './cad/geom.ts';
 import { cadIcon, type CadIcon } from './cad/icons.ts';
-import { parseNumber, parsePoint, parseSize } from './cad/input.ts';
+import { decimalComma, parseNumber, parsePoint, parseSize } from './cad/input.ts';
 import {
   COLOUR_NAMES, CONSTRUCTION, DIMENSIONS, TEXT, isNote, CadProblem, LAYER_COLOURS, LINE_TYPES, TYPE_NAMES, colourName, describe, type LineType, fmt, newDrawing, readTcad, tooBigToSave, writeTcad, type Drawing, type Ent, type Layer, type Shape, type Units,
 } from './cad/model.ts';
@@ -103,6 +103,8 @@ const releaseRecovery = (p: string) => {
 };
 /** The note beside a copy ("<id>.note.json" for "<id>.tcad"), refreshed while the copy is in use. */
 const recoveryNoteOf = (p: string) => p.replace(/\.tcad$/i, '') + '.note.json';
+/** The desktops (one per shell) that are showing CAD Draft's recovery offer now: two windows opened together offer once. */
+const offeringRecovery = new WeakMap<object, boolean>();
 /** Each window's question has its own id, so its boxes can say they are answering it. */
 let promptIds = 0;
 /** The photo made ready for paper: its JPEG (for a PDF) and an address for it (for the preview and printing). */
@@ -387,7 +389,32 @@ export const cadApp: AppDef = {
         if (!layerOf(layerName)) drawing.layers = [...drawing.layers, { name: layerName, colour: layerName === CONSTRUCTION ? '#e040e0' : '#ffffff', on: true, locked: false, lineType: layerName === CONSTRUCTION ? 'dashed' : 'continuous' }];
         drawing.ents = [...drawing.ents, ...shapes.map(s => ({ ...s, id: nextId++, layer: layerName }) as Ent)];
       });
+      hiddenLayerNote(layerName);
       return shapes.map((_, i) => first + i);
+    }
+    /** Layers already said to be hidden while drawn on (said again once the layer has been shown in between). */
+    const toldHidden = new Set<string>();
+    /** Drawing on a hidden layer gives nothing to see: says so, with a button that shows the layer. */
+    function hiddenLayerNote(layerName: string): void {
+      const l = layerOf(layerName);
+      if (!l || l.on) {
+        toldHidden.delete(layerName);
+        return;
+      }
+      if (toldHidden.has(layerName)) return;
+      toldHidden.add(layerName);
+      const text = `Drawn on the layer “${layerName}”, which is hidden, so it cannot be seen.`;
+      say(text);
+      shell.toast(text, {
+        label: 'Show it',
+        run: () => {
+          const now = layerOf(layerName);
+          if (!now || now.on) return;
+          now.on = true;
+          toldHidden.delete(layerName);
+          touched();
+        },
+      });
     }
 
     // ---- Messages: the command history and the status bar ------------------------------------------------------
@@ -529,6 +556,15 @@ export const cadApp: AppDef = {
       }
     }
     function cancel(): void {
+      // A text box handle being dragged: Escape puts the box back as it was (the button is still down; letting go then
+      // changes nothing), and the box stays chosen.
+      if (gripDrag) {
+        const moved = !!gripDrag.now;
+        gripDrag = null;
+        if (moved) say('Text box put back as it was.');
+        paint();
+        return;
+      }
       if (!tool && bendId !== null) {
         bendId = null;
         say('Bending by hand: ended (the text box stays chosen).');
@@ -579,6 +615,13 @@ export const cadApp: AppDef = {
           tool.size(sz.w, sz.h);
           return afterInput();
         }
+      }
+      // A step asking for a size reads 12,5 as twelve and a half (a decimal comma), not as the point 12,5.
+      const dc = want.number && tool.number ? decimalComma(t) : null;
+      if (dc !== null && tool.number) {
+        say(`Read “${t}” as the number ${String(dc)}.${want.point ? ` For the point ${t}, type it as ${t.replace(',', '.0,')}.` : ''}`);
+        tool.number(dc, cursor);
+        return afterInput();
       }
       if (want.point && tool.point) {
         const r = parsePoint(t, tool.base());
@@ -695,11 +738,24 @@ export const cadApp: AppDef = {
       refreshStatus();
       paint();
     }
+    /** Deletes every layer with nothing on it, in one step Undo brings back (the current layer and locked ones stay). */
+    function deleteEmptyLayers(): void {
+      const used = new Set(drawing.ents.map(e => e.layer));
+      const gone = drawing.layers.filter(l => !used.has(l.name) && l.name !== drawing.current && !l.locked);
+      if (!gone.length) return say('No empty layers to delete (the current layer and locked layers are kept).');
+      const drop = new Set(gone.map(l => l.name));
+      commit(() => {
+        drawing.layers = drawing.layers.filter(l => !drop.has(l.name));
+      });
+      say(`${gone.length.toLocaleString('en-GB')} empty layer${gone.length === 1 ? '' : 's'} deleted; ${drawing.layers.length.toLocaleString('en-GB')} left. Undo brings them back.`);
+    }
     async function deleteLayerItems(): Promise<void> {
       const name = await chooseLayer('Delete a layer’s items', 'Delete every item on this layer (the layer itself stays). Undo brings them back.', 'Delete them');
       if (name === null) return;
       const n = drawing.ents.filter(e => e.layer === name).length;
       if (!n) return say(`There is nothing on ${name}.`);
+      // A locked layer's items cannot be changed, and deleting is a change: they are kept.
+      if (layerOf(name)?.locked) return problem(`${name} is locked, so its ${n} item${n === 1 ? ' was' : 's were'} kept. Unlock the layer first to delete them.`);
       commit(() => {
         drawing.ents = drawing.ents.filter(e => e.layer !== name);
       });
@@ -1757,6 +1813,8 @@ export const cadApp: AppDef = {
     }
     /** When this window last wrote its copy's note (below). */
     let recoveryNoted = 0;
+    /** The drawing has been said to be too big for a recovery copy (said once, not every two minutes). */
+    let toldNoRecovery = false;
     /**
      * The note beside a copy, written every two minutes while the window is open, as shell/recovery.ts writes it: a fresh
      * one tells another window (a second tab, another device) the copy is still in use, so it is not offered as left behind.
@@ -1767,7 +1825,15 @@ export const cadApp: AppDef = {
     }
     /** Keeps a copy of a drawing with unsaved changes, so a flat battery or a closed page loses two minutes at most. */
     async function autosave(): Promise<void> {
-      if (!settings.autosave || version === savedVersion || tooBigToSave(drawing)) return;
+      if (!settings.autosave || version === savedVersion) return;
+      const big = tooBigToSave(drawing);
+      if (big) {
+        // A copy that could not be opened again is not kept: said once (and again if it fits for a while in between).
+        if (!toldNoRecovery) say(`No recovery copy can be kept of this drawing while it is this big, so only Save keeps it. ${big}`);
+        toldNoRecovery = true;
+        return;
+      }
+      toldNoRecovery = false;
       const v = version;
       try {
         if (version === autosavedVersion) {
@@ -1808,6 +1874,17 @@ export const cadApp: AppDef = {
     }
     /** Copies kept by windows that stopped before their drawing was saved: offered to open (or delete). */
     async function offerRecovery(asked: boolean): Promise<void> {
+      // Two windows started together would each offer the same copies: one offer at a time per desktop, as
+      // shell/recovery.ts does for the other programs.
+      if (offeringRecovery.get(shell)) return;
+      offeringRecovery.set(shell, true);
+      try {
+        await offerRecoveryNow(asked);
+      } finally {
+        offeringRecovery.delete(shell);
+      }
+    }
+    async function offerRecoveryNow(asked: boolean): Promise<void> {
       let left: Entry[] = [];
       let elsewhere = 0;
       let recent = 0;
@@ -1931,9 +2008,10 @@ export const cadApp: AppDef = {
       if (!ok || units === drawing.units) return;
       const k = units === 'inch' ? 1 / 25.4 : 25.4;
       commit(() => {
-        if (convert.checked) drawing.ents = drawing.ents.map(e => ({ ...scaleShape(e, P(0, 0), k), id: e.id, layer: e.layer }) as Ent);
+        // Dimensions keep their fineness: one decimal place more in inches, one fewer in millimetres (cad/edit.ts).
+        if (convert.checked) drawing.ents = drawing.ents.map(e => ({ ...toUnits(e, k), id: e.id, layer: e.layer }) as Ent);
         if (convert.checked && drawing.photo) drawing.photo = { ...drawing.photo, at: mul(drawing.photo.at, k), u: mul(drawing.photo.u, k) };
-        drawing.style = convert.checked ? { ...drawing.style, textH: drawing.style.textH * k, dimH: drawing.style.dimH * k, arrow: drawing.style.arrow * k } : defaultStyle(units === 'inch');
+        drawing.style = convert.checked ? { ...drawing.style, textH: drawing.style.textH * k, dimH: drawing.style.dimH * k, arrow: drawing.style.arrow * k, dp: unitPlaces(drawing.style.dp, k) } : defaultStyle(units === 'inch');
         drawing.units = units;
       });
       if (convert.checked) setView({ cx: view.cx * k, cy: view.cy * k, scale: view.scale / k }, false);
@@ -2811,6 +2889,7 @@ export const cadApp: AppDef = {
       { separator: true },
       { label: 'Delete', hint: 'Del', disabled: !selected.size, action: deleteSelected },
       { label: 'Delete a layer’s items...', action: () => void deleteLayerItems() },
+      { label: 'Delete empty layers', action: deleteEmptyLayers },
     ];
     const cadMenu = (): MenuItem[] => [
       item('trim'), item('extend'),
@@ -2923,6 +3002,34 @@ export const cadApp: AppDef = {
 
     const body = h('div', { class: 'cad-body' }, panel, canvasWrap);
     app.root.append(bar.el, bar.dock(body), commandRow, status);
+    // A phone's toolbar row scrolls sideways, and a touch screen hides its scroll bar: a » at its right edge shows more
+    // is there (a press scrolls on), and a thin scroll bar is kept wherever the browser shows one.
+    const strip = bar.el.querySelector<HTMLElement>('.cbar-dock-top');
+    if (strip) {
+      const onward = h('button', {
+        type: 'button', class: 'cad-strip-more', tabindex: -1, hidden: true, title: 'More toolbar buttons (scrolls the toolbars along)', 'aria-label': 'More toolbar buttons',
+      }, '»');
+      css(onward, {
+        position: 'absolute', right: 0, 'z-index': 3, 'min-width': 24, padding: '0 4px', font: '13px Tahoma, "Segoe UI", sans-serif', color: '#000', background: '#d4d0c8',
+        border: '1px solid', 'border-color': '#fff #808080 #808080 #fff', 'border-radius': 0, 'box-shadow': '-4px 0 6px rgba(0, 0, 0, .18)',
+      });
+      css(bar.el, { position: 'relative' });
+      bar.el.append(onward);
+      const placeOnward = () => {
+        const more = strip.scrollWidth - strip.clientWidth - strip.scrollLeft > 2 && getComputedStyle(strip).overflowX !== 'visible';
+        onward.hidden = !more;
+        if (!more) return;
+        css(onward, { top: strip.offsetTop, height: strip.offsetHeight });
+      };
+      on(strip, 'scroll', placeOnward, signal);
+      on(onward, 'click', () => strip.scrollBy({ left: Math.max(60, strip.clientWidth * 0.8), behavior: 'smooth' }), signal);
+      const watchStrip = new ResizeObserver(placeOnward);
+      watchStrip.observe(strip);
+      watchStrip.observe(app.root);
+      signal.addEventListener('abort', () => watchStrip.disconnect());
+      if (onPhone) css(strip, { 'scrollbar-width': 'thin' });
+      setTimeout(placeOnward, 0);
+    }
     // On a phone the drawing gets the room (View > Layers panel opens the panel over it); a finger gets the large buttons.
     panel.hidden = !settings.layersPanel || onPhone;
     app.root.classList.toggle('cad-large', settings.large || onTouch);
@@ -3110,7 +3217,13 @@ export const cadApp: AppDef = {
     else if (dxfReport) {
       say(`Opened ${label} (a ${/\.dwg$/i.test(label) ? 'DWG' : 'DXF'}; Save makes a CAD Draft drawing beside it).`);
       for (const line of dxfReport.lines) say(line);
-      if (dxfReport.leftOut || dxfReport.changed) void shell.dialogs.alert(`Opened ${label}`, dxfReport.lines.join('\n\n'));
+      // Opened, but too big to be saved as a drawing and opened again: said now, not first at Save.
+      const big = tooBigToSave(drawing);
+      if (big) {
+        say(`It cannot be saved as a CAD Draft drawing as it is, and no recovery copies are kept of it. ${big}`);
+        toldNoRecovery = true;
+      }
+      if (dxfReport.leftOut || dxfReport.changed || big) void shell.dialogs.alert(`Opened ${label}`, [...dxfReport.lines, ...(big ? [`It cannot be saved as a CAD Draft drawing as it is, and no recovery copies are kept of it. ${big}`] : [])].join('\n\n'));
     } else say(path ? `Opened ${label}.` : 'A new drawing, in millimetres. Choose a tool, or type one such as line.');
     canvas.focus({ preventScroll: true });
     paint();

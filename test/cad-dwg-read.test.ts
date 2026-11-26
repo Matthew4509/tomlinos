@@ -64,7 +64,7 @@ test('ACadSharp\'s drawing opens the same in all five versions, with its layers,
   const text = first.report.join('\n');
   assert.match(text, /Units: millimetres/);
   assert.match(text, /2 blocks and dimensions taken apart/);
-  assert.match(text, /Left out \(CAD Draft does not draw these\): 2 filled triangle or square \(SOLID\)s/);
+  assert.match(text, /Left out \(CAD Draft does not draw these\): 2 filled triangles or squares \(SOLID\)/);
   assert.equal(first.leftOut, 2);
 });
 

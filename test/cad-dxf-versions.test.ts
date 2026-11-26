@@ -237,10 +237,12 @@ const strip = (e: Ent): Shape => {
 // ---- Tests ----------------------------------------------------------------------------------------------------------
 
 test('R12 is written exactly as before (byte for byte)', () => {
+  // Remade when numbers were first written with every digit they need to read back the same (they had been cut to
+  // ten decimal places); checked then that nothing else in the three files had changed.
   const hash = (d: Drawing, o: typeof ALL) => createHash('sha256').update(writeDxf(d, o).bytes).digest('hex');
-  assert.equal(hash(sampleDrawing(), { textAsLines: false, construction: false, hidden: false }), '1305992820d4cf6b937103ff29e518a1c30bac023cb4a84f4c497049a6c85dc5');
-  assert.equal(hash(sampleDrawing(), ALL), 'd9e0b726dc407201adabdc8633c7aaecc26a9183cf04ef481cce1871299416ca');
-  assert.equal(hash(sampleDrawing('inch'), { textAsLines: true, construction: true, hidden: true }), '901540b14934ed326f48c1aa3a817cb5e09e42196563a044b86a844e4872c4bf');
+  assert.equal(hash(sampleDrawing(), { textAsLines: false, construction: false, hidden: false }), '05b71bf94259b0e285af383a0cd4a15695737cc1317d8f4270a5197454da40a5');
+  assert.equal(hash(sampleDrawing(), ALL), '11fd9e984899ad1f5b92898371c842cf9abba69fefa4534afd13e1d9ea67a4cd');
+  assert.equal(hash(sampleDrawing('inch'), { textAsLines: true, construction: true, hidden: true }), '3e6670271cb5c0390f8daa5671a9653927855dd21500c8dbe1ef9aa948e87d01');
   // Not giving a release is R12.
   assert.equal(writeDxf(sampleDrawing(), { ...ALL, version: 'R12' }).text, writeDxf(sampleDrawing(), ALL).text);
 });

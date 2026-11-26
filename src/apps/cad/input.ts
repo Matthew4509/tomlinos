@@ -57,6 +57,17 @@ export function parseNumber(text: string): number | null {
   return v !== null && i === s.length && Number.isFinite(v) ? v : null;
 }
 
+/**
+ * A number written with a decimal comma (12,5 or -0,75): the value, or null when the text is not one. Only plain
+ * figures either side of one comma count; 12,5.0 or 12, 5 stay a point.
+ */
+export function decimalComma(text: string): number | null {
+  const m = /^([+-]?)(\d+),(\d+)$/.exec(text.trim());
+  if (!m) return null;
+  const v = Number(`${m[1]}${m[2]}.${m[3]}`);
+  return Number.isFinite(v) ? v : null;
+}
+
 /** Splits "a,b" (or "a<b") into its two halves only at the top level, never inside brackets. */
 function split(s: string, sep: string): [string, string] | null {
   let depth = 0;

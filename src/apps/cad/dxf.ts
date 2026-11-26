@@ -15,7 +15,7 @@ import {
   type Box, type Piece, type Pt,
 } from './geom.ts';
 import {
-  COLOUR_NAMES, CONSTRUCTION, CadProblem, DIMENSIONS, GEOMETRY, MAX_TEXT_LENGTH, TEXT, TYPE_NAMES, newDrawing, outlineOf, piecesOf, shapeBox,
+  COLOUR_NAMES, CONSTRUCTION, CadProblem, DIMENSIONS, GEOMETRY, MAX_LAYERS, MAX_TEXT_LENGTH, TEXT, TYPE_NAMES, newDrawing, outlineOf, piecesOf, shapeBox,
   type Drawing, type Ent, type Layer, type LineType, type Shape, type Units,
 } from './model.ts';
 import { arcLetters, dimParts, defaultStyle, textShapeStrokes, type NoteText, type TextShape } from './notes.ts';
@@ -182,13 +182,23 @@ export const DXF_LINE_TYPES: Record<LineType, { name: string; text: string; mm: 
   dotted: { name: 'DOT', text: '. . . . . .', mm: [0, -6.35] },
 };
 
-/** A number as DXF writes it: no exponent, at most ten decimal places. */
+/** A number as DXF writes it: no exponent, with every digit it needs to read back the same (up to 17 significant). */
 export function dxfNum(v: number): string {
   if (!Number.isFinite(v)) return '0.0';
   // Above this, JavaScript writes an exponent, which an R12 reader refuses.
   if (Math.abs(v) >= 1e15) throw new CadProblem('A number in the drawing is too big for a DXF (more than 1,000,000,000,000,000). Something drawn very far away, or scaled hugely, is the likely cause: Zoom fit shows it.');
   if (Math.abs(v) < 5e-11) return '0.0';
-  const s = v.toFixed(10).replace(/0+$/, '');
+  // The shortest form that reads back as the same number; a small one JavaScript would write with an exponent
+  // (below a millionth) is written out in full instead.
+  let s = String(v);
+  if (/e/i.test(s)) {
+    for (let k = 7; k <= 30; k++) {
+      s = v.toFixed(k);
+      if (Number(s) === v) break;
+    }
+    s = s.replace(/0+$/, '');
+  }
+  if (!s.includes('.')) s += '.0';
   return s.endsWith('.') ? `${s}0` : s;
 }
 
@@ -201,6 +211,8 @@ export function r12Name(name: string): string {
 /** Text with the signs R12 writes as codes (degree, diameter, plus-minus); a letter outside Windows' Western set becomes ?. */
 export function r12Text(s: string): string {
   return s
+    // A \U+0041 typed in the words is kept as typed: its backslash is written as a code, so it is not read as an A.
+    .replace(/\\(?=U\+[0-9a-fA-F]{4})/g, '\\U+005C')
     // %%% is one % sign, so a %% typed in the words is written as two of them.
     .replace(/%%/g, '%%%%%%')
     .replace(/°/g, '%%d')
@@ -290,7 +302,6 @@ function modernWords(s: string, utf8: boolean, ascii: boolean, mtext: boolean): 
   t = mtext ? t.replace(/\r\n|\r|\n/g, '\\P') : t.replace(/[\r\n]+/g, ' ');
   return encodeName(t, utf8, ascii);
 }
-
 /** A name or words: as they are in a UTF-8 file; letters beyond the code page as \U+ codes in an older one. */
 function encodeName(s: string, utf8: boolean, ascii: boolean): string {
   if (utf8) return s;
@@ -1027,6 +1038,8 @@ const num = (r: Rec, code: number, dflt = 0): number => {
   return Number.isFinite(n) ? n : dflt;
 };
 const nums = (r: Rec, code: number): number[] => r.tags.filter(t => t[0] === code).map(t => Number(t[1])).filter(Number.isFinite);
+/** Whether a coordinate, size or angle (group codes 10 to 59) in the record is written but is not a usable number. */
+const notANumber = (r: Rec): boolean => r.tags.some(([code, v]) => code >= 10 && code <= 59 && v.trim() !== '' && !Number.isFinite(Number(v)));
 const ptOf = (r: Rec, x: number, dflt = P(0, 0)): Pt => (get(r, x) === undefined ? dflt : P(num(r, x), num(r, x + 10)));
 
 /** A name with AutoCAD's \U+XXXX codes (how a file older than 2007 holds letters beyond its code page) as the letters. */
@@ -1108,6 +1121,23 @@ const LEFT_OUT_NAMES: Record<string, string> = {
   SHAPE: 'shape symbol', ARCALIGNEDTEXT: 'text on an arc (AutoCAD Express)', UNDERLAY: 'underlay', PDFUNDERLAY: 'PDF underlay', DWFUNDERLAY: 'DWF underlay', DGNUNDERLAY: 'DGN underlay',
 };
 
+/** One word made plural (curve, curves; body, bodies; mesh, meshes). */
+const pluralWord = (w: string): string =>
+  /[^aeiou]y$/i.test(w) ? `${w.slice(0, -1)}ies` : /(s|x|z|ch|sh)$/i.test(w) ? `${w}es` : `${w}s`;
+
+/**
+ * A count and the name of what was counted: "1 curve through points", "2 curves through points", "3 lines of no
+ * length". The noun before the words that describe it is the one made plural (each one, on both sides of an "or").
+ */
+export function countOf(c: number, name: string): string {
+  if (c === 1) return `${c} ${name}`;
+  const cut = /\s(?:tilted|of|with|whose|saved|too|through|nested|on|in|from|that)\s|\s\(/.exec(name);
+  const head = cut ? name.slice(0, cut.index) : name;
+  const tail = cut ? name.slice(cut.index) : '';
+  const plural = head.split(' or ').map(part => part.replace(/(\S+)$/, w => pluralWord(w))).join(' or ');
+  return `${c} ${plural}${tail}`;
+}
+
 export interface DxfRead {
   drawing: Drawing;
   /** Lines for the report shown after opening. */
@@ -1151,7 +1181,8 @@ export function readDxf(bytes: Uint8Array): DxfRead {
     const code = Number(lines[i].trim());
     if (!Number.isInteger(code)) throw new CadProblem(`This file is not a DXF drawing (line ${i + 1} should be a group code number).`);
     const raw = lines[i + 1];
-    tags.push([code, code === 1 || code === 3 ? raw.replace(/\s+$/, '') : raw.trim()]);
+    // A text's own words keep their spaces at the end: right-aligned text is placed by them.
+    tags.push([code, code === 1 || code === 3 ? raw : raw.trim()]);
   }
   if (!tags.some(t => t[0] === 0 && t[1] === 'SECTION')) throw new CadProblem('This file is not a DXF drawing (it has no sections).');
 
@@ -1327,6 +1358,23 @@ export function readDxf(bytes: Uint8Array): DxfRead {
           if (recs[n]?.type === 'SEQEND') n++;
         }
         continue;
+      }
+      // A coordinate, size or angle that is not a number (NaN, or 1e400, beyond any number) would be read as 0 and
+      // drawn in the wrong place without a word: the item is left out and counted instead.
+      if (r.type !== 'SEQEND' && r.type !== 'VERTEX') {
+        let bad = notANumber(r);
+        if (r.type === 'POLYLINE') {
+          let k = n;
+          while (k < recs.length && recs[k].type === 'VERTEX') if (notANumber(recs[k++])) bad = true;
+          if (bad) {
+            n = k;
+            if (recs[n]?.type === 'SEQEND') n++;
+          }
+        }
+        if (bad) {
+          counted(leftOut, 'item with a number that is not a number (NaN, or too big)');
+          continue;
+        }
       }
       switch (r.type) {
         case 'LINE': {
@@ -1559,7 +1607,8 @@ export function readDxf(bytes: Uint8Array): DxfRead {
 
   function mtextOf(r: Rec): TextShape | null {
     const raw = r.tags.filter(t => t[0] === 3).map(t => t[1]).join('') + (get(r, 1) ?? '');
-    const words = decodeMtext(raw).replace(/\s+$/, '');
+    // Empty lines at the end go; spaces at the end of the last line stay (right-aligned text is placed by them).
+    const words = decodeMtext(raw).replace(/\n\s*$/, '');
     if (!words.trim()) return null;
     const h = num(r, 40, 0);
     if (!(h > 0)) return null;
@@ -1627,7 +1676,7 @@ export function readDxf(bytes: Uint8Array): DxfRead {
     const kName = (e.type === 'dim' ? 'leader' : TYPE_NAMES[e.type]).toLowerCase();
     byName.set(kName, (byName.get(kName) ?? 0) + 1);
   }
-  report.push(`Read ${d.ents.length} item${d.ents.length === 1 ? '' : 's'}${byName.size ? `: ${[...byName].map(([kName, c]) => `${c} ${kName}${c === 1 ? '' : 's'}`).join(', ')}` : ''}, on ${d.layers.length} layer${d.layers.length === 1 ? '' : 's'}.`);
+  report.push(`Read ${d.ents.length} item${d.ents.length === 1 ? '' : 's'}${byName.size ? `: ${[...byName].map(([kName, c]) => countOf(c, kName)).join(', ')}` : ''}, on ${d.layers.length} layer${d.layers.length === 1 ? '' : 's'}.`);
   report.push(unitsNote);
   if (exploded) report.push(`${exploded} block${exploded === 1 ? '' : 's'} and dimension${exploded === 1 ? '' : 's'} taken apart into their lines, arcs and text.`);
   if (curves) report.push(`${curves} curve${curves === 1 ? '' : 's'} (splines) drawn as polylines of arcs, each within ${tol} ${units === 'mm' ? 'mm' : 'in'} of the true shape.`);
@@ -1637,10 +1686,15 @@ export function readDxf(bytes: Uint8Array): DxfRead {
   if (raised) report.push(`${raised} item${raised === 1 ? ' sits' : 's sit'} at a height (Z) other than 0: drawn flat, and a DXF output from here puts ${raised === 1 ? 'it' : 'them'} at 0. If the CAM program reads depth from Z, set it again there.`);
   if (thick) report.push(`${thick} item${thick === 1 ? ' has' : 's have'} a thickness (raised walls in 3D): drawn flat, and not kept.`);
   const left = [...leftOut].reduce((t, [, c]) => t + c, 0);
-  if (left) report.push(`Left out (CAD Draft does not draw these): ${[...leftOut].map(([kName, c]) => `${c} ${kName}${c === 1 ? '' : 's'}`).join(', ')}.`);
+  if (left) report.push(`Left out (CAD Draft does not draw these): ${[...leftOut].map(([kName, c]) => countOf(c, kName)).join(', ')}.`);
   const joined = [...new Set(joinedLayers)];
   if (joined.length) report.push(`${joined.length} layer name${joined.length === 1 ? ' is' : 's are'} longer than 64 letters and the same up to there, so ${joined.length === 1 ? 'those layers were' : 'each pair was'} joined into one layer (shortened to 64 letters): ${joined.map(n => n.slice(0, 40) + '...').join(', ')}.`);
   if (!d.ents.length) report.push('Nothing in the file could be drawn.');
+  if (d.layers.length > MAX_LAYERS) {
+    const used = new Set(d.ents.map(e => e.layer));
+    const empty = d.layers.filter(l => !used.has(l.name)).length;
+    report.push(`It has ${d.layers.length.toLocaleString('en-GB')} layers, more than the ${MAX_LAYERS.toLocaleString('en-GB')} a CAD Draft drawing keeps, so it cannot be saved as one yet: Edit > Delete empty layers clears the ${empty.toLocaleString('en-GB')} empty ones in one step.`);
+  }
   // Text longer than a drawing keeps is cut to that length, and said, so the drawing opens again once saved.
   let longText = 0;
   for (const e of d.ents) if ((e.type === 'text' || e.type === 'dim') && typeof e.text === 'string' && e.text.length > MAX_TEXT_LENGTH) {
