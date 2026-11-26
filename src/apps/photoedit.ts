@@ -1523,7 +1523,13 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     if (textDrag) {
       const t = textDrag;
       const prev = textBounds(t.layer);
-      t.layer.text = { ...t.spec, x: Math.round(t.spec.x + p.x - t.at.x), y: Math.round(t.spec.y + p.y - t.at.y) };
+      const moved: TextSpec = { ...t.spec, x: Math.round(t.spec.x + p.x - t.at.x), y: Math.round(t.spec.y + p.y - t.at.y) };
+      // A Meme box moved by hand is no longer kept at the top or bottom edge.
+      if (moved.box?.dock) {
+        moved.box = { ...moved.box };
+        delete moved.box.dock;
+      }
+      t.layer.text = moved;
       paintText(t.layer);
       doc.render(unionRect(prev, textBounds(t.layer)));
       return;
