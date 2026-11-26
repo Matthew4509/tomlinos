@@ -1219,7 +1219,8 @@ textarea.field { resize: vertical; font: inherit; }
 :root[data-theme="dark"] .sheet-tab { background: var(--face-hi); border-color: var(--line); color: var(--ink); }
 :root[data-theme="dark"] .sheet-tab.active { background: var(--face); color: #7fd6a4; border-bottom-color: #7fd6a4; }
 /* The list in the Open and Save windows was white too, with the same pale words. */
-:root[data-theme="dark"] .pick-list { background: #15181e; }
+:root[data-theme="dark"] .pick-list, :root[data-theme="dark"] .pick-files, :root[data-theme="dark"] .pick-side, :root[data-theme="dark"] .pick-preview, :root[data-theme="dark"] .pick-thumb { background: #15181e; }
+:root[data-theme="dark"] .pick-head, :root[data-theme="dark"] .pick-pv-text { background: var(--face); }
 
 /* ---- Xfce (Greybird, the look Debian's Xfce desktop ships): flat light-grey title bars and panel, blue selection -- */
 .theme-swatch[data-theme-sample="xfce"] .swatch-chip { background: linear-gradient(#f2f2f1, #cfcfcd); box-shadow: inset 0 -4px 0 #398ee7; }
@@ -1534,16 +1535,81 @@ textarea.field { resize: vertical; font: inherit; }
 .npp-status { white-space: pre; overflow: hidden; text-overflow: ellipsis; }
 
 /* ---- Open / Save as picker (src/shell/filepicker.ts) ---- */
-.pick { display: flex; flex-direction: column; gap: 6px; width: min(520px, 80vw); }
-.pick-bar { display: flex; align-items: center; gap: 6px; }
-.pick-where { font-size: 13px; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pick-list { height: 260px; overflow: auto; border: 1px solid var(--line); background: #fff; outline: none; }
-.pick-row { display: flex; align-items: center; gap: 8px; padding: 3px 8px; font-size: 13px; cursor: default; user-select: none; }
+.pick { display: flex; flex-direction: column; gap: 6px; width: min(900px, 96vw); height: min(560px, 80vh); min-height: 0; }
+.pick-bar { flex: none; display: flex; align-items: center; gap: 4px; min-width: 0; }
+.pick-tool { display: inline-flex; align-items: center; justify-content: center; padding: 0 5px; }
+.pick-tool[aria-pressed="true"] { border-color: var(--sel); background: var(--sel-soft); }
+.pick-gap { flex: 1; }
+.pick-crumbs { flex: 1 1 auto; font-size: 13px; }
+.pick-crumbs .crumb { font-size: 13px; color: var(--ink); }
+.pick-crumbs .crumb[aria-current] { font-weight: 700; }
+.pick-search { flex: 0 1 200px; width: auto; min-width: 100px; font-size: 13px; }
+.pick-folders-btn { display: none; }
+.pick-main { flex: 1; min-height: 0; display: flex; gap: 6px; }
+.pick-side { flex: 0 0 190px; min-width: 0; display: flex; flex-direction: column; overflow: auto; border: 1px solid var(--line); background: #fff; color: var(--ink); }
+.pick-tree { flex: none; padding: 2px 0; outline: none; }
+.pick-tree:focus-visible { box-shadow: inset 0 0 0 1px var(--sel); }
+.pick-node, .pick-recent-item { display: flex; align-items: center; gap: 4px; min-height: 22px; padding: 1px 6px 1px 4px; font-size: 13px; white-space: nowrap; cursor: default; user-select: none; }
+.pick-node:hover, .pick-recent-item:hover { background: rgba(58, 110, 165, .08); }
+.pick-node[aria-selected="true"], .pick-recent-item.current { background: rgba(58, 110, 165, .2); }
+.pick-tree:focus .pick-node[aria-selected="true"] { outline: 1px dotted var(--sel); outline-offset: -1px; }
+.pick-twisty { flex: none; width: 12px; text-align: center; font-size: 12px; color: var(--ink-soft); cursor: pointer; }
+.pick-node svg, .pick-recent-item svg { flex: none; }
+.pick-node-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.pick-recent-box { flex: none; border-top: 1px solid var(--line); padding: 4px 0; }
+.pick-side-title { padding: 2px 8px; font-size: 12px; font-weight: 700; color: var(--ink-soft); }
+.pick-recent { display: flex; flex-direction: column; }
+.pick-recent-item { width: 100%; border: 0; background: none; color: inherit; font: inherit; font-size: 13px; text-align: left; padding-left: 8px; }
+.pick-files { flex: 1; min-width: 0; display: flex; flex-direction: column; border: 1px solid var(--line); background: #fff; color: var(--ink); }
+.pick-head, .pick-list.details .pick-row { display: grid; grid-template-columns: minmax(120px, 1fr) 140px 120px 72px; align-items: center; }
+.pick-head { flex: none; border-bottom: 1px solid var(--line); background: var(--face-hi); }
+.pick-col { display: flex; align-items: center; gap: 4px; min-width: 0; height: 24px; padding: 0 8px; border: 0; border-right: 1px solid var(--line); background: none; color: var(--ink); font: inherit; font-size: 12px; text-align: left; cursor: pointer; white-space: nowrap; overflow: hidden; }
+.pick-col:hover { background: var(--sel-soft); }
+.pick-col-size { justify-content: flex-end; }
+.pick-sort { font-size: 12px; color: var(--ink-soft); }
+.pick-list { flex: 1; min-height: 0; overflow: auto; background: #fff; outline: none; }
+.pick-list:focus-visible { box-shadow: inset 0 0 0 1px var(--sel); }
+.pick-row { gap: 8px; padding: 2px 8px; font-size: 13px; cursor: default; user-select: none; }
 .pick-row:hover { background: rgba(58, 110, 165, .08); }
 .pick-row[aria-selected="true"] { background: rgba(58, 110, 165, .2); }
+.pick-row:focus { outline: 1px dotted var(--sel); outline-offset: -1px; }
+.pick-cell-name { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.pick-cell-name svg { flex: none; }
 .pick-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pick-size { color: var(--ink-soft); font-size: 12px; }
-.pick-empty { margin: 0; padding: 16px; text-align: center; color: var(--ink-soft); font-size: 13px; }
+.pick-date, .pick-type, .pick-size { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-soft); font-size: 12px; }
+.pick-size { text-align: right; }
+.pick-edit { flex: 1; min-width: 60px; min-height: 22px; padding: 1px 4px; font-size: 13px; }
+.pick-list.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); align-content: start; gap: 2px; padding: 4px; }
+.pick-list.tiles .pick-row { display: flex; align-items: center; gap: 8px; padding: 4px 6px; min-width: 0; }
+.pick-pic { flex: none; width: 52px; height: 52px; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.pick-thumb { max-width: 52px; max-height: 52px; object-fit: contain; border: 1px solid var(--line); background: #fff; }
+.pick-tile-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.pick-sub { font-size: 12px; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pick-empty { grid-column: 1 / -1; margin: 0; padding: 16px; text-align: center; color: var(--ink-soft); font-size: 13px; }
+.pick-preview { display: none; flex: 0 0 200px; min-width: 0; flex-direction: column; gap: 4px; padding: 8px; overflow: auto; border: 1px solid var(--line); background: #fff; color: var(--ink); font-size: 13px; }
+.pick.with-preview .pick-preview { display: flex; }
+.pick-pv-pic { display: flex; align-items: center; justify-content: center; min-height: 96px; }
+.pick-pv-img { max-width: 100%; max-height: 160px; object-fit: contain; border: 1px solid var(--line); }
+.pick-pv-name { font-weight: 700; overflow-wrap: anywhere; }
+.pick-pv-line { font-size: 12px; color: var(--ink-soft); overflow-wrap: anywhere; }
+.pick-pv-text { margin: 4px 0 0; padding: 4px; max-height: 220px; overflow: hidden; border: 1px solid var(--line); background: var(--face-hi); font: 12px/1.35 ui-monospace, Consolas, "Courier New", monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pick-foot { flex: none; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 4px 8px; }
+.pick-foot-label { font-size: 13px; }
+.pick-foot .field { font-size: 13px; }
+@media (max-width: 720px) {
+  .pick { width: 96vw; height: min(560px, 74vh); }
+  .pick-bar { flex-wrap: wrap; }
+  .pick-search { flex: 1 1 100%; }
+  .pick-folders-btn { display: inline-flex; }
+  .pick-main { flex-direction: column; }
+  .pick-side { display: none; flex: 0 0 auto; max-height: 40%; }
+  .pick.side-open .pick-side { display: flex; }
+  .pick.with-preview .pick-preview { display: none; }
+  .pick-head, .pick-list.details .pick-row { grid-template-columns: minmax(0, 1fr) 72px; }
+  .pick-col-modified, .pick-col-type, .pick-list.details .pick-date, .pick-list.details .pick-type { display: none; }
+  .pick-list.tiles { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+  .pick-foot { grid-template-columns: 1fr; }
+}
 
 /* ---- Photo Editor (src/apps/photoedit.ts) ---- */
 .pe { display: flex; flex-direction: column; height: 100%; }
