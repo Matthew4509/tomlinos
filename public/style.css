@@ -320,6 +320,33 @@ body.is-dragging .win-body { pointer-events: none; }
 .menu-label { flex: 1; }
 .menu-hint { color: inherit; opacity: .65; padding-left: 16px; }
 .menu-sep { height: 1px; margin: 3px 2px; background: #cfd5e0; }
+/* ---- Classic menu bar and small-picture toolbar (shell/menubar.ts), and the 16 px pictures (shell/toolicons.ts) --- */
+.ti { display: block; flex: none; overflow: visible; }
+.ti .ti-acc { fill: var(--accent); }
+.ti .ti-acc-line { stroke: var(--accent); }
+.cbar { flex: none; display: flex; flex-direction: column; min-width: 0; background: var(--face); color: var(--ink); border-bottom: 1px solid var(--line); font-size: 13px; }
+.cbar-menus { display: flex; flex-wrap: nowrap; align-items: center; min-width: 0; overflow: hidden; padding: 1px 2px; }
+.cbar-title { flex: none; padding: 2px 8px; border: 1px solid transparent; border-radius: 3px; background: none; color: inherit; font-size: 13px; line-height: 18px; white-space: nowrap; cursor: default; }
+.cbar-title:hover { background: var(--face-hi); border-color: var(--line); }
+.cbar-title.on, .cbar-title[aria-expanded="true"], .cbar-title:focus-visible { background: var(--sel); border-color: var(--sel); color: #fff; outline: none; }
+.cbar-title u { text-decoration: underline; text-underline-offset: 2px; }
+.cbar-tools { display: flex; flex-wrap: nowrap; align-items: center; gap: 1px; min-width: 0; overflow: hidden; padding: 2px 3px; box-shadow: inset 0 1px 0 var(--face-hi); }
+.cbar-tool { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; border: 1px solid transparent; border-radius: 3px; background: none; color: var(--ink); font-size: 14px; line-height: 1; cursor: default; }
+.cbar-tool:hover { background: var(--face-hi); border-color: var(--line); }
+.cbar-tool:active, .cbar-tool[aria-pressed="true"] { background: var(--sel-soft); border-color: var(--sel); }
+.cbar-tool.off, .cbar-tool.off:hover, .cbar-tool.off:active { opacity: .4; background: none; border-color: transparent; }
+.cbar-tool.off .ti-acc { fill: currentColor; }
+.cbar-tool.off .ti-acc-line { stroke: currentColor; }
+.cbar-tsep { flex: none; width: 1px; height: 18px; margin: 0 3px; background: var(--line); }
+.cbar-widget { flex: none; display: inline-flex; align-items: center; }
+.cbar-more { font-size: 14px; }
+.cbar-has-icon .menu-check { display: inline-flex; align-items: center; justify-content: center; height: 16px; }
+.cbar-has-icon:hover .ti-acc, .cbar-has-icon:focus .ti-acc { fill: currentColor; }
+.cbar-has-icon:hover .ti-acc-line, .cbar-has-icon:focus .ti-acc-line { stroke: currentColor; }
+@media (pointer: coarse) {
+  .cbar-title { min-height: 36px; padding: 6px 12px; }
+  .cbar-tool { width: 40px; height: 40px; }
+}
 
 .backdrop { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 12px; background: rgba(10, 20, 40, .35); }
 .dialog { width: min(420px, 100%); max-height: 100%; overflow: auto; background: var(--face); border: 3px solid #0b4fd6; border-radius: 8px; box-shadow: 4px 6px 22px rgba(0, 0, 0, .5); outline: none; }
