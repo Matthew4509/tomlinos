@@ -106,6 +106,9 @@ export interface Recovery {
 
 const noteOf = (path: string, ext: string) => path.slice(0, -ext.length) + '.note.json';
 
+/** The apps whose "not saved" offer is showing, per desktop. */
+const offering = new WeakMap<object, Set<string>>();
+
 export function createRecovery(shell: Shell, signal: AbortSignal, o: RecoveryOptions): Recovery {
   const off = !!shell.native;
   let mine: string | null = null;
@@ -191,6 +194,19 @@ export function createRecovery(shell: Shell, signal: AbortSignal, o: RecoveryOpt
   }
 
   async function offer(asked: boolean, after?: { untouched: () => boolean; close: () => void }): Promise<void> {
+    // Two windows of one app opened together would each offer the same copies: one offer at a time per app.
+    const showing = offering.get(shell) ?? new Set<string>();
+    offering.set(shell, showing);
+    if (showing.has(o.appId)) return;
+    showing.add(o.appId);
+    try {
+      await offerNow(asked, after);
+    } finally {
+      showing.delete(o.appId);
+    }
+  }
+
+  async function offerNow(asked: boolean, after?: { untouched: () => boolean; close: () => void }): Promise<void> {
     if (off) {
       if (asked) await shell.dialogs.alert('No recovery copies here', `${o.appName} keeps recovery copies on the desktop only, not in this program yet: Save keeps your work.`);
       return;

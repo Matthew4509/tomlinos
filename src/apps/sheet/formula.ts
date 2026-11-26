@@ -3,6 +3,7 @@
 // deeply nested, or that loops back on itself gives an error value instead of hanging.
 // Lists work as in Excel 365: an operator or a one-value function given a list works on every value of it
 // (B2:B10>5 is a list of TRUE/FALSE), and a formula whose answer is a list fills the cells around it (see workbook.ts).
+import { wildFind, wildMatch } from './wild.ts';
 import { daysInMonth, nowSerial, partsOf, readDateTime, serialOf, type DateOrder } from './dates.ts';
 import { CodeProblem, formatCode } from './numfmt.ts';
 import { MAX_COLS, MAX_ROWS, parseCellRef, parseColRef, parseTablePart, sheetNameOf, SyntaxProblem, tokenize, wholeColumns, type Ref, type TablePart, type Tok } from './refs.ts';
@@ -795,7 +796,9 @@ export class Ev {
   }
 }
 
-const fits = (v: number): Value => (Number.isFinite(v) ? clean(v) : E.NUM);
+// Each step keeps the full double, as Excel does: cutting every step to 15 digits made =INT(10/3*3) give 9. Display and
+// comparisons still round to 15 digits (see compare and the number formats).
+const fits = (v: number): Value => (Number.isFinite(v) ? v : E.NUM);
 
 function unary(op: '-' | '+' | '%', v: Value): Value {
   if (v instanceof CellError) return v;
@@ -971,9 +974,9 @@ function makeMatcher(criteria: Value): ((v: Value) => boolean) | CellError {
     return v => ((v === null || v === '') === (op === '='));
   }
   if (typeof operand === 'string') {
-    const pattern = new RegExp('^' + wildcard(operand) + '$', 'is');
+    const pattern = operand;
     return v => {
-      const hit = typeof v === 'string' && pattern.test(v);
+      const hit = typeof v === 'string' && wildMatch(pattern, v);
       return op === '<>' ? !hit : op === '=' ? hit : typeof v === 'string' && compare(op, v, operand as string);
     };
   }
@@ -1021,7 +1024,7 @@ function roundTo(x: number, d: number, mode: 'round' | 'up' | 'down'): number {
 /** An exact match as VLOOKUP and MATCH read it: text ignores case, and * ? ~ are wildcards in text, as in Excel. */
 function exactly(v: Value, key: Value): boolean {
   if (v === null || key === null) return false;
-  if (typeof key === 'string' && typeof v === 'string' && /[*?~]/.test(key)) return new RegExp(`^${wildcard(key)}$`, 'i').test(v);
+  if (typeof key === 'string' && typeof v === 'string' && /[*?~]/.test(key)) return wildMatch(key, v);
   return rank(v) === rank(key) && compare('=', v, key);
 }
 
@@ -1304,8 +1307,8 @@ function findText(ev: Ev, a: Node[], d: number, search: boolean): Value {
     const at = hay.indexOf(needle, start - 1);
     return at < 0 ? E.VALUE : at + 1;
   }
-  const m = new RegExp(wildcard(needle), 'i').exec(hay.slice(start - 1));
-  return m ? m.index + start : E.VALUE;
+  const at = wildFind(needle, hay.slice(start - 1));
+  return at >= 0 ? at + start : E.VALUE;
 }
 
 // CHAR and CODE use the Windows character set, as Excel on Windows does: CHAR(128) is €, CHAR(150) an en dash.
@@ -1342,8 +1345,8 @@ function seek(list: Value[], key: Value, mode: number, search: number): number {
   let same: (v: Value) => boolean;
   if (key === null) same = v => v === null || v === '';
   else if (mode === 2 && typeof key === 'string') {
-    const rx = new RegExp(`^${wildcard(key)}$`, 'i');
-    same = v => typeof v === 'string' && rx.test(v);
+    const pattern = key;
+    same = v => typeof v === 'string' && wildMatch(pattern, v);
   } else same = v => v !== null && rank(v) === rank(key) && compare('=', v, key);
   for (const i of order) if (same(list[i])) return i;
   if (mode !== -1 && mode !== 1) return -1;
@@ -2064,7 +2067,12 @@ function within<T>(ev: Ev, fn: () => T): T {
 export function evaluate(node: Node, ctx: Context): Value {
   dateOrder = ctx.dateOrder ?? 'dmy';
   const ev = new Ev(ctx);
-  return within(ev, () => ev.scalar(node));
+  return tidy(within(ev, () => ev.scalar(node)));
+}
+
+/** A formula's answer, rounded to the 15 digits a cell keeps (the steps on the way were worked out in full). */
+function tidy(v: Value): Value {
+  return typeof v === 'number' ? clean(v) : v;
 }
 
 /** True when a formula's answer can be a list (it may fill the cells around it). `ctx` lets names be looked up. */
@@ -2096,10 +2104,10 @@ export function evaluateCell(node: Node, ctx: Context): Value | Grid {
   dateOrder = ctx.dateOrder ?? 'dmy';
   const ev = new Ev(ctx);
   return within(ev, () => {
-    if (!Ev.isList(node)) return ev.scalar(node);
+    if (!Ev.isList(node)) return tidy(ev.scalar(node));
     const g = ev.block(node);
     if (g instanceof CellError) return g;
-    return g.length && g[0].length ? g : E.CALC;
+    return g.length && g[0].length ? g.map(row => row.map(tidy)) : E.CALC;
   });
 }
 

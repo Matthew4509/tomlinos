@@ -7,6 +7,7 @@ import type { Ev, Grid, Helpers, Node } from './formula.ts';
 import { daysInMonth, partsOf, serialOf } from './dates.ts';
 import { quoteSheet, colName } from './refs.ts';
 import { CellError, clean, E, type Value } from './values.ts';
+import { wildMatch } from './wild.ts';
 
 type Fn = (ev: Ev, a: Node[], d: number) => Value;
 type ListFn = (ev: Ev, a: Node[], d: number) => Grid | CellError;
@@ -16,7 +17,7 @@ const ALL = 'all';
 const everyOther = (from: number): number[] => Array.from({ length: 128 }, (_, i) => from + i * 2);
 
 export function moreFunctions(h: Helpers): { fns: Record<string, Fn>; lists: Record<string, ListFn>; lift: Record<string, typeof ALL | number[]> } {
-  const { toNumber, toBool, text, numbers, collect, grid, str, makeMatcher, roundTo, capped, serialArg, compare, rank, wildcard } = h;
+  const { toNumber, toBool, text, numbers, collect, grid, str, makeMatcher, roundTo, capped, serialArg, compare, rank } = h;
 
   /** An optional number argument: missing or left empty is `fallback`. */
   const opt = (ev: Ev, a: Node[], i: number, d: number, fallback: number): number | CellError => {
@@ -523,7 +524,7 @@ export function moreFunctions(h: Helpers): { fns: Record<string, Fn>; lists: Rec
   /** An exact match as VLOOKUP, HLOOKUP and MATCH read it: text ignores case, and * ? ~ are wildcards in text. */
   function same(v: Value, key: Value): boolean {
     if (v === null || key === null) return false;
-    if (typeof key === 'string' && typeof v === 'string' && /[*?~]/.test(key)) return new RegExp(`^${wildcard(key)}$`, 'i').test(v);
+    if (typeof key === 'string' && typeof v === 'string' && /[*?~]/.test(key)) return wildMatch(key, v);
     return rank(v) === rank(key) && compare('=', v, key);
   }
 
