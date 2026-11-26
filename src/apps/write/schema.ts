@@ -250,7 +250,9 @@ export function buildSchema(pm: PM): any {
   });
   return new pm.Schema({
     nodes: {
-      doc: { content: 'block+' },
+      // `page`: the page setup after a change made here (null = as the file was opened), kept in the document so
+      // Undo and Redo take a page setup change back in its place among the typing.
+      doc: { content: 'block+', attrs: { page: { default: null } } },
       paragraph: {
         content: 'inline*',
         group: 'block',

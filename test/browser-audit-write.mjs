@@ -146,7 +146,7 @@ await step('W-P1 Tab in the last cell of a table adds a row (as Word does) inste
   ok((await doc().locator('td').count()) > cells, `cells: ${cells} before, ${await doc().locator('td').count()} after Tab in the last cell`);
 });
 
-await step('W-P1 Undo (Ctrl+Z) undoes a page setup change (landscape)', async () => {
+await step('W-P1-1 Undo (Ctrl+Z) undoes a page setup change (landscape), and Redo brings it back', async () => {
   await newDoc();
   await page.keyboard.type('Words');
   await page.waitForTimeout(700);
@@ -162,6 +162,10 @@ await step('W-P1 Undo (Ctrl+Z) undoes a page setup change (landscape)', async ()
   await settle();
   const w2 = await W().locator('.wp-paper').evaluate(el => el.offsetWidth);
   eq({ text: await doc().innerText(), width: w2 }, { text: 'Words', width: w0 }, 'Ctrl+Z after landscape');
+  await page.keyboard.press('Control+Y');
+  await settle();
+  const w3 = await W().locator('.wp-paper').evaluate(el => el.offsetWidth);
+  eq({ text: await doc().innerText(), width: w3 }, { text: 'Words', width: w1 }, 'Ctrl+Y after that');
 });
 
 await step('W-P1 a list pasted from Word (MsoListParagraph) comes in as a list, not paragraphs starting "·"', async () => {

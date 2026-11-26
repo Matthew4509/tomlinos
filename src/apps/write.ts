@@ -533,6 +533,8 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
   // A recovered copy starts unsaved: Save asks where.
   let savedDoc = recovered ? schema.nodeFromJSON(EMPTY_DOC) : state.doc;
   let savedPage = JSON.stringify(page);
+  /** The page setup the document had when it was opened (what a page attribute of null stands for). */
+  const basePage = page;
 
   const mount = h('div', { class: 'wp-doc-host' });
   const furniture = h('div', { class: 'wp-furniture', 'aria-hidden': 'true' });
@@ -585,6 +587,9 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
     dispatchTransaction(tr: any) {
       const next = view.state.apply(tr);
       view.updateState(next);
+      // A page setup change, or its Undo or Redo.
+      const pageNow: PageSetup = next.doc.attrs.page ?? basePage;
+      if (pageNow !== page) page = pageNow;
       if (tr.docChanged) {
         scheduleLayout();
         refresh();
@@ -1124,11 +1129,10 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
 
   // ---- Page setup --------------------------------------------------------------------------------------------------
 
+  // A step in the document (not only a value beside it), so Ctrl+Z takes it back in its place among the typing.
   const setPage = (next: PageSetup) => {
-    page = next;
-    refresh();
-    scheduleLayout();
-    syncToolbar();
+    if (JSON.stringify(next) === JSON.stringify(page)) return;
+    view.dispatch(view.state.tr.setDocAttribute('page', next));
   };
 
   // ---- Saving and opening ----------------------------------------------------------------------------------------------
@@ -1149,7 +1153,8 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
     }
     return true;
   };
-  const isDirty = () => !view.state.doc.eq(savedDoc) || JSON.stringify(page) !== savedPage;
+  // The page setup is compared on its own (the document's page attribute is only its undo record).
+  const isDirty = () => !view.state.doc.content.eq(savedDoc.content) || JSON.stringify(page) !== savedPage;
   function refresh(): void {
     const dirty = isDirty();
     app.setDirty(dirty);
