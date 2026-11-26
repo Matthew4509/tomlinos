@@ -296,7 +296,7 @@ export class Session {
       const reason = this.unread instanceof Error ? ` (${this.unread.message})` : '';
       this.unread = null;
       this.loaded = false;
-      this.onSaveError(new Error(`Your desktop settings could not be read when this page opened${reason}, so changes made here are not kept, rather than replace them. Reload the page to read them again.`));
+      this.onSaveError(new Error(`Your desktop settings could not be read when this page opened${reason}, so changes made here are not kept, to avoid writing over them. Reload the page to read them again.`));
       return this.saving;
     }
     this.saving = this.saving
