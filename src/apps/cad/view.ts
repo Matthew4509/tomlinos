@@ -60,6 +60,8 @@ export interface Scene {
   arrows: boolean;
   /** The photo under the drawing (when it is showing and its pixels are ready). */
   photo: { ph: Photo; img: CanvasImageSource } | null;
+  /** A chosen text box's frame: its outline, guide lines (dashed) and handles (square, or round for turning and bending). */
+  frame?: { outline: Pt[][]; guides: Pt[][]; handles: Array<{ p: Pt; round: boolean }> } | null;
 }
 
 /** Dash patterns in pixels (the same on screen at every zoom). */
@@ -202,6 +204,36 @@ export function render(c: CanvasRenderingContext2D, w: number, h: number, v: Vie
     c.setLineDash([5, 3]);
     for (const p of s.preview) stroke(c, p, v, w, h);
     c.setLineDash([]);
+  }
+
+  // A chosen text box's frame and handles.
+  if (s.frame) {
+    const ink = s.white ? '#0050c0' : '#80d0ff';
+    c.strokeStyle = ink;
+    c.lineWidth = 1;
+    const trace = (pts: Pt[], close: boolean) => {
+      c.beginPath();
+      pts.forEach((p, i) => {
+        const q = scr(p);
+        if (i) c.lineTo(q.x, q.y);
+        else c.moveTo(q.x, q.y);
+      });
+      if (close) c.closePath();
+      c.stroke();
+    };
+    for (const o of s.frame.outline) trace(o, true);
+    c.setLineDash([4, 3]);
+    for (const g of s.frame.guides) trace(g, false);
+    c.setLineDash([]);
+    for (const hd of s.frame.handles) {
+      const q = scr(hd.p);
+      c.fillStyle = bg;
+      c.beginPath();
+      if (hd.round) c.arc(q.x, q.y, 4.5, 0, Math.PI * 2);
+      else c.rect(Math.round(q.x) - 4.5, Math.round(q.y) - 4.5, 9, 9);
+      c.fill();
+      c.stroke();
+    }
   }
 
   // The selection box: a window is a solid edge, a crossing box a dashed one.

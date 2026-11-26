@@ -6,7 +6,8 @@ import {
   tangentLines, tangentPoints, unit, type Piece, type Pt,
 } from './geom.ts';
 import type { Align } from './font.ts';
-import { angleArms, dimLabel, type DimShape, type NoteStyle } from './notes.ts';
+import { angleArms, dimLabel, type DimShape, type NoteStyle, type TextShape } from './notes.ts';
+import { fitHeight, withWords } from './textbox.ts';
 import { boxOfShapes, chainFrom, mirrorShape, moveShape, pieceNear, rotateShape, scaleShape } from './edit.ts';
 import { CONSTRUCTION, ellipse, isNote, pieceLength, piecesOf, polygon, rectangle, slot, type Ent, type Shape, type Units } from './model.ts';
 import { placePart, type Part } from './parts.ts';
@@ -40,6 +41,8 @@ export interface TextAsk {
   arc?: boolean;
   cw?: boolean;
   plain?: boolean;
+  /** Words for a text box: no height or turn asked (the box gives them), only how the lines line up. */
+  box?: boolean;
 }
 
 export interface TextAnswer {
@@ -70,6 +73,10 @@ export interface ToolCtx {
   askPolar(): Promise<PolarAnswer | null>;
   /** The text box (words, height, turn, lining up). */
   askText(o: TextAsk): Promise<TextAnswer | null>;
+  /** The Warp box for one text, which changes it when answered (a plain text becomes a text box). */
+  askWarp?(e: Ent & TextShape): Promise<void>;
+  /** Shows the envelope of a text's bend with handles to drag (a plain text becomes a text box first). */
+  bendByHand?(e: Ent & TextShape): void;
   /** A dimension's own words, the height of its number and its decimal places. */
   askDim(d: DimShape): Promise<{ text: string; h: number; dp: number } | null>;
   /** Sizes for new text and dimensions. */
@@ -1272,6 +1279,66 @@ function textTool(ctx: ToolCtx): Tool {
   return t;
 }
 
+/** A text box: two corners, then the words, which fill the box. */
+function textBoxTool(ctx: ToolCtx): Tool {
+  let waiting = false;
+  let first: Pt | null = null;
+  const t: Tool = {
+    title: 'Text box',
+    done: false,
+    prompt: () => (waiting ? 'Type the words in the box' : first ? 'Other corner of the box' : 'First corner of the box'),
+    want: () => (waiting ? {} : { point: true }),
+    base: () => first,
+    point(p) {
+      if (waiting) return;
+      if (!first) {
+        first = p;
+        return;
+      }
+      const a = first;
+      const w = Math.abs(p.x - a.x);
+      const hgt = Math.abs(p.y - a.y);
+      if (!(w > 1e-9) || !(hgt > 1e-9)) return ctx.problem('The box needs a width and a height: put the other corner across and up (or down) from the first.');
+      const corner = P(Math.min(a.x, p.x), Math.min(a.y, p.y));
+      waiting = true;
+      void ctx.askText({ title: 'Text box', text: '', h: ctx.style().textH, align: 'left', box: true }).then(answer => {
+        waiting = false;
+        t.done = true;
+        if (answer) {
+          // The new box is chosen, so its handles show straight away.
+          const ids = ctx.add([{ type: 'text', p: corner, text: answer.text, h: fitHeight(answer.text, answer.align, hgt), angle: 0, align: answer.align, box: { w, h: hgt } }], ctx.noteLayer('text'));
+          if (ids && ids.length) ctx.select(ids);
+        }
+        ctx.finished();
+      });
+    },
+    enter: () => false,
+    preview: c => (first && !waiting ? [{ type: 'poly', pts: [first, P(c.x, first.y), c, P(first.x, c.y)], bulges: [0, 0, 0, 0], closed: true }] : []),
+  };
+  return t;
+}
+
+/** Picks a text, then opens the Warp box or the handles for bending it by hand. */
+function textShapeTool(ctx: ToolCtx, byHand: boolean): Tool {
+  const t: Tool = {
+    title: byHand ? 'Bend text by hand' : 'Warp text',
+    done: false,
+    prompt: () => 'Pick the text to bend (not text round an arc)',
+    want: () => ({ pick: true }),
+    base: () => null,
+    pickFilter: e => e.type === 'text' && !e.arc,
+    pick(e) {
+      if (e.type !== 'text' || e.arc) return;
+      t.done = true;
+      if (byHand) ctx.bendByHand?.(e);
+      else void ctx.askWarp?.(e);
+    },
+    enter: () => false,
+    preview: () => [],
+  };
+  return t;
+}
+
 function textArcTool(ctx: ToolCtx): Tool {
   let waiting = false;
   let round: Extract<Piece, { k: 'arc' }> | null = null;
@@ -1323,7 +1390,15 @@ function editNoteTool(ctx: ToolCtx): Tool {
         t.done = true;
         ctx.finished();
       };
-      if (e.type === 'text') {
+      if (e.type === 'text' && e.box && !e.arc) {
+        void ctx.askText({ title: 'Change the text box', text: e.text, h: e.h, align: e.align, box: true }).then(a => {
+          if (a) {
+            const { id: _id, layer: _layer, ...shape } = e;
+            ctx.change([{ id: e.id, shape: withWords(shape, a.text, a.align) }], []);
+          }
+          done();
+        });
+      } else if (e.type === 'text') {
         void ctx.askText({ title: 'Change text', text: e.text, h: e.h, angle: e.angle, align: e.align, arc: !!e.arc, cw: e.arc?.cw }).then(a => {
           if (a) {
             const { id: _id, layer: _layer, ...shape } = e;
@@ -1792,6 +1867,9 @@ export const TOOLS = {
   'zoom-window': { name: 'Zoom to a window', make: zoomWindowTool },
   text: { name: 'Text', make: textTool },
   'text-arc': { name: 'Text round an arc', make: textArcTool },
+  'text-box': { name: 'Text box (words fill a box you drag)', make: textBoxTool },
+  'text-warp': { name: 'Warp text...', make: (c: ToolCtx) => textShapeTool(c, false) },
+  'text-bend': { name: 'Edit the shape by hand', make: (c: ToolCtx) => textShapeTool(c, true) },
   'text-edit': { name: 'Change text or a dimension', make: editNoteTool },
   'dim-linear': { name: 'Dimension: linear (across or up)', make: (c: ToolCtx) => dimLinearTool(c, 'linear') },
   'dim-horizontal': { name: 'Dimension: horizontal', make: (c: ToolCtx) => dimLinearTool(c, 'horizontal') },
@@ -1819,7 +1897,7 @@ export const COMMAND_WORDS: Record<string, ToolId> = {
   scale: 'scale', sc: 'scale', measure: 'measure', dist: 'measure', di: 'measure', list: 'list', li: 'list', zoom: 'zoom-window', z: 'zoom-window',
   trim: 'trim', tr: 'trim', extend: 'extend', ex: 'extend', break: 'break-point', br: 'break-point', fillet: 'fillet', f: 'fillet',
   chamfer: 'chamfer', cha: 'chamfer', offset: 'offset', o: 'offset', area: 'area', angle: 'measure-angle',
-  text: 'text', dtext: 'text', dt: 'text', t: 'text', ed: 'text-edit', dim: 'dim-linear', dli: 'dim-linear', dimlinear: 'dim-linear',
+  text: 'text', dtext: 'text', dt: 'text', t: 'text', textbox: 'text-box', tb: 'text-box', warp: 'text-warp', bend: 'text-bend', ed: 'text-edit', dim: 'dim-linear', dli: 'dim-linear', dimlinear: 'dim-linear',
   dal: 'dim-aligned', dimaligned: 'dim-aligned', dra: 'dim-radius', dimradius: 'dim-radius', ddi: 'dim-diameter', dimdiameter: 'dim-diameter',
   dan: 'dim-angle', dimangular: 'dim-angle', le: 'leader', leader: 'leader',
 };

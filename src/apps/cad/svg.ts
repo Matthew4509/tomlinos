@@ -9,7 +9,8 @@
 import { textStrokes, type Align } from './font.ts';
 import { P, TAU, add, at, curveThrough, dist, isFull, mul, normAngle, rotatePt, sub, type Box, type Pt } from './geom.ts';
 import { STRAIGHT_BULGE, shapeBox, type Drawing, type Ent, type Shape } from './model.ts';
-import { arcLetters, dimParts, type NoteText, type TextShape } from './notes.ts';
+import { arcLetters, dimParts, textShapeStrokes, type NoteText, type TextShape } from './notes.ts';
+import { boxAsText, boxGoesAsLines } from './textbox.ts';
 import { paperInk } from './print.ts';
 import { DXF_LINE_TYPES } from './dxf.ts';
 
@@ -237,6 +238,18 @@ export function writeSvg(d: Drawing, o: SvgOptions): SvgWritten {
   }
 
   function textShape(t: TextShape, ink: string): number {
+    if (t.box && !t.arc) {
+      // A box only made bigger stays text; stretched or bent, its letters go out as the lines they are drawn with.
+      const plain = boxAsText(t);
+      if (plain) return text(plain, ink);
+      let c = 0;
+      for (const s of textShapeStrokes(t)) {
+        if (s.length < 2) continue;
+        out.push(`<path d="M ${s.map(xy).join(' L ')}" stroke-dasharray="none"/>`);
+        c++;
+      }
+      return c;
+    }
     if (!t.arc) return text({ text: t.text, p: t.p, h: t.h, angle: t.angle, align: t.align }, ink);
     let c = 0;
     for (const l of arcLetters(t)) if (l.ch.trim()) c += text({ text: l.ch, p: l.at, h: t.h, angle: l.angle, align: 'left' as Align }, ink);
@@ -247,6 +260,8 @@ export function writeSvg(d: Drawing, o: SvgOptions): SvgWritten {
   notes.push('Each layer is a group (an Inkscape layer) in the colour it prints in; white is written as black.');
   if (ents.some(e => e.type === 'text' || e.type === 'dim') && !o.textAsLines) notes.push('Text is SVG text: the viewer draws it in its own sans-serif letters (CAD Draft\'s single-stroke letters are written only with "Text as lines").');
   if (d.ents.some(e => e.type === 'dim')) notes.push('Dimensions are written as plain lines and text.');
+  const bent = ents.filter(e => e.type === 'text' && boxGoesAsLines(e)).length;
+  if (bent && !o.textAsLines) notes.push(`${bent} stretched or bent text box${bent === 1 ? ' is' : 'es are'} written as polylines in CAD Draft's own letters (a viewer's letters could not follow a stretch or a bend).`);
   if (leftHidden) notes.push(`${leftHidden} item${leftHidden === 1 ? '' : 's'} on hidden layers left out.`);
   if (leftXlines) notes.push(`${leftXlines} construction line${leftXlines === 1 ? '' : 's'} left out.`);
   const textOut = out.join('\n') + '\n';
