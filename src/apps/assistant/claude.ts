@@ -4,7 +4,9 @@
 import { infoTip } from '../../shell/infotip.ts';
 import { h, on } from '../../core/dom.ts';
 import type { ServiceApi } from '../../net/service.ts';
+import type { DialogLayer } from '../../shell/dialogs.ts';
 import type { ChatTurn } from './engine.ts';
+import { keyTile, showCostLog } from './keytile.ts';
 
 export interface ClaudeModel {
   id: string;
@@ -32,15 +34,6 @@ export interface ClaudeDone {
   spent: number;
   cap: number;
 }
-interface LogRow {
-  at: number;
-  model: string;
-  in: number;
-  out: number;
-  cost: number;
-  note: string;
-}
-
 /** How much text one question may carry to Claude (letters); the server allows a little more for the conversation. */
 export const CLAUDE_MAX_INPUT = 300_000;
 
@@ -94,52 +87,48 @@ export async function askClaude(api: ServiceApi, turns: ChatTurn[], onText: (all
   return { text, done, error };
 }
 
-/** The "Claude, with your own API key" section of Settings › AI: state, settings and cost log. */
-export function claudeSection(api: ServiceApi | null, signal: AbortSignal, onUse: (settings: ClaudeSettings) => void): { el: HTMLElement; refresh: () => Promise<void>; settings: () => ClaudeSettings | null } {
+/**
+ * The Claude tile of Settings › AI: "Connect Claude" and whether a key is set; it opens a pop-up with the key, the
+ * model, the monthly limit, Use Claude and the cost log.
+ */
+export function claudeSection(api: ServiceApi | null, dialogs: DialogLayer, signal: AbortSignal, onUse: (settings: ClaudeSettings) => void): { el: HTMLElement; refresh: () => Promise<void>; settings: () => ClaudeSettings | null } {
   let current: ClaudeSettings | null = null;
-  const state = h('p', { class: 'ai-device' }, api ? 'Checking...' : 'Claude needs the desktop\'s server, which this copy does not have.');
-  const useBtn = h('button', { type: 'button', class: 'btn primary', disabled: true }, 'Use Claude');
-  const setBtn = h('button', { type: 'button', class: 'btn', disabled: !api }, 'Claude settings...');
-  const logBtn = h('button', { type: 'button', class: 'btn', disabled: true }, 'Cost log...');
+  let open = false;
+  const tile = keyTile('claude', 'Connect Claude', !!api);
+  tile.show(null, api ? 'Checking...' : 'Claude needs the desktop\'s server, which this copy does not have.');
 
   const keyInput = h('input', { type: 'password', class: 'field', autocomplete: 'off', spellcheck: false, 'aria-label': 'Anthropic API key', placeholder: 'sk-ant-...' });
   const modelSelect = h('select', { class: 'field', 'aria-label': 'Claude model' });
   const capInput = h('input', { type: 'number', class: 'field ai-cap', min: '0', max: '1000', step: '0.5', 'aria-label': 'Monthly limit in US dollars' });
-  const saveBtn = h('button', { type: 'button', class: 'btn primary' }, 'Save');
   const forgetBtn = h('button', { type: 'button', class: 'btn danger' }, 'Remove my key');
-  const cancelBtn = h('button', { type: 'button', class: 'btn' }, 'Close settings');
+  const logBtn = h('button', { type: 'button', class: 'btn' }, 'Cost log...');
   const formMsg = h('p', { class: 'ai-cloud-msg', role: 'status' });
   const keyNote = h('span', { class: 'ai-cloud-hint' });
-  const form = h('div', { class: 'ai-cloud-form', hidden: true },
+  const stateLine = h('p', { class: 'ai-key-state' });
+  const body = h('div', { class: 'ai-key-dialog' },
+    h('p', { class: 'ai-key-about' }, 'More capable than the built-in AI, and it takes long text. Not free: each answer is paid for by your Anthropic account, and what you send goes to Anthropic.'),
+    stateLine,
     h('label', { class: 'ai-row' }, h('span', {}, 'API key'), keyInput),
     h('p', { class: 'ai-cloud-hint' }, keyNote),
     h('label', { class: 'ai-row' }, h('span', {}, 'Model'), modelSelect),
     h('label', { class: 'ai-row' }, h('span', {}, 'Monthly limit, US$'), capInput),
     h('p', { class: 'ai-cloud-hint' }, 'Claude is not asked once a question could take the month past this limit. $0 stops it. ', infoTip('the monthly limit', 'Before each question, the most it could cost is checked against this limit.')),
     h('p', { class: 'ai-cloud-hint' }, 'Whoever runs this server could use your key: save it only on a server you trust. ', infoTip('your key', 'It is kept encrypted on this server and never shown again, only its last four characters. Make a key at console.anthropic.com > API keys; one just for TOMLIN OS can be deleted on its own.')),
-    h('div', { class: 'row-buttons' }, saveBtn, forgetBtn, cancelBtn),
+    h('div', { class: 'row-buttons' }, logBtn, forgetBtn),
     formMsg);
-  const logBody = h('tbody');
-  const logHead = h('p', { class: 'ai-cloud-hint' });
-  const logBox = h('div', { class: 'ai-cloud-log', hidden: true }, logHead,
-    h('table', { class: 'ai-log-table' }, h('thead', {}, h('tr', {}, h('th', {}, 'When'), h('th', {}, 'Model'), h('th', {}, 'Tokens in'), h('th', {}, 'Tokens out'), h('th', {}, 'Cost'), h('th', {}, 'Note'))), logBody));
 
-  const el = h('section', { class: 'ai-cloud' },
-    h('h2', {}, 'Claude, with your own API key'),
-    h('p', {}, 'More capable than the built-in AI, and it takes long text. Not free: each answer is paid for by your Anthropic account, and what you send goes to Anthropic.'),
-    state,
-    h('div', { class: 'row-buttons' }, useBtn, setBtn, logBtn),
-    form, logBox);
+  const used = (s: ClaudeSettings): string => `${money(s.spent)} of your ${money(s.cap)} limit used this month`;
+  const modelName = (s: ClaudeSettings): string => s.models.find(m => m.id === s.model)?.name ?? s.model;
+  function paintTile(): void {
+    const s = current;
+    if (s) tile.show(s.hasKey, s.hasKey ? `${modelName(s)} · ${used(s)}` : '');
+  }
 
   function paint() {
     const s = current;
     if (!s) return;
-    const model = s.models.find(m => m.id === s.model);
-    state.textContent = s.hasKey
-      ? `Your key ending ${s.hint} · ${model?.name ?? s.model} · ${money(s.spent)} of your ${money(s.cap)} limit used this month.`
-      : 'No key saved yet. Add yours in Claude settings.';
-    useBtn.disabled = !s.hasKey;
-    logBtn.disabled = false;
+    paintTile();
+    stateLine.textContent = s.hasKey ? `Your key ending ${s.hint} · ${modelName(s)} · ${used(s)}.` : 'No key saved yet.';
     modelSelect.replaceChildren(...s.models.map(m => h('option', { value: m.id, selected: m.id === s.model }, `${m.name}: ${m.note} ($${m.in} in, $${m.out} out per million tokens)`)));
     capInput.value = String(s.cap);
     keyNote.textContent = s.hasKey ? `A key ending ${s.hint} is saved. Leave the box empty to keep it; paste a new one to replace it.` : 'Paste your key; it starts with sk-ant-.';
@@ -152,61 +141,75 @@ export function claudeSection(api: ServiceApi | null, signal: AbortSignal, onUse
       current = await api.call<ClaudeSettings>('settings');
       paint();
     } catch (error) {
-      state.textContent = error instanceof Error ? error.message : 'The Claude settings could not be read.';
+      tile.show(null, error instanceof Error ? error.message : 'The Claude settings could not be read.');
+    }
+  }
+
+  /** What is in the boxes differs from what is saved. */
+  const changed = (): boolean => !!keyInput.value.trim() || (!!current && (modelSelect.value !== current.model || Number(capInput.value) !== current.cap));
+
+  /** Saves what is in the boxes. A refusal leaves the server's words in the pop-up, and the boxes as they were. */
+  async function save(): Promise<boolean> {
+    if (!api) return false;
+    tile.show(null, keyInput.value.trim() ? 'Trying the key with Anthropic...' : 'Saving...');
+    try {
+      await api.call('save', { body: { key: keyInput.value.trim(), model: modelSelect.value, cap: capInput.value } });
+      keyInput.value = '';
+      formMsg.textContent = '';
+      await refresh();
+      return true;
+    } catch (error) {
+      formMsg.textContent = error instanceof Error ? error.message : 'It could not be saved.';
+      paintTile();
+      return false;
+    }
+  }
+
+  /** The pop-up; after a refused save it opens again with what was typed, and the reason. */
+  async function openDialog(): Promise<void> {
+    if (!api || open) return;
+    open = true;
+    paint();
+    try {
+      for (;;) {
+        const answer = await dialogs.ask<'save' | 'use' | 'cancel'>({
+          title: 'Connect Claude',
+          body,
+          buttons: [
+            { label: 'Save', value: 'save', primary: true },
+            ...(current?.hasKey ? [{ label: 'Use Claude', value: 'use' as const }] : []),
+            { label: 'Cancel', value: 'cancel' },
+          ],
+          cancel: 'cancel',
+          focus: () => keyInput,
+        });
+        if (answer === 'cancel') break;
+        // Use Claude keeps what was changed in the boxes first.
+        if ((answer === 'save' || changed()) && !(await save())) continue;
+        if (answer === 'use' && current?.hasKey) onUse(current);
+        break;
+      }
+    } finally {
+      keyInput.value = '';
+      formMsg.textContent = '';
+      open = false;
     }
   }
 
   if (api) {
-    on(setBtn, 'click', () => {
-      form.hidden = !form.hidden;
-      logBox.hidden = true;
-      formMsg.textContent = '';
-      if (!form.hidden) keyInput.focus();
-    }, signal);
-    on(cancelBtn, 'click', () => {
-      form.hidden = true;
-      keyInput.value = '';
-    }, signal);
-    on(saveBtn, 'click', async () => {
-      saveBtn.disabled = true;
-      formMsg.textContent = keyInput.value.trim() ? 'Trying the key with Anthropic...' : 'Saving...';
-      try {
-        await api.call('save', { body: { key: keyInput.value.trim(), model: modelSelect.value, cap: capInput.value } });
-        keyInput.value = '';
-        form.hidden = true;
-        await refresh();
-      } catch (error) {
-        formMsg.textContent = error instanceof Error ? error.message : 'It could not be saved.';
-      } finally {
-        saveBtn.disabled = false;
-      }
-    }, signal);
+    on(tile.el, 'click', () => void openDialog(), signal);
     on(forgetBtn, 'click', async () => {
+      formMsg.textContent = 'Removing...';
       try {
         await api.call('forget', { body: {} });
         keyInput.value = '';
-        form.hidden = true;
         await refresh();
+        formMsg.textContent = 'Your key was removed from this TOMLIN OS.';
       } catch (error) {
         formMsg.textContent = error instanceof Error ? error.message : 'It could not be removed.';
       }
     }, signal);
-    on(logBtn, 'click', async () => {
-      logBox.hidden = !logBox.hidden;
-      form.hidden = true;
-      if (logBox.hidden) return;
-      try {
-        const r = await api.call<{ month: string; spent: number; cap: number; rows: LogRow[] }>('log');
-        logHead.textContent = `${r.month}: ${money(r.spent)} of your ${money(r.cap)} limit. The log keeps numbers only, never what was asked or answered.`;
-        logBody.replaceChildren(...r.rows.map(row => h('tr', {},
-          h('td', {}, new Date(row.at * 1000).toLocaleString()), h('td', {}, row.model), h('td', {}, row.in.toLocaleString()),
-          h('td', {}, row.out.toLocaleString()), h('td', {}, money(row.cost)), h('td', {}, row.note))));
-        if (!r.rows.length) logBody.append(h('tr', {}, h('td', { colspan: '6' }, 'Nothing yet this month.')));
-      } catch (error) {
-        logHead.textContent = error instanceof Error ? error.message : 'The cost log could not be read.';
-      }
-    }, signal);
-    on(useBtn, 'click', () => current && onUse(current), signal);
+    on(logBtn, 'click', () => showCostLog(dialogs, api, 'Claude cost log'), signal);
   }
-  return { el, refresh, settings: () => current };
+  return { el: tile.el, refresh, settings: () => current };
 }

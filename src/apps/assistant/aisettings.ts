@@ -173,9 +173,10 @@ export function aiSettings(shell: Shell, signal: AbortSignal): HTMLElement {
   }, signal);
   on(chatBtn, 'click', () => void shell.openApp('chat', 'agents'), signal);
 
-  // Claude: "Use Claude" goes to where the talking is, with that AI chosen there.
-  const cloud = claudeSection(service, signal, () => void shell.openApp('chat', 'agents:claude'));
-  const router = openRouterSection(shell.account ? new ServiceApi(shell.account.api.base, 'openrouter') : null, signal, () => void shell.openApp('chat', 'agents:openrouter'));
+  // Claude and OpenRouter: two tiles side by side, each opening its settings in a pop-up. "Use Claude" (or "Use
+  // OpenRouter") goes to where the talking is, with that AI chosen there.
+  const cloud = claudeSection(service, shell.dialogs, signal, () => void shell.openApp('chat', 'agents:claude'));
+  const router = openRouterSection(shell.account ? new ServiceApi(shell.account.api.base, 'openrouter') : null, shell.dialogs, signal, () => void shell.openApp('chat', 'agents:openrouter'));
 
   const el = h('div', { class: 'set-ai' },
     h('h3', { class: 'set-sub' }, 'Built-in AI ', infoTip('the built-in AI', 'It downloads once and runs as fast as your graphics chip allows. You talk to it in Chat › Agents and on the Panel.')),
@@ -188,8 +189,8 @@ export function aiSettings(shell: Shell, signal: AbortSignal): HTMLElement {
     myList,
     h('div', { class: 'bin-line' }, h('label', { class: 'check-row' }, idleBox, ' Disconnect when idle'),
       infoTip('disconnecting when idle', `After ${IDLE_MINUTES} minutes without a question the built-in AI stops and frees its graphics memory. Your next message starts it again.`)),
-    cloud.el,
-    router.el);
+    h('h3', { class: 'set-sub ai-keys-head' }, 'Your own AI keys'),
+    h('div', { class: 'ai-keys' }, cloud.el, router.el));
 
   void (async () => {
     try {
