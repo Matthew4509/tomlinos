@@ -19,7 +19,8 @@ export function dueReminders(events: CalEvent[], now: number, after: number): Ar
   // One day more than the longest reminder reaches, for one set across midnight.
   const longest = Math.max(0, ...events.map(e => e.remind));
   const ahead = Math.min(MAX_DAYS_AHEAD, Math.ceil(longest / 1440) + 1);
-  for (let i = 0; i <= ahead; i++) {
+  // From yesterday: a reminder due just before midnight is still within the late limit just after it.
+  for (let i = -1; i <= ahead; i++) {
     const day = addDays(today, i);
     for (const event of eventsOn(events, day)) {
       const due = reminderAt(event, day);

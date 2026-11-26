@@ -106,7 +106,7 @@ test('CAL-P1-2: a common monthly rule from Google or Outlook (the second Tuesday
   assert.ok(occursOn(events[0], '2026-12-08'));
 });
 
-test('CAL-P1-3: a reminder due just before midnight is still shown when the check runs just after it', { todo: 'P1' }, () => {
+test('CAL-P1-3: a reminder due just before midnight is still shown when the check runs just after it', () => {
   inZone('Europe/London', () => {
     const e: CalEvent = { uid: 'r', title: 'R', date: '2026-11-02', start: '23:59', end: '', notes: '', repeat: 'none', remind: 0 };
     assert.equal(dueReminders([e], new Date(2026, 10, 3, 0, 1).getTime(), 0).length, 1);
