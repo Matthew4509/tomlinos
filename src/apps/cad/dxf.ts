@@ -1130,7 +1130,6 @@ const MAX_ITEMS = 200_000;
 export function readDxf(bytes: Uint8Array): DxfRead {
   const head = new TextDecoder('latin1').decode(bytes.subarray(0, 32));
   if (head.startsWith('AutoCAD Binary DXF')) throw new CadProblem('This is a binary DXF. Save it again as an ASCII (text) DXF in the program that made it, then open that.');
-  if (/^AC10\d\d/.test(head)) throw new CadProblem('This is a DWG drawing, not a DXF. Save it as DXF in the program that made it (R12 or 2000 DXF is best), then open that.');
   let text: string;
   try {
     text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);

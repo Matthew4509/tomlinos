@@ -36,6 +36,7 @@ import { CAD_PAPERS, CAD_SCALES, DEFAULT_SETUP, PT, drawCadPage, planPrint, scal
 import { svg } from '../core/dom.ts';
 import type { Entry } from '../fs/fs.ts';
 import { SvgPainter, type Painter } from './sheet/paint.ts';
+import { isDwgFile, outputDwgFile, readDwg } from './cad/dwg/app.ts';
 import { PdfDocument, type PdfPage } from './sheet/pdf.ts';
 
 const SETTINGS = '/System/cad.json';
@@ -192,9 +193,9 @@ export const cadApp: AppDef = {
         const entry = await shell.fs.stat(arg);
         if (!entry || entry.kind !== 'file') throw new CadProblem('That file is not there any more. It may have been moved or deleted.');
         const raw = await shell.fs.readFile(arg);
-        if (/\.dxf$/i.test(arg)) {
-          // A DXF is read into a new drawing: saving it makes a .tcad beside it (the DXF is never written over by Save).
-          const read = readDxf(raw);
+        if (/\.(dxf|dwg)$/i.test(arg) || isDwgFile(raw)) {
+          // A DXF or DWG is read into a new drawing: saving it makes a .tcad beside it (it is never written over by Save).
+          const read = isDwgFile(raw) ? readDwg(raw) : readDxf(raw);
           drawing = read.drawing;
           label = baseName(arg);
           folderHint = parentPath(arg);
@@ -1833,7 +1834,7 @@ export const cadApp: AppDef = {
       }
     }
     async function openDrawing(): Promise<void> {
-      const chosen = await pickFile(shell, { title: 'Open a drawing (CAD Draft or DXF)', folder: path ? parentPath(path) : folderHint ?? '/Documents', accept: ['tcad', 'dxf'], ok: 'Open' });
+      const chosen = await pickFile(shell, { title: 'Open a drawing (CAD Draft, DXF or DWG)', folder: path ? parentPath(path) : folderHint ?? '/Documents', accept: ['tcad', 'dxf', 'dwg'], ok: 'Open' });
       if (!chosen) return;
       // A new window nothing was drawn in gives way to the drawing opened from it.
       const untouched = !path && !drawing.ents.length && !undoStack.length && !drawing.photo;
@@ -2512,7 +2513,7 @@ export const cadApp: AppDef = {
       { label: 'Save as...', hint: 'Ctrl+Shift+S', action: () => void saveAs() },
       { separator: true },
       { label: 'Print to scale...', hint: 'Ctrl+P', action: () => void printDialog() },
-      sub_('Output', [sub_('CAD', [{ label: 'DXF or SVG...', action: () => void outputDxf() }]), { label: 'PDF to scale...', action: () => void printDialog() }]),
+      sub_('Output', [sub_('CAD', [{ label: 'DXF or SVG...', action: () => void outputDxf() }, { label: 'DWG 2004...', action: () => void outputDwg() }]), { label: 'PDF to scale...', action: () => void printDialog() }]),
       { separator: true },
       { label: 'Keep a recovery copy every 2 minutes', checked: settings.autosave, action: () => setAutosave(!settings.autosave) },
       { label: 'Drawings not saved...', action: () => void offerRecovery(true) },
@@ -2837,13 +2838,18 @@ export const cadApp: AppDef = {
       if (ok) dropRecovery();
       return ok;
     });
+    // ---- DWG output (File > Output > CAD > DWG 2004): the dialog and saving are in cad/dwg/app.ts ----------------
+    async function outputDwg(): Promise<void> {
+      await outputDwgFile({ shell, drawing, settings, keepSettings, folder: path ? parentPath(path) : folderHint ?? '/Documents', label, source: lossyDxf, say, problem });
+      setTimeout(keyboardBack, 0);
+    }
     if (recovered) say(`Recovered ${label}: a copy kept before it was saved. Save it to keep it (Save asks where).`);
     else if (leftOutOnOpen) {
       say(`Opened ${label} as a copy: ${leftOutOnOpen}; those were left out. Save asks where, so the file keeps them.`);
       void shell.dialogs.alert(`Opened ${label} as a copy`, `Some items could not be opened: ${leftOutOnOpen}. They were left out. Saving this copy over the file would lose them, so Save asks for a name (the file itself is not changed).`);
     }
     else if (dxfReport) {
-      say(`Opened ${label} (a DXF; Save makes a CAD Draft drawing beside it).`);
+      say(`Opened ${label} (a ${/\.dwg$/i.test(label) ? 'DWG' : 'DXF'}; Save makes a CAD Draft drawing beside it).`);
       for (const line of dxfReport.lines) say(line);
       if (dxfReport.leftOut || dxfReport.changed) void shell.dialogs.alert(`Opened ${label}`, dxfReport.lines.join('\n\n'));
     } else say(path ? `Opened ${label}.` : 'A new drawing, in millimetres. Choose a tool, or type one such as line.');

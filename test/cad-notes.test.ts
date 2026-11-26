@@ -329,8 +329,9 @@ test('DXF in (AutoCAD 2000 kind): inches, light polylines, ellipse arcs, splines
   assert.ok(report.some(l => /taken apart/.test(l)), 'blocks taken apart said');
 });
 
-test('DXF in: refuses DWG and binary DXF with what to do instead; decodes AutoCAD text codes', () => {
-  assert.throws(() => readDxf(new TextEncoder().encode('AC1027 rest of a dwg')), /DWG drawing.*Save it as DXF/);
+test('DXF in: refuses binary DXF with what to do instead; decodes AutoCAD text codes', () => {
+  // A DWG opens through the DWG reader (cad/dwg, tested in cad-dwg-read.test.ts); to the DXF reader it is not a DXF.
+  assert.throws(() => readDxf(new TextEncoder().encode('AC1027 rest of a dwg')), /not a DXF/);
   assert.throws(() => readDxf(new TextEncoder().encode('AutoCAD Binary DXF\r\n')), /binary DXF/);
   assert.throws(() => readDxf(new TextEncoder().encode('hello\nworld\n')), /not a DXF/);
   assert.equal(decodeText('45%%d %%p0.1 %%c8 100%%%'), '45° ±0.1 Ø8 100%');

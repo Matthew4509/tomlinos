@@ -3,7 +3,7 @@
 // redo, saving and opening again; snaps found with the pointer (middle, intersection, centre); the shapes (circle by
 // diameter, ellipse, polygon, slot, arcs, curves); construction lines and tangent lines; choosing by window, crossing
 // box and chain; move, mirror, the arrays; Utils > Measure; text and dimensions (session 7); a DXF written and opened
-// again (session 8); a photo traced over, printing to scale, recent drawings and a recovery copy (session 9); a
+// again (session 8); a DWG opened and one written and opened again; a photo traced over, printing to scale, recent drawings and a recovery copy (session 9); a
 // slanted photo straightened; pen and touch (taps, a held finger, two-finger pan and pinch); and no errors in the
 // console.
 // Needs the dev server on a FRESH, EMPTY data folder (the first step sets up the owner), and `npm run build` done.
@@ -11,6 +11,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 
 const BASE = process.argv[2] ?? 'http://127.0.0.1:3043';
@@ -1299,6 +1300,48 @@ await step('a DXF with items at a height and a dashed line of its own says so; o
   await D().getByRole('button', { name: 'Cancel' }).click();
   ok(!(await page.locator('.toast', { hasText: 'Saved “heights.dxf”' }).count()), 'nothing was written');
   // The next step works in a new drawing.
+  await closeAll();
+  await openCad();
+});
+
+await step('a DWG (AutoCAD 2018, made by ACadSharp for the tests) opens: its items on their layers, and what was left out said', async () => {
+  await closeAll();
+  await upload(fileURLToPath(new URL('./fixtures/dwg/acadsharp-full-AC1032.dwg', import.meta.url)), '/Documents');
+  await openCad();
+  await W().getByRole('menuitem', { name: 'File' }).click();
+  await page.locator('.menu').getByText('Open...', { exact: true }).click();
+  await D().locator('.pick-row', { hasText: 'acadsharp-full-AC1032.dwg' }).first().dblclick();
+  await D().getByText(/Read from an AutoCAD 2018 DWG \(AC1032\)/).waitFor();
+  ok((await D().innerText()).includes('2 filled triangle or square (SOLID)s'), 'what was left out is said: ' + (await D().innerText()));
+  await shot('cad-dwg-opened');
+  await D().getByRole('button', { name: 'OK' }).click();
+  await page.locator('.win .win-bar', { hasText: 'acadsharp-full-AC1032.dwg' }).waitFor();
+  eq([await count('Walls'), await count('Holes'), await count('Hidden stuff')], [8, 6, 1], 'items on Walls, Holes (two blocks taken apart) and the hidden layer');
+  ok((await said(8)).includes('(a DWG; Save makes a CAD Draft drawing beside it)'), 'the notes: ' + (await said(8)));
+});
+
+await step('File > Output > CAD > DWG 2004 writes a DWG that opens again with every item, and nothing left out', async () => {
+  await W().getByRole('menuitem', { name: 'File' }).click();
+  await page.locator('.menu').getByText('Output', { exact: true }).click();
+  await page.locator('.menu').getByText('CAD', { exact: true }).click();
+  await page.locator('.menu').getByText('DWG 2004...', { exact: true }).click();
+  await D().locator('label', { hasText: 'Construction lines' }).locator('input').check();
+  await D().locator('label', { hasText: 'Items on hidden layers' }).locator('input').check();
+  await D().getByRole('button', { name: 'Choose where...' }).click();
+  eq(await D().locator('input[aria-label="File name"]').inputValue(), 'acadsharp-full-AC1032 (2).dwg', 'offered a new name beside it');
+  await D().locator('input[aria-label="File name"]').fill('walls.dwg');
+  await D().getByRole('button', { name: 'Save' }).click();
+  await page.locator('.toast', { hasText: 'walls.dwg' }).first().waitFor();
+  ok((await said(6)).includes('16 items written (AutoCAD 2004 DWG'), 'the notes: ' + (await said(6)));
+  await W().getByRole('menuitem', { name: 'File' }).click();
+  await page.locator('.menu').getByText('Open...', { exact: true }).click();
+  await D().locator('.pick-row', { hasText: 'walls.dwg' }).first().dblclick();
+  await page.locator('.win .win-bar', { hasText: 'walls.dwg' }).waitFor();
+  // The paragraph text of two lines was written as two texts.
+  eq([await count('Walls'), await count('Holes'), await count('Hidden stuff')], [9, 6, 1], 'every item came back');
+  ok((await said(4)).includes('Read from an AutoCAD 2004 DWG (AC1018).'), 'the report: ' + (await said(4)));
+  ok(!(await page.locator('.dialog').count()), 'nothing left out or changed, so no report box');
+  await shot('cad-dwg-written-and-opened');
   await closeAll();
   await openCad();
 });

@@ -27,6 +27,8 @@ const ODT: FileType = { label: 'OpenDocument text', icon: 'write', apps: ['write
 const CAD: FileType = { label: 'CAD Draft drawing', icon: 'cad', apps: ['cad'] };
 /** A DXF drawing (AutoCAD's exchange format): opened in CAD Draft, which also writes it for CAM programs. */
 const DXF: FileType = { label: 'DXF drawing', icon: 'cad', apps: ['cad'] };
+/** A DWG drawing (AutoCAD's own format, 2000 to 2018): opened in CAD Draft, which also writes it (as AutoCAD 2004). */
+const DWG: FileType = { label: 'DWG drawing', icon: 'cad', apps: ['cad'] };
 const CALC: FileType = { label: 'Calculator sheet', icon: 'calculator', apps: ['calculator'] };
 const ARCHIVE: FileType = { label: 'Compressed folder', icon: 'archive', apps: ['archive'] };
 const CODE: FileType = { label: 'Code or data file', icon: 'code', apps: ['editor', 'notepadpro'] };
@@ -59,6 +61,7 @@ const GROUPS: Array<[FileType, string[]]> = [
   [ODT, ['odt']],
   [CAD, ['tcad']],
   [DXF, ['dxf']],
+  [DWG, ['dwg']],
   [CALC, ['calc']],
   [CALENDAR, ['ics']],
   [CONTACTS, ['vcf']],

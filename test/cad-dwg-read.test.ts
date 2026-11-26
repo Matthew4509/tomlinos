@@ -427,6 +427,133 @@ test('versions: older and newer files, and things that are not DWGs, are each to
   assert.match(clean(() => readDwg(new Uint8Array(10))), /not a DWG drawing|too short/);
 });
 
+// ---- The 2007 format ---------------------------------------------------------------------------------------------
+// No 2007 DWG from another program was at hand (ACadSharp does not write 2007), so this builds one from the published
+// description of the format and checks the reader finds its sections again. It shows the 2007 page layout, the
+// interleaved error-correcting blocks and the section map are read as described; it cannot show the description was
+// understood right, and it uses only the literal form of the 2007 compression.
+
+/** A 2007-format literal run: decompress21 unpacks it to `data`. */
+function literal21(data: Uint8Array): Uint8Array {
+  const L = data.length;
+  const head: number[] = [];
+  if (L < 0x17) head.push(L - 8);
+  else {
+    head.push(0x0f);
+    let n = L - 0x17;
+    if (n < 0xff) head.push(n);
+    else {
+      head.push(0xff);
+      n -= 0xff;
+      while (n >= 0xffff) {
+        head.push(0xff, 0xff);
+        n -= 0xffff;
+      }
+      head.push(n & 0xff, n >> 8);
+    }
+  }
+  // Which byte of the run lands where (the format scrambles short runs and each 32): found by unpacking a probe.
+  const probe = (shift: number) => decompress21(new Uint8Array([...head, ...Array.from({ length: L }, (_, i) => (i >> shift) & 0xff)]), L);
+  const lo = probe(0);
+  const hi = probe(8);
+  const out = new Uint8Array(head.length + L);
+  out.set(head);
+  for (let k = 0; k < L; k++) out[head.length + (lo[k] | (hi[k] << 8))] = data[k];
+  return out;
+}
+
+/** Spreads data over Reed-Solomon blocks of 255 (`k` data bytes each, parity left 0), interleaved `factor` ways. */
+function interleave(data: Uint8Array, factor: number, k: number): Uint8Array {
+  const out = new Uint8Array(factor * 255);
+  for (let i = 0; i < factor; i++) for (let j = 0; j < k && i * k + j < data.length; j++) out[i + j * factor] = data[i * k + j];
+  return out;
+}
+
+function make2007(sections: Array<[string, Uint8Array]>): Uint8Array {
+  const chunks: Uint8Array[] = [];
+  let offset = 0;
+  const pageMap: Array<[number, number]> = [];
+  const sm: number[] = [];
+  const u64 = (v: number) => {
+    const b = new Uint8Array(8);
+    new DataView(b.buffer).setBigUint64(0, BigInt(v), true);
+    return [...b];
+  };
+  let id = 0;
+  for (const [name, data] of sections) {
+    const pid = ++id;
+    const factor = Math.max(1, Math.ceil(((data.length + 7) & ~7) / 251));
+    const page = interleave(data, factor, 251);
+    chunks.push(page);
+    pageMap.push([page.length, pid]);
+    const utf16 = [...name, '\u0000'].flatMap(c => [c.charCodeAt(0) & 0xff, c.charCodeAt(0) >> 8]);
+    sm.push(...u64(data.length), ...u64(Math.max(1, data.length)), ...u64(0), ...u64(0), ...u64(utf16.length), ...u64(0), ...u64(4), ...u64(1), ...utf16);
+    sm.push(...u64(0), ...u64(page.length), ...u64(pid), ...u64(data.length), ...u64(data.length), ...u64(0), ...u64(0));
+    offset += page.length;
+  }
+  const system = (data: Uint8Array) => {
+    const comp = literal21(data);
+    const total = (comp.length + 7) & ~7;
+    const factor = Math.ceil(total / 239);
+    const padded = new Uint8Array(total);
+    padded.set(comp);
+    return { page: interleave(padded, factor, 239), comp: comp.length };
+  };
+  const smData = new Uint8Array(sm);
+  const smPage = system(smData);
+  const smId = ++id;
+  const smOffset = offset;
+  chunks.push(smPage.page);
+  pageMap.push([smPage.page.length, smId]);
+  offset += smPage.page.length;
+  const pmData = new Uint8Array(pageMap.flatMap(([size, pid]) => [...u64(size), ...u64(pid)]));
+  const pmPage = system(pmData);
+  const pmOffset = offset;
+  chunks.push(pmPage.page);
+  void smOffset;
+  const fh = new Uint8Array(0x110);
+  const fv = new DataView(fh.buffer);
+  const F = (i: number, v: number) => fv.setBigUint64(i * 8, BigInt(v), true);
+  F(0, 0x70);
+  F(3, 1);
+  F(7, pmOffset);
+  F(10, pmPage.comp);
+  F(11, pmData.length);
+  F(22, smPage.comp);
+  F(24, smId);
+  F(25, smData.length);
+  F(27, 1);
+  const decoded = new Uint8Array(3 * 239);
+  new DataView(decoded.buffer).setInt32(24, -0x110, true);
+  decoded.set(fh, 32);
+  const file = new Uint8Array(0x480 + chunks.reduce((t, c) => t + c.length, 0));
+  file.set([0x41, 0x43, 0x31, 0x30, 0x32, 0x31]);
+  new DataView(file.buffer).setUint16(0x13, 30, true);
+  file.set(interleave(decoded, 3, 239).subarray(0, 0x400), 0x80);
+  let at = 0x480;
+  for (const c of chunks) {
+    file.set(c, at);
+    at += c.length;
+  }
+  return file;
+}
+
+test('the 2007 layout: a file built from its published description gives back each of its sections', () => {
+  const source = readParts(fixture('acadsharp-full-AC1024.dwg'));
+  const file = make2007([['AcDb:Header', source.header], ['AcDb:Classes', source.classes], ['AcDb:Handles', source.handles], ['AcDb:AcDbObjects', source.objects]]);
+  const back = readParts(file);
+  assert.equal(back.name, 'AC1021');
+  assert.deepEqual(back.header, source.header);
+  assert.deepEqual(back.classes, source.classes);
+  assert.deepEqual(back.handles, source.handles);
+  assert.deepEqual(back.objects, source.objects);
+  // Its objects are in the 2010 form, not 2007's, so reading on must end in a clear message or a drawing: never a crash.
+  clean(() => readDwg(file));
+  // Cut short, or a section missing: a clear message naming 2007.
+  assert.match(clean(() => readDwg(file.subarray(0, file.length - 300))), /AutoCAD 2007 DWG \(AC1021\) cannot be opened/);
+  assert.match(clean(() => readDwg(make2007([['AcDb:Header', source.header]]))), /AutoCAD 2007 DWG \(AC1021\) cannot be opened: it has no Classes section/);
+});
+
 test('a drawing over the item limit is refused with the limit named', () => {
   const d: Drawing = newDrawing('mm');
   for (let i = 0; i < 200_001; i++) d.ents.push({ type: 'point', p: P(i, 0), id: i + 1, layer: 'Geometry' });
