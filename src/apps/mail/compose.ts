@@ -135,7 +135,19 @@ export const composeApp: AppDef = {
       }
     }
 
+    // One send at a time: a second Ctrl+Enter (or Send) while one is being checked or sent does nothing, so a message
+    // never goes twice.
+    let sending = false;
     async function send() {
+      if (sending) return;
+      sending = true;
+      try {
+        await sendOnce();
+      } finally {
+        sending = false;
+      }
+    }
+    async function sendOnce() {
       const all = { to: splitAddresses(to.value), cc: splitAddresses(cc.value), bcc: splitAddresses(bcc.value) };
       if (!all.to.length && !all.cc.length && !all.bcc.length) {
         status.textContent = 'Add who it goes to.';

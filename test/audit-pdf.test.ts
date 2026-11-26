@@ -3,7 +3,6 @@
 // Run: node --test test/audit-pdf.test.ts
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { deflateSync } from 'node:zlib';
 import { PdfDocument } from '../src/apps/pdf/objects.ts';
 import { renderPage } from '../src/apps/pdf/render.ts';
 
