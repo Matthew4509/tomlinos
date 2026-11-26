@@ -13,12 +13,12 @@ export interface StartGroup {
 export const DEFAULT_PINNED = ['panel', 'explorer'];
 
 export const START_GROUPS: StartGroup[] = [
-  { id: 'accessories', name: 'Accessories', apps: ['explorer', 'editor', 'notepadpro', 'calculator', 'reader'] },
+  { id: 'accessories', name: 'Accessories', apps: ['explorer', 'editor', 'calculator', 'reader'] },
   { id: 'office', name: 'Office', apps: ['write', 'sheet', 'cad', 'calendar', 'projects', 'contacts'] },
   { id: 'internet', name: 'Internet', apps: ['mail', 'chat'] },
   { id: 'media', name: 'Graphics & media', apps: ['photoedit'] },
   { id: 'games', name: 'Games', apps: ['planetziods', 'printer'] },
-  { id: 'development', name: 'Development', apps: ['riscv', 'terminal'] },
+  { id: 'development', name: 'Development', apps: ['notepadpro', 'riscv', 'terminal'] },
   { id: 'system', name: 'System', apps: ['taskmanager', 'panel', 'appmanager', 'trash'] },
   { id: 'settings', name: 'Settings', apps: ['settings', 'account', 'shortcuts'] },
 ];
