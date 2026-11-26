@@ -69,8 +69,8 @@ await step('set up the owner', async () => {
 const APPS = [
   { label: 'write', name: 'Write', root: '.write', menus: ['File', 'Edit', 'View', 'Insert', 'Format', 'Table', 'Tools', 'Help'], toolbar: true },
   { label: 'spreadsheet', name: 'Spreadsheet', root: '.sheet', menus: ['File', 'Edit', 'View', 'Insert', 'Format', 'Tools', 'Data', 'Help'], toolbar: false },
-  { label: 'notepad', name: 'Notepad', root: '.editor', menus: ['File', 'Edit', 'Format', 'View', 'Help'], toolbar: false },
-  { label: 'notepad pro', name: 'Notepad Pro', root: '.npp', menus: ['File', 'Edit', 'Search', 'View', 'Format', 'Help'], toolbar: true },
+  { label: 'notepad', name: 'Notepad', root: '.editor', menus: ['File', 'Edit', 'View', 'Format', 'Help'], toolbar: false },
+  { label: 'notepad pro', name: 'Notepad Pro', root: '.npp', menus: ['File', 'Edit', 'View', 'Search', 'Format', 'Help'], toolbar: true },
   { label: 'file explorer', name: 'File Explorer', root: '.explorer', menus: ['File', 'Edit', 'View', 'Go', 'Help'], toolbar: true },
   { label: 'calculator', name: 'Calculator', root: '.calc-app', menus: ['Edit', 'View', 'Help'], toolbar: false },
 ];
@@ -95,6 +95,19 @@ for (const a of APPS) {
       return spec ? mod.checkShortcuts(spec.menus) : ['no description kept for this bar'];
     });
     eq(bad, [], 'items showing a key the browser keeps');
+  });
+  await step(`${a.name}: the bar starts with File, Edit, View (those it has), Help is last, and the Alt letters are unique and not Q or L`, async () => {
+    const win = page.locator('.win', { has: page.locator(a.root) }).last();
+    const shown = await win.locator('.cbar-title:visible').allInnerTexts();
+    const lead = ['File', 'Edit', 'View'].filter(m => shown.includes(m));
+    eq(shown.slice(0, lead.length), lead, 'File, Edit, View first');
+    eq(shown[shown.length - 1], 'Help', 'the last menu');
+    const keys = await win.locator('.cbar').evaluate(async el => {
+      const mod = await import('/app/shell/menubar.js');
+      return mod.pickAccessKeys(mod.barSpecOf(el).menus);
+    });
+    ok(keys.every(k => k && k !== 'q' && k !== 'l'), 'every menu has an Alt letter, not Q or L: ' + keys.join(''));
+    eq(new Set(keys).size, keys.length, 'the Alt letters are unique: ' + keys.join(''));
   });
 }
 

@@ -55,7 +55,7 @@ export const editorApp: AppDef = {
 
     const status = h('div', { class: 'statusbar editor-status', role: 'status' });
 
-    // The menu bar: File, Edit, Format, View, Help. Every command the old button row had is in a menu.
+    // The menu bar: File, Edit, View, Format, Help. Every command the old button row had is in a menu.
     const can = () => usable;
     const setWrap = (wrap: boolean) => {
       wrapOn = wrap;
@@ -84,15 +84,15 @@ export const editorApp: AppDef = {
           { label: 'Replace...', icon: 'replace', shortcut: 'Ctrl+H', enabled: can, action: () => openFind(true) },
           { label: 'Go to line...', shortcut: 'Ctrl+G', enabled: can, action: () => void goToLine() },
         ] },
-        { label: 'Format', items: [
-          { label: 'Word wrap', checked: () => wrapOn, enabled: can, action: () => setWrap(!wrapOn) },
-          { separator: true },
-          { label: 'Line endings when saving', enabled: can, submenu: () => EOLS.map(e => ({ label: `${EOL_NAMES[e]} (${EOL_SHORT[e]})`, checked: () => eol === e, action: () => setEol(e) })) },
-        ] },
         { label: 'View', items: [
           { label: 'Zoom in', icon: 'zoom-in', shortcut: 'Ctrl++', enabled: () => usable && zoom < ZOOMS[ZOOMS.length - 1], action: () => step(1) },
           { label: 'Zoom out', icon: 'zoom-out', shortcut: 'Ctrl+-', enabled: () => usable && zoom > ZOOMS[0], action: () => step(-1) },
           { label: 'Normal size (100%)', shortcut: 'Ctrl+0', enabled: () => usable && zoom !== 100, action: () => setZoom(100) },
+        ] },
+        { label: 'Format', items: [
+          { label: 'Word wrap', checked: () => wrapOn, enabled: can, action: () => setWrap(!wrapOn) },
+          { separator: true },
+          { label: 'Line endings when saving', enabled: can, submenu: () => EOLS.map(e => ({ label: `${EOL_NAMES[e]} (${EOL_SHORT[e]})`, checked: () => eol === e, action: () => setEol(e) })) },
         ] },
         helpMenu(shell),
       ],

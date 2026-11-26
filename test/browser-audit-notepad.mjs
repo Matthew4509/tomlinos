@@ -140,7 +140,7 @@ await step('FAULT: a file Notepad cannot open leaves no dead buttons (Find, Repl
   ok((await n.locator('.editor-status').innerText()).includes('does not look like text'), 'refused as not text');
   // Every command that works on the text is off in the menus (File keeps Close; Help is the desktop's).
   const live = [];
-  for (const menu of ['File', 'Edit', 'Format', 'View']) {
+  for (const menu of ['File', 'Edit', 'View', 'Format']) {
     await n.locator(`.cbar-title[data-menu=${menu}]`).click();
     live.push(...(await page.locator('.menu-root .menu-item:not([aria-disabled="true"]) .menu-label').allInnerTexts()));
     await page.keyboard.press('Escape');
