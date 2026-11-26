@@ -16,7 +16,8 @@ import type { AppDef, AppHandle } from '../shell/types.ts';
 import { APPS } from './catalog.ts';
 import { ChatSession } from './chat/session.ts';
 import { joinPath } from '../fs/names.ts';
-import { dayName, listPads, padLabel, PAD_FOLDER, savePad } from './panel/scratchpad.ts';
+import { dayName, listPads, padLabel, PAD_FOLDER, readPad, savePadFile } from './panel/scratchpad.ts';
+import { saveOver } from '../shell/savefile.ts';
 import { nextFor, parseProjects, PROJECTS_PATH, shortTitle, sortProjects, type Project } from './projects/data.ts';
 
 interface Section {
@@ -274,8 +275,15 @@ export const panelApp: AppDef = {
     }, signal);
 
     // ---- Scratch pad ----
+    // padFile and padId: the file the pad came from and the copy read or last saved, so a save replaces only that copy
+    // and asks when Notepad Pro, another tab or another device saved it meanwhile. padGen changes whenever a different
+    // pad is put in the box (New, or a pad opened), so a save or read that finishes later leaves the box alone.
     let padFile: string | null = null;
+    let padId = '';
+    let padGen = 0;
     let padSaved = { name: '', text: '' };
+    let padSaving: Promise<void> = Promise.resolve();
+    let padBusy = 0;
     const setPadDirty = () => {
       padDirty = padText.value !== padSaved.text || padName.value.trim() !== padSaved.name;
       padState.textContent = padDirty ? 'not saved' : padFile ? 'saved' : '';
@@ -294,7 +302,9 @@ export const panelApp: AppDef = {
     const keepPad = async (): Promise<boolean> => !padDirty || shell.dialogs.confirm({ title: 'Leave this pad?', text: 'The scratch pad has notes that are not saved. Leave them?', ok: 'Leave them', danger: true, cancel: 'Keep writing' });
     async function newPad(): Promise<void> {
       if (!(await keepPad())) return;
+      padGen++;
       padFile = null;
+      padId = '';
       padName.value = dayName(new Date());
       padText.value = '';
       padSaved = { name: padName.value, text: '' };
@@ -302,33 +312,85 @@ export const panelApp: AppDef = {
       void paintPads();
       padText.focus();
     }
+    // Opening the pad already open reads it again (to see changes made elsewhere).
     async function openPad(name: string): Promise<void> {
-      if (name === padFile || !(await keepPad())) return;
+      if (!(await keepPad())) return;
+      // A save on its way finishes first, so what is read is not overtaken by it.
+      await padSaving;
+      const gen = ++padGen;
       try {
-        padText.value = await shell.fs.readText(joinPath(PAD_FOLDER, name));
-        padFile = name;
-        padName.value = padLabel(name);
-        padSaved = { name: padName.value, text: padText.value };
+        const got = await readPad(shell.fs, name);
+        if (!got) throw new Error(`"${padLabel(name)}" is not there any more. It may have been moved or deleted.`);
+        if (gen !== padGen) return;
+        padText.value = got.text;
+        padFile = got.name;
+        padId = got.id;
+        padName.value = padLabel(got.name);
+        padSaved = { name: padName.value, text: got.text };
         setPadDirty();
         void paintPads();
       } catch (error) {
         await shell.report('Could not open that scratch pad', error);
       }
     }
+    // The open pad's file changed (Notepad Pro, another tab, another device): with no unsaved typing the pad shows the
+    // new text; with some, the typing stays and the next save asks before it replaces the newer copy.
+    async function reloadPad(): Promise<void> {
+      if (!padFile || padBusy) return;
+      const gen = padGen;
+      const file = padFile;
+      try {
+        const there = await shell.fs.stat(joinPath(PAD_FOLDER, file));
+        if (!there || there.id === padId) return;
+        const got = await readPad(shell.fs, file);
+        if (!got || gen !== padGen || padBusy || file !== padFile || got.id === padId || padDirty) return;
+        padText.value = got.text;
+        padId = got.id;
+        padSaved = { name: padName.value.trim(), text: got.text };
+        setPadDirty();
+      } catch {
+        // Not readable just now: the pad keeps what it shows, and its next save asks if the file changed.
+      }
+    }
     async function savePadNow(): Promise<void> {
-      // What is sent is what is marked saved: text typed while the save waits stays "not saved".
+      // Saves go one at a time, each replacing the copy the one before it wrote. A save asked for on a pad that has
+      // since been left (New, or another pad opened) is not made.
+      const gen = padGen;
+      const run = padSaving.then(() => (gen === padGen ? saveOnce() : undefined));
+      padSaving = run.catch(() => undefined);
+      return run;
+    }
+    async function saveOnce(): Promise<void> {
+      // What is sent is what is marked saved: text typed while the save waits stays "not saved". The file and the copy
+      // are taken now, so a pad put in the box meanwhile is not given this pad's file.
+      const gen = padGen;
       const sentName = padName.value;
       const sentText = padText.value;
+      const file = padFile;
+      const id = padId;
+      padBusy++;
       try {
-        padFile = await savePad(shell.fs, sentName, sentText, padFile, new Date());
-        const label = padLabel(padFile);
+        const saved = await savePadFile(shell.fs, sentName, sentText, file, id, new Date(),
+          (path, text) => saveOver(shell, path, new TextEncoder().encode(text), id));
+        if (gen !== padGen) return void paintPads();
+        if (!saved) {
+          padState.textContent = 'not saved';
+          return;
+        }
+        padFile = saved.name;
+        padId = saved.id;
+        const label = padLabel(saved.name);
         if (padName.value === sentName) padName.value = label;
         padSaved = { name: label, text: sentText };
         setPadDirty();
         await paintPads();
       } catch (error) {
         await shell.report('Could not save the scratch pad', error);
+      } finally {
+        padBusy--;
       }
+      // A change made elsewhere while this save was on its way is looked at now.
+      void reloadPad();
     }
     async function openPadFull(): Promise<void> {
       if (padDirty || !padFile) await savePadNow();
@@ -489,7 +551,10 @@ export const panelApp: AppDef = {
 
     shell.changes.on(paths => {
       if (current === 'overview' && paths.some(p => p === '/Documents' || RECENT_FOLDERS.includes(p))) void refreshOverview();
-      if (paths.includes(PAD_FOLDER)) void paintPads();
+      if (paths.includes(PAD_FOLDER)) {
+        void paintPads();
+        void reloadPad();
+      }
     }, signal);
 
     // The clock, the "Open for" line and the calendar strip move on the minute.
