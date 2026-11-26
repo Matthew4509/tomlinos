@@ -412,19 +412,15 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
       return true;
     }),
     Enter: pm.splitListItem(nodes.list_item),
-    Tab: pm.chainCommands(pm.goToNextCell(1), (state: any, dispatch: any) => {
+    Tab: pm.chainCommands(pm.goToNextCell(1), (state: any, dispatch: any, v: any) => {
       // In the last cell of a table (there is no next one): a new row, and the cursor in its first cell, as in Word.
-      if (!pm.isInTable(state)) return false;
-      let added: any = null;
-      if (!pm.addRowAfter(state, (t: any) => (added = t)) || !added) return false;
-      if (dispatch) {
-        let moved: any = null;
-        pm.goToNextCell(1)(state.apply(added), (t: any) => (moved = t));
-        if (moved) added.setSelection(moved.selection);
-        dispatch(added.scrollIntoView());
+      if (!pm.isInTable(state) || !pm.addRowAfter(state)) return false;
+      if (dispatch && v) {
+        pm.addRowAfter(state, dispatch);
+        pm.goToNextCell(1)(v.state, v.dispatch);
       }
       return true;
-    }, pm.sinkListItem(nodes.list_item), (state: any, dispatch: any) => {
+    },pm.sinkListItem(nodes.list_item), (state: any, dispatch: any) => {
       if (dispatch) dispatch(state.tr.insertText('\t').scrollIntoView());
       return true;
     }),
