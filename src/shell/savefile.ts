@@ -24,6 +24,36 @@ export function askReplace(shell: Shell): AskReplace {
  * chose not to replace a newer copy (nothing written). A copy that changes again while they decide is asked about again.
  */
 export async function saveOver(shell: Shell, path: string, bytes: Uint8Array, openedId: string, ask: AskReplace = askReplace(shell)): Promise<Entry | null> {
+  // Two quick saves of one window: the second started with the id the first was about to replace, so it would call the
+  // window's own first save "changed somewhere else". It waits for the first and replaces what that one wrote.
+  const running = inFlight(shell);
+  const before = running.get(path);
+  const mine = (async () => {
+    let replacing = openedId;
+    if (before) {
+      const done = await before.result.catch(() => null);
+      if (done && before.from === openedId) replacing = done.id;
+    }
+    return write(shell, path, bytes, replacing, ask);
+  })();
+  const slot = { from: openedId, result: mine };
+  running.set(path, slot);
+  try {
+    return await mine;
+  } finally {
+    if (running.get(path) === slot) running.delete(path);
+  }
+}
+
+/** The saves on their way, per desktop and path. */
+const saving = new WeakMap<object, Map<string, { from: string; result: Promise<Entry | null> }>>();
+function inFlight(shell: Shell): Map<string, { from: string; result: Promise<Entry | null> }> {
+  let m = saving.get(shell);
+  if (!m) saving.set(shell, (m = new Map()));
+  return m;
+}
+
+async function write(shell: Shell, path: string, bytes: Uint8Array, openedId: string, ask: AskReplace): Promise<Entry | null> {
   let replacing = openedId;
   for (;;) {
     try {
