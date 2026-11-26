@@ -101,8 +101,10 @@ after(() => {
 
 // ---- P0 ------------------------------------------------------------------------------------------------------------
 
-test('ACC-P0-1 (edge): a switched-off account answers a wrong password like an unknown name (no account enumeration)',
-  { skip: noPhp }, async () => {
+// Held for a decision: this asks for the opposite of test/auth.test.ts, which wants a switched-off person told so (403),
+// while test/retest-security.test.ts wants a right and a wrong password answered alike. No one answer meets all three.
+test('ACC-P0-1 (edge, held for a decision): a switched-off account answers a wrong password like an unknown name (no account enumeration)',
+  { skip: noPhp, todo: 'held: conflicts with the 403 "switched off" message auth.test.ts asks for' }, async () => {
     const off = await owner.call('user-disable', { id: bobId, disabled: true, password: PASS });
     assert.equal(off.status, 200, JSON.stringify(off.json));
     clearBrakes();

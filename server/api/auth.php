@@ -209,10 +209,9 @@ try {
             $user = auth_find_user(auth_users($dataDir), $name);
             // The same slow check runs for a name that does not exist, so the time taken does not tell which half was wrong.
             $ok = $user ? password_verify($password, $user['hash']) : (auth_hash_password($password) === '');
-            // A switched-off account with a wrong password gets the same answer as a name that does not exist (below), so
-            // nobody can find out which accounts are there or switched off. Only the right password hears that it is
-            // switched off, which tells no more than a working account would. The try stays charged either way.
-            if ($user && $ok && !empty($user['disabled'])) {
+            // A switched-off account answers the same whether the password was right or not (after the same slow check), so
+            // the refusal cannot be used to try passwords against it. The try stays charged either way.
+            if ($user && !empty($user['disabled'])) {
                 auth_history_add($dataDir, $user['id'], 'Sign-in refused (account switched off)');
                 api_fail(403, 'This account is switched off. Ask the owner of this desktop to switch it back on.');
             }
@@ -673,9 +672,8 @@ try {
                     $ok = $usedCode !== null;
                 }
             }
-            // As at sign-in: a switched-off account with a wrong key answers as a name that does not exist; only the right
-            // key (and code) hears that it is switched off.
-            if ($ok && !empty($user['disabled'])) {
+            // As at sign-in: a switched-off account answers the same whether the key was right or not.
+            if ($user && !empty($user['disabled'])) {
                 api_fail(403, 'This account is switched off. Ask the owner of this desktop to switch it back on.');
             }
             if (!$ok) {
