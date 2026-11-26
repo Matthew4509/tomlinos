@@ -42,7 +42,7 @@ export function inlineMd(text: string, base: MarkJSON[] = []): NodeJSON[] {
     };
     while (i < s.length) {
       const ch = s[i];
-      if (ch === '\\' && i + 1 < s.length && /[\\`*_{}[\]()#+\-.!~|>]/.test(s[i + 1])) {
+      if (ch === '\\' && i + 1 < s.length && /[\\`*_{}[\]()#+\-=.!~|>]/.test(s[i + 1])) {
         plain += s[i + 1];
         i += 2;
         continue;
@@ -306,7 +306,10 @@ function readBlocks(source: string): NodeJSON {
 /** Text with Markdown's own signs escaped where they would mean something. */
 // A number that would start a list ("1. ") has its dot escaped ("1\. "): a backslash before a digit is not an escape
 // Markdown reads, so "\1. " came back with its backslash.
-const escapeMd = (s: string): string => s.replace(/([\\`*_[\]~|])/g, '\\$1').replace(/^(#{1,6}\s|>|[-+*]\s)/, '\\$1').replace(/^(\d+)([.)]\s)/, '$1\\$2');
+const escapeMd = (s: string): string => s.replace(/([\\`*_[\]~|])/g, '\\$1').replace(/^(#{1,6}\s|>|[-+*]\s)/, '\\$1').replace(/^(\d+)([.)]\s)/, '$1\\$2')
+  // A line of only dashes or equals signs ("---", "==") has its first one escaped: unescaped it is read back as a line
+  // across the page (and dropped), or it turns the line above it into a heading.
+  .replace(/^(\s*)([-=])(?=[-=\s]*$)/, '$1\\$2');
 
 /** Inline code: in single backticks, or in a longer run (with a space inside each end) when it holds backticks. */
 function codeSpan(text: string): string {

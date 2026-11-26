@@ -947,7 +947,8 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
     const st = view.state;
     const { from, to } = st.selection;
     const tr = st.tr;
-    for (const t of Object.values(marks)) tr.removeMark(from, to, t);
+    // The look goes; a link is not a look, so it stays (as in other word processors).
+    for (const t of Object.values(marks)) if ((t as { name: string }).name !== 'link') tr.removeMark(from, to, t);
     tr.setStoredMarks([]);
     for (const p of selectedParagraphs(st)) tr.setNodeMarkup(p.pos, undefined, { style: p.node.attrs.style, align: null, before: null, after: null, line: null, indent: null, first: null });
     view.dispatch(tr);
@@ -1529,8 +1530,11 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
     const from = view.state.selection.from;
     const current = hits.length ? Math.max(0, hits.findIndex(x => x.from >= from)) : -1;
     view.dispatch(view.state.tr.setMeta(finder.key, { query, opts, hits, current }).setMeta('addToHistory', false));
+    landed = false;
     showCount();
   }
+  /** False until the first Next after a new search: that one goes to the place already marked, not the one after it. */
+  let landed = false;
   /** The next (1) or previous (-1) place, chosen in the text and scrolled to. */
   function go(step: number): void {
     const s = findState();
@@ -1538,7 +1542,8 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
       showCount();
       return;
     }
-    const current = s.current < 0 ? 0 : (s.current + step + s.hits.length) % s.hits.length;
+    const current = s.current < 0 ? 0 : !landed ? s.current : (s.current + step + s.hits.length) % s.hits.length;
+    landed = true;
     const hit = s.hits[current];
     view.dispatch(view.state.tr.setMeta(finder.key, { ...s, current }).setSelection(pm.TextSelection.create(view.state.doc, hit.from, hit.to)).scrollIntoView());
     showCount();
