@@ -7,13 +7,14 @@
 // loaded only when a Write window opens. Pasted text keeps its basic formatting; nothing in it ever runs.
 import { css, h, on, svg } from '../core/dom.ts';
 import { formatSize } from '../core/format.ts';
-import { inertMarkup } from '../core/inert.ts';
+import { inertMarkup, parseInert } from '../core/inert.ts';
 import { pictureTooBig } from '../core/imagesize.ts';
 import { baseName, joinPath, parentPath, splitExtension, uniqueName } from '../fs/names.ts';
 import type { MenuItem } from '../shell/menu.ts';
 import { pickFile, pickSave, savePdfAs, type FileTypeChoice } from '../shell/filepicker.ts';
 import { saveOver } from '../shell/savefile.ts';
 import { createRecovery } from '../shell/recovery.ts';
+import { decodeText as decodeRecordText, MAX_RECORD_FILE } from '../shell/recordfile.ts';
 import type { AppDef, AppHandle } from '../shell/types.ts';
 import { APPS } from './catalog.ts';
 import { FONT_FACES, FONT_SIZES } from './sheet/fonts.ts';
@@ -34,7 +35,7 @@ import {
 } from './write/model.ts';
 import { openInNewTab } from './link.ts';
 import { pdfOf, printPreview, snapshot } from './write/print.ts';
-import { buildSchema, htmlIsOnlyPicture, pastedHtml, type PM } from './write/schema.ts';
+import { buildSchema, htmlIsOnlyPicture, pastedHtml, tidyPasted, type PM } from './write/schema.ts';
 import { serialQueue } from '../core/serial.ts';
 import { classicBar, type BarItem, type ClassicBar } from '../shell/menubar.ts';
 import { fromMenuItems, helpMenu } from './classic-menus.ts';
@@ -120,6 +121,51 @@ function loadProseMirror(): Promise<PM> {
 }
 
 class Problem extends Error {}
+
+/** A document file as read: what the editor starts from, and what the window needs to know about it. */
+interface ReadFile {
+  doc: NodeJSON;
+  page?: PageSetup;
+  lost: string[];
+  kept: string[];
+  source?: DocxSource;
+  kind: 'docx' | 'txt' | 'md';
+  /** A kind Write reads but does not save (.rtf, .odt): Save makes a Word document beside it. */
+  readOnly: boolean;
+}
+
+/** Reads a document's bytes by its name's ending. Throws Problem (or the reader's own) with a plain reason. */
+async function readDocumentFile(bytes: Uint8Array, name: string): Promise<ReadFile> {
+  const ext = splitExtension(name)[1].toLowerCase();
+  if (ext === '.docx') {
+    const read = await readDocx(bytes);
+    return { doc: read.doc, page: read.page, lost: read.dropped, kept: read.kept, source: read.source, kind: 'docx', readOnly: false };
+  }
+  if (ext === '.rtf') {
+    const read = readRtf(bytes);
+    return { doc: read.doc, lost: read.dropped, kept: [], kind: 'docx', readOnly: true };
+  }
+  if (ext === '.odt') {
+    const read = await readOdt(bytes);
+    return { doc: read.doc, page: read.page, lost: read.dropped, kept: [], kind: 'docx', readOnly: true };
+  }
+  if (ext === '.md' || ext === '.markdown') {
+    const changes = new Set<string>();
+    const read = decodeText(bytes);
+    const doc = readMarkdown(read.text, changes);
+    return { doc, lost: read.guessed ? [GUESSED_TEXT, ...changes] : [...changes], kept: [], kind: 'md', readOnly: false };
+  }
+  if (ext === '.txt' || ext === '.text' || ext === '') {
+    const read = decodeText(bytes);
+    return { doc: docFromText(read.text), lost: read.guessed ? [GUESSED_TEXT] : [], kept: [], kind: 'txt', readOnly: false };
+  }
+  if (ext === '.doc') throw new Problem('This is an older Word file (.doc), which Write cannot open. In Word, use File > Save As > Word Document (.docx), and open that file.');
+  throw new Problem('Write opens Word documents (.docx), WordPad files (.rtf), LibreOffice files (.odt), Markdown (.md) and plain text (.txt). This file is none of those.');
+}
+
+/** A reason Write gives in words for a file it cannot open (the readers' own, or its own), else null. */
+const knownProblem = (error: unknown): string | null =>
+  error instanceof Problem || error instanceof DocxProblem || error instanceof RtfProblem || error instanceof OdtProblem ? (error as Error).message : null;
 
 /** Four short lines, aligned like the paragraph alignment buttons draw them. */
 function alignIcon(kind: 'left' | 'center' | 'right' | 'justify'): SVGElement {
@@ -228,6 +274,9 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
     // Nothing kept yet: spelling is checked, and the Classic look.
   }
 
+  // A window closed while its settings were being read: no copies are kept for it (its timer would never stop, as
+  // the window's own stop has already happened).
+  if (app.signal.aborted) return;
   // A copy of unsaved work every two minutes, offered back if the page stops before it is saved. The copy is a Word
   // document as Write writes one, so its pictures, footnotes and page setup come back with it.
   const recovery = createRecovery(shell, app.signal, {
@@ -277,43 +326,15 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
       if (entry.size > MAX_FILE_BYTES) throw new Problem(`This file is ${formatSize(entry.size)}. Write opens documents up to ${formatSize(MAX_FILE_BYTES)}.`);
       const bytes = await shell.fs.readFile(arg);
       const name = baseName(arg);
-      const ext = splitExtension(name)[1].toLowerCase();
       // WordPad (.rtf) and LibreOffice (.odt) files are read here and saved as Word documents beside them.
-      let readOnly = false;
-      if (ext === '.docx') {
-        const read = await readDocx(bytes);
-        startDoc = read.doc;
-        page = read.page;
-        lost = read.dropped;
-        keptParts = read.kept;
-        source = read.source;
-      } else if (ext === '.rtf') {
-        const read = readRtf(bytes);
-        startDoc = read.doc;
-        lost = read.dropped;
-        readOnly = true;
-      } else if (ext === '.odt') {
-        const read = await readOdt(bytes);
-        startDoc = read.doc;
-        page = read.page;
-        lost = read.dropped;
-        readOnly = true;
-      } else if (ext === '.md' || ext === '.markdown') {
-        const changes = new Set<string>();
-        const read = decodeText(bytes);
-        startDoc = readMarkdown(read.text, changes);
-        lost = read.guessed ? [GUESSED_TEXT, ...changes] : [...changes];
-        kind = 'md';
-      } else if (ext === '.txt' || ext === '.text' || ext === '') {
-        const read = decodeText(bytes);
-        startDoc = docFromText(read.text);
-        if (read.guessed) lost = [GUESSED_TEXT];
-        kind = 'txt';
-      } else if (ext === '.doc') {
-        throw new Problem('This is an older Word file (.doc), which Write cannot open. In Word, use File > Save As > Word Document (.docx), and open that file.');
-      } else {
-        throw new Problem('Write opens Word documents (.docx), WordPad files (.rtf), LibreOffice files (.odt), Markdown (.md) and plain text (.txt). This file is none of those.');
-      }
+      const read = await readDocumentFile(bytes, name);
+      const readOnly = read.readOnly;
+      startDoc = read.doc;
+      if (read.page) page = read.page;
+      lost = read.lost;
+      keptParts = read.kept;
+      source = read.source;
+      kind = read.kind;
       label = name;
       if (readOnly) folderHint = parentPath(arg);
       else {
@@ -321,8 +342,9 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
         loadedId = entry.id;
       }
     } catch (error) {
-      const known = error instanceof Problem || error instanceof DocxProblem || error instanceof RtfProblem || error instanceof OdtProblem;
-      const why = known ? (error as Error).message : 'This file could not be opened.';
+      const knownWhy = knownProblem(error);
+      const known = knownWhy !== null;
+      const why = knownWhy ?? 'This file could not be opened.';
       if (!known) await shell.report('Could not open the document', error);
       app.root.append(h('div', { class: 'app-message', role: 'alert' }, h('p', {}, why), h('p', { class: 'dialog-detail' }, 'The file was not changed.')));
       app.setTitle(baseName(arg));
@@ -330,6 +352,8 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
     }
   }
 
+  // Closed while the file was loading: nothing more to set up (and no timers left running for it).
+  if (app.signal.aborted) return;
   let doc: any;
   try {
     doc = schema.nodeFromJSON(startDoc);
@@ -388,7 +412,19 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
       return true;
     }),
     Enter: pm.splitListItem(nodes.list_item),
-    Tab: pm.chainCommands(pm.goToNextCell(1), pm.sinkListItem(nodes.list_item), (state: any, dispatch: any) => {
+    Tab: pm.chainCommands(pm.goToNextCell(1), (state: any, dispatch: any) => {
+      // In the last cell of a table (there is no next one): a new row, and the cursor in its first cell, as in Word.
+      if (!pm.isInTable(state)) return false;
+      let added: any = null;
+      if (!pm.addRowAfter(state, (t: any) => (added = t)) || !added) return false;
+      if (dispatch) {
+        let moved: any = null;
+        pm.goToNextCell(1)(state.apply(added), (t: any) => (moved = t));
+        if (moved) added.setSelection(moved.selection);
+        dispatch(added.scrollIntoView());
+      }
+      return true;
+    }, pm.sinkListItem(nodes.list_item), (state: any, dispatch: any) => {
       if (dispatch) dispatch(state.tr.insertText('\t').scrollIntoView());
       return true;
     }),
@@ -589,6 +625,8 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
   const scroller = h('div', { class: 'wp-scroll' }, desk);
 
   let zoom = 1;
+  /** While the window looks for unsaved copies left behind (and offers them), the page takes no keys. */
+  let checkingCopies = false;
   const zoomFactor = () => zoom;
   const box = () => pageBox(page);
   const bodyWidth = () => box().w - box().left - box().right;
@@ -601,6 +639,7 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
   };
   const view = new pm.EditorView(mount, {
     state,
+    editable: () => !checkingCopies,
     attributes: () => ({ class: 'wp-doc', spellcheck: spell ? 'true' : 'false', role: 'textbox', 'aria-multiline': 'true', 'aria-label': 'Document' }),
     nodeViews,
     // Ctrl+click on a link opens it in a new browser tab (a plain click puts the cursor there, as in Word).
@@ -613,7 +652,17 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
       return true;
     },
     // Pasted HTML is read from a copy that never runs or loads anything; style blocks and comments are dropped first.
-    transformPastedHTML: pastedHtml,
+    transformPastedHTML: (html: string) => {
+      // Lists from Word stay lists and code stays code (tidyPasted), worked on in an inert copy.
+      const safe = pastedHtml(html);
+      try {
+        const copy = parseInert(safe);
+        tidyPasted(copy);
+        return copy.body.innerHTML;
+      } catch {
+        return safe;
+      }
+    },
     handlePaste: (_v: any, event: ClipboardEvent) => {
       const files = [...(event.clipboardData?.files ?? [])].filter(f => PICTURE_TYPES.test(f.type));
       // Word and Excel give words as HTML with a picture of them too: those paste as the words.
@@ -1204,10 +1253,16 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
   };
   // The page setup is compared on its own (the document's page attribute is only its undo record).
   const isDirty = () => !view.state.doc.content.eq(savedDoc.content) || JSON.stringify(page) !== savedPage;
+  // The window's title and its unsaved mark are told only when they change: each telling redraws the taskbar, which
+  // at every key was a good part of a key's time in a long document.
+  let shownDirty: boolean | null = null;
+  let shownLabel: string | null = null;
   function refresh(): void {
     const dirty = isDirty();
-    app.setDirty(dirty);
-    app.setTitle(label);
+    if (dirty !== shownDirty) app.setDirty(dirty);
+    if (label !== shownLabel) app.setTitle(label);
+    shownDirty = dirty;
+    shownLabel = label;
     if (!dirty) recovery.drop();
   }
 
@@ -1332,6 +1387,16 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
         await shell.dialogs.alert('That file is too big', `Documents up to ${formatSize(MAX_FILE_BYTES)} can be opened.`);
         return;
       }
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      // Read first: a file Write cannot open (an older .doc, a damaged one) is said so and not copied into Documents.
+      try {
+        await readDocumentFile(bytes, file.name);
+      } catch (error) {
+        const why = knownProblem(error);
+        if (why === null) await shell.report('Could not open that file', error);
+        else await shell.dialogs.alert('Write cannot open that file', `${why} Nothing was copied into Documents.`);
+        return;
+      }
       try {
         let taken: string[] = [];
         try {
@@ -1339,7 +1404,7 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
         } catch {
           // Writing says so if Documents is not there.
         }
-        const entry = await shell.fs.writeFile(joinPath('/Documents', uniqueName(file.name, taken)), new Uint8Array(await file.arrayBuffer()), { mustBeNew: true });
+        const entry = await shell.fs.writeFile(joinPath('/Documents', uniqueName(file.name, taken)), bytes, { mustBeNew: true });
         shell.toast(`Copied “${file.name}” into Documents as “${entry.name}” and opened it.`);
         await shell.openApp('write', joinPath('/Documents', entry.name));
       } catch (error) {
@@ -1464,13 +1529,23 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
 
   /** Letters from a list: the people in Contacts. */
   async function listFromContacts(): Promise<void> {
+    // Contacts keeps everyone in this one file (the Contacts app's own), read as Contacts reads it (UTF-8 or UTF-16).
+    const path = '/Documents/Contacts.vcf';
+    let text: string;
     try {
-      // Contacts keeps everyone in this one file (the Contacts app's own).
-      const text = await shell.fs.readText('/Documents/Contacts.vcf');
-      useList(contactsList(text));
-    } catch {
-      await shell.dialogs.alert('No contacts yet', 'Contacts keeps its people in Documents/Contacts.vcf, and there is no such file yet. Add people in Contacts first, or choose a spreadsheet.');
+      const entry = await shell.fs.stat(path);
+      if (!entry) {
+        await shell.dialogs.alert('No contacts yet', 'Contacts keeps its people in Documents/Contacts.vcf, and there is no such file yet. Add people in Contacts first, or choose a spreadsheet.');
+        return;
+      }
+      if (entry.kind !== 'file') throw new Error('Documents/Contacts.vcf is a folder, not a file.');
+      if (entry.size > MAX_RECORD_FILE) throw new Error(`Documents/Contacts.vcf is ${formatSize(entry.size)}; letters take a contacts file of up to ${formatSize(MAX_RECORD_FILE)}.`);
+      text = decodeRecordText(await shell.fs.readFile(path));
+    } catch (error) {
+      await shell.dialogs.alert('Contacts could not be read', `Write could not read Documents/Contacts.vcf: ${error instanceof Error ? error.message : String(error)} Nothing was changed.`);
+      return;
     }
+    useList(contactsList(text));
   }
   /** Letters from a list: a spreadsheet (.xlsx, .sheet, .csv), its first row naming the columns. */
   async function listFromSheet(): Promise<void> {
@@ -2049,6 +2124,58 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
   }, app.signal);
   const tabsRow = h('div', { class: 'ribbon-tabs', role: 'tablist', 'aria-label': 'Toolbar' }, fileBtn, ...tabButtons);
 
+  // The ribbon by keyboard (the Modern look): F10, or Alt pressed and let go on its own, goes to the tab shown; Left and
+  // Right move between the tabs (showing each), Down or Tab goes into its buttons, Escape goes back to the page.
+  const shownTabs = (): HTMLElement[] => [fileBtn, ...tabButtons.filter(b => !b.hidden)];
+  function toRibbon(): void {
+    const at = tabButtons[TAB_ORDER.indexOf(tab)];
+    (at && !at.hidden ? at : tabButtons[0]).focus();
+  }
+  on(tabsRow, 'keydown', (e: KeyboardEvent) => {
+    const all = shownTabs();
+    const i = all.indexOf(document.activeElement as HTMLElement);
+    if (i < 0) return;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+      e.preventDefault();
+      const next = all[(i + (e.key === 'ArrowRight' ? 1 : all.length - 1)) % all.length];
+      next.focus();
+      const t = TAB_ORDER[tabButtons.indexOf(next as HTMLButtonElement)];
+      if (t) showTab(t);
+    } else if (e.key === 'ArrowDown' && all[i] !== fileBtn) {
+      e.preventDefault();
+      ribbon.querySelector<HTMLElement>('button:not([disabled]), select, input')?.focus();
+    } else if (e.key === 'ArrowDown' && all[i] === fileBtn) {
+      e.preventDefault();
+      fileBtn.click();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      view.focus();
+    }
+  }, app.signal);
+  on(ribbon, 'keydown', (e: KeyboardEvent) => {
+    if (e.key === 'Escape' && look === 'modern' && !palette) {
+      e.preventDefault();
+      view.focus();
+    }
+  }, app.signal);
+  let altAlone = false;
+  on(app.root, 'keydown', (e: KeyboardEvent) => {
+    altAlone = e.key === 'Alt' && !e.ctrlKey && !e.shiftKey && !e.metaKey;
+    if (look !== 'modern' || document.querySelector('.dialog, .menu')) return;
+    if (e.key === 'F10' && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) {
+      e.preventDefault();
+      toRibbon();
+    }
+  }, app.signal);
+  on(app.root, 'keyup', (e: KeyboardEvent) => {
+    const alone = altAlone && e.key === 'Alt';
+    altAlone = false;
+    if (!alone || look !== 'modern' || document.querySelector('.dialog, .menu')) return;
+    e.preventDefault();
+    if (tabsRow.contains(document.activeElement)) view.focus();
+    else toRibbon();
+  }, app.signal);
+
   // ---- Status bar ------------------------------------------------------------------------------------------------------
 
   const pageLabel = h('span', {});
@@ -2065,13 +2192,26 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
   }
   let wordsFor: any = null;
   let wordsTimer = 0;
+  let statusTimer = 0;
+  let wordsAll = 0;
+  let wordsSel: any = null;
+  /** The words of the whole document; with words chosen, "12 of 345 words" (as Word shows it). */
+  function showWords(): void {
+    const sel = view.state.selection;
+    const chosen = sel.empty ? -1 : countWords(view.state.doc.textBetween(sel.from, sel.to, '\n', ' '));
+    wordsLabel.textContent = chosen >= 0
+      ? `${chosen.toLocaleString()} of ${wordsAll.toLocaleString()} ${wordsAll === 1 ? 'word' : 'words'}`
+      : `${wordsAll.toLocaleString()} ${wordsAll === 1 ? 'word' : 'words'}`;
+  }
   function countNow(): void {
     wordsTimer = 0;
-    const n = countWords(view.state.doc.textBetween(0, view.state.doc.content.size, '\n', ' '));
-    wordsLabel.textContent = `${n.toLocaleString()} ${n === 1 ? 'word' : 'words'}`;
+    wordsAll = countWords(view.state.doc.textBetween(0, view.state.doc.content.size, '\n', ' '));
+    showWords();
   }
   function syncStatus(): void {
     pageLabel.textContent = `Page ${Math.min(pageCount, pageOfCursor(view, paper, box()))} of ${pageCount}`;
+    if (wordsSel !== view.state.selection && wordsFor === view.state.doc && !wordsTimer) showWords();
+    wordsSel = view.state.selection;
     if (wordsFor !== view.state.doc) {
       wordsFor = view.state.doc;
       if (wordsTimer) clearTimeout(wordsTimer);
@@ -2121,7 +2261,15 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
     press(spellBtn, spell);
     press(classicBtn, look === 'classic');
     press(modernBtn, look === 'modern');
-    syncStatus();
+    // In a very long document, finding the cursor's page makes the browser lay the whole document out again: the status
+    // bar waits for a short pause in the typing rather than slow every key.
+    if (view.state.doc.childCount > LONG_DOC_BLOCKS) {
+      if (statusTimer) clearTimeout(statusTimer);
+      statusTimer = window.setTimeout(() => {
+        statusTimer = 0;
+        if (!app.signal.aborted) syncStatus();
+      }, 150);
+    } else syncStatus();
   }
   // Choosing a picture opens its tab once; after that the person picks the tab they want.
   let lastPicture: any = null;
@@ -2414,6 +2562,10 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
     } else if (event.key === 'Escape' && palette) {
       closePalette();
       view.focus();
+    } else if (event.key === 'Escape' && !findPanel.hidden && dom.contains(event.target as Node) && !document.querySelector('.dialog, .menu')) {
+      // Escape in the page closes the Find bar too (as it does in the bar itself), and the marks go.
+      event.preventDefault();
+      closeFind();
     }
   }, app.signal);
   on(document, 'pointerdown', (event: PointerEvent) => {
@@ -2423,11 +2575,34 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
     if (layoutFrame) cancelAnimationFrame(layoutFrame);
     if (layoutTimer) clearTimeout(layoutTimer);
     if (wordsTimer) clearTimeout(wordsTimer);
+    if (statusTimer) clearTimeout(statusTimer);
     view.destroy();
   });
 
   if (recovered) shell.toast(`Recovered “${label}”: a copy kept before it was saved. Save it to keep it (Save asks where).`);
-  else void recovery.offer(false, { untouched: () => !path && !isDirty() && !view.state.doc.textContent, close: () => app.close() });
+  else {
+    // The page takes keys only once any "not saved" offer has been made and answered: shown a moment after the window
+    // opens, while the person was already typing, a key could have answered it ("Open it" is its first button).
+    checkingCopies = true;
+    view.setProps({});
+    // And if the offer shows, its Later button has the keys (a space or Enter typed on regardless only puts it off).
+    const watch = new MutationObserver(() => {
+      const offerBox = [...document.querySelectorAll<HTMLElement>('.dialog')].find(d => d.querySelector('.recover-offer'));
+      const later = offerBox ? [...offerBox.querySelectorAll<HTMLButtonElement>('button')].find(b => b.textContent?.trim() === 'Later') : undefined;
+      if (later) {
+        watch.disconnect();
+        later.focus();
+      }
+    });
+    watch.observe(document.body, { childList: true, subtree: true });
+    void recovery.offer(false, { untouched: () => !path && !isDirty() && !view.state.doc.textContent, close: () => app.close() }).finally(() => {
+      watch.disconnect();
+      checkingCopies = false;
+      if (app.signal.aborted) return;
+      view.setProps({});
+      if (!document.querySelector('.dialog')) view.focus();
+    });
+  }
 
   if (lost.length || keptParts.length) {
     const parts: Node[] = [];

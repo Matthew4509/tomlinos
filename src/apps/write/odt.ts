@@ -506,7 +506,7 @@ export async function readOdt(bytes: Uint8Array): Promise<OdtRead> {
     const words: string[] = [];
     const walk = (e: XmlEl) => {
       for (const part of mixedOf(e)) {
-        if (typeof part === 'string') words.push(part);
+        if (typeof part === 'string') words.push(part.replace(/&/g, '&&')); // A typed & stays one (&P would be the page number).
         else if (part.name === 'page-number') words.push('&P');
         else if (part.name === 'page-count') words.push('&N');
         else if (part.name === 'tab') words.push('\t');

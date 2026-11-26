@@ -21,6 +21,22 @@ export const MOST_HITS = 5000;
 
 const isWordChar = (c: string | undefined) => !!c && /[\p{L}\p{N}_]/u.test(c);
 
+/** The character that ends just before `i` (a letter outside the basic plane is two UTF-16 units, taken together). */
+const charBefore = (s: string, i: number): string | undefined => {
+  if (i <= 0) return undefined;
+  const low = s.charCodeAt(i - 1);
+  if (low >= 0xdc00 && low <= 0xdfff && i >= 2) {
+    const high = s.charCodeAt(i - 2);
+    if (high >= 0xd800 && high <= 0xdbff) return s.slice(i - 2, i);
+  }
+  return s[i - 1];
+};
+/** The character that starts at `i` (both halves of one outside the basic plane). */
+const charAt = (s: string, i: number): string | undefined => {
+  const cp = s.codePointAt(i);
+  return cp === undefined ? undefined : String.fromCodePoint(cp);
+};
+
 /**
  * Small letters, one for one: the text keeps its length, so a place found in it is the same place in the document.
  * (A letter whose small form is longer, such as Turkish İ, which is "i" and a dot, becomes its first letter.)
@@ -45,15 +61,23 @@ export function findAll(doc: any, query: string, opts: FindOptions, most = MOST_
     if (hits.length >= most) return false;
     if (!node.isTextblock) return true;
     // The paragraph's text, one character per position (anything not text stands as one character no word matches).
+    // Where those stand-ins are: a search never matches one (even for the same character typed as text), so a Replace
+    // never takes out a picture or a kept part.
     let text = '';
+    const objects: Array<[number, number]> = [];
     node.forEach((child: any) => {
-      text += child.isText ? child.text : '￼'.repeat(child.nodeSize);
+      if (child.isText) text += child.text;
+      else {
+        objects.push([text.length, text.length + child.nodeSize]);
+        text += '￼'.repeat(child.nodeSize);
+      }
     });
+    const onObject = (from: number, to: number) => objects.some(([a, b]) => a < to && b > from);
     const hay = opts.matchCase ? text : fold(text);
     let at = hay.indexOf(needle);
     while (at >= 0 && hits.length < most) {
       const end = at + needle.length;
-      if (!opts.wholeWord || (!isWordChar(text[at - 1]) && !isWordChar(text[end]))) hits.push({ from: pos + 1 + at, to: pos + 1 + end });
+      if (!onObject(at, end) && (!opts.wholeWord || (!isWordChar(charBefore(text, at)) && !isWordChar(charAt(text, end))))) hits.push({ from: pos + 1 + at, to: pos + 1 + end });
       at = hay.indexOf(needle, at + Math.max(1, needle.length));
     }
     return false;

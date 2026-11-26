@@ -228,6 +228,35 @@ test('WR-10b: an address with brackets saves and reads back whole', () => {
   assert.deepEqual(readMarkdown(writeMarkdown(doc)), doc, writeMarkdown(doc));
 });
 
+test('Find: the stand-in for a picture is never found (so Replace never deletes one); whole words count letters outside the basic plane', async () => {
+  const { findAll } = await import('../src/apps/write/find.ts');
+  const { buildSchema } = await import('../src/apps/write/schema.ts');
+  const pm = await import('../public/vendor/prosemirror.js' as string);
+  const schema = buildSchema(pm);
+  const doc = schema.nodeFromJSON({ type: 'doc', content: [
+    { type: 'paragraph', content: [{ type: 'text', text: 'a ' }, { type: 'field', attrs: { name: 'Name' } }, { type: 'text', text: ' b ￼ typed' }] },
+    { type: 'paragraph', content: [{ type: 'text', text: '\u{1D400}cat cat\u{1D400} cat' }] },
+  ] });
+  const hits = findAll(doc, '￼', { matchCase: false, wholeWord: false });
+  assert.equal(hits.length, 1, 'only the character typed as text, not the field');
+  assert.equal(doc.textBetween(hits[0].from, hits[0].to), '￼');
+  // 𝐀 (a mathematical bold capital A) is a letter: "𝐀cat" and "cat𝐀" are not the whole word "cat".
+  assert.equal(findAll(doc, 'cat', { matchCase: false, wholeWord: true }).length, 1);
+});
+
+test('A header typed in a LibreOffice file as "R&P Ltd" keeps its & (it is not the page number)', async () => {
+  const { readOdt } = await import('../src/apps/write/odt.ts');
+  const { fillLine } = await import('../src/apps/write/model.ts');
+  const { zipStore } = await import('../src/core/zip.ts');
+  const NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0"';
+  const styles = `<?xml version="1.0"?><office:document-styles ${NS}><office:master-styles><style:master-page style:name="Standard"><style:header><text:p>R&amp;P Ltd, page <text:page-number>1</text:page-number></text:p></style:header></style:master-page></office:master-styles></office:document-styles>`;
+  const content = `<?xml version="1.0"?><office:document-content ${NS}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>`;
+  const read = await readOdt(zipStore([{ name: 'mimetype', data: enc.encode('application/vnd.oasis.opendocument.text'), modified: 0 }, { name: 'content.xml', data: enc.encode(content), modified: 0 }, { name: 'styles.xml', data: enc.encode(styles), modified: 0 }]));
+  assert.equal(fillLine(read.page.header.c, 3, 9), 'R&P Ltd, page 3');
+  // Typed in Write's own box: && is one & there, and &P stays the page number.
+  assert.equal(fillLine('R&&P Ltd &P of &N', 2, 5), 'R&P Ltd 2 of 5');
+});
+
 test('CON-P1-11: letters from Contacts take the last word of a name as the family name ("Mary Ann Smith")', async () => {
   const { contactsList } = await import('../src/apps/write/merge.ts');
   const list = contactsList('BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Mary Ann Smith\r\nEND:VCARD\r\n');

@@ -89,6 +89,123 @@ export function pastedHtml(html: string): string {
 /** An element's CSS: its renamed (pasted) style attribute, or its own. */
 const styleOf = (el: HTMLElement): string | null => el.getAttribute('data-wp-style') ?? el.getAttribute('style');
 
+/** The typeface code is shown in (as Markdown's code blocks read). */
+export const CODE_FACE = 'Consolas';
+
+/** The lines of a block of code as written: a line break, a <br> or a line of its own (<div>) each starts a line. */
+function codeLines(el: Element): string[] {
+  const lines: string[] = [''];
+  const walk = (n: Node) => {
+    if (n.nodeType === 3) {
+      const parts = (n.nodeValue ?? '').replace(/\r\n?/g, '\n').split('\n');
+      parts.forEach((p, i) => {
+        if (i) lines.push('');
+        lines[lines.length - 1] += p.replace(/ /g, ' ');
+      });
+    } else if (n.nodeType === 1) {
+      const name = n.nodeName;
+      if (name === 'BR') {
+        lines.push('');
+        return;
+      }
+      const block = name === 'DIV' || name === 'P';
+      if (block && lines[lines.length - 1] !== '') lines.push('');
+      for (const c of [...n.childNodes]) walk(c);
+      if (block) lines.push('');
+    }
+  };
+  for (const c of [...el.childNodes]) walk(c);
+  while (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
+  return lines;
+}
+
+/**
+ * Pasted HTML made ready for the editor, on an inert copy (DOMParser: nothing in it runs or loads):
+ * - Word's lists, which it copies as paragraphs with a "mso-list" style and the bullet or number written in front, are
+ *   lists again (deeper levels inside the item above);
+ * - a block of code (<pre>, or lines kept as written in a code typeface) is a paragraph a line, in the code typeface,
+ *   its spaces kept, as a Markdown code block reads.
+ */
+export function tidyPasted(doc: Document): void {
+  // Code first (a list item never holds a <pre> in Word's copies).
+  const codeBlocks = [...doc.body.querySelectorAll<HTMLElement>('pre, [data-wp-style*="white-space"]')].filter(el => {
+    if (el.parentElement?.closest('pre, [data-wp-code-done]')) return false;
+    if (el.nodeName === 'PRE') return true;
+    const css = readCss(styleOf(el));
+    return /^pre/.test(css['white-space'] ?? '') && /mono|consolas|courier|menlo|monaco/i.test(css['font-family'] ?? '') && el.nodeName === 'DIV';
+  });
+  for (const el of codeBlocks) {
+    el.setAttribute('data-wp-code-done', '');
+    const frag = doc.createDocumentFragment();
+    for (const line of codeLines(el)) {
+      const p = doc.createElement('p');
+      p.setAttribute('data-wp-code', '');
+      p.setAttribute('data-wp-style', 'margin-bottom: 0pt');
+      if (line) {
+        const span = doc.createElement('span');
+        span.setAttribute('data-wp-style', `font-family: ${CODE_FACE}`);
+        span.textContent = line;
+        p.append(span);
+      }
+      frag.append(p);
+    }
+    el.replaceWith(frag);
+  }
+
+  // Word's lists.
+  const isListPara = (n: Node | null): n is HTMLElement => !!n && n.nodeType === 1 && /^(P|H[1-6])$/.test(n.nodeName) && /mso-list\s*:\s*l\d+\s+level\d+/i.test(styleOf(n as HTMLElement) ?? '');
+  const nextEl = (n: Node): Node | null => {
+    let x = n.nextSibling;
+    while (x && x.nodeType !== 1 && !(x.nodeValue ?? '').trim()) x = x.nextSibling;
+    return x;
+  };
+  const firstParas = [...doc.body.querySelectorAll<HTMLElement>('p, h1, h2, h3, h4, h5, h6')].filter(el => isListPara(el) && !isListPara((() => {
+    let x = el.previousSibling;
+    while (x && x.nodeType !== 1 && !(x.nodeValue ?? '').trim()) x = x.previousSibling;
+    return x;
+  })()));
+  for (const first of firstParas) {
+    const run: HTMLElement[] = [];
+    for (let n: Node | null = first; isListPara(n); n = nextEl(n)) run.push(n);
+    const stack: Array<{ list: HTMLElement; level: number }> = [];
+    const outer: HTMLElement[] = [];
+    for (const para of run) {
+      const level = Number(/level(\d+)/i.exec(styleOf(para) ?? '')?.[1] ?? 1);
+      // The bullet or number Word wrote in front (in a part marked to be ignored), and the conditional comments round it.
+      let mark = '';
+      for (const ignore of [...para.querySelectorAll<HTMLElement>('[data-wp-style], [style]')]) {
+        if (/mso-list\s*:\s*ignore/i.test(styleOf(ignore) ?? '') && ignore.isConnected) {
+          mark += ignore.textContent ?? '';
+          ignore.remove();
+        }
+      }
+      for (const c of [...para.childNodes]) if (c.nodeType === 8) c.remove();
+      mark = mark.replace(/ /g, ' ').trim();
+      const ordered = /^\(?[0-9a-zA-Z]{1,7}[.)]$/.test(mark);
+      while (stack.length && stack[stack.length - 1].level > level) stack.pop();
+      let top = stack[stack.length - 1];
+      if (!top || top.level < level || (top.list.nodeName === 'OL') !== ordered) {
+        if (top && top.level === level) stack.pop();
+        const list = doc.createElement(ordered ? 'ol' : 'ul');
+        const start = /^\(?(\d+)/.exec(mark)?.[1];
+        if (ordered && start && start !== '1') list.setAttribute('start', start);
+        const parent = stack[stack.length - 1];
+        if (parent) (parent.list.lastElementChild ?? parent.list).append(list);
+        else outer.push(list);
+        top = { list, level };
+        stack.push(top);
+      }
+      const li = doc.createElement('li');
+      const p = doc.createElement('p');
+      p.append(...para.childNodes);
+      li.append(p);
+      top.list.append(li);
+    }
+    first.before(...outer);
+    for (const para of run) para.remove();
+  }
+}
+
 /** "font-size: 12pt; color: red" as { 'font-size': '12pt', color: 'red' } (names in lower case, values trimmed). */
 export function readCss(text: string | null | undefined): Record<string, string> {
   const out: Record<string, string> = {};
@@ -257,7 +374,8 @@ export function buildSchema(pm: PM): any {
         content: 'inline*',
         group: 'block',
         attrs: pAttrs,
-        parseDOM: [pRule('p', null), pRule('h1', 'h1'), pRule('h2', 'h2'), pRule('h3', 'h3'), pRule('h4', 'h4'), pRule('h5', 'h5'), pRule('h6', 'h6')],
+        // A line of pasted code (tidyPasted): its spaces kept, no space after it.
+        parseDOM: [{ tag: 'p[data-wp-code]', preserveWhitespace: 'full', getAttrs: () => ({ style: 'normal', after: 0 }) }, pRule('p', null),pRule('h1', 'h1'), pRule('h2', 'h2'), pRule('h3', 'h3'), pRule('h4', 'h4'), pRule('h5', 'h5'), pRule('h6', 'h6')],
         toDOM: (node: any) => {
           const css = paraCss(node.attrs);
           const attrs: Record<string, string> = { class: `wp-${node.attrs.style}` };
