@@ -1,5 +1,5 @@
-// The Panel Overview's Today tile: where each of today's events stands against the clock (to come, on now, over).
-// Pure, so the tests can give it any time.
+// The Panel Overview's Today tile: where each of today's events stands against the clock (to come, on now, over), and
+// a refresh that never drops a change made while one is under way. Pure, so the tests can give it any time.
 import { dateKey, type CalEvent } from '../../core/ical.ts';
 
 /** Minutes from now to the start of an event's showing on `day` (negative once started), or null for all-day events. */
@@ -21,6 +21,33 @@ export function standing(e: CalEvent, day: string, now: Date): { to: number | nu
   const to = minutesTo(e, day, now);
   const left = endsIn(e, day, now);
   return { to, live: to !== null && to <= 0 && left > 0, done: to !== null && left <= 0 };
+}
+
+/**
+ * A refresh asked for while one is under way runs once more after it, so the last change is always shown (two quick
+ * changes to the calendar file would otherwise leave the second one unseen). Asks made meanwhile are one more run.
+ */
+export function latestRun(run: () => Promise<void>): () => Promise<void> {
+  let running: Promise<void> | null = null;
+  let again = false;
+  const go = async (): Promise<void> => {
+    try {
+      do {
+        again = false;
+        await run();
+      } while (again);
+    } finally {
+      running = null;
+    }
+  };
+  return () => {
+    if (running) {
+      again = true;
+      return running;
+    }
+    running = go();
+    return running;
+  };
 }
 
 const two = (n: number) => String(n).padStart(2, '0');

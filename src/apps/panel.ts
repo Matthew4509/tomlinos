@@ -17,7 +17,7 @@ import { APPS } from './catalog.ts';
 import { ChatSession } from './chat/session.ts';
 import { joinPath } from '../fs/names.ts';
 import { dayName, listPads, padLabel, PAD_FOLDER, readPad, savePadFile } from './panel/scratchpad.ts';
-import { standing } from './panel/today.ts';
+import { latestRun, standing } from './panel/today.ts';
 import { saveOver } from '../shell/savefile.ts';
 import { nextFor, parseProjects, PROJECTS_PATH, shortTitle, sortProjects, type Project } from './projects/data.ts';
 
@@ -505,19 +505,13 @@ export const panelApp: AppDef = {
       if (!found.length) recentList.append(h('p', { class: 'panel-empty' }, 'No files yet in Desktop, Documents, Pictures, Music or Videos.'));
     }
 
-    let overviewBusy = false;
-    async function refreshOverview(): Promise<void> {
-      if (overviewBusy) return;
-      overviewBusy = true;
-      try {
-        await Promise.all([readCalendar(), readProjects()]);
-        renderToday();
-        renderFocus();
-        await renderRecent();
-      } finally {
-        overviewBusy = false;
-      }
-    }
+    // One refresh at a time; a change seen during one is read again right after it, so the tiles never stay stale.
+    const refreshOverview = latestRun(async () => {
+      await Promise.all([readCalendar(), readProjects()]);
+      renderToday();
+      renderFocus();
+      await renderRecent();
+    });
 
     // The Overview's chat is the Chat app itself, in the right-hand column (the advanced layout).
     host('chat', chatArea, () => undefined, () => undefined);

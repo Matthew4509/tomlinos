@@ -1,9 +1,10 @@
-// The Panel Overview's Today tile (src/apps/panel/today.ts): where an event stands against an injected clock.
+// The Panel Overview's Today tile (src/apps/panel/today.ts): where an event stands against an injected clock, and a
+// refresh that never drops a change made while one is under way.
 // Run: node --test test/panel-today.test.ts
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { eventsOn, parseIcs, type CalEvent } from '../src/core/ical.ts';
-import { standing } from '../src/apps/panel/today.ts';
+import { latestRun, standing } from '../src/apps/panel/today.ts';
 
 const ev = (over: Partial<CalEvent>): CalEvent => ({ uid: 'x', title: 'X', date: '2026-11-02', start: '09:00', end: '10:00', notes: '', repeat: 'none', remind: -1, ...over });
 
@@ -29,4 +30,27 @@ test('the Today tile: a daytime event is to come, on now, then over; one with no
   assert.equal(standing(ev({ end: '' }), '2026-11-02', new Date(2026, 10, 2, 9, 59)).live, true);
   assert.equal(standing(ev({ end: '' }), '2026-11-02', new Date(2026, 10, 2, 10, 0)).done, true);
   assert.deepEqual(standing(ev({ start: '', end: '' }), '2026-11-02', new Date(2026, 10, 2, 12, 0)), { to: null, live: false, done: false });
+});
+
+test('PN-P1-4: two quick calendar changes: the refresh asked for during the first still runs, so the second is shown', async () => {
+  let file = 'one';
+  let shown = '';
+  let release = () => {};
+  let runs = 0;
+  const refresh = latestRun(async () => {
+    runs++;
+    const read = file;
+    if (runs === 1) await new Promise<void>(r => (release = r));
+    shown = read;
+  });
+  const first = refresh();
+  file = 'two';
+  const second = refresh();
+  const third = refresh();
+  release();
+  await Promise.all([first, second, third]);
+  assert.equal(shown, 'two');
+  assert.equal(runs, 2, 'asks made during one run make one more run, not one each');
+  await refresh();
+  assert.equal(runs, 3, 'a later ask runs again');
 });
