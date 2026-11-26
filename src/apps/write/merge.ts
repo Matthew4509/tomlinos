@@ -19,9 +19,13 @@ export const CONTACT_COLUMNS = ['Name', 'First name', 'Last name', 'Organisation
 /** The people in a contacts file (.vcf) as rows. */
 export function contactsList(vcf: string): MergeList {
   const rows = parseVcf(vcf).map(c => {
-    const words = c.name.trim().split(/\s+/);
+    // With no given and family names of its own, a name's last word is the family name and the words before it the
+    // given names ("Mary Ann Smith"); a name of one word is a given name.
+    const words = c.name.trim().split(/\s+/).filter(Boolean);
+    const given = words.length > 1 ? words.slice(0, -1).join(' ') : words[0] ?? '';
+    const family = words.length > 1 ? words[words.length - 1] : '';
     return {
-      Name: c.name, 'First name': c.given ?? words[0] ?? '', 'Last name': c.family ?? words.slice(1).join(' '), Organisation: c.org, Email: c.emails[0] ?? '',
+      Name: c.name, 'First name': c.given ? c.given : given, 'Last name': c.given ? c.family ?? '' : family, Organisation: c.org, Email: c.emails[0] ?? '',
       Phone: c.phones[0] ?? '', Address: c.address, Birthday: c.birthday, Notes: c.notes,
     };
   });

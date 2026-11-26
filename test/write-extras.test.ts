@@ -87,11 +87,11 @@ test('a contents page: Word’s TOC field with each heading and its page, read b
 test('merge fields both ways, and letters from Contacts and from a spreadsheet', async () => {
   const letter: NodeJSON = { type: 'doc', content: [p(t('Dear '), { type: 'field', attrs: { name: 'First name' } }, t(',')), p(t('We will call '), { type: 'field', attrs: { name: 'Phone' }, marks: [{ type: 'strong' }] })] };
   assert.deepEqual(fieldsIn(letter), ['First name', 'Phone']);
-  // Word's MERGEFIELD (names with spaces become _), read back as fields.
+  // Word's MERGEFIELD (a name with a space in quotes, as Word writes it), read back as the same fields.
   const bytes = await writeDocx(letter, page);
-  assert.ok((await files(bytes)).get('word/document.xml')?.includes('<w:fldSimple w:instr=" MERGEFIELD First_name ">'));
+  assert.ok((await files(bytes)).get('word/document.xml')?.includes('<w:fldSimple w:instr=" MERGEFIELD &quot;First name&quot; ">'));
   const back = await readDocx(bytes);
-  assert.deepEqual(fieldsIn(back.doc), ['First_name', 'Phone']);
+  assert.deepEqual(fieldsIn(back.doc), ['First name', 'Phone']);
   const vcf = 'BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Ann Lee\r\nTEL:0400 111 222\r\nEND:VCARD\r\nBEGIN:VCARD\r\nVERSION:3.0\r\nFN:Bob\r\nEND:VCARD\r\n';
   const people = contactsList(vcf);
   assert.equal(people.rows.length, 2);

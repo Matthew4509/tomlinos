@@ -4,7 +4,7 @@
 // tables; PNG and JPEG pictures. Read only: Write saves it as a Word document. Our own reader; no browser needed except
 // to keep the pictures (images.ts). An .rtf is read character by character, never with patterns that could run long.
 import { addPicture } from './images.ts';
-import { STYLES, type MarkJSON, type NodeJSON } from './model.ts';
+import { linkHref, STYLES, type MarkJSON, type NodeJSON } from './model.ts';
 
 export class RtfProblem extends Error {}
 
@@ -41,13 +41,15 @@ interface Para {
 }
 
 /** What a group is: ordinary text, or one of the parts read differently or skipped. */
-type Dest = 'text' | 'skip' | 'fonttbl' | 'colortbl' | 'pict' | 'listmark';
+type Dest = 'text' | 'skip' | 'fonttbl' | 'colortbl' | 'pict' | 'listmark' | 'fldinst';
 
 interface State {
   dest: Dest;
   chars: Chars;
   /** How many characters a \uN stands in for (\ucN). */
   uc: number;
+  /** The address of the link (a HYPERLINK field) the words of this group are in. */
+  href?: string;
 }
 
 const plainChars = (size: number, font: number): Chars => ({ bold: false, italic: false, underline: false, strike: false, vert: null, font, size, colour: 0, highlight: 0, hidden: false });
@@ -94,6 +96,8 @@ export function readRtf(bytes: Uint8Array): RtfRead {
   let entry = '';
   let colour = { r: 0, g: 0, b: 0, set: false };
   let fontNo = 0;
+  // The code of the field being read ({\*\fldinst HYPERLINK "..."}).
+  let fieldCode = '';
 
   const stack: State[] = [];
   let st: State = { dest: 'text', chars: plainChars(defSize, defFont), uc: 1 };
@@ -115,10 +119,16 @@ export function readRtf(bytes: Uint8Array): RtfRead {
     if (c.underline) out.push({ type: 'underline' });
     if (c.strike) out.push({ type: 'strike' });
     if (c.vert) out.push({ type: 'vert', attrs: { pos: c.vert } });
+    if (st.href) out.push({ type: 'link', attrs: { href: st.href } });
     return out;
   };
   const addText = (text: string): void => {
-    if (!text || st.chars.hidden) return;
+    if (!text) return;
+    if (st.dest === 'fldinst') {
+      fieldCode += text;
+      return;
+    }
+    if (st.chars.hidden) return;
     if (st.dest === 'listmark') {
       listMark += text;
       return;
@@ -338,6 +348,13 @@ export function readRtf(bytes: Uint8Array): RtfRead {
     if (word === 'pict') return 'pict';
     if (word === 'pntext' || word === 'listtext') return 'listmark';
     if (word === 'shppict') return null;
+    // A field's code: read for a link's address (its shown words come after, in \fldrslt).
+    if (word === 'fldinst') {
+      fieldCode = '';
+      return 'fldinst';
+    }
+    // The words in a text box (inside a shape, whose other parts are skipped): kept, as paragraphs of their own.
+    if (word === 'shptxt') return 'text';
     if (SKIP.has(word)) {
       if (word === 'header' || word === 'footer' || word.startsWith('header') || word.startsWith('footer')) dropped.add('headers and footers');
       if (word === 'footnote') dropped.add('footnotes');
@@ -357,7 +374,7 @@ export function readRtf(bytes: Uint8Array): RtfRead {
     if (ch === '{') {
       flushBytes();
       stack.push(st);
-      st = { dest: st.dest, chars: { ...st.chars }, uc: st.uc };
+      st = { dest: st.dest, chars: { ...st.chars }, uc: st.uc, href: st.href };
       if (stack.length > 2000) throw new RtfProblem('This RTF file is nested too deeply to read.');
       groupStart = true;
       starred = false;
@@ -379,6 +396,17 @@ export function readRtf(bytes: Uint8Array): RtfRead {
           st = saved;
         }
         pict = { kind: '', hex: [], w: 0, h: 0, sx: 100, sy: 100 };
+      }
+      if (st.dest === 'fldinst' && (stack[stack.length - 1]?.dest ?? 'text') !== 'fldinst') {
+        // A link field: its address goes on the field's group, so the shown words (\fldrslt) carry it.
+        const outer = stack[stack.length - 1];
+        const hl = /^\s*HYPERLINK\s+"([^"]+)"/i.exec(fieldCode);
+        if (outer && /^\s*HYPERLINK\b/i.test(fieldCode) && !/\\l\b/.test(fieldCode)) {
+          const href = hl ? linkHref(hl[1]) : null;
+          if (href) outer.href = href;
+          else dropped.add('links to addresses Write does not open (their words are kept)');
+        }
+        fieldCode = '';
       }
       st = stack.pop() ?? st;
       groupStart = false;

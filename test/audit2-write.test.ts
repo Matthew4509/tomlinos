@@ -111,7 +111,7 @@ test('WR-18: letters from a CSV list show each value as written (a postcode keep
 
 // ---- P1 -------------------------------------------------------------------------------------------------------------
 
-test('WR-4: a link added to a Word file whose relationships part is written empty (self-closing) is kept through a save', { todo: 'P1' }, async () => {
+test('WR-4: a link added to a Word file whose relationships part is written empty (self-closing) is kept through a save', async () => {
   const rels = `<?xml version="1.0"?><Relationships xmlns="${PKG_REL}"/>`;
   const read = await readDocx(await wordFile('<w:p><w:r><w:t>x</w:t></w:r></w:p>', { 'word/_rels/document.xml.rels': rels }));
   const doc: NodeJSON = { type: 'doc', content: [para([text('a link', [{ type: 'link', attrs: { href: 'https://example.test/' } }])])] };
@@ -120,7 +120,7 @@ test('WR-4: a link added to a Word file whose relationships part is written empt
   assert.match(relsOut, /https:\/\/example\.test\//, 'the link has its relationship (the main part names an id that is not there)');
 });
 
-test('WR-5: a mail merge field whose name has a space (MERGEFIELD "First name") keeps its whole name', { todo: 'P1' }, async () => {
+test('WR-5: a mail merge field whose name has a space (MERGEFIELD "First name") keeps its whole name', async () => {
   const read = await readDocx(await wordFile('<w:p><w:fldSimple w:instr=" MERGEFIELD &quot;First name&quot; "><w:r><w:t>«First name»</w:t></w:r></w:fldSimple></w:p>'));
   const field = read.doc.content![0].content![0];
   assert.equal(field.attrs?.name, 'First name');
@@ -129,7 +129,7 @@ test('WR-5: a mail merge field whose name has a space (MERGEFIELD "First name") 
   assert.equal(plainText(filled), 'Ann');
 });
 
-test('WR-6: a footnote from a Word file copied and pasted is two footnotes, not two references to one', { todo: 'P1' }, async () => {
+test('WR-6: a footnote from a Word file copied and pasted is two footnotes, not two references to one', async () => {
   const notes = `<?xml version="1.0"?><w:footnotes ${W_NS}><w:footnote w:type="separator" w:id="-1"><w:p/></w:footnote><w:footnote w:type="continuationSeparator" w:id="0"><w:p/></w:footnote><w:footnote w:id="1"><w:p><w:r><w:t>The note</w:t></w:r></w:p></w:footnote></w:footnotes>`;
   const rels = `<?xml version="1.0"?><Relationships xmlns="${PKG_REL}"><Relationship Id="rId9" Type="${OFFICE_REL}/footnotes" Target="footnotes.xml"/></Relationships>`;
   const read = await readDocx(await wordFile('<w:p><w:r><w:t>a</w:t></w:r><w:r><w:footnoteReference w:id="1"/></w:r></w:p>', { 'word/footnotes.xml': notes, 'word/_rels/document.xml.rels': rels }));
@@ -139,14 +139,14 @@ test('WR-6: a footnote from a Word file copied and pasted is two footnotes, not 
   assert.equal(new Set(ids).size, ids.length, `footnote references: ${ids.join(', ')}`);
 });
 
-test('WR-9: words in a text box of an RTF file are kept, or said to be left out', { todo: 'P1' }, () => {
+test('WR-9: words in a text box of an RTF file are kept, or said to be left out', () => {
   const rtf = String.raw`{\rtf1\ansi\deff0{\fonttbl{\f0 Calibri;}}\pard Before box\par{\shp{\*\shpinst\shpleft0\shptop0{\sp{\sn shapeType}{\sv 202}}{\shptxt \pard Words in the box\par}}{\shprslt{\*\do\dobxcolumn}}}\pard After box\par}`;
   const read = readRtf(enc.encode(rtf));
   const words = plainText(read.doc);
   assert.ok(words.includes('Words in the box') || read.dropped.length > 0, `shown: ${JSON.stringify(words)}, said: ${JSON.stringify(read.dropped)}`);
 });
 
-test('WR-10: a Markdown link whose address has brackets (a Wikipedia page) keeps its address and words', { todo: 'P1' }, () => {
+test('WR-10: a Markdown link whose address has brackets (a Wikipedia page) keeps its address and words', () => {
   const src = 'See [Foo](https://en.wikipedia.org/wiki/Foo_(bar)) here.\n';
   const doc = readMarkdown(src);
   assert.equal(plainText(doc), 'See Foo here.', 'no stray bracket in the words');
@@ -154,17 +154,17 @@ test('WR-10: a Markdown link whose address has brackets (a Wikipedia page) keeps
   assert.equal(link?.marks?.find(m => m.type === 'link')?.attrs?.href, 'https://en.wikipedia.org/wiki/Foo_(bar)');
 });
 
-test('WR-11: a Markdown list item with a second paragraph stays one list (numbering does not start again)', { todo: 'P1' }, () => {
+test('WR-11: a Markdown list item with a second paragraph stays one list (numbering does not start again)', () => {
   const doc = readMarkdown('1. one\n2. two\n\n   more about two\n3. three\n');
   assert.equal(doc.content!.length, 1, `blocks: ${doc.content!.map(b => b.type).join(', ')}`);
 });
 
-test('WR-11b: a Markdown table written without outer pipes stays a table through Write', { todo: 'P1' }, () => {
+test('WR-11b: a Markdown table written without outer pipes stays a table through Write', () => {
   const doc = readMarkdown('a | b\n--|--\n1 | 2\n');
   assert.equal(doc.content![0].type, 'table', `read as ${doc.content![0].type}; saved back as ${JSON.stringify(writeMarkdown(doc))}`);
 });
 
-test('WR-19: the words LibreOffice shows for its fields (file name, input field, variable, metadata) are kept', { todo: 'P1' }, async () => {
+test('WR-19: the words LibreOffice shows for its fields (file name, input field, variable, metadata) are kept', async () => {
   const { readOdt } = await import('../src/apps/write/odt.ts');
   const { zipStore } = await import('../src/core/zip.ts');
   const NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"';
@@ -176,14 +176,61 @@ test('WR-19: the words LibreOffice shows for its fields (file name, input field,
 
 // ---- P2 -------------------------------------------------------------------------------------------------------------
 
-test('WR-12: a field named with a space keeps its name through a save and reopen', { todo: 'P2' }, async () => {
+test('WR-12: a field named with a space keeps its name through a save and reopen', async () => {
   const doc: NodeJSON = { type: 'doc', content: [para([{ type: 'field', attrs: { name: 'First name' } }])] };
   const back = await readDocx(await writeDocx(doc, defaultPage('en-GB'), 'x'));
   assert.equal(back.doc.content![0].content![0].attrs?.name, 'First name');
 });
 
-test('WR-15: an RTF link keeps its address', { todo: 'P2' }, () => {
+test('WR-15: an RTF link keeps its address', () => {
   const read = readRtf(enc.encode(String.raw`{\rtf1\ansi{\field{\*\fldinst HYPERLINK "https://a.test/"}{\fldrslt link words}}\par}`));
   const run = read.doc.content![0].content![0];
   assert.ok(run.marks?.some(m => m.type === 'link') || read.dropped.length > 0, 'the link is kept or said');
+});
+
+// ---- Round-2 fixes: more of the same paths --------------------------------------------------------------------------
+
+test('WR-15b: the RTF link keeps its exact address, and an ODT link (text:a) keeps its address too', async () => {
+  const read = readRtf(enc.encode(String.raw`{\rtf1\ansi Go {\field{\*\fldinst HYPERLINK "https://a.test/x"}{\fldrslt link words}} now\par}`));
+  const run = read.doc.content![0].content!.find(n => n.text === 'link words');
+  assert.equal(run?.marks?.find(m => m.type === 'link')?.attrs?.href, 'https://a.test/x');
+  assert.equal(plainText(read.doc), 'Go link words now');
+  const { readOdt } = await import('../src/apps/write/odt.ts');
+  const { zipStore } = await import('../src/core/zip.ts');
+  const NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:xlink="http://www.w3.org/1999/xlink"';
+  const content = `<?xml version="1.0"?><office:document-content ${NS}><office:body><office:text><text:p>See <text:a xlink:href="https://b.test/">the page</text:a>.</text:p></office:text></office:body></office:document-content>`;
+  const odt = await readOdt(zipStore([{ name: 'mimetype', data: enc.encode('application/vnd.oasis.opendocument.text'), modified: 0 }, { name: 'content.xml', data: enc.encode(content), modified: 0 }]));
+  const linked = odt.doc.content![0].content!.find(n => n.text === 'the page');
+  assert.equal(linked?.marks?.find(m => m.type === 'link')?.attrs?.href, 'https://b.test/');
+});
+
+test('WR-9b: the words of an RTF text box come through as their own paragraph, between the paragraphs around it', () => {
+  const rtf = String.raw`{\rtf1\ansi\pard Before box\par{\shp{\*\shpinst\shpleft0{\sp{\sn shapeType}{\sv 202}}{\shptxt \pard Words in the box\par}}}\pard After box\par}`;
+  assert.equal(plainText(readRtf(enc.encode(rtf)).doc), 'Before box\nWords in the box\nAfter box');
+});
+
+test('WR-11c: Markdown list items with second paragraphs, task boxes and indented code come back the same after a save', () => {
+  const doc = readMarkdown('1. one\n2. two\n\n   more about two\n3. three\n');
+  assert.equal(doc.content![0].content![1].content!.length, 2, 'item two has two paragraphs');
+  assert.deepEqual(readMarkdown(writeMarkdown(doc)), doc, `saved as ${JSON.stringify(writeMarkdown(doc))}`);
+  // Task boxes stay boxes, not escaped brackets.
+  assert.equal(writeMarkdown(readMarkdown('- [ ] milk\n- [x] bread\n')), '- [ ] milk\n- [x] bread\n');
+  // Code indented four spaces is code (in the code typeface, its own spaces kept) and saves as a code block.
+  const code = readMarkdown('Text\n\n    let a = 1;\n      b();\n\nAfter\n');
+  assert.equal(plainText(code), 'Text\nlet a = 1;\n  b();\nAfter');
+  assert.ok(writeMarkdown(code).includes('```\nlet a = 1;\n  b();\n```'), writeMarkdown(code));
+  // A table without outer pipes saves as a table, with its cells.
+  assert.equal(writeMarkdown(readMarkdown('a | b\n--|--\n1 | 2\n')), '| a | b |\n| --- | --- |\n| 1 | 2 |\n');
+});
+
+test('WR-10b: an address with brackets saves and reads back whole', () => {
+  const doc = readMarkdown('See [Foo](https://en.wikipedia.org/wiki/Foo_(bar)) here.\n');
+  assert.deepEqual(readMarkdown(writeMarkdown(doc)), doc, writeMarkdown(doc));
+});
+
+test('CON-P1-11: letters from Contacts take the last word of a name as the family name ("Mary Ann Smith")', async () => {
+  const { contactsList } = await import('../src/apps/write/merge.ts');
+  const list = contactsList('BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Mary Ann Smith\r\nEND:VCARD\r\n');
+  assert.equal(list.rows[0]['First name'], 'Mary Ann');
+  assert.equal(list.rows[0]['Last name'], 'Smith');
 });

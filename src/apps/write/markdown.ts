@@ -20,7 +20,22 @@ function unescapedAt(s: string, token: string, from: number): number {
   return -1;
 }
 
-/** Inline Markdown as text runs: **bold**, *italic* / _italic_, ~~struck~~, `code`, [words](address), \escapes. */
+/** Where a link's address that starts at `from` ends: the ")" that closes it, brackets inside it in pairs (Foo_(bar)). */
+function addressEnd(s: string, from: number): number {
+  let depth = 0;
+  for (let i = from; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === '\\') i++;
+    else if (ch === '(') depth++;
+    else if (ch === ')') {
+      if (depth === 0) return i;
+      depth--;
+    }
+  }
+  return -1;
+}
+
+/** Inline Markdown as text runs:**bold**, *italic* / _italic_, ~~struck~~, `code`, [words](address), \escapes. */
 export function inlineMd(text: string, base: MarkJSON[] = []): NodeJSON[] {
   const out: NodeJSON[] = [];
   // A very long line is taken as it is: looking for the end of each * in it could take minutes.
@@ -67,7 +82,7 @@ export function inlineMd(text: string, base: MarkJSON[] = []): NodeJSON[] {
       // A picture: its description stands in its place (Markdown pictures are links to other files).
       if (ch === '!' && s[i + 1] === '[') {
         const close = s.indexOf('](', i + 2);
-        const end = close > 0 ? s.indexOf(')', close + 2) : -1;
+        const end = close > 0 ? addressEnd(s, close + 2) : -1;
         if (close > 0 && end > 0) {
           plain += s.slice(i + 2, close);
           changing?.add('pictures (each shows as its description)');
@@ -77,7 +92,7 @@ export function inlineMd(text: string, base: MarkJSON[] = []): NodeJSON[] {
       }
       if (ch === '[') {
         const close = s.indexOf('](', i + 1);
-        const end = close > 0 ? s.indexOf(')', close + 2) : -1;
+        const end = close > 0 ? addressEnd(s, close + 2) : -1;
         if (close > 0 && end > 0) {
           flush();
           // A web or email address stays a link; anything else (a file next to it, a place in the page) is its words.
@@ -197,7 +212,30 @@ function readBlocks(source: string): NodeJSON {
       i += 2;
       continue;
     }
-    if (/^\s*\|/.test(line) && i + 1 < lines.length && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1])) {
+    // Code indented four spaces (or a tab), as a code block reads (a fenced one when saved).
+    if (/^( {4}|\t)/.test(line)) {
+      const code: string[] = [];
+      while (i < lines.length) {
+        if (/^( {4}|\t)/.test(lines[i]) && lines[i].trim()) {
+          code.push(lines[i++].replace(/^( {4}|\t)/, ''));
+          continue;
+        }
+        // Blank lines belong to the code only when more indented code follows them.
+        let j = i;
+        while (j < lines.length && !lines[j].trim()) j++;
+        if (j === i || j >= lines.length || !/^( {4}|\t)/.test(lines[j])) break;
+        while (i < j) {
+          code.push('');
+          i++;
+        }
+      }
+      for (const c of code) blocks.push(c.trim() ? { type: 'paragraph', attrs: { style: 'normal', after: 0 }, content: [{ type: 'text', text: c, marks: [{ type: 'font', attrs: { face: CODE_FACE } }] }] } : { type: 'paragraph', attrs: { style: 'normal', after: 0 } });
+      continue;
+    }
+    // A table: a row, then a row of dashes; the outer pipes may be left off ("a | b" over "--|--").
+    const pipeAt = (l: string) => /(?<!\\)\|/.test(l);
+    if ((/^\s*\|/.test(line) && i + 1 < lines.length && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1]))
+      || (pipeAt(line) && i + 1 < lines.length && pipeAt(lines[i + 1]) && /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/.test(lines[i + 1]))) {
       const rows: string[][] = [];
       // A table this size is far past any page; a crafted one (thousands by thousands) would fill the memory. Cells
       // past the 64th go into the 64th, and rows past 20,000 cells in all stay as their lines of text.
@@ -216,7 +254,7 @@ function readBlocks(source: string): NodeJSON {
       i += 2;
       let count = rows[0].length;
       const rest: string[] = [];
-      while (i < lines.length && /^\s*\|/.test(lines[i])) {
+      while (i < lines.length && lines[i].trim() && (/^\s*\|/.test(lines[i]) || pipeAt(lines[i]))) {
         if (rest.length) rest.push(lines[i++]);
         else {
           const row = cells(lines[i]);
@@ -252,16 +290,32 @@ function readBlocks(source: string): NodeJSON {
     }
     if (LIST.test(line)) {
       // Lists: an item's further lines are indented under it; a deeper marker starts a list inside it.
-      const items: Array<{ indent: number; ordered: boolean; start: number; text: string }> = [];
+      // An item's paragraphs: the first is on the marker's line; one after a blank line, indented under it, is another.
+      const items: Array<{ indent: number; ordered: boolean; start: number; paras: string[] }> = [];
+      // The list's sign (-, * or +; . or ) after a number): another sign after a blank line starts a new list.
+      const sign = LIST.exec(line)![2].slice(-1);
       while (i < lines.length) {
         const m = LIST.exec(lines[i]);
         if (m) {
-          items.push({ indent: m[1].length, ordered: /\d/.test(m[2]), start: Number.parseInt(m[2], 10) || 1, text: m[3] });
+          items.push({ indent: m[1].length, ordered: /\d/.test(m[2]), start: Number.parseInt(m[2], 10) || 1, paras: [m[3]] });
           i++;
         } else if (lines[i].trim() && /^\s{2,}/.test(lines[i]) && items.length) {
           // Only the indent comes off: two spaces at the end are a line break, kept for the paragraph to read.
-          items[items.length - 1].text += `\n${lines[i].trimStart()}`;
+          const ps = items[items.length - 1].paras;
+          ps[ps.length - 1] += `\n${lines[i].trimStart()}`;
           i++;
+        } else if (!lines[i].trim() && items.length) {
+          // Blank lines: the list goes on when what follows is indented under the last item (another paragraph of
+          // it) or is the next item of the same kind (a numbered one that does not start again at 1).
+          let j = i;
+          while (j < lines.length && !lines[j].trim()) j++;
+          const last = items[items.length - 1];
+          const next = j < lines.length ? LIST.exec(lines[j]) : null;
+          if (j < lines.length && !next && /^\s{2,}/.test(lines[j]) && !/^\s*(`{3,}|~{3,})/.test(lines[j])) {
+            last.paras.push(lines[j].trimStart());
+            i = j + 1;
+          } else if (next && (next[1].length > items[0].indent || (next[2].slice(-1) === sign && (!/\d/.test(next[2]) || Number.parseInt(next[2], 10) !== 1)))) i = j;
+          else break;
         } else break;
       }
       const build = (from: number, indent: number): [NodeJSON, number] => {
@@ -277,7 +331,7 @@ function readBlocks(source: string): NodeJSON {
             continue;
           }
           if (items[k].ordered !== first.ordered && k > from) break;
-          list.content!.push({ type: 'list_item', content: [para(items[k].text)] });
+          list.content!.push({ type: 'list_item', content: items[k].paras.map(t => para(t)) });
           k++;
         }
         return [list, k];
@@ -338,7 +392,13 @@ function runToMd(n: NodeJSON, bold: '**' | '__', italic: '*' | '_' = '*'): strin
     if (types.has('em')) t = `${italic}${t}${italic}`;
     if (types.has('strong')) t = `${bold}${t}${bold}`;
     const href = n.marks?.find(m => m.type === 'link')?.attrs?.href;
-    if (typeof href === 'string' && linkHref(href)) t = `[${t}](${href.replace(/[()\s]/g, c => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`)})`;
+    if (typeof href === 'string' && linkHref(href)) {
+      // Brackets in pairs stay as they are (the reader pairs them, as Foo_(bar)); any others are written %28 and %29.
+      let depth = 0;
+      for (const c of href) if (depth >= 0) depth += c === '(' ? 1 : c === ')' ? -1 : 0;
+      const odd = depth !== 0 ? /[()\s]/g : /\s/g;
+      t = `[${t}](${href.replace(odd, c => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`)})`;
+    }
   }
   return lead + t + trail;
 }
@@ -395,6 +455,7 @@ export function markdownLoses(doc: NodeJSON): string[] {
       if (m.type === 'font' && !/consolas|courier|mono/i.test(String(m.attrs?.face))) lost.add('typefaces');
     }
     if (n.type === 'table_cell' && (Number(n.attrs?.colspan) > 1 || Number(n.attrs?.rowspan) > 1)) lost.add('joined table cells');
+    if ((n.type === 'table_cell' || n.type === 'table_header') && (n.content?.length ?? 0) > 1) lost.add('paragraphs inside a table cell (joined into one line)');
     if (n.type === 'ordered_list' && (n.attrs?.kind || n.attrs?.shape || n.attrs?.outline)) lost.add('list numbering such as A., (a) or 1.1 (Markdown numbers 1. 2. 3.)');
     for (const c of n.content ?? []) walk(c);
   };
@@ -409,8 +470,11 @@ const EMPTY_CODE_LINE = '';
 export function writeMarkdown(doc: NodeJSON): string {
   const out: string[] = [];
   const blocks = (nodes: NodeJSON[], indent: string) => {
+    // A list right after a list of the same kind takes the other sign (* for -, ) for .), so it reads back as its own.
+    let otherSign = false;
     for (let at = 0; at < nodes.length; at++) {
       const b = nodes[at];
+      otherSign = at > 0 && nodes[at - 1].type === b.type && (b.type === 'bullet_list' || b.type === 'ordered_list') ? !otherSign : false;
       // Lines of a code block (as a code block reads) go back as one, word for word.
       if (isCodeLine(b) && b.content?.length) {
         let last = at;
@@ -430,16 +494,21 @@ export function writeMarkdown(doc: NodeJSON): string {
         if (style === 'title' || style === 'h1') out.push(`${indent}# ${text}`, '');
         else if (style === 'h2') out.push(`${indent}## ${text}`, '');
         else if (/^h[3-6]$/.test(String(style))) out.push(`${indent}${'#'.repeat(Number(String(style).slice(1)))} ${text}`, '');
-        else out.push(text ? text.split('\n').map(l => indent + l).join('\n') : '', '');
+        // Spaces at the start are left off (four of them would make it read back as code).
+        else out.push(text ? text.replace(/^[ \t]+/, '').split('\n').map(l => indent + l).join('\n') : '', '');
       } else if (b.type === 'bullet_list' || b.type === 'ordered_list') {
         let n = Number(b.attrs?.order ?? 1) || 1;
         for (const item of b.content ?? []) {
-          const marker = b.type === 'ordered_list' ? `${n++}. ` : '- ';
+          const marker = b.type === 'ordered_list' ? `${n++}${otherSign ? ')' : '.'} ` : otherSign ? '* ' : '- ';
           const [first, ...rest] = item.content ?? [];
           const inner = indent + ' '.repeat(marker.length);
           // The lines after a line break sit under the item's words, or they would start a paragraph of their own.
-          out.push(`${indent}${marker}${first?.type === 'paragraph' ? inlineToMd(first.content).replace(/\n/g, `\n${inner}`) : ''}`);
+          // A task box ("[ ]", "[x]") at the start of an item stays a box, not escaped brackets.
+          const words = first?.type === 'paragraph' ? inlineToMd(first.content).replace(/^\\\[([ xX])\\\] /, '[$1] ') : '';
+          out.push(`${indent}${marker}${words.replace(/\n/g, `\n${inner}`)}`);
           for (const r of rest) {
+            // A further paragraph of the item is set apart by a blank line (without one it joins the first).
+            if (r.type !== 'bullet_list' && r.type !== 'ordered_list' && out[out.length - 1] !== '') out.push('');
             blocks([r], inner);
             // Lists inside lists sit tight under their item.
             if (out[out.length - 1] === '' && (r.type === 'bullet_list' || r.type === 'ordered_list')) out.pop();
