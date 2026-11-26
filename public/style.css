@@ -358,7 +358,7 @@ body.is-dragging .win-body { pointer-events: none; }
   .view-list .item, .fv-head { grid-template-columns: minmax(100px, 3fr) 1fr; }
   .view-list .item .item-col:nth-of-type(n+2), .fv-head span:nth-child(n+3) { display: none; }
   .bin-head, .bin-row { grid-template-columns: minmax(100px, 3fr) 2fr; }
-  .bin-head span:nth-child(n+3), .bin-row .bin-col:nth-of-type(n+2) { display: none; }
+  .bin-head span:nth-child(n+3), .bin-row > .bin-col:nth-child(n+3) { display: none; }
 }
 @media (pointer: coarse) {
   .tool, .btn, .crumb { min-height: 40px; }
