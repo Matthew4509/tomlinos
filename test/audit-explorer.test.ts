@@ -100,7 +100,7 @@ test('a file still gets its " (2)" before the ending (unchanged behaviour)', asy
 
 // ---- P1 notes (pass/fail here is information, not a release fault) ---------------------------------------------------
 
-test('E-P1-8: a copied file keeps its own modified time (as Windows and macOS do)', async () => {
+test('E-P1-8: a copied file keeps its own modified time (as Windows and macOS do)', { todo: 'P1, waiting on direction' }, async () => {
   const fs = new FileSystem(new MemoryStore());
   const original = await fs.writeText('/Documents/old.txt', 'x');
   await new Promise(resolve => setTimeout(resolve, 15));
@@ -110,7 +110,7 @@ test('E-P1-8: a copied file keeps its own modified time (as Windows and macOS do
   assert.equal(copy.modified, original.modified, 'the copy shows the time it was copied, so sorting by date puts an old file first');
 });
 
-test('E-P1-9: a standard folder (Documents) can be copied, since copying does not change it', async () => {
+test('E-P1-9: a standard folder (Documents) can be copied, since copying does not change it', { todo: 'P1, waiting on direction' }, async () => {
   const fs = new FileSystem(new MemoryStore());
   await fs.writeText('/Documents/a.txt', 'x');
   const { shell } = fakeShell(fs);

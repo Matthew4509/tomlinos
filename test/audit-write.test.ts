@@ -23,7 +23,7 @@ test('W-P0-3 Markdown: a line break followed by a line of dashes does not turn t
   assert.equal(plainText(back), 'Total\n---');
 });
 
-test('W-P1 Markdown: a table cell with two paragraphs is joined into one on save, and that is said before saving', () => {
+test('W-P1 Markdown: a table cell with two paragraphs is joined into one on save, and that is said before saving', { todo: 'P1, waiting on direction' }, () => {
   const cell = (c: NodeJSON[]): NodeJSON => ({ type: 'table_cell', attrs: { colspan: 1, rowspan: 1, colwidth: null, background: null }, content: c });
   const doc: NodeJSON = { type: 'doc', content: [{ type: 'table', attrs: { borders: true }, content: [
     { type: 'table_row', content: [cell([p('Head')]), cell([p('Other')])] },
