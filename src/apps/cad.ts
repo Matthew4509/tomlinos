@@ -8,7 +8,7 @@
 import { css, h, on } from '../core/dom.ts';
 import { baseName, joinPath, parentPath, uniqueName } from '../fs/names.ts';
 import type { MenuItem } from '../shell/menu.ts';
-import { pickFile, pickSave } from '../shell/filepicker.ts';
+import { pickFile, pickSave, type FileTypeChoice } from '../shell/filepicker.ts';
 import { heldInOtherTabs, holdCopy, releaseCopy } from '../shell/recovery.ts';
 import { saveOver } from '../shell/savefile.ts';
 import type { AppDef } from '../shell/types.ts';
@@ -40,6 +40,20 @@ import { isDwgFile, outputDwgFile, readDwg } from './cad/dwg/app.ts';
 import { PdfDocument, type PdfPage } from './sheet/pdf.ts';
 
 const SETTINGS = '/System/cad.json';
+/** The kinds Save as offers: the drawing itself, or a copy for another program. */
+const SAVE_TYPES: FileTypeChoice[] = [
+  { label: 'CAD Draft drawing', ext: ['tcad'] },
+  { label: 'DXF drawing', ext: ['dxf'] },
+  { label: 'SVG drawing', ext: ['svg'] },
+  { label: 'DWG drawing, AutoCAD 2004', ext: ['dwg'] },
+];
+/** The kinds Open offers: every drawing CAD Draft reads first, then each kind on its own. */
+const OPEN_TYPES: FileTypeChoice[] = [
+  { label: 'All drawings', ext: ['tcad', 'dxf', 'dwg'] },
+  { label: 'CAD Draft drawing', ext: ['tcad'] },
+  { label: 'DXF drawing', ext: ['dxf'] },
+  { label: 'DWG drawing', ext: ['dwg'] },
+];
 
 interface Settings {
   snaps: SnapMode[];
@@ -958,12 +972,16 @@ export const cadApp: AppDef = {
       });
       say('New text and dimensions take these sizes (Undo takes them back).');
     }
-    /** File > Output: a DXF of the release chosen (remembered for next time), or an SVG. */
-    async function outputDxf(): Promise<void> {
+    /**
+     * File > Output: a DXF of the release chosen (remembered for next time), or an SVG. `to`: Save as chose the file
+     * already (and its kind), so only the options are asked. True when a file was written; the drawing's own file and
+     * its saved state never change.
+     */
+    async function outputDxf(to?: { path: string; replace: boolean; kind: 'dxf' | 'svg' }): Promise<boolean> {
       const format = h('select', { class: 'field', 'aria-label': 'Write as' },
-        ...DXF_VERSION_LIST.map(v => h('option', { value: v }, `${DXF_VERSIONS[v].label}${v === 'R12' ? ' (the oldest CAM programs)' : v === DEFAULT_DXF_VERSION ? ' (most CAM programs)' : ''}`)),
-        h('option', { value: 'svg' }, 'SVG (laser and vinyl cutters, Inkscape, the web)'));
-      format.value = settings.exportFormat;
+        ...(to?.kind === 'svg' ? [] : DXF_VERSION_LIST.map(v => h('option', { value: v }, `${DXF_VERSIONS[v].label}${v === 'R12' ? ' (the oldest CAM programs)' : v === DEFAULT_DXF_VERSION ? ' (most CAM programs)' : ''}`))),
+        ...(to?.kind === 'dxf' ? [] : [h('option', { value: 'svg' }, 'SVG (laser and vinyl cutters, Inkscape, the web)')]));
+      format.value = to?.kind === 'svg' ? 'svg' : to?.kind === 'dxf' && settings.exportFormat === 'svg' ? DEFAULT_DXF_VERSION : settings.exportFormat;
       const asLines = h('input', { type: 'checkbox', checked: settings.dxfTextAsLines });
       const xlines = h('input', { type: 'checkbox', checked: settings.dxfConstruction });
       const hidden = h('input', { type: 'checkbox', checked: settings.dxfHidden });
@@ -983,16 +1001,19 @@ export const cadApp: AppDef = {
       };
       explain();
       on(format, 'change', explain, signal);
+      const formatRow = h('label', { class: 'cad-row' }, h('span', {}, 'Write as'), format);
+      formatRow.hidden = to?.kind === 'svg';
       const body = h('div', { class: 'cad-dialog' },
-        h('label', { class: 'cad-row' }, h('span', {}, 'Write as'), format),
+        formatRow,
         about,
         h('label', { class: 'cad-check' }, asLines, ' Text as lines in CAD Draft’s letters (exactly as on screen; for engraving). Off: as text the other program draws in its own letters.'),
         h('label', { class: 'cad-check' }, xlines, ' Construction lines (as long lines across the drawing)'),
         hiddenRow,
         sheetRow);
-      const ok = await shell.dialogs.ask<boolean>({ title: 'Output a DXF or SVG', body, buttons: [{ label: 'Choose where...', value: true, primary: true }, { label: 'Cancel', value: false }], cancel: false, focus: () => format });
+      const title = to ? (to.kind === 'svg' ? 'Save an SVG copy' : 'Save a DXF copy') : 'Output a DXF or SVG';
+      const ok = await shell.dialogs.ask<boolean>({ title, body, buttons: [{ label: to ? 'Save' : 'Choose where...', value: true, primary: true }, { label: 'Cancel', value: false }], cancel: false, focus: () => (to?.kind === 'svg' ? asLines : format) });
       setTimeout(keyboardBack, 0);
-      if (!ok) return;
+      if (!ok) return false;
       const chosenFormat: DxfVersion | 'svg' = format.value === 'svg' || isDxfVersion(format.value) ? format.value : DEFAULT_DXF_VERSION;
       const ext = chosenFormat === 'svg' ? 'svg' : 'dxf';
       settings.exportFormat = chosenFormat;
@@ -1006,28 +1027,38 @@ export const cadApp: AppDef = {
           ? writeSvg(drawing, { white: sheet.checked, textAsLines: asLines.checked, construction: xlines.checked, title: label.replace(/\.(tcad|dxf|svg)$/i, '') })
           : writeDxf(drawing, { textAsLines: asLines.checked, construction: xlines.checked, hidden: hidden.checked, version: chosenFormat });
       } catch (error) {
-        if (error instanceof CadProblem) return problem(error.message);
+        if (error instanceof CadProblem) {
+          problem(error.message);
+          return false;
+        }
         throw error;
       }
-      if (!out.count) return problem(`There is nothing to write: draw something first (or tick ${ext === 'svg' ? 'construction lines' : 'hidden layers or construction lines'} if that is all there is).`);
-      const folder = path ? parentPath(path) : folderHint ?? '/Documents';
-      let taken: string[] = [];
-      try {
-        taken = (await shell.fs.list(folder, true)).map(e => e.name);
-      } catch {
-        // Saving will say the folder is gone.
+      if (!out.count) {
+        problem(`There is nothing to write: draw something first (or tick ${ext === 'svg' ? 'construction lines' : 'hidden layers or construction lines'} if that is all there is).`);
+        return false;
       }
-      const stem = label.replace(/\.(tcad|dxf|svg)$/i, '');
-      const chosen = await pickSave(shell, { title: ext === 'svg' ? 'Output an SVG' : 'Output a DXF', folder, name: uniqueName(`${stem}.${ext}`, taken), accept: [ext], ok: 'Save' });
-      setTimeout(keyboardBack, 0);
-      if (!chosen) return;
+      let chosen: { path: string; replace: boolean } | null = to ?? null;
+      if (!chosen) {
+        const folder = path ? parentPath(path) : folderHint ?? '/Documents';
+        let taken: string[] = [];
+        try {
+          taken = (await shell.fs.list(folder, true)).map(e => e.name);
+        } catch {
+          // Saving will say the folder is gone.
+        }
+        const stem = label.replace(/\.(tcad|dxf|svg|dwg)$/i, '');
+        const kind: FileTypeChoice = ext === 'svg' ? { label: 'SVG drawing', ext: ['svg'] } : { label: 'DXF drawing', ext: ['dxf'] };
+        chosen = await pickSave(shell, { title: ext === 'svg' ? 'Output an SVG' : 'Output a DXF', folder, name: uniqueName(`${stem}.${ext}`, taken), accept: [ext], ok: 'Save', types: [kind] });
+        setTimeout(keyboardBack, 0);
+        if (!chosen) return false;
+      }
       // The output's extension: added when missing; a .dxf, .svg or .tcad typed for the other kind is changed, never doubled.
       const target = joinPath(parentPath(chosen.path), withExtension(baseName(chosen.path), ext));
       try {
         let replacing = chosen.replace;
         if (target !== chosen.path) {
           const existing = await shell.fs.stat(target).catch(() => null);
-          if (existing && !(await shell.dialogs.confirm({ title: 'Replace it?', text: `“${baseName(target)}” already exists. Replace it with this one?`, ok: 'Replace', danger: true, cancel: 'Cancel' }))) return;
+          if (existing && !(await shell.dialogs.confirm({ title: 'Replace it?', text: `“${baseName(target)}” already exists. Replace it with this one?`, ok: 'Replace', danger: true, cancel: 'Cancel' }))) return false;
           replacing = !!existing;
         }
         if (lossyDxf && target.toLowerCase() === lossyDxf.toLowerCase() && !(await shell.dialogs.confirm({
@@ -1036,12 +1067,14 @@ export const cadApp: AppDef = {
           ok: 'Write over it',
           danger: true,
           cancel: 'Cancel',
-        }))) return;
+        }))) return false;
         const entry = await shell.fs.writeFile(target, out.bytes, replacing ? {} : { mustBeNew: true });
         for (const n of out.notes) say(n);
-        shell.toast(`Saved “${entry.name}”.`);
+        shell.toast(to ? `Saved a ${ext.toUpperCase()} copy, “${entry.name}”; the drawing itself is not saved as .tcad.` : `Saved “${entry.name}”.`);
+        return true;
       } catch (error) {
         await shell.report(ext === 'svg' ? 'Could not save the SVG' : 'Could not save the DXF', error);
+        return false;
       }
     }
     // ---- The photo to trace -----------------------------------------------------------------------------------------
@@ -1795,8 +1828,11 @@ export const cadApp: AppDef = {
         return false;
       }
     }
+    /**
+     * Save as: a CAD Draft drawing (.tcad), or a DXF, SVG or DWG copy written as File > Output writes them. A copy
+     * leaves the drawing's own file and its unsaved changes as they were, so it answers false (not saved).
+     */
     async function saveAs(): Promise<boolean> {
-      if (!(await fitsTheFile())) return false;
       const folder = path ? parentPath(path) : folderHint ?? '/Documents';
       let taken: string[] = [];
       try {
@@ -1804,9 +1840,20 @@ export const cadApp: AppDef = {
       } catch {
         // Saving will say the folder is gone.
       }
-      const stem = label.replace(/\.(tcad|dxf)$/i, '');
-      const chosen = await pickSave(shell, { title: 'Save as', folder, name: uniqueName(`${stem}.tcad`, taken), accept: ['tcad'], ok: 'Save' });
+      const stem = label.replace(/\.(tcad|dxf|svg|dwg)$/i, '');
+      const chosen = await pickSave(shell, { title: 'Save as', folder, name: uniqueName(`${stem}.tcad`, taken), accept: ['tcad', 'dxf', 'svg', 'dwg'], ok: 'Save', types: SAVE_TYPES });
       if (!chosen) return false;
+      const copyKind = /\.(dxf|svg|dwg)$/i.exec(chosen.path)?.[1].toLowerCase();
+      if (copyKind === 'dwg') {
+        await outputDwgFile({ shell, drawing, settings, keepSettings, folder, label, source: lossyDxf, say, problem, to: chosen });
+        setTimeout(keyboardBack, 0);
+        return false;
+      }
+      if (copyKind === 'dxf' || copyKind === 'svg') {
+        await outputDxf({ ...chosen, kind: copyKind });
+        return false;
+      }
+      if (!(await fitsTheFile())) return false;
       let target = chosen.path;
       if (!/\.tcad$/i.test(target)) target += '.tcad';
       try {
@@ -1834,7 +1881,7 @@ export const cadApp: AppDef = {
       }
     }
     async function openDrawing(): Promise<void> {
-      const chosen = await pickFile(shell, { title: 'Open a drawing (CAD Draft, DXF or DWG)', folder: path ? parentPath(path) : folderHint ?? '/Documents', accept: ['tcad', 'dxf', 'dwg'], ok: 'Open' });
+      const chosen = await pickFile(shell, { title: 'Open a drawing', folder: path ? parentPath(path) : folderHint ?? '/Documents', accept: ['tcad', 'dxf', 'dwg'], ok: 'Open', types: OPEN_TYPES });
       if (!chosen) return;
       // A new window nothing was drawn in gives way to the drawing opened from it.
       const untouched = !path && !drawing.ents.length && !undoStack.length && !drawing.photo;

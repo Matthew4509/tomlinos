@@ -24,6 +24,8 @@ export interface DwgOutput {
   source: string | null;
   say: (text: string) => void;
   problem: (text: string) => void;
+  /** Save as chose the file already: only the options are asked, and the toast says the drawing itself is not saved. */
+  to?: { path: string; replace: boolean };
 }
 
 /** Asks how, then where, and writes the drawing as an AutoCAD 2004 DWG. True when a file was written. */
@@ -37,7 +39,7 @@ export async function outputDwgFile(o: DwgOutput): Promise<boolean> {
     h('label', { class: 'cad-check' }, asLines, ' Text as lines in CAD Draft’s letters (exactly as on screen; for engraving). Off: as text the other program draws in its own letters.'),
     h('label', { class: 'cad-check' }, xlines, ' Construction lines (as endless construction lines)'),
     h('label', { class: 'cad-check' }, hidden, ' Items on hidden layers'));
-  const ok = await shell.dialogs.ask<boolean>({ title: 'Output a DWG', body, buttons: [{ label: 'Choose where...', value: true, primary: true }, { label: 'Cancel', value: false }], cancel: false });
+  const ok = await shell.dialogs.ask<boolean>({ title: o.to ? 'Save a DWG copy' : 'Output a DWG', body, buttons: [{ label: o.to ? 'Save' : 'Choose where...', value: true, primary: true }, { label: 'Cancel', value: false }], cancel: false });
   if (!ok) return false;
   settings.dxfTextAsLines = asLines.checked;
   settings.dxfConstruction = xlines.checked;
@@ -57,15 +59,18 @@ export async function outputDwgFile(o: DwgOutput): Promise<boolean> {
     o.problem('There is nothing to write: draw something first (or tick hidden layers or construction lines if that is all there is).');
     return false;
   }
-  let taken: string[] = [];
-  try {
-    taken = (await shell.fs.list(o.folder, true)).map(e => e.name);
-  } catch {
-    // Saving will say the folder is gone.
+  let chosen = o.to ?? null;
+  if (!chosen) {
+    let taken: string[] = [];
+    try {
+      taken = (await shell.fs.list(o.folder, true)).map(e => e.name);
+    } catch {
+      // Saving will say the folder is gone.
+    }
+    const stem = o.label.replace(/\.(tcad|dxf|svg|dwg)$/i, '');
+    chosen = await pickSave(shell, { title: 'Output a DWG', folder: o.folder, name: uniqueName(`${stem}.dwg`, taken), accept: ['dwg'], ok: 'Save', types: [{ label: 'DWG drawing, AutoCAD 2004', ext: ['dwg'] }] });
+    if (!chosen) return false;
   }
-  const stem = o.label.replace(/\.(tcad|dxf|dwg)$/i, '');
-  const chosen = await pickSave(shell, { title: 'Output a DWG', folder: o.folder, name: uniqueName(`${stem}.dwg`, taken), accept: ['dwg'], ok: 'Save' });
-  if (!chosen) return false;
   let target = chosen.path;
   if (!/\.dwg$/i.test(target)) target += '.dwg';
   try {
@@ -84,7 +89,7 @@ export async function outputDwgFile(o: DwgOutput): Promise<boolean> {
     }))) return false;
     const entry = await shell.fs.writeFile(target, out.bytes, replacing ? {} : { mustBeNew: true });
     for (const n of out.notes) o.say(n);
-    shell.toast(`Saved “${entry.name}”.`);
+    shell.toast(o.to ? `Saved a DWG copy, “${entry.name}”; the drawing itself is not saved as .tcad.` : `Saved “${entry.name}”.`);
     return true;
   } catch (error) {
     await shell.report('Could not save the DWG', error);

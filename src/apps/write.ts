@@ -11,7 +11,7 @@ import { inertMarkup } from '../core/inert.ts';
 import { pictureTooBig } from '../core/imagesize.ts';
 import { baseName, joinPath, parentPath, splitExtension, uniqueName } from '../fs/names.ts';
 import type { MenuItem } from '../shell/menu.ts';
-import { pickFile, pickSave } from '../shell/filepicker.ts';
+import { pickFile, pickSave, type FileTypeChoice } from '../shell/filepicker.ts';
 import { saveOver } from '../shell/savefile.ts';
 import { createRecovery } from '../shell/recovery.ts';
 import type { AppDef, AppHandle } from '../shell/types.ts';
@@ -37,6 +37,22 @@ import { buildSchema, htmlIsOnlyPicture, pastedHtml, type PM } from './write/sch
 import { serialQueue } from '../core/serial.ts';
 import { classicBar, type BarItem, type ClassicBar } from '../shell/menubar.ts';
 import { fromMenuItems, helpMenu } from './classic-menus.ts';
+
+/** The kinds Save as offers; the first ending of each is the kind Write saves. */
+const SAVE_TYPES: FileTypeChoice[] = [
+  { label: 'Word document', ext: ['docx'] },
+  { label: 'Plain text', ext: ['txt'] },
+  { label: 'Markdown', ext: ['md'] },
+];
+/** The kinds Open offers: every document Write reads first, then each kind on its own. */
+const OPEN_TYPES: FileTypeChoice[] = [
+  { label: 'All documents', ext: ['docx', 'rtf', 'odt', 'md', 'markdown', 'txt'] },
+  { label: 'Word document', ext: ['docx'] },
+  { label: 'WordPad document', ext: ['rtf'] },
+  { label: 'LibreOffice document', ext: ['odt'] },
+  { label: 'Markdown', ext: ['md', 'markdown'] },
+  { label: 'Plain text', ext: ['txt'] },
+];
 
 /**
  * Modern: the ribbon. Classic: a menu bar and a row of small buttons, as word processors looked before the ribbon.
@@ -1222,16 +1238,18 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
     } catch {
       // Saving will say the folder is gone.
     }
-    const chosen = await pickSave(shell, { title: 'Save as', folder, name: uniqueName(`${baseLabel()}.${kind}`, taken), ok: 'Save' });
+    // The kind the document has now comes first in the list, so the window starts on it.
+    const types = SAVE_TYPES.filter(t => t.ext[0] === kind).concat(SAVE_TYPES.filter(t => t.ext[0] !== kind));
+    const chosen = await pickSave(shell, { title: 'Save as', folder, name: uniqueName(`${baseLabel()}.${kind}`, taken), ok: 'Save', types });
     if (!chosen) {
       view.focus();
       return false;
     }
-    // The ending chooses the kind: .txt is plain text, .md Markdown, anything else a Word document.
+    // The window gives the path the chosen type's ending, and the ending chooses the kind.
     let target = chosen.path;
     const as: 'docx' | 'txt' | 'md' = /\.txt$/i.test(target) ? 'txt' : /\.(md|markdown)$/i.test(target) ? 'md' : 'docx';
-    // An ending of another kind of document Write cannot write (.rtf, .odt, .doc...) is swapped for .docx, and that is
-    // asked first: never a silent "notes.rtf.docx".
+    // Only if an ending of a kind Write cannot write (.rtf, .odt, .doc...) still comes back: it is swapped for .docx,
+    // and that is asked first, never a silent "notes.rtf.docx".
     const other = /\.(rtf|odt|doc|docm|dot|dotx|wps|wpd|pages|pdf|html?|xml)$/i.exec(target);
     if (other) {
       target = target.slice(0, -other[0].length) + '.docx';
@@ -1275,7 +1293,7 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
   }
 
   async function openFromDesktop(): Promise<void> {
-    const chosen = await pickFile(shell, { title: 'Open a document', folder: path ? parentPath(path) : '/Documents', accept: ['docx', 'rtf', 'odt', 'md', 'markdown', 'txt'], ok: 'Open' });
+    const chosen = await pickFile(shell, { title: 'Open a document', folder: path ? parentPath(path) : '/Documents', accept: ['docx', 'rtf', 'odt', 'md', 'markdown', 'txt'], ok: 'Open', types: OPEN_TYPES });
     if (chosen) await shell.openApp('write', chosen);
   }
 
@@ -1961,7 +1979,7 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
   const fileItems = (): MenuItem[] => [
     { label: 'New', action: () => void shell.openApp('write') },
     { label: 'New from a template', submenu: (Object.keys(TEMPLATES) as Array<keyof typeof TEMPLATES>).map(k => ({ label: TEMPLATES[k].label, action: () => void shell.openApp('write', `template:${k}`) })) },
-    { label: 'Open...', action: () => void openFromDesktop() },
+    { label: 'Open...', hint: 'Ctrl+O', action: () => void openFromDesktop() },
     { label: 'Open a Word file from your computer...', action: openFromComputer },
     { separator: true },
     { label: 'Save', hint: 'Ctrl+S', action: () => void save() },
@@ -2325,6 +2343,9 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
     if (ctrl && k === 's') {
       event.preventDefault();
       void (event.shiftKey ? saveAs() : save());
+    } else if (ctrl && !event.shiftKey && !event.altKey && k === 'o') {
+      event.preventDefault();
+      if (!event.repeat) void openFromDesktop();
     } else if (ctrl && !event.shiftKey && k === 'p') {
       event.preventDefault();
       print();

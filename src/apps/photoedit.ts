@@ -10,7 +10,7 @@
 import { css, h, on } from '../core/dom.ts';
 import { formatSize } from '../core/format.ts';
 import { baseName, parentPath, splitExtension, uniqueName } from '../fs/names.ts';
-import { pickFile, pickSave } from '../shell/filepicker.ts';
+import { pickFile, pickSave, type FileTypeChoice } from '../shell/filepicker.ts';
 import { extensionOf } from '../shell/filetypes.ts';
 import type { AppDef, AppHandle } from '../shell/types.ts';
 import type { MenuItem } from '../shell/menu.ts';
@@ -41,6 +41,26 @@ const MAX_FILE = 60 * 1024 * 1024;
 const MAX_PIXELS = MAX_PICTURE_PIXELS;
 const SAVE_TYPES: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', ora: 'image/openraster' };
 const OPEN_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 'svg', 'ico', 'ora'];
+/** The kinds Save as offers, in the window's list. */
+const SAVE_CHOICES: FileTypeChoice[] = [
+  { label: 'PNG picture', ext: ['png'] },
+  { label: 'JPEG picture', ext: ['jpg', 'jpeg'] },
+  { label: 'WebP picture', ext: ['webp'] },
+  { label: 'OpenRaster with layers', ext: ['ora'] },
+];
+/** The kinds Open offers: every picture first, then each kind on its own. */
+const OPEN_CHOICES: FileTypeChoice[] = [
+  { label: 'All pictures', ext: OPEN_EXTS },
+  { label: 'PNG picture', ext: ['png'] },
+  { label: 'JPEG picture', ext: ['jpg', 'jpeg'] },
+  { label: 'GIF picture', ext: ['gif'] },
+  { label: 'WebP picture', ext: ['webp'] },
+  { label: 'AVIF picture', ext: ['avif'] },
+  { label: 'BMP picture', ext: ['bmp'] },
+  { label: 'SVG drawing', ext: ['svg'] },
+  { label: 'Icon', ext: ['ico'] },
+  { label: 'OpenRaster with layers', ext: ['ora'] },
+];
 const ZOOMS = [0.05, 0.1, 0.17, 0.25, 0.33, 0.5, 0.67, 0.75, 1, 1.5, 2, 3, 4, 6, 8, 12, 16];
 
 type Tool =
@@ -686,7 +706,10 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       }
       name = uniqueName(name, taken);
     }
-    const target = await pickSave(shell, { title: 'Save picture as (.png, .jpg, .webp, or .ora to keep the layers)', folder, name, accept: OPEN_EXTS });
+    // The kind offered in the name comes first, so the window starts on it.
+    const first = SAVE_CHOICES.findIndex(t => t.ext.includes(keep.slice(1).toLowerCase()));
+    const types = first > 0 ? [SAVE_CHOICES[first], ...SAVE_CHOICES.filter((_, i) => i !== first)] : SAVE_CHOICES;
+    const target = await pickSave(shell, { title: 'Save picture as', folder, name, accept: OPEN_EXTS, types });
     if (!target) return false;
     let dest = target.path;
     let replace = target.replace;
@@ -2369,7 +2392,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
   const openPicked = async () => {
     settle();
     if (!(await guard())) return;
-    const p = await pickFile(shell, { title: 'Open picture', folder: path ? parentPath(path) : '/Pictures', accept: OPEN_EXTS });
+    const p = await pickFile(shell, { title: 'Open picture', folder: path ? parentPath(path) : '/Pictures', accept: OPEN_EXTS, types: OPEN_CHOICES });
     if (p) await openPath(p);
   };
   on(cropApply, 'click', applyCrop, app.signal);
