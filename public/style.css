@@ -2150,6 +2150,10 @@ textarea.field { resize: vertical; font: inherit; }
 .write .rb[aria-pressed="true"] { background: #c7d9f1; border-color: #7fa3d6; }
 .write .palette-sw:hover, .write .palette-sw:focus-visible { outline-color: #2b579a; }
 .write .rb-break { flex-basis: 100%; height: 0; }
+/* The Classic look (View > Classic): the shared menu bar and small-picture toolbar in place of the ribbon. */
+.write.wp-classic > .ribbon-tabs, .write.wp-classic > .ribbon { display: none; }
+.wp-classic-font { display: inline-flex; align-items: center; gap: 2px; }
+.cbar-widget .rb-select, .cbar-widget .rb-size { height: 22px; font-size: 12px; }
 .write .rb sup, .write .rb sub { font-size: 9px; }
 .wp-style-rb { height: 40px; min-width: 66px; background: #fff; border-color: #d6d6d6; }
 .wp-style-sample { font-family: Calibri, Carlito, "Segoe UI", Arial, sans-serif; font-size: 13px; color: #000; }

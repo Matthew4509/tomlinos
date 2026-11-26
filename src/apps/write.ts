@@ -1,7 +1,8 @@
 // Write: a document writer. A File menu and a ribbon laid out like a familiar word processor's (Home: undo,
 // font, paragraph, styles; Insert: page break, table, picture; Layout: margins, orientation, paper size, header and
-// footer; Table and Picture tabs when one is chosen; Help), the document on pages as it will print, and a status bar
-// with the page, the word count and the zoom. Opens and saves Word documents (.docx) and plain text (.txt); prints and
+// footer; View: the look; Table and Picture tabs when one is chosen; Help), or, in the Classic look (View > Classic), a
+// menu bar and a row of small buttons that reach the same commands; the document on pages as it will print, and a
+// status bar with the page, the word count and the zoom. Opens and saves Word documents (.docx) and plain text (.txt); prints and
 // makes PDFs. The editor is ProseMirror (MIT), bundled as public/vendor/prosemirror.js by vendor-src/prosemirror and
 // loaded only when a Write window opens. Pasted text keeps its basic formatting; nothing in it ever runs.
 import { css, h, on, svg } from '../core/dom.ts';
@@ -34,6 +35,15 @@ import { openInNewTab } from './link.ts';
 import { pdfOf, printPreview, snapshot } from './write/print.ts';
 import { buildSchema, htmlIsOnlyPicture, pastedHtml, type PM } from './write/schema.ts';
 import { serialQueue } from '../core/serial.ts';
+import { classicBar, type BarItem, type ClassicBar } from '../shell/menubar.ts';
+import { fromMenuItems, helpMenu } from './classic-menus.ts';
+
+/**
+ * Modern: the ribbon. Classic: a menu bar and a row of small buttons, as word processors looked before the ribbon.
+ * Kept per person in /System/write.json; every Write window on the page follows a change.
+ */
+type Look = 'modern' | 'classic';
+const LOOK_EVENT = 'write-look';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -175,11 +185,13 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
   // Write's own settings: spell checking on or off.
   const SETTINGS = '/System/write.json';
   let spell = true;
+  let look: Look = 'modern';
   try {
-    const saved = JSON.parse(await shell.fs.readText(SETTINGS)) as { spell?: unknown };
+    const saved = JSON.parse(await shell.fs.readText(SETTINGS)) as { spell?: unknown; look?: unknown };
     if (saved.spell === false) spell = false;
+    if (saved.look === 'classic') look = 'classic';
   } catch {
-    // Nothing kept yet: spelling is checked.
+    // Nothing kept yet: spelling is checked, and the Modern look.
   }
 
   // A copy of unsaved work every two minutes, offered back if the page stops before it is saved. The copy is a Word
@@ -1746,7 +1758,7 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
 
   const bulletBtn = btn(listIcon('bullet'), 'Bullets (Ctrl+Shift+L, or type * and a space)', () => exec(toggleList(nodes.bullet_list)));
   const numberBtn = btn(listIcon('number'), 'Numbering (or type 1. and a space)', () => exec(toggleList(nodes.ordered_list)));
-  const numberFormatBtn = menuBtn('▾', 'Numbering format: 1) (a) A. I. 1.1 ...', () => {
+  const numberFormatItems = (): MenuItem[] => {
     const choices: Array<[string, NumberKind | null, NumberShape | null, boolean]> = [
       ['As the level goes: 1. then a. then i.', null, null, false],
       ['1. 2. 3.', 'decimal', 'dot', false], ['1) 2) 3)', 'decimal', 'paren', false],
@@ -1755,11 +1767,12 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
       ['1.1. 1.2. (inside a numbered list)', null, null, true],
     ];
     return choices.map(([label, kind, shape, outline]) => ({ label, action: () => exec(listFormatCmd(kind, shape, outline)) }));
-  }, 'rb');
+  };
+  const numberFormatBtn = menuBtn('▾', 'Numbering format: 1) (a) A. I. 1.1 ...', numberFormatItems, 'rb');
   const outdentBtn = btn(listIcon('outdent'), 'Decrease indent (Shift+Tab in a list)', () => indentBy(-1));
   const indentBtn = btn(listIcon('indent'), 'Increase indent (Tab in a list)', () => indentBy(1));
   const alignBtns = (['left', 'center', 'right', 'justify'] as const).map(a => btn(alignIcon(a), { left: 'Align left (Ctrl+L)', center: 'Centre (Ctrl+E)', right: 'Align right (Ctrl+R)', justify: 'Justify (Ctrl+J)' }[a], () => exec(paraCmd({ align: a === 'left' ? null : a }))));
-  const lineBtn = menuBtn('↕', 'Line and paragraph spacing', () => {
+  const lineItems = (): MenuItem[] => {
     const p = selectedParagraphs(view.state)[0]?.node;
     const style = STYLES[(p?.attrs.style ?? 'normal') as StyleId];
     const line = p?.attrs.line ?? style.line;
@@ -1775,7 +1788,8 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
       { separator: true },
       { label: 'Paragraph settings...', action: () => void paragraphSettings() },
     ];
-  }, 'text-rb');
+  };
+  const lineBtn = menuBtn('↕', 'Line and paragraph spacing', lineItems, 'text-rb');
   async function paragraphSettings(): Promise<void> {
     const p = selectedParagraphs(view.state)[0]?.node;
     if (!p) return;
@@ -1801,7 +1815,7 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
   const picPcBtn = btn('⇪ From this computer', 'Insert a picture from this computer (you can also paste or drop one in)', pictureFromComputer, 'text-rb');
 
   // Layout.
-  const marginsBtn = menuBtn('Margins', 'Margins', () => [
+  const marginItems = (): MenuItem[] => [
     ...(Object.keys(MARGIN_PRESETS) as Array<keyof typeof MARGIN_PRESETS>).map(k => ({
       label: MARGIN_PRESETS[k].label,
       checked: JSON.stringify(MARGIN_PRESETS[k].m) === JSON.stringify(page.margins),
@@ -1809,17 +1823,21 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
     })),
     { separator: true },
     { label: 'Custom margins...', action: () => void marginsDialog(shell, page).then(m => { if (m) setPage({ ...page, margins: m }); view.focus(); }) },
-  ]);
-  const orientBtn = menuBtn('Orientation', 'Orientation', () => [
+  ];
+  const marginsBtn = menuBtn('Margins', 'Margins', marginItems);
+  const orientItems = (): MenuItem[] => [
     { label: 'Portrait (tall)', checked: page.orient === 'portrait', action: () => setPage({ ...page, orient: 'portrait' }) },
     { label: 'Landscape (wide)', checked: page.orient === 'landscape', action: () => setPage({ ...page, orient: 'landscape' }) },
-  ]);
-  const sizeMenuBtn = menuBtn('Size', 'Paper size', () => (Object.keys(PAPERS) as Paper[]).map(k => ({ label: PAPERS[k].label, checked: page.paper === k, action: () => setPage({ ...page, paper: k }) })));
-  const hfBtn = btn('Header & footer...', 'Header and footer: words at the top and bottom of every page, with page numbers', () => void headerFooterDialog(shell, page).then(got => {
+  ];
+  const orientBtn = menuBtn('Orientation', 'Orientation', orientItems);
+  const paperItems = (): MenuItem[] => (Object.keys(PAPERS) as Paper[]).map(k => ({ label: PAPERS[k].label, checked: page.paper === k, action: () => setPage({ ...page, paper: k }) }));
+  const sizeMenuBtn = menuBtn('Size', 'Paper size', paperItems);
+  const headerFooter = () => void headerFooterDialog(shell, page).then(got => {
     if (got) setPage({ ...page, ...got });
     view.focus();
-  }), 'text-rb');
-  const numbersBtn = menuBtn('Page numbers', 'Page numbers', () => [
+  });
+  const hfBtn = btn('Header & footer...', 'Header and footer: words at the top and bottom of every page, with page numbers', headerFooter, 'text-rb');
+  const pageNumberItems = (): MenuItem[] => [
     { label: 'Bottom, centre: 1', action: () => setPage({ ...page, footer: { ...page.footer, c: '&P' } }) },
     { label: 'Bottom, right: Page 1 of 3', action: () => setPage({ ...page, footer: { ...page.footer, r: 'Page &P of &N' } }) },
     { label: 'Top, right: 1', action: () => setPage({ ...page, header: { ...page.header, r: '&P' } }) },
@@ -1831,14 +1849,16 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
         setPage({ ...page, header: strip(page.header), footer: strip(page.footer) });
       },
     },
-  ]);
+  ];
+  const numbersBtn = menuBtn('Page numbers', 'Page numbers', pageNumberItems);
   const breakBtn2 = btn('⤓ Page break', 'Page break (Ctrl+Enter)', () => exec(insertPageBreak), 'text-rb');
 
   // Table.
-  const borderBtn = btn('Lines on or off', 'Table lines: printed lines round every cell, or none (faint lines show while you edit)', () => {
+  const toggleBorders = () => {
     const t = tableHere();
     if (t) setTableAttr({ borders: !t.node.attrs.borders });
-  }, 'text-rb');
+  };
+  const borderBtn = btn('Lines on or off', 'Table lines: printed lines round every cell, or none (faint lines show while you edit)', toggleBorders, 'text-rb');
   const shadeBtn = paletteBtn('▧', 'Cell shading', SHADES, 'No shading', '#d9d9d9', hex => exec(pm.setCellAttr('background', hex)));
 
   // Picture.
@@ -1848,10 +1868,20 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
   const spellBtn = btn('Spelling', 'Spelling: words the browser does not know are underlined (on or off, kept for next time)', () => void setSpell(!spell), 'text-rb');
   const listLabel = h('span', { class: 'wp-tip' }, 'No list chosen');
   const previewLabel = h('span', { class: 'wp-tip' }, 'Field names');
+  const fieldItems = (): MenuItem[] => [
+    ...(mergeList?.columns ?? CONTACT_COLUMNS).map(c => ({ label: c, action: () => insertField(c) })),
+    { separator: true },
+    { label: 'Another name...', action: () => void otherField() },
+  ];
+  // View > Classic / Modern.
+  const classicBtn = btn('Classic', 'Classic: a menu bar and a row of small buttons, as word processors looked before the ribbon', () => void setLook('classic'), 'text-rb');
+  const modernBtn = btn('Modern', 'Modern: the ribbon, with its tabs', () => void setLook('modern'), 'text-rb');
+  const zoomBy = (step: 1 | -1) => setZoom(step > 0 ? (ZOOMS.find(z => z > zoom + 0.01) ?? zoom) : (ZOOMS.slice().reverse().find(z => z < zoom - 0.01) ?? zoom));
+  const pageWidth = () => setZoom(Math.max(0.3, Math.min(2, (scroller.clientWidth - 32) / box().w)));
 
-  type Tab = 'home' | 'insert' | 'layout' | 'review' | 'mailings' | 'table' | 'picture' | 'help';
-  const TAB_NAMES: Record<Tab, string> = { home: 'Home', insert: 'Insert', layout: 'Layout', review: 'Review', mailings: 'Mailings', table: 'Table', picture: 'Picture', help: 'Help' };
-  const TAB_ORDER: Tab[] = ['home', 'insert', 'layout', 'review', 'mailings', 'table', 'picture', 'help'];
+  type Tab = 'home' | 'insert' | 'layout' | 'review' | 'mailings' | 'view' | 'table' | 'picture' | 'help';
+  const TAB_NAMES: Record<Tab, string> = { home: 'Home', insert: 'Insert', layout: 'Layout', review: 'Review', mailings: 'Mailings', view: 'View', table: 'Table', picture: 'Picture', help: 'Help' };
+  const TAB_ORDER: Tab[] = ['home', 'insert', 'layout', 'review', 'mailings', 'view', 'table', 'picture', 'help'];
   const groupsOf = (t: Tab): HTMLElement[] => {
     if (t === 'home') {
       return [
@@ -1875,13 +1905,15 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
     if (t === 'mailings') {
       return [
         sized(250, group('List', btn('From Contacts', 'One letter for each person in Contacts', () => void listFromContacts(), 'text-rb'), btn('From a spreadsheet...', 'One letter for each row of a spreadsheet (its first row names the columns)', () => void listFromSheet(), 'text-rb'), listLabel)),
-        group('Fields', menuBtn('Insert field', 'Insert a field: filled in from each row', () => [
-          ...(mergeList?.columns ?? CONTACT_COLUMNS).map(c => ({ label: c, action: () => insertField(c) })),
-          { separator: true },
-          { label: 'Another name...', action: () => void otherField() },
-        ])),
+        group('Fields', menuBtn('Insert field', 'Insert a field: filled in from each row', fieldItems)),
         sized(220, group('Preview', btn('◂', 'Previous row', () => preview(-1)), btn('Preview', 'Show a row’s values in the fields (press again for the field names)', () => preview(0), 'text-rb'), btn('▸', 'Next row', () => preview(1)), previewLabel)),
         group('Finish', btn('Letters as a document', 'Make one letter per row in a new document (saved in Documents)', () => void makeLetters(false), 'text-rb'), btn('Letters as a PDF', 'Make one letter per row in one PDF (saved in Documents)', () => void makeLetters(true), 'text-rb')),
+      ];
+    }
+    if (t === 'view') {
+      return [
+        group('Look', classicBtn, modernBtn),
+        group('Zoom', btn('Zoom in', 'Zoom in', () => zoomBy(1), 'text-rb'), btn('Zoom out', 'Zoom out', () => zoomBy(-1), 'text-rb'), btn('Page width', 'Zoom to the page’s width', pageWidth, 'text-rb')),
       ];
     }
     if (t === 'table') {
@@ -1919,6 +1951,8 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
   function showTab(t: Tab): void {
     tab = t;
     closePalette();
+    // The Classic toolbar has the font boxes while that look is shown; the ribbon is drawn again on going back.
+    if (look === 'classic') return;
     ribbon.replaceChildren(...groupsOf(t));
     tabButtons.forEach((b, i) => b.setAttribute('aria-selected', String(TAB_ORDER[i] === t)));
     syncToolbar();
@@ -1947,9 +1981,9 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
 
   const pageLabel = h('span', {});
   const wordsLabel = h('span', {});
-  const zoomOut = btn('−', 'Zoom out', () => setZoom(ZOOMS.slice().reverse().find(z => z < zoom - 0.01) ?? zoom), 'zoom-btn');
-  const zoomIn = btn('+', 'Zoom in', () => setZoom(ZOOMS.find(z => z > zoom + 0.01) ?? zoom), 'zoom-btn');
-  const zoomLabel = btn('100%', 'Zoom: press for the page’s width', () => setZoom(Math.max(0.3, Math.min(2, (scroller.clientWidth - 32) / box().w))), 'zoom-label');
+  const zoomOut = btn('−', 'Zoom out', () => zoomBy(-1), 'zoom-btn');
+  const zoomIn = btn('+', 'Zoom in', () => zoomBy(1), 'zoom-btn');
+  const zoomLabel = btn('100%', 'Zoom: press for the page’s width', pageWidth, 'zoom-label');
   const status = h('div', { class: 'statusbar sheet-status wp-status', role: 'status' }, pageLabel, wordsLabel, h('span', { class: 'spacer' }), zoomOut, zoomLabel, zoomIn);
   function setZoom(z: number): void {
     zoom = Math.round(z * 100) / 100;
@@ -2013,6 +2047,8 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
     else if (onPicture && tab === 'home' && pictureJustChosen()) showTab('picture');
     if (tab === 'table') press(borderBtn, !!tableHere()?.node.attrs.borders);
     press(spellBtn, spell);
+    press(classicBtn, look === 'classic');
+    press(modernBtn, look === 'modern');
     syncStatus();
   }
   // Choosing a picture opens its tab once; after that the person picks the tab they want.
@@ -2024,9 +2060,244 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
     return fresh;
   };
 
+  // ---- The Classic look ---------------------------------------------------------------------------------------------------
+  // A menu bar (File, Edit, View, Insert, Format, Table, Tools, Help) and a row of small pictures in place of the ribbon,
+  // reaching the same commands. It is made when the look is chosen and taken down when the ribbon comes back, so its
+  // keys (Alt, F10) are heard only while it is shown.
+
+  const st = () => view.state;
+  const paraNow = () => selectedParagraphs(st())[0]?.node;
+  const alignNow = () => paraNow()?.attrs.align ?? 'left';
+  const styleNow = () => (paraNow()?.attrs.style ?? 'normal') as StyleId;
+  const listNow = (): any => {
+    const $f = st().selection.$from;
+    for (let d = $f.depth; d > 0; d--) if ($f.node(d).type === nodes.bullet_list || $f.node(d).type === nodes.ordered_list) return $f.node(d).type;
+    return null;
+  };
+  const inTableNow = () => pm.isInTable(st());
+  const onPictureNow = () => !!pictureHere();
+  const chosenText = () => !st().selection.empty;
+  const clip = (what: 'cut' | 'copy') => () => {
+    view.focus();
+    document.execCommand(what);
+  };
+  const selectEverything = () => {
+    view.dispatch(st().tr.setSelection(new pm.AllSelection(st().doc)));
+    view.focus();
+  };
+  const run = (cmd: (s: any, d?: any) => boolean) => () => exec(cmd);
+  const markItem = (label: string, shortcut: string | undefined, type: any, attrs?: Record<string, unknown>): BarItem => ({
+    label, shortcut, checked: () => (attrs ? markAttr(type, 'pos') === attrs.pos : hasMark(type)), action: run(pm.toggleMark(type, attrs)),
+  });
+  const colourItems = (colours: Array<[string, string]>, none: string, pick: (hex: string | null) => void): BarItem[] => [
+    { label: none, action: () => pick(null) },
+    { separator: true },
+    ...colours.map(([name, hex]): BarItem => ({ label: name, action: () => pick(hex) })),
+  ];
+  const ALIGNS = [['left', 'Align left', 'Ctrl+L', 'align-left'], ['center', 'Centre', 'Ctrl+E', 'align-centre'], ['right', 'Align right', 'Ctrl+R', 'align-right'], ['justify', 'Justify', 'Ctrl+J', 'justify']] as const;
+  const alignItem = ([a, label, shortcut, icon]: (typeof ALIGNS)[number]): BarItem => ({ label, shortcut, icon, checked: () => alignNow() === a, action: run(paraCmd({ align: a === 'left' ? null : a })) });
+  const inTableItem = (label: string, cmd: any, danger = false): BarItem => ({ label, danger, enabled: inTableNow, action: tableCmd(cmd) });
+  const helpText = () => void shell.dialogs.ask<true>({ title: 'Write', body: groupsOf('help')[0], buttons: [{ label: 'OK', value: true, primary: true }], cancel: true }).then(() => view.focus());
+  /** The font and size boxes sit on the Classic toolbar while that look is shown (the ribbon's Home tab has them otherwise). */
+  const fontHolder = h('span', { class: 'wp-classic-font' });
+
+  const classicMenus = (): Parameters<typeof classicBar>[0] => ({
+    menus: [
+      { label: 'File', items: () => [...fromMenuItems(fileItems()), { separator: true }, { label: 'Close', icon: 'close', shortcut: 'Alt+Q', action: () => app.close() }] },
+      { label: 'Edit', items: [
+        { label: 'Undo', icon: 'undo', shortcut: 'Ctrl+Z', enabled: () => pm.undoDepth(st()) > 0, action: run(pm.undo) },
+        { label: 'Redo', icon: 'redo', shortcut: 'Ctrl+Y', enabled: () => pm.redoDepth(st()) > 0, action: run(pm.redo) },
+        { separator: true },
+        { label: 'Cut', icon: 'cut', shortcut: 'Ctrl+X', enabled: chosenText, action: clip('cut') },
+        { label: 'Copy', icon: 'copy', shortcut: 'Ctrl+C', enabled: chosenText, action: clip('copy') },
+        { separator: true },
+        { label: 'Select all', icon: 'select-all', shortcut: 'Ctrl+A', action: selectEverything },
+        { separator: true },
+        { label: 'Find...', icon: 'find', shortcut: 'Ctrl+F', action: () => openFind(false) },
+        { label: 'Replace...', icon: 'replace', shortcut: 'Ctrl+H', action: () => openFind(true) },
+      ] },
+      { label: 'View', items: [
+        { label: 'Zoom in', icon: 'zoom-in', action: () => zoomBy(1) },
+        { label: 'Zoom out', icon: 'zoom-out', action: () => zoomBy(-1) },
+        { label: 'Page width', icon: 'zoom-fit', action: pageWidth },
+        { separator: true },
+        { label: 'Classic', checked: () => look === 'classic', action: () => void setLook('classic') },
+        { label: 'Modern (ribbon)', checked: () => look === 'modern', action: () => void setLook('modern') },
+      ] },
+      { label: 'Insert', items: [
+        { label: 'Page break', shortcut: 'Ctrl+Enter', action: run(insertPageBreak) },
+        { label: 'Contents page', action: insertToc },
+        { separator: true },
+        { label: 'Table...', icon: 'insert-table', action: () => void insertTable() },
+        { label: 'Picture', icon: 'insert-picture', submenu: [
+          { label: 'From Pictures...', action: () => void pictureFromDesktop() },
+          { label: 'From this computer...', action: pictureFromComputer },
+        ] },
+        { label: 'Link...', icon: 'insert-link', shortcut: 'Ctrl+K', action: () => void editLink() },
+        { label: 'Footnote', shortcut: 'Ctrl+Alt+F', action: () => void insertFootnote() },
+      ] },
+      { label: 'Format', items: [
+        { label: 'Font', submenu: () => [
+          markItem('Bold', 'Ctrl+B', marks.strong), markItem('Italic', 'Ctrl+I', marks.em), markItem('Underline', 'Ctrl+U', marks.underline),
+          markItem('Strikethrough', undefined, marks.strike),
+          markItem('Superscript', 'Ctrl+Shift+=', marks.vert, { pos: 'super' }), markItem('Subscript', 'Ctrl+=', marks.vert, { pos: 'sub' }),
+          { separator: true },
+          { label: 'Bigger text', shortcut: 'Ctrl+]', action: () => growFont(1) },
+          { label: 'Smaller text', shortcut: 'Ctrl+[', action: () => growFont(-1) },
+          { separator: true },
+          { label: 'Clear formatting', shortcut: 'Ctrl+Space', action: clearFormatting },
+        ] },
+        { label: 'Text colour', icon: 'font-colour', submenu: () => colourItems(PALETTE, 'Automatic (the style’s colour)', hex => setMark(marks.color, hex ? { value: hex } : null)) },
+        { label: 'Highlight', icon: 'highlight', submenu: () => colourItems(HIGHLIGHTS, 'No highlight', hex => setMark(marks.highlight, hex ? { value: hex } : null)) },
+        { separator: true },
+        { label: 'Paragraph', submenu: () => [
+          ...ALIGNS.map(alignItem),
+          { separator: true },
+          { label: 'Line spacing', submenu: () => fromMenuItems(lineItems()) },
+          { label: 'Paragraph settings...', action: () => void paragraphSettings() },
+        ] },
+        { label: 'Bullets and numbering', submenu: () => [
+          { label: 'Bullets', icon: 'bullets', shortcut: 'Ctrl+Shift+L', checked: () => listNow() === nodes.bullet_list, action: run(toggleList(nodes.bullet_list)) },
+          { label: 'Numbering', icon: 'numbering', checked: () => listNow() === nodes.ordered_list, action: run(toggleList(nodes.ordered_list)) },
+          { label: 'Numbering format', submenu: () => fromMenuItems(numberFormatItems()) },
+          { separator: true },
+          { label: 'Decrease indent', icon: 'outdent', action: () => indentBy(-1) },
+          { label: 'Increase indent', icon: 'indent', action: () => indentBy(1) },
+        ] },
+        { label: 'Style', submenu: () => STYLE_IDS.map((id): BarItem => ({
+          label: STYLES[id].label, shortcut: id === 'normal' ? 'Ctrl+Shift+N' : id === 'title' ? undefined : `Ctrl+Alt+${id.slice(1)}`, checked: () => styleNow() === id, action: run(styleCmd(id)),
+        })) },
+        { separator: true },
+        { label: 'Page', icon: 'page-setup', submenu: () => [
+          { label: 'Margins', submenu: () => fromMenuItems(marginItems()) },
+          { label: 'Orientation', submenu: () => fromMenuItems(orientItems()) },
+          { label: 'Paper size', submenu: () => fromMenuItems(paperItems()) },
+          { separator: true },
+          { label: 'Header and footer...', action: headerFooter },
+          { label: 'Page numbers', submenu: () => fromMenuItems(pageNumberItems()) },
+        ] },
+        { label: 'Picture', shown: onPictureNow, submenu: () => [
+          { label: 'Size...', action: () => void pictureSize() },
+          { label: 'Own size', action: () => pictureFit(true) },
+          { label: 'Page width', action: () => pictureFit(false) },
+          { separator: true },
+          ...ALIGNS.slice(0, 3).map(alignItem),
+          { separator: true },
+          { label: 'Alt text...', action: () => void pictureAlt() },
+        ] },
+      ] },
+      { label: 'Table', items: [
+        { label: 'Insert table...', icon: 'insert-table', action: () => void insertTable() },
+        { separator: true },
+        inTableItem('Row above', pm.addRowBefore), inTableItem('Row below', pm.addRowAfter),
+        inTableItem('Column left', pm.addColumnBefore), inTableItem('Column right', pm.addColumnAfter),
+        { separator: true },
+        inTableItem('Delete row', pm.deleteRow), inTableItem('Delete column', pm.deleteColumn), inTableItem('Delete table', pm.deleteTable, true),
+        { separator: true },
+        inTableItem('Merge cells', pm.mergeCells), inTableItem('Split cell', pm.splitCell),
+        { separator: true },
+        { label: 'Lines', enabled: inTableNow, checked: () => !!tableHere()?.node.attrs.borders, action: toggleBorders },
+        { label: 'Cell shading', enabled: inTableNow, submenu: () => colourItems(SHADES, 'No shading', hex => exec(pm.setCellAttr('background', hex))) },
+        { label: 'Even columns', enabled: inTableNow, action: evenColumns },
+      ] },
+      { label: 'Tools', items: [
+        { label: 'Spelling', checked: () => spell, action: () => void setSpell(!spell) },
+        { label: 'Word count...', action: () => void wordCount() },
+        { separator: true },
+        { label: 'Letters (mail merge)', submenu: () => [
+          { label: 'List from Contacts', action: () => void listFromContacts() },
+          { label: 'List from a spreadsheet...', action: () => void listFromSheet() },
+          { label: 'Insert field', submenu: () => fromMenuItems(fieldItems()) },
+          { separator: true },
+          { label: 'Previous row', action: () => preview(-1) },
+          { label: 'Preview (field names or values)', action: () => preview(0) },
+          { label: 'Next row', action: () => preview(1) },
+          { separator: true },
+          { label: 'Letters as a document', action: () => void makeLetters(false) },
+          { label: 'Letters as a PDF', action: () => void makeLetters(true) },
+        ] },
+      ] },
+      helpMenu(shell, [{ label: 'What Write opens, saves and does', icon: 'help', action: helpText }]),
+    ],
+    tools: [
+      { label: 'New', icon: 'new', action: () => void shell.openApp('write') },
+      { label: 'Open', icon: 'open', action: () => void openFromDesktop() },
+      { label: 'Save', icon: 'save', shortcut: 'Ctrl+S', action: () => void save() },
+      { label: 'Print and PDF', icon: 'print', shortcut: 'Ctrl+P', action: print },
+      '|',
+      { label: 'Undo', icon: 'undo', shortcut: 'Ctrl+Z', enabled: () => pm.undoDepth(st()) > 0, action: run(pm.undo) },
+      { label: 'Redo', icon: 'redo', shortcut: 'Ctrl+Y', enabled: () => pm.redoDepth(st()) > 0, action: run(pm.redo) },
+      '|',
+      { label: 'Cut', icon: 'cut', shortcut: 'Ctrl+X', enabled: chosenText, action: clip('cut') },
+      { label: 'Copy', icon: 'copy', shortcut: 'Ctrl+C', enabled: chosenText, action: clip('copy') },
+      '|',
+      { widget: fontHolder },
+      '|',
+      { id: 'bold', label: 'Bold', icon: 'bold', shortcut: 'Ctrl+B', pressed: () => hasMark(marks.strong), action: run(pm.toggleMark(marks.strong)) },
+      { id: 'italic', label: 'Italic', icon: 'italic', shortcut: 'Ctrl+I', pressed: () => hasMark(marks.em), action: run(pm.toggleMark(marks.em)) },
+      { id: 'underline', label: 'Underline', icon: 'underline', shortcut: 'Ctrl+U', pressed: () => hasMark(marks.underline), action: run(pm.toggleMark(marks.underline)) },
+      '|',
+      ...ALIGNS.map(([a, label, shortcut, icon]) => ({ id: `align-${a}`, label, icon, shortcut, pressed: () => alignNow() === a, action: run(paraCmd({ align: a === 'left' ? null : a })) })),
+      '|',
+      { id: 'bullets', label: 'Bullets', icon: 'bullets', shortcut: 'Ctrl+Shift+L', pressed: () => listNow() === nodes.bullet_list, action: run(toggleList(nodes.bullet_list)) },
+      { id: 'numbering', label: 'Numbering', icon: 'numbering', pressed: () => listNow() === nodes.ordered_list, action: run(toggleList(nodes.ordered_list)) },
+      { label: 'Decrease indent', icon: 'outdent', action: () => indentBy(-1) },
+      { label: 'Increase indent', icon: 'indent', action: () => indentBy(1) },
+      '|',
+      { label: 'Insert a table', icon: 'insert-table', action: () => void insertTable() },
+      { label: 'Insert a picture from Pictures', icon: 'insert-picture', action: () => void pictureFromDesktop() },
+      { label: 'Insert a link', icon: 'insert-link', shortcut: 'Ctrl+K', action: () => void editLink() },
+      '|',
+      { label: 'Find', icon: 'find', shortcut: 'Ctrl+F', action: () => openFind(false) },
+    ],
+  });
+  let classic: ClassicBar | null = null;
+  let classicStop: AbortController | null = null;
+  /** Shows one look or the other in this window. */
+  function applyLook(next: Look): void {
+    look = next;
+    app.root.classList.toggle('wp-classic', next === 'classic');
+    closePalette();
+    classicStop?.abort();
+    classic?.el.remove();
+    classic = null;
+    classicStop = null;
+    if (next === 'classic') {
+      const stop = new AbortController();
+      app.signal.addEventListener('abort', () => stop.abort(), { once: true });
+      classicStop = stop;
+      fontHolder.replaceChildren(faceBox, sizeBox);
+      classic = classicBar(classicMenus(), { layer: shell.menus, signal: stop.signal, scope: app.root, doc: () => dom, label: 'Write menu bar' });
+      app.root.prepend(classic.el);
+    } else showTab(tab);
+    syncToolbar();
+  }
+  /** View > Classic / Modern: this window and every other Write window here, kept for next time. */
+  async function setLook(next: Look): Promise<void> {
+    if (next === look) return;
+    applyLook(next);
+    window.dispatchEvent(new CustomEvent(LOOK_EVENT, { detail: next }));
+    view.focus();
+    try {
+      let saved: Record<string, unknown> = {};
+      try {
+        saved = JSON.parse(await shell.fs.readText(SETTINGS)) as Record<string, unknown>;
+      } catch {
+        // Nothing kept yet.
+      }
+      await shell.fs.writeText(SETTINGS, JSON.stringify({ ...saved, look: next }), { hidden: true });
+    } catch (error) {
+      await shell.report('This window shows that look now, but the choice could not be kept for next time', error);
+    }
+  }
+  on(window, LOOK_EVENT, (event: CustomEvent<Look>) => {
+    if (event.detail !== look) applyLook(event.detail);
+  }, app.signal);
+
   // ---- Put together -------------------------------------------------------------------------------------------------------
 
   app.root.append(tabsRow, ribbon, findPanel, scroller, status, sizeList);
+  if (look === 'classic') applyLook('classic');
   setZoom(scroller.clientWidth && scroller.clientWidth < box().w + 32 ? Math.max(0.3, (scroller.clientWidth - 32) / box().w) : 1);
   refresh();
   syncToolbar();
