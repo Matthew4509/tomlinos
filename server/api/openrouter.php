@@ -68,7 +68,12 @@ switch ("$method $op") {
         if ($model !== '' && (!or_model_id_ok($model) || or_model($root, $model) === null)) {
             api_fail(400, 'Choose one of the models in the list.');
         }
-        $cap = (float) body_str($body, 'cap');
+        // An empty box is not a limit of $0: it is refused, so a key is never saved switched off by mistake.
+        $capText = trim(body_str($body, 'cap'));
+        if ($capText === '' || !is_numeric($capText)) {
+            api_fail(400, 'Type a monthly limit in dollars ($0 stops it).');
+        }
+        $cap = (float) $capText;
         if (!is_finite($cap) || $cap < 0 || $cap > AI_MAX_CAP_CENTS / 100) {
             api_fail(400, 'The monthly limit must be between $0 and $' . (AI_MAX_CAP_CENTS / 100) . '.');
         }
