@@ -58,6 +58,23 @@ export const recycleBinApp: AppDef = {
       });
       const head = h('div', { class: 'bin-head', 'aria-hidden': 'true' }, h('span', {}, 'Name'), h('span', {}, 'Deleted from'), h('span', {}, 'Deleted'), h('span', {}, 'Size'));
       list.replaceChildren(head, ...rows, ...(items.length ? [] : [h('p', { class: 'fv-empty', role: 'status' }, 'The Recycle Bin is empty.')]));
+      paintButtons();
+    }
+
+    /**
+     * A new pick only repaints the rows that are there: rebuilding them between the two clicks of a double-click
+     * took the row from under the second click, so a double-click never restored anything.
+     */
+    function paintSelection(): void {
+      for (const row of list.querySelectorAll<HTMLElement>('.bin-row')) {
+        const on = selected.has(row.dataset.slot ?? '');
+        row.classList.toggle('selected', on);
+        row.setAttribute('aria-selected', String(on));
+      }
+      paintButtons();
+    }
+
+    function paintButtons(): void {
       restoreBtn.disabled = selected.size === 0;
       deleteBtn.disabled = selected.size === 0;
       emptyBtn.disabled = items.length === 0;
@@ -81,7 +98,7 @@ export const recycleBinApp: AppDef = {
         selected.add(slot);
         anchor = slot;
       }
-      render();
+      paintSelection();
       list.querySelector<HTMLElement>(`[data-slot="${CSS.escape(slot)}"]`)?.scrollIntoView({ block: 'nearest' });
     }
 
@@ -141,7 +158,7 @@ export const recycleBinApp: AppDef = {
       if (slot && event.button === 0) pick(slot, event);
       else if (!slot && event.button === 0) {
         selected.clear();
-        render();
+        paintSelection();
       }
     }, app.signal);
     on(list, 'dblclick', (event: MouseEvent) => {
@@ -163,7 +180,7 @@ export const recycleBinApp: AppDef = {
       } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a') {
         event.preventDefault();
         for (const item of items) selected.add(item.slot);
-        render();
+        paintSelection();
       }
     }, app.signal);
     bindContextMenu(list, app.signal, shell.menus, target => {

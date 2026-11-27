@@ -191,9 +191,11 @@ await step('the app is deleted from the server while it is open in another signe
   await other.waitForTimeout(1500);
   const stillOpen = await other.locator('.win iframe[title="Probe App"]').count();
   const reload = await other.evaluate(() => fetch('/apps/probe/index.html').then(x => x.status));
-  console.log(`       other tab: window still open ${stillOpen}, its page now answers ${reload}`);
+  const told = (await other.locator('.toast').allTextContents()).join(' ');
+  console.log(`       other tab: window still open ${stillOpen}, its page now answers ${reload}, told "${told}"`);
   await other.close();
   ok(stillOpen === 0 || reload === 200, 'P1: the other tab keeps a window on an app whose files are gone (it shows Not found inside it)');
+  ok(reload === 200 || /Probe App was deleted/.test(told), `the other tab's window closed without a word (toasts: "${told}")`);
 });
 
 await step('the store down (no catalogue): the shelves still show the built-in apps and say why the store is empty', async () => {

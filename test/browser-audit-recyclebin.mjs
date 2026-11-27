@@ -17,7 +17,9 @@ const ORIGIN = new URL(BASE).origin;
 let passed = 0;
 const failures = [];
 
+let stepName = 'start';
 async function step(name, fn) {
+  stepName = name.slice(0, 40);
   try {
     await fn();
     passed++;
@@ -58,6 +60,8 @@ page.setDefaultTimeout(10000);
 const problems = [];
 page.on('console', m => m.type() === 'error' && problems.push('console: ' + m.text()));
 page.on('pageerror', e => problems.push('pageerror: ' + e.message));
+// The console says only "Failed to load resource": name the address too.
+page.on('response', r => r.status() >= 400 && problems.push(`HTTP ${r.status()}: ${r.request().method()} ${r.url().replace(/^https?:\/\/[^/]+/, '')} (in "${stepName}")`));
 const shot = async name => SHOTS && page.screenshot({ path: `${SHOTS}/${name}.png` });
 const settle = ms => page.waitForTimeout(ms);
 const ew = () => page.locator('.win', { has: page.locator('.explorer') }).first();
@@ -297,7 +301,12 @@ await step('AB-P1-1 / SC: About and Keyboard shortcuts are usable on a phone-wid
   await settle(600);
   const r = await page.evaluate(() => ['.shortcuts', '.about'].map(sel => {
     const el = document.querySelector(sel);
-    return el ? { sel, over: el.scrollWidth - el.clientWidth } : { sel, over: 'missing' };
+    if (!el) return { sel, over: 'missing' };
+    // What sticks out past the right edge, so a failure names it.
+    const edge = el.getBoundingClientRect().left + el.clientWidth;
+    const wide = [...el.querySelectorAll('*')].filter(c => c.getBoundingClientRect().right > edge + 0.5).slice(0, 4)
+      .map(c => `${c.tagName.toLowerCase()}.${[...c.classList].join('.')} "${(c.textContent ?? '').trim().slice(0, 30)}"`);
+    return { sel, over: el.scrollWidth - el.clientWidth, ...(wide.length ? { wide } : {}) };
   }));
   await page.setViewportSize({ width: 1280, height: 800 });
   ok(r.every(x => x.over === 0 || x.over === 'missing'), JSON.stringify(r));

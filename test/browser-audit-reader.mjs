@@ -126,7 +126,10 @@ await step('Sherlock Holmes opens; arrow keys turn pages; larger text keeps the 
   const f = F();
   await f.locator('.r-tile', { hasText: 'Sherlock' }).click();
   await f.locator('.r-tile-book').first().click();
+  // Picked at once, while the book's text (3.8 MB) may still be loading: it opens there once the text is in.
   await f.locator('.r-chapter', { hasText: 'Chapter II' }).first().click();
+  await f.locator('.r-count', { hasText: /^Page 1 of \d+/ }).waitFor({ timeout: 15000 });
+  ok((await f.locator('.r-chapter-title').textContent()).includes('Chapter II'), `opened at ${await f.locator('.r-chapter-title').textContent()}`);
   await f.locator('.r-flow').focus();
   for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowRight');
   const [a, of] = (await f.locator('.r-count').textContent()).match(/\d+/g).map(Number);

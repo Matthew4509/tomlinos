@@ -57,6 +57,8 @@ let lib;
 let author;
 let work;
 let lines;
+/** A chapter picked while the book's text is still loading: opened once it is in. */
+let wanted = null;
 let chapter = 0;
 let page = 0;
 let pages = 1;
@@ -216,8 +218,8 @@ function showChapter(i, at = 'start') {
   history.replaceState(null, '', url);
 }
 
-const next = () => (page < pages - 1 ? go(page + 1) : piece < pieces.length - 1 ? showPiece(piece + 1, 'start') : chapter < work.chapters.length - 1 && showChapter(chapter + 1, 'start'));
-const prev = () => (page > 0 ? go(page - 1) : piece > 0 ? showPiece(piece - 1, 'end') : chapter > 0 && showChapter(chapter - 1, 'end'));
+const next = () => !lines ? undefined : (page < pages - 1 ? go(page + 1) : piece < pieces.length - 1 ? showPiece(piece + 1, 'start') : chapter < work.chapters.length - 1 && showChapter(chapter + 1, 'start'));
+const prev = () => !lines ? undefined : (page > 0 ? go(page - 1) : piece > 0 ? showPiece(piece - 1, 'end') : chapter > 0 && showChapter(chapter - 1, 'end'));
 
 // ---------- The column ----------
 
@@ -240,13 +242,20 @@ async function openWork(a, w, startChapter, bookLines) {
   ui.author.replaceChildren(author.name, ' ', h('span', { class: 'r-years', text: author.years }));
   ui.about.textContent = work.year ? `First published ${work.year}. ${author.about}` : author.about;
   ui.chaptersCount.textContent = `${work.chapters.length}`;
-  ui.chapterButtons = work.chapters.map((c, i) => h('button', { class: 'r-chapter', type: 'button', text: c.title, onclick: () => { showChapter(i); ui.flow.focus?.(); } }));
+  ui.chapterButtons = work.chapters.map((c, i) => h('button', { class: 'r-chapter', type: 'button', text: c.title, onclick: () => { if (lines) showChapter(i); else wanted = i; ui.flow.focus?.(); } }));
   ui.chapters.replaceChildren(...ui.chapterButtons.map(b => h('li', {}, b)));
   root.dataset.view = 'book';
   ui.flow.replaceChildren(h('p', { text: 'Opening...' }));
-  lines = bookLines ?? await linesOf(author.file);
-  const saved = await places.get(work.id);
-  if (Number.isInteger(startChapter)) showChapter(startChapter, 'start');
+  // Until this book's text is in, no page turn or chapter shows the last book's text (or none at all).
+  lines = undefined;
+  wanted = null;
+  const text = bookLines ?? await linesOf(author.file);
+  const saved = await places.get(w.id);
+  if (work !== w) return;
+  lines = text;
+  if (root.dataset.view !== 'book') return;
+  if (wanted !== null) showChapter(wanted, 'start');
+  else if (Number.isInteger(startChapter)) showChapter(startChapter, 'start');
   else if (saved) showChapter(saved.chapter, saved.ratio);
   else showChapter(0, 'start');
 }
