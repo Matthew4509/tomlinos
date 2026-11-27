@@ -13,11 +13,12 @@ import { heldInOtherTabs, holdCopy, releaseCopy } from '../shell/recovery.ts';
 import { saveOver } from '../shell/savefile.ts';
 import type { AppDef } from '../shell/types.ts';
 import { APPS } from './catalog.ts';
-import { classicBar, type BarItem, type ClassicBar, type ToolButton, type ToolEntry } from '../shell/menubar.ts';
-import type { ToolIconId } from '../shell/toolicons.ts';
+import { classicBar, type BarItem, type BarMenu, type ClassicBar, type ToolButton, type ToolEntry } from '../shell/menubar.ts';
+import { toolIcon } from '../shell/toolicons.ts';
 import { boxOfShapes, chainFrom, distToShape, inWindow, itemsNear, moveShape, toUnits, touchesBox, unitPlaces } from './cad/edit.ts';
 import { P, add, dist, mul, normAngle, sub, unit, type Pt } from './cad/geom.ts';
 import { cadIcon, type CadIcon } from './cad/icons.ts';
+import { ICON_STYLES, ICON_STYLE_NAMES, WORKSHOP_FOR_DESKTOP, readIconStyle, workshopIcon, type DesktopIcon, type IconStyle } from './cad/workshop-icons.ts';
 import { decimalComma, parseNumber, parsePoint, parseSize } from './cad/input.ts';
 import {
   COLOUR_NAMES, CONSTRUCTION, DIMENSIONS, TEXT, isNote, CadProblem, LAYER_COLOURS, LINE_TYPES, TYPE_NAMES, colourName, describe, type LineType, fmt, newDrawing, readTcad, tooBigToSave, writeTcad, type Drawing, type Ent, type Layer, type Shape, type Units,
@@ -81,6 +82,8 @@ interface Settings {
   autosave: boolean;
   /** Where the toolbars are (shell/toolbars.ts checks it when the window opens). */
   toolbars: unknown;
+  /** Which set of toolbar pictures: Standard or Workshop (View > Toolbars > Icon style). */
+  iconStyle: IconStyle;
 }
 
 const DEFAULT_SNAPS: SnapMode[] = ['end', 'mid', 'centre', 'intersection', 'quadrant'];
@@ -156,7 +159,7 @@ export const cadApp: AppDef = {
     app.root.classList.add('cad');
 
     // ---- Settings kept between windows -----------------------------------------------------------------------------
-    const settings: Settings = { snaps: [...DEFAULT_SNAPS], arrows: false, white: false, large: false, layersPanel: true, ortho: false, gridOn: false, gridSnap: false, dxfTextAsLines: false, dxfConstruction: false, dxfHidden: false, exportFormat: DEFAULT_DXF_VERSION, recent: [], print: readPrintSettings(null), autosave: true, toolbars: null };
+    const settings: Settings = { snaps: [...DEFAULT_SNAPS], arrows: false, white: false, large: false, layersPanel: true, ortho: false, gridOn: false, gridSnap: false, dxfTextAsLines: false, dxfConstruction: false, dxfHidden: false, exportFormat: DEFAULT_DXF_VERSION, recent: [], print: readPrintSettings(null), autosave: true, toolbars: null, iconStyle: 'standard' };
     try {
       const saved = JSON.parse(await shell.fs.readText(SETTINGS)) as Partial<Settings>;
       if (Array.isArray(saved.snaps)) settings.snaps = saved.snaps.filter((s): s is SnapMode => SNAP_ORDER.includes(s as SnapMode));
@@ -165,6 +168,7 @@ export const cadApp: AppDef = {
       if (Array.isArray(saved.recent)) settings.recent = saved.recent.filter((r): r is string => typeof r === 'string').slice(0, RECENT_MAX);
       settings.print = readPrintSettings(saved.print);
       if (saved.toolbars !== undefined) settings.toolbars = saved.toolbars;
+      settings.iconStyle = readIconStyle(saved.iconStyle);
     } catch {
       // Nothing kept yet: the usual settings.
     }
@@ -2514,17 +2518,20 @@ export const cadApp: AppDef = {
     const backToDrawing = () => {
       if (!commandRow.contains(document.activeElement)) canvas.focus({ preventScroll: true });
     };
+    /** CAD Draft's own picture in the chosen set. */
+    const picture = (icon: CadIcon) => () => (settings.iconStyle === 'workshop' ? workshopIcon(icon) : cadIcon(icon));
     /** A toolbar button with CAD Draft's own picture. */
     const btn = (icon: CadIcon, label: string, run: () => void, more: Partial<ToolButton> = {}): ToolButton => ({
-      id: icon, label, picture: () => cadIcon(icon), ...more,
+      id: icon, label, picture: picture(icon), ...more,
       action: () => {
         run();
         backToDrawing();
       },
     });
-    /** A toolbar button with the desktop's picture for the same thing (toolicons.ts). */
-    const std = (icon: ToolIconId, label: string, run: () => void, shortcut?: string): ToolButton => ({
+    /** A toolbar button with the desktop's picture for the same thing (toolicons.ts), or its Workshop drawing. */
+    const std = (icon: DesktopIcon, label: string, run: () => void, shortcut?: string): ToolButton => ({
       id: icon, label, icon, shortcut,
+      picture: () => (settings.iconStyle === 'workshop' ? workshopIcon(WORKSHOP_FOR_DESKTOP[icon]) : toolIcon(icon)),
       action: () => {
         run();
         backToDrawing();
@@ -2581,7 +2588,7 @@ export const cadApp: AppDef = {
         std('new', 'New drawing', () => void shell.openApp('cad')), std('open', 'Open...', () => void openDrawing(), 'Ctrl+O'), std('save', 'Save', () => void save(), 'Ctrl+S'),
         btn('dxfOut', 'Output a DXF for the CAM program (File > Output > CAD > DXF)', () => void outputDxf()),
         std('print', 'Print or save a PDF to scale', () => void printDialog(), 'Ctrl+P'),
-        { id: 'photo', label: 'Photo to trace', picture: () => cadIcon('photo'), action: photoMenuAtButton }, '|',
+        { id: 'photo', label: 'Photo to trace', picture: picture('photo'), action: photoMenuAtButton }, '|',
         std('undo', 'Undo', undo, 'Ctrl+Z'), std('redo', 'Redo', redo, 'Ctrl+Y'),
       ] },
       { id: 'draw', name: 'Draw', tools: [
@@ -2620,7 +2627,7 @@ export const cadApp: AppDef = {
         std('zoom-in', 'Zoom in', () => zoomBy(1.5)), std('zoom-out', 'Zoom out', () => zoomBy(1 / 1.5)),
       ] },
       { id: 'snaps', name: 'Snaps', side: 'right', tools: SNAP_ORDER.map(m => ({
-        id: `snap-${m}`, label: `Snap: ${SNAP_NAMES[m]}`, picture: () => cadIcon(SNAP_ICONS[m]),
+        id: `snap-${m}`, label: `Snap: ${SNAP_NAMES[m]}`, picture: picture(SNAP_ICONS[m]),
         pressed: () => (m === 'grid' ? settings.gridSnap : settings.snaps.includes(m)),
         action: () => toggleSnap(m),
       })) },
@@ -2980,8 +2987,7 @@ export const cadApp: AppDef = {
       checked: i.checked === undefined ? undefined : () => !!i.checked,
       submenu: i.submenu ? barItems(i.submenu) : undefined,
     }));
-    const bar = classicBar({
-      menus: [
+    const menus: BarMenu[] = [
         { label: 'File', items: () => barItems(fileMenu()) },
         { label: 'Edit', items: () => barItems(editMenu()) },
         { label: 'View', items: () => barItems(viewMenu()) },
@@ -2989,9 +2995,8 @@ export const cadApp: AppDef = {
         { label: 'CAD', items: () => barItems(cadMenu()) },
         { label: 'Utils', items: () => barItems(utilsMenu()) },
         { label: 'Help', items: () => barItems(helpMenu()) },
-      ],
-      toolbars,
-    }, {
+    ];
+    const bar = classicBar({ menus, toolbars }, {
       layer: shell.menus, signal, scope: app.root, doc: () => canvas, label: 'CAD Draft menus',
       layout: { saved: settings.toolbars, save: v => {
         settings.toolbars = v;
@@ -2999,6 +3004,35 @@ export const cadApp: AppDef = {
       } },
     });
     barRef = bar;
+    // View > Toolbars (the desktop's toolbars put it at the top of View) ends with Icon style: Standard or Workshop.
+    const viewBar = menus.find(m => m.label === 'View');
+    if (viewBar) {
+      const withToolbars = viewBar.items;
+      const listOf = (items: BarItem[] | (() => BarItem[])) => (typeof items === 'function' ? items() : items);
+      const iconStyleItem: BarItem = {
+        label: 'Icon style',
+        submenu: () => ICON_STYLES.map(s => ({ label: ICON_STYLE_NAMES[s], checked: () => settings.iconStyle === s, action: () => setIconStyle(s) })),
+      };
+      viewBar.items = () => listOf(withToolbars).map(i => {
+        const sub = i.submenu;
+        return i.label === 'Toolbars' && sub ? { ...i, submenu: () => [...listOf(sub), { separator: true }, iconStyleItem] } : i;
+      });
+    }
+    /** Every toolbar button's picture by its id, so a change of set draws them all again at once. */
+    const pictureOf = new Map<string, () => Element>();
+    for (const t of toolbars) for (const e of t.tools) if (e !== '|' && 'action' in e && e.id && e.picture) pictureOf.set(e.id, e.picture);
+    function setIconStyle(s: IconStyle): void {
+      if (settings.iconStyle === s) return;
+      settings.iconStyle = s;
+      keepSettings();
+      for (const b of app.root.querySelectorAll<HTMLElement>('.cbar-tool[data-tool]')) {
+        const draw = pictureOf.get(b.dataset.tool ?? '');
+        if (draw) b.replaceChildren(draw());
+      }
+      app.root.dataset.iconStyle = s;
+      say(`Toolbar pictures: ${ICON_STYLE_NAMES[s]}.`);
+    }
+    app.root.dataset.iconStyle = settings.iconStyle;
 
     const body = h('div', { class: 'cad-body' }, panel, canvasWrap);
     app.root.append(bar.el, bar.dock(body), commandRow, status);
