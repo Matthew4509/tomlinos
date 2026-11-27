@@ -22,7 +22,7 @@ import { bindDesktopKeys } from './keys.ts';
 import { NoticeCentre } from './notices.ts';
 import { startReminders } from './reminders.ts';
 import { MenuLayer } from './menu.ts';
-import { Session, type Theme, type Wallpaper } from './session.ts';
+import { Session, THEMES, type Theme, type Wallpaper } from './session.ts';
 import { StartMenu } from './startmenu.ts';
 import { buildTaskbar } from './taskbar.ts';
 import { Transfers } from './transfer.ts';
@@ -307,9 +307,24 @@ class DesktopShell implements Shell {
     this.session.data.theme = theme;
     this.session.touch();
     this.applyTheme();
+    // The same person's other tabs in this browser take the scheme at once, as they take file changes.
+    this.themeTabs?.postMessage({ theme, who: this.account?.user().id ?? null });
   }
 
+  /** Colour schemes chosen in this person's other tabs (opened with the first applyTheme). */
+  private themeTabs: BroadcastChannel | null = null;
+
   applyTheme(): void {
+    if (!this.themeTabs && typeof BroadcastChannel !== 'undefined') {
+      this.themeTabs = new BroadcastChannel('tomlinos-theme');
+      this.themeTabs.onmessage = event => {
+        const m = event.data as { theme?: unknown; who?: unknown } | null;
+        if (!m || !THEMES.some(t => t.id === m.theme) || m.who !== (this.account?.user().id ?? null)) return;
+        if (this.session.data.theme === m.theme) return;
+        this.session.data.theme = m.theme as Theme;
+        this.applyTheme();
+      };
+    }
     document.documentElement.dataset.theme = this.session.data.theme;
     // Xfce calls its button Menu; the other schemes call it Start (Glass and Flat show only the orb).
     const word = this.session.data.theme === 'xfce' ? 'Menu' : 'Start';

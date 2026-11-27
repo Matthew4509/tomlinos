@@ -33,7 +33,7 @@ export const settingsApp: AppDef = {
     const custom = h('input', { type: 'color', class: 'colour-input', 'aria-label': 'Choose your own colour', value: DEFAULT_COLOUR });
     const pictures = h('div', { class: 'picture-list', role: 'radiogroup', 'aria-label': 'Background picture' });
     const note = h('span', { class: 'hint' });
-    const pictureTip = infoTip('background pictures', 'These are the pictures in your Pictures folder (PNG, JPG, GIF, WebP, AVIF or BMP). Put a new one there, then open Settings again. Choosing a colour puts the plain background back.');
+    const pictureTip = infoTip('background pictures', 'These are the pictures in your Pictures folder (PNG, JPG, GIF, WebP, AVIF or BMP). Put a new one there and it shows here. Choosing a colour puts the plain background back.');
 
     function drawSwatches(): void {
       const now = current();
@@ -49,13 +49,16 @@ export const settingsApp: AppDef = {
       if (now.kind === 'colour') custom.value = now.value;
     }
 
+    let pictureRound = 0;
     async function drawPictures(): Promise<void> {
+      const round = ++pictureRound;
       let names: string[] = [];
       try {
         names = (await shell.fs.list('/Pictures')).filter(e => e.kind === 'file' && PICTURE_TYPES.includes(extensionOf(e.name))).map(e => e.name);
       } catch (error) {
         await shell.report('Could not read the Pictures folder', error);
       }
+      if (round !== pictureRound) return; // a newer reading of the folder draws the list
       const now = current();
       const rows = names.sort((a, b) => a.localeCompare(b)).map(name => {
         const path = `/Pictures/${name}`;
@@ -143,19 +146,42 @@ export const settingsApp: AppDef = {
     showBin();
 
     // ---- Colour scheme ----
+    // A radio group: Tab reaches only the chosen scheme, the arrow keys move to the next one and choose it.
     const themes = h('div', { class: 'swatches', role: 'radiogroup', 'aria-label': 'Colour scheme' });
+    const themeButtons = THEMES.map(t => {
+      const b = h('button', { type: 'button', class: 'swatch theme-swatch', role: 'radio', 'data-theme-sample': t.id }, h('span', { class: 'swatch-chip' }), t.name);
+      b.addEventListener('click', () => {
+        shell.setTheme(t.id);
+        drawThemes();
+      }, { signal: app.signal });
+      return b;
+    });
+    themes.append(...themeButtons);
     const drawThemes = () => {
       const now = shell.session.data.theme;
-      themes.replaceChildren(...THEMES.map(t => {
-        const b = h('button', { type: 'button', class: `swatch theme-swatch${t.id === now ? ' on' : ''}`, role: 'radio', 'aria-checked': String(t.id === now), 'data-theme-sample': t.id }, h('span', { class: 'swatch-chip' }), t.name);
-        b.addEventListener('click', () => {
-          shell.setTheme(t.id);
-          drawThemes();
-        }, { signal: app.signal });
-        return b;
-      }));
+      themeButtons.forEach((b, i) => {
+        const chosen = THEMES[i].id === now;
+        b.classList.toggle('on', chosen);
+        b.setAttribute('aria-checked', String(chosen));
+        b.tabIndex = chosen ? 0 : -1;
+      });
+      if (!themeButtons.some(b => b.tabIndex === 0)) themeButtons[0].tabIndex = 0;
     };
+    on(themes, 'keydown', (event: KeyboardEvent) => {
+      const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[event.key];
+      const at = themeButtons.indexOf(document.activeElement as HTMLButtonElement);
+      if (at < 0) return;
+      const to = step ? (at + step + themeButtons.length) % themeButtons.length : event.key === 'Home' ? 0 : event.key === 'End' ? themeButtons.length - 1 : -1;
+      if (to < 0) return;
+      event.preventDefault();
+      themeButtons[to].focus();
+      themeButtons[to].click();
+    }, app.signal);
     drawThemes();
+    // A scheme chosen in another tab (shell.applyTheme) shows here too.
+    const themeWatch = new MutationObserver(drawThemes);
+    themeWatch.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    app.signal.addEventListener('abort', () => themeWatch.disconnect(), { once: true });
 
     // ---- Chat and AI history ----
     // Chat's messages live on the server: how long they are kept is the owner's choice, for everyone. AI chats are each
@@ -284,6 +310,10 @@ export const settingsApp: AppDef = {
     app.onReopen(next => {
       if (next === 'ai') aiHead.scrollIntoView({ block: 'start' });
     });
+    // A picture added to (or taken from) Pictures while Settings is open, here or in another tab, shows in the list.
+    shell.changes.on(paths => {
+      if (paths.some(p => p === '/Pictures' || p.startsWith('/Pictures/'))) void drawPictures();
+    }, app.signal);
     await drawPictures();
   },
 };
