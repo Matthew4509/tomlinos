@@ -635,7 +635,16 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
   };
   const view = new pm.EditorView(mount, {
     state,
-    editable: () => !checkingCopies,
+    // While the "not saved" copies are checked the page stays editable, so it can take the keyboard (and Ctrl+S, Ctrl+O
+    // reach the window), but typing, pasting and dropping are held back: a key must not answer the offer by accident.
+    editable: () => true,
+    handleTextInput: () => checkingCopies,
+    handleKeyDown: (_v: any, event: KeyboardEvent) => {
+      if (!checkingCopies) return false;
+      const moves = /^(Arrow|Home|End|Page|Tab|Escape|Shift|Control|Alt|Meta)/.test(event.key);
+      const windowKey = (event.ctrlKey || event.metaKey) && /^[sop]$/i.test(event.key);
+      return !(moves || windowKey);
+    },
     attributes: () => ({ class: 'wp-doc', spellcheck: spell ? 'true' : 'false', role: 'textbox', 'aria-multiline': 'true', 'aria-label': 'Document' }),
     nodeViews,
     // Ctrl+click on a link opens it in a new browser tab (a plain click puts the cursor there, as in Word).
@@ -662,6 +671,7 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
       }
     },
     handlePaste: (_v: any, event: ClipboardEvent) => {
+      if (checkingCopies) return true;
       const files = [...(event.clipboardData?.files ?? [])].filter(f => PICTURE_TYPES.test(f.type));
       // Word and Excel give words as HTML with a picture of them too: those paste as the words.
       if (!files.length || !htmlIsOnlyPicture(event.clipboardData?.getData('text/html') ?? '')) return false;
@@ -669,6 +679,10 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
       return true;
     },
     handleDrop: (_v: any, event: DragEvent) => {
+      if (checkingCopies) {
+        event.preventDefault();
+        return true;
+      }
       const files = [...(event.dataTransfer?.files ?? [])].filter(f => PICTURE_TYPES.test(f.type));
       if (!files.length) return false;
       event.preventDefault();

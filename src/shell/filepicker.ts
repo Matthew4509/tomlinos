@@ -885,8 +885,15 @@ function picker(shell: Shell, options: PickOptions, save: SaveOptions | null, fo
   }, signal);
 
   return (async () => {
-    folder = await firstFolder(shell, [options.folder ?? '/Documents', '/Documents', '/']);
-    if (!await go(folder, false)) renderAll();
+    // The window shows at once and fills in when the folder has been read: on a slow or busy server, waiting first
+    // made Save as (and Ctrl+S) look as if nothing had happened.
+    folder = options.folder ?? '/Documents';
+    list.replaceChildren(h('p', { class: 'pick-empty' }, 'Loading...'));
+    void (async () => {
+      const start = await firstFolder(shell, [options.folder ?? '/Documents', '/Documents', '/']);
+      if (signal.aborted) return;
+      if (!await go(start, false)) renderAll();
+    })();
     const asking = shell.dialogs.ask<string>({
       title: options.title,
       body,
