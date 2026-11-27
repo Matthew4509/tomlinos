@@ -30,11 +30,18 @@ test('TM-P1-twice: End task is not run again while a close of that window is sti
   assert.match(windows, /if \(win\.closing\) return win\.closing;/);
 });
 
-// TM-P0-files: "Your files" adds up the file sizes, but the server charges at least STORE_MIN_CHARGE per record, counts
-// folder records, and refuses at quota_mb. The figure is not the one the "storage is full" message uses.
-test('TM-P1-files (moved from P0: the figure is the true file sizes; showing the server count and the limit waits on direction): the files figure is the server\'s own count, with the limit', { todo: 'P1, waiting on direction' }, () => {
-  assert.match(store, /STORE_MIN_CHARGE = 16384/, 'the server still charges a minimum per record');
-  assert.match(src, /quota/i);
+// TM-P1-files: "Your files" added up the file sizes only, but the server charges every record (files AND folders) its
+// size plus the version stamp, at least STORE_MIN_CHARGE. The figure now follows the server's rule; the browser test
+// checks it against the server's .usage file.
+test('TM-P1-files: the files figure uses the server\'s own charging rule (minimum per record, stamp, folders counted)', () => {
+  const min = /STORE_MIN_CHARGE = (\d+);/.exec(store)?.[1];
+  const stamp = /STORE_VERSION_LEN = (\d+);/.exec(store)?.[1];
+  assert.ok(min && stamp, 'the server rule is still in server/lib/store.php');
+  assert.match(src, new RegExp(`RECORD_MIN_CHARGE = ${min};`), 'same minimum as the server');
+  assert.match(src, new RegExp(`RECORD_STAMP = ${stamp};`), 'same version stamp as the server');
+  assert.match(store, /store_charge\(STORE_VERSION_LEN \+ strlen\(\$o\['data'\]\)\)/, 'the server still charges stamp + bytes');
+  assert.match(src, /counted \+= recordCharge\(folderRecordBytes\(entries\)\)/, 'folder records are counted');
+  assert.match(src, /counted against your storage limit/);
 });
 
 test('TM-P1-sort: the window list can be sorted (name, app, state)', { todo: 'P1' }, () => {

@@ -39,7 +39,8 @@ const problems = [];
 page.on('pageerror', e => problems.push('pageerror: ' + e.message));
 const shot = async name => SHOTS && page.screenshot({ path: `${SHOTS}/${name}.png` });
 const openApp = async label => {
-  await page.locator('.start-btn').click();
+  // The Start button opens and closes the menu: a step that failed with it open must not leave the next one closing it.
+  if (!(await page.locator('.start-filter').isVisible())) await page.locator('.start-btn').click();
   await page.locator('.start-filter').fill(label);
   await page.locator(`.start-menu [data-label="${label}"]`).first().click();
 };
@@ -71,8 +72,8 @@ async function openTm() {
   if (await tmWin().locator('.tm-pane').first().isHidden()) await tmWin().getByRole('tab', { name: 'Apps' }).click();
   await tmWin().locator('.tm-list').waitFor();
 }
-async function dirtyNotepad(text) {
-  await openApp('notepad');
+async function dirtyNotes(text) {
+  await openApp('quick notes');
   const win = page.locator('.win', { has: page.locator('.editor') }).last();
   await win.locator('textarea.editor-text').fill(text);
   return win;
@@ -94,18 +95,18 @@ await step('set up the owner', async () => {
 
 await step('baseline: the list shows every other window, and a dirty one as "Not saved"', async () => {
   await closeAll();
-  await dirtyNotepad('hello');
+  await dirtyNotes('hello');
   await openApp('calculator');
   await openTm();
   eq(await tmRows().count(), 2, 'rows');
   const states = await tmRows().locator('.tm-state').allInnerTexts();
-  ok(states.includes('Not saved'), 'Notepad with typing shows Not saved: ' + states);
+  ok(states.includes('Not saved'), 'Quick Notes with typing shows Not saved: ' + states);
 });
 
 await step('TM-P0-keys: the window list can be used from the keyboard (arrow picks a row, Enter switches, Delete ends)', async () => {
   await closeAll();
   await openApp('calculator');
-  await openApp('notepad');
+  await openApp('quick notes');
   await openTm();
   await tmWin().locator('.tm-list').focus();
   await page.keyboard.press('ArrowDown');
@@ -118,7 +119,7 @@ await step('TM-P0-keys: the window list can be used from the keyboard (arrow pic
 
 await step('TM-P1-4: Delete held down on a window with unsaved typing asks once, not three times over', async () => {
   await closeAll();
-  await dirtyNotepad('held');
+  await dirtyNotes('held');
   await openTm();
   await tmWin().locator('.tm-list').focus();
   await page.keyboard.press('Home');
@@ -131,11 +132,11 @@ await step('TM-P1-4: Delete held down on a window with unsaved typing asks once,
   eq(await page.locator('.dialog').count(), 1, 'close questions open');
   await page.locator('.dialog').getByRole('button', { name: 'Keep it open' }).click();
   eq(await page.locator('.dialog').count(), 0, 'questions left after Keep it open');
-  eq(await page.locator('.win', { has: page.locator('.editor') }).count(), 1, 'Notepad windows still open');
+  eq(await page.locator('.win', { has: page.locator('.editor') }).count(), 1, 'Quick Notes windows still open');
 });
 
 let manyOk = false;
-await step('setup: 120 small files opened in Notepad from the Terminal (120 windows)', async () => {
+await step('setup: 120 small files opened in Quick Notes from the Terminal (120 windows)', async () => {
   await closeAll();
   await openApp('terminal');
   await termWin().locator('.term-in').waitFor();
@@ -147,7 +148,7 @@ await step('setup: 120 small files opened in Notepad from the Terminal (120 wind
   const t0 = Date.now();
   await term('open ' + names.join(' '));
   await page.waitForFunction(() => document.querySelectorAll('.win .editor').length >= 120, null, { timeout: 120000 });
-  console.log('       opened 120 Notepad windows in ' + (Date.now() - t0) + ' ms');
+  console.log('       opened 120 Quick Notes windows in ' + (Date.now() - t0) + ' ms');
   manyOk = true;
   console.log('       page heap now ' + Math.round((await page.evaluate(() => performance.memory?.usedJSHeapSize ?? 0)) / 1048576) + ' MB');
 });
@@ -238,7 +239,7 @@ await step('TM-P1-files: "Your files" agrees with what the server counts against
   const unit = { b: 1, bytes: 1, kb: 1024, mb: 1048576, gb: 1073741824 }[m[2].toLowerCase()];
   const shownBytes = Number(m[1]) * unit;
   console.log(`       server counts ${counted} bytes against the limit; Task Manager shows about ${Math.round(shownBytes)}`);
-  ok(shownBytes >= counted * 0.5 && shownBytes <= counted * 2, `Task Manager shows ${shown}, the server counts ${(counted / 1048576).toFixed(2)} MB`);
+  ok(Math.abs(shownBytes - counted) <= counted * 0.1, `Task Manager shows ${shown}, the server counts ${(counted / 1048576).toFixed(2)} MB`);
 });
 
 await step('TM-mem: Memory follows what the page holds (100 MB more is shown within a few seconds)', async () => {

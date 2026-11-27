@@ -13,6 +13,14 @@ interface ChromeMemory {
   jsHeapSizeLimit: number;
 }
 
+// The server's rule for what one record counts against the limit (STORE_MIN_CHARGE and STORE_VERSION_LEN in
+// server/lib/store.php): its bytes plus the version stamp kept with them, but at least 16 KB.
+const RECORD_MIN_CHARGE = 16384;
+const RECORD_STAMP = 32;
+const recordCharge = (bytes: number) => Math.max(RECORD_MIN_CHARGE, RECORD_STAMP + bytes);
+/** The size of a folder's record: its list of entries, as the file system writes it (src/fs/fs.ts). */
+const folderRecordBytes = (entries: unknown[]) => new TextEncoder().encode(JSON.stringify({ v: 1, entries })).length;
+
 export const taskManagerApp: AppDef = {
   ...APPS.taskmanager,
   launch(app) {
@@ -151,8 +159,13 @@ export const taskManagerApp: AppDef = {
       let bytes = 0;
       let files = 0;
       let folders = 0;
+      // What the server counts against the storage limit, worked out the way it does (server/lib/store.php): every
+      // file and every folder is one record, and a record counts its own size, but at least 16 KB.
+      let counted = 0;
       const walk = async (path: string): Promise<void> => {
-        for (const e of await shell.fs.list(path, true)) {
+        const entries = await shell.fs.list(path, true);
+        counted += recordCharge(folderRecordBytes(entries));
+        for (const e of entries) {
           if (app.signal.aborted) return;
           if (e.kind === 'folder') {
             folders++;
@@ -160,12 +173,16 @@ export const taskManagerApp: AppDef = {
           } else {
             files++;
             bytes += e.size;
+            counted += recordCharge(e.size);
           }
         }
       };
       try {
         await walk('/');
-        filesOut.textContent = `${formatSize(bytes)} in ${plural(files, 'file')} and ${plural(folders, 'folder')} (the Recycle Bin and settings included)`;
+        const plain = `${formatSize(bytes)} in ${plural(files, 'file')} and ${plural(folders, 'folder')}`;
+        filesOut.textContent = shell.storeLabel.includes('server')
+          ? `${formatSize(counted)} counted against your storage limit (${plain}; every file and folder counts at least 16 KB)`
+          : `${plain} (the Recycle Bin and settings included)`;
       } catch (error) {
         filesOut.textContent = 'could not be measured';
         await shell.report('Could not measure your files', error);
