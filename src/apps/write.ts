@@ -654,7 +654,9 @@ async function run(app: AppHandle, pm: PM, argIn: string | undefined): Promise<v
       try {
         const copy = parseInert(safe);
         tidyPasted(copy);
-        return copy.body.innerHTML;
+        // Written out node by node (the desktop never reads or writes markup through innerHTML).
+        const out = new XMLSerializer();
+        return [...copy.body.childNodes].map(n => out.serializeToString(n)).join('');
       } catch {
         return safe;
       }
