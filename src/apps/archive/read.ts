@@ -30,6 +30,8 @@ export interface ArchiveEntry {
   folder: boolean;
   /** The unpacked size the archive claims (checked while unpacking). */
   size: number;
+  /** Locked with a zip password: listed, but read() refuses it (an extract skips it and says so). */
+  locked?: boolean;
   read(): Promise<Uint8Array>;
 }
 
@@ -146,7 +148,7 @@ export function readZip(b: Uint8Array): ArchiveEntry[] {
       }
       throw new ArchiveError(`“${parts.join('/')}” is packed a way this opener does not read (method ${method}). Only the usual "deflate" and "stored" are read.`);
     };
-    entries.push({ parts, folder, size, read });
+    entries.push({ parts, folder, size, locked: (flags & 1) !== 0, read });
   }
   if (claimed > MAX_TOTAL) throw new ArchiveError('This archive says it unpacks to more than 500 MB, which is more than this opener will unpack.');
   return entries;
