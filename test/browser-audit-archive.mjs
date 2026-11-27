@@ -190,6 +190,10 @@ await step('AR-P1-1: a file "x" and a folder "x/" in one zip: Extract all still 
   await typePath(folder);
   const got = await names();
   ok(got.includes('after.txt'), `${status} Got ${JSON.stringify(got)}: the extract stopped at the clash.`);
+  eq(got, ['after.txt', 'x', 'x (2)'], 'the file, the renamed folder and the last file');
+  ok(/came out as “x \(2\)”/.test(status), `the end message names the rename: ${status}`);
+  await typePath(folder + '/x (2)');
+  eq(await names(), ['inner.txt'], 'the folder "x" came out as "x (2)" with its file in it');
 });
 
 await step('Extract selected: one ticked file inside "docs" comes out alone (docs/keep.txt)', async () => {
@@ -211,6 +215,9 @@ await step('AR-P1-2: keyboard: Enter on a folder row (focused by Tab) opens it',
   await page.waitForTimeout(300);
   const where = await aw().locator('.archive-where').innerText();
   ok(where === '/docs', `still at "${where}": a folder opens only by double-click, so the keyboard cannot reach a file inside one`);
+  await page.keyboard.press('Backspace');
+  await page.waitForTimeout(300);
+  eq(await aw().locator('.archive-where').innerText(), '/', 'Backspace goes up a folder');
 });
 
 await step('AR-P1-3: keyboard: arrow keys move through the list rows', async () => {
@@ -219,14 +226,46 @@ await step('AR-P1-3: keyboard: arrow keys move through the list rows', async () 
   await page.keyboard.press('ArrowDown');
   const focused = await page.evaluate(() => document.activeElement?.closest('.archive-row')?.textContent ?? document.activeElement?.className ?? '');
   ok(/docs/.test(focused), `ArrowDown in the list leaves focus on "${focused}"`);
+  const on = () => page.evaluate(() => document.activeElement?.closest('.archive-row')?.querySelector('.archive-name')?.textContent ?? '');
+  await page.keyboard.press('ArrowDown');
+  eq(await on(), 'top.txt', 'a second ArrowDown');
+  await page.keyboard.press('ArrowDown');
+  eq(await on(), 'top.txt', 'ArrowDown on the last row stays there');
+  await page.keyboard.press('Home');
+  eq(await on(), 'docs', 'Home');
+  await page.keyboard.press('End');
+  eq(await on(), 'top.txt', 'End');
+  await page.keyboard.press('ArrowUp');
+  eq(await on(), 'docs', 'ArrowUp');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(300);
+  eq(await aw().locator('.archive-where').innerText(), '/docs', 'Enter on the focused folder row');
+  eq(await on(), 'keep.txt', 'the first row inside has the focus');
 });
 
 await step('AR-P1-4: double-clicking a file inside the archive opens (or previews) it', async () => {
-  await openZip('nest.zip');
+  // clash.zip, so that nest.zip's folders stay as the steps below expect ("clash" is taken by AR-P1-1).
+  await openZip('clash.zip');
   const before = await page.locator('.win').count();
-  await aw().locator('.archive-row', { hasText: 'top.txt' }).dblclick();
+  await aw().locator('.archive-row', { hasText: 'after.txt' }).dblclick();
   await page.waitForTimeout(1500);
   ok((await page.locator('.win').count()) > before, 'nothing happens: a file cannot be looked at without extracting the whole archive first');
+  const status = await aw().locator('.statusbar').innerText();
+  ok(status.includes('/Documents/clash (2)'), `the status line says where the copy went: ${status}`);
+  // Enter on the same file opens the copy already made, not a second one.
+  await aw().locator('.archive-row', { hasText: 'after.txt' }).locator('input').focus();
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(1000);
+  const opened = page.locator('.win:not(:has(.explorer)):not(:has(.archive))');
+  for (let i = 0; i < 5 && (await opened.count()); i++) {
+    await opened.first().getByRole('button', { name: 'Close' }).click();
+    await page.waitForTimeout(200);
+  }
+  await closeArchives();
+  await typePath('/Documents/clash (2)');
+  eq(await names(), ['after.txt'], 'the copy, once');
+  await typePath('/Documents');
+  ok(!(await names()).includes('clash (3)'), 'a second open made no second folder');
 });
 
 await step('narrow window (380 px viewport): the three toolbar buttons are all on screen', async () => {
@@ -248,6 +287,8 @@ await step('AR-P1-5: a password-locked file in the middle: Extract all still ext
   await typePath(folder);
   const got = await names();
   ok(got.includes('last.txt'), `${status} Got ${JSON.stringify(got)}: one locked file stops the whole extract, and the list never marks it as locked.`);
+  eq(got, ['first.txt', 'last.txt'], 'the two unlocked files');
+  ok(/“secret\.txt” is locked with a password/.test(status), `the end message names the locked file: ${status}`);
 });
 
 // AR-P1-6 was about a typed folder name ("sub/inner"); the name prompt is gone, the folder is named after the archive.

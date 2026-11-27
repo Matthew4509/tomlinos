@@ -127,6 +127,14 @@ test('a locked (encrypted) entry is listed and refused with a plain reason when 
   await assert.rejects(e.read(), /locked with a password/);
 });
 
+test('AR-P1-5: a locked entry is marked locked, so an extract can skip it and go on; the others are not', async () => {
+  const entries = await readArchive(makeZip([
+    { name: 'first.txt', data: '1' }, { name: 'secret.txt', flags: 0x801, data: 'zzz' }, { name: 'last.txt', data: '3' },
+  ]), 'locked.zip');
+  assert.deepEqual(entries.map(e => [e.parts.join('/'), Boolean(e.locked)]), [['first.txt', false], ['secret.txt', true], ['last.txt', false]]);
+  assert.equal(text(await entries[2].read()), '3');
+});
+
 test('names that clash once cleaned are all listed by the reader (the loss happens later, in extract)', async () => {
   const entries = await readArchive(makeZip([
     { name: 'a.txt', data: '1' }, { name: 'A.TXT', data: '2' }, { name: 'q?.txt', data: '3' }, { name: 'q_.txt', data: '4' },

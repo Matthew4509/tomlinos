@@ -20,6 +20,18 @@ interface Row {
   name: string;
   folder: boolean;
   size: number;
+  /** For a file row: the entry it shows (opened by double-click or Enter). */
+  entry?: ArchiveEntry;
+}
+
+/** At most this many skipped or renamed items are named in the end message; the rest are counted. */
+const MAX_LISTED = 15;
+
+/** The end message's list: a few lines, then "and 3 more". */
+function listed(lines: string[]): string {
+  const shown = lines.slice(0, MAX_LISTED).map(l => '• ' + l);
+  if (lines.length > MAX_LISTED) shown.push(`and ${lines.length - MAX_LISTED} more`);
+  return shown.join('\n');
 }
 
 /** "photos.tar.gz" -> "photos". */
@@ -89,35 +101,125 @@ async function showArchive(app: AppHandle, arg: string | undefined): Promise<voi
       const folder = e.folder || e.parts.length > here.length + 1;
       // Folders whose names fold together are one folder; files keep a row each, as they are extracted each under a name.
       const key = folder ? nameKey(name) + '/' : '\0' + name;
-      const row = byKey.get(key) ?? { name, folder, size: 0 };
+      const row: Row = byKey.get(key) ?? { name, folder, size: 0 };
       if (!e.folder) row.size += e.size;
+      if (!folder) row.entry = e;
       byKey.set(key, row);
     }
     return [...byKey.values()].sort((a, b) => Number(b.folder) - Number(a.folder) || a.name.localeCompare(b.name));
   }
 
-  function render() {
+  /** The rows on show, in order, and the one the keyboard is on. */
+  let shown: { row: Row; el: HTMLElement }[] = [];
+
+  function render(focusName?: string) {
     where.textContent = '/' + here.join('/');
     upBtn.disabled = here.length === 0;
     someBtn.disabled = chosen.size === 0;
-    list.replaceChildren(
-      ...rows().map(row => {
-        const key = keyOf([...here, row.name]) + (row.folder ? '/' : '');
-        const tick = h('input', { type: 'checkbox', 'aria-label': `Choose ${row.name}`, checked: chosen.has(key) });
-        const el = h('div', { class: 'archive-row', role: 'option', 'aria-selected': String(chosen.has(key)), title: row.folder ? 'Double-click to look inside' : '' },
-          tick, icon(row.folder ? 'folder' : fileTypeOf(row.name).icon, 20), h('span', { class: 'archive-name' }, row.name),
-          h('span', { class: 'archive-size' }, row.folder ? '' : formatSize(row.size)));
-        on(tick, 'change', () => {
-          if (tick.checked) chosen.add(key);
-          else chosen.delete(key);
-          el.setAttribute('aria-selected', String(tick.checked));
-          someBtn.disabled = chosen.size === 0;
-        }, app.signal);
-        if (row.folder) on(el, 'dblclick', () => { here = [...here, row.name]; render(); }, app.signal);
-        return el;
-      }),
-    );
+    shown = rows().map(row => {
+      const key = keyOf([...here, row.name]) + (row.folder ? '/' : '');
+      const tick = h('input', { type: 'checkbox', 'aria-label': `Choose ${row.name}`, checked: chosen.has(key) });
+      const locked = !row.folder && row.entry?.locked;
+      const el = h('div', {
+        class: 'archive-row', role: 'option', tabindex: '-1', 'aria-selected': String(chosen.has(key)),
+        title: row.folder ? 'Double-click or press Enter to look inside' : locked ? 'Locked with a password: it cannot be opened or extracted here' : 'Double-click or press Enter to open',
+      },
+        tick, icon(row.folder ? 'folder' : fileTypeOf(row.name).icon, 20), h('span', { class: 'archive-name' }, row.name),
+        h('span', { class: 'archive-size' }, row.folder ? '' : locked ? 'Locked' : formatSize(row.size)));
+      on(tick, 'change', () => {
+        if (tick.checked) chosen.add(key);
+        else chosen.delete(key);
+        el.setAttribute('aria-selected', String(tick.checked));
+        someBtn.disabled = chosen.size === 0;
+      }, app.signal);
+      on(el, 'dblclick', () => void activate(row), app.signal);
+      return { row, el };
+    });
+    list.replaceChildren(...shown.map(s => s.el));
     if (!list.firstChild) list.append(h('p', { class: 'app-message' }, 'This archive is empty.'));
+    if (focusName !== undefined) {
+      const at = shown.findIndex(s => s.row.folder && nameKey(s.row.name) === nameKey(focusName));
+      moveTo(Math.max(0, at));
+    }
+  }
+
+  /** A folder row opens the folder; a file row opens the file. */
+  async function activate(row: Row) {
+    if (row.folder) {
+      here = [...here, row.name];
+      render('');
+    } else if (row.entry) await openEntry(row.entry);
+  }
+
+  function goUp() {
+    if (!here.length) return;
+    const from = here[here.length - 1];
+    here = here.slice(0, -1);
+    render(from);
+  }
+
+  function moveTo(index: number) {
+    const target = shown[Math.min(Math.max(index, 0), shown.length - 1)];
+    target?.el.focus();
+  }
+
+  // The keyboard, as in File Explorer's list: Up, Down, Home and End move through the rows, Enter opens the row,
+  // Backspace goes up a folder, Space ticks the row.
+  on(list, 'keydown', (event: KeyboardEvent) => {
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    const current = (event.target as HTMLElement).closest('.archive-row');
+    const index = shown.findIndex(s => s.el === current);
+    const move = (to: number) => {
+      event.preventDefault();
+      moveTo(to);
+    };
+    if (event.key === 'ArrowDown') return move(index < 0 ? 0 : index + 1);
+    if (event.key === 'ArrowUp') return move(index < 0 ? 0 : index - 1);
+    if (event.key === 'Home') return move(0);
+    if (event.key === 'End') return move(shown.length - 1);
+    if (event.key === 'Backspace') {
+      event.preventDefault();
+      return goUp();
+    }
+    if (index < 0) return;
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      void activate(shown[index].row);
+    } else if (event.key === ' ' && event.target === current) {
+      event.preventDefault();
+      shown[index].el.querySelector('input')?.click();
+    }
+  }, app.signal);
+
+  // A file opened from inside the archive is copied out first: into a new folder named after the archive, made beside
+  // it the first time and used again for the next file opened from this window.
+  let openFolder: string | null = null;
+  const openedAt = new Map<ArchiveEntry, string>();
+  async function openEntry(e: ArchiveEntry) {
+    const name = e.parts[e.parts.length - 1];
+    try {
+      const before = openedAt.get(e);
+      if (before && (await shell.fs.stat(before))?.kind === 'file') return void (await shell.openPath(before));
+      if (e.locked) return void (await shell.dialogs.alert('Locked with a password', `“${name}” is locked with a password. This opener does not unlock zip passwords.`));
+      const bytes = await e.read();
+      if (app.signal.aborted) return;
+      if (!openFolder || (await shell.fs.stat(openFolder))?.kind !== 'folder') {
+        const beside = parentPath(arg!);
+        const taken = (await shell.fs.list(beside, true)).map(x => x.name);
+        openFolder = joinPath(beside, (await shell.fs.mkdir(joinPath(beside, uniqueName(archiveStem(archiveName), taken, true)))).name);
+      }
+      const fileName = uniqueName(name, (await shell.fs.list(openFolder, true)).map(x => x.name));
+      const path = joinPath(openFolder, fileName);
+      await shell.fs.writeFile(path, bytes, { mustBeNew: true });
+      openedAt.set(e, path);
+      status.textContent = `Opened a copy of “${name}”, put in ${openFolder}.`;
+      const folder = openFolder;
+      shell.toast(`“${fileName}” was copied out of the archive into ${folder} to open it.`, { label: 'Open folder', run: () => void shell.openPath(folder) });
+      await shell.openPath(path);
+    } catch (error) {
+      if (error instanceof ArchiveError) await shell.dialogs.alert('Could not open that file', error.message);
+      else await shell.report('Could not open that file', error);
+    }
   }
 
   async function extract(pick: ArchiveEntry[]) {
@@ -134,21 +236,41 @@ async function showArchive(app: AppHandle, arg: string | undefined): Promise<voi
     allBtn.disabled = someBtn.disabled = true;
     let done = 0;
     let deep = 0;
-    const made = new Set<string>();
-    // The names given out in each folder: two entries whose names come to the same one there ("a.txt" and "A.TXT",
-    // "q?.txt" and "q_.txt", "café" written two ways) get " (2)" rather than one writing over the other.
+    // What could not come out (locked, damaged), and what came out under another name, all said once at the end.
+    const skipped: string[] = [];
+    const renamed: string[] = [];
+    // The names given out in each folder (files and folders alike): two entries whose names come to the same one there
+    // ("a.txt" and "A.TXT", "q?.txt" and "q_.txt", "café" written two ways, a file "x" and a folder "x/") get " (2)"
+    // rather than one writing over the other or the extract stopping.
     const given = new Map<string, string[]>();
+    // Each folder in the archive (by its folded path) -> the name it was given on disk.
+    const folderNames = new Map<string, string>();
+    const fileCount = pick.filter(p => !p.folder).length;
     try {
       const target = (await shell.fs.mkdir(joinPath(folder, name))).name;
       const root = joinPath(folder, target);
-      const ensure = async (parts: string[]) => {
-        for (let i = 1; i <= parts.length; i++) {
-          if (app.signal.aborted) return;
-          const key = keyOf(parts.slice(0, i));
-          if (made.has(key)) continue;
-          await shell.fs.ensureFolder(joinPath(root, ...parts.slice(0, i)));
-          made.add(key);
+      const giveName = (dir: string[], wanted: string, isFolder: boolean, shownAs: string): string => {
+        const names = given.get(keyOf(dir)) ?? [];
+        const got = uniqueName(wanted, names, isFolder);
+        names.push(got);
+        given.set(keyOf(dir), names);
+        if (got !== wanted) renamed.push(`${shownAs} came out as “${got}”`);
+        return got;
+      };
+      /** Makes the folders of `parts` (as named on disk) and returns their names on disk. */
+      const ensure = async (parts: string[]): Promise<string[]> => {
+        const real: string[] = [];
+        for (let i = 0; i < parts.length; i++) {
+          const key = keyOf(parts.slice(0, i + 1));
+          let got = folderNames.get(key);
+          if (got === undefined) {
+            got = giveName(real, parts[i], true, `the folder “${parts.slice(0, i + 1).join('/')}/”`);
+            await shell.fs.ensureFolder(joinPath(root, ...real, got));
+            folderNames.set(key, got);
+          }
+          real.push(got);
         }
+        return real;
       };
       for (const e of pick) {
         if (app.signal.aborted) return;
@@ -160,20 +282,39 @@ async function showArchive(app: AppHandle, arg: string | undefined): Promise<voi
           await ensure(e.parts);
           continue;
         }
-        const dir = e.parts.slice(0, -1);
-        await ensure(dir);
+        const shownAs = e.parts.join('/');
+        status.textContent = `Extracting ${done + skipped.length + 1} of ${fileCount}: ${shownAs}`;
+        if (e.locked) {
+          skipped.push(`“${shownAs}” is locked with a password`);
+          continue;
+        }
+        let bytes: Uint8Array;
+        try {
+          bytes = await e.read();
+        } catch (error) {
+          // A damaged or unreadable file is left out and named; the rest still come out.
+          if (!(error instanceof ArchiveError)) throw error;
+          skipped.push(error.message);
+          continue;
+        }
         if (app.signal.aborted) return;
-        const names = given.get(keyOf(dir)) ?? [];
-        const fileName = uniqueName(e.parts[e.parts.length - 1], names);
-        names.push(fileName);
-        given.set(keyOf(dir), names);
-        status.textContent = `Extracting ${done + 1} of ${pick.filter(p => !p.folder).length}: ${e.parts.join('/')}`;
-        await shell.fs.writeFile(joinPath(root, ...dir, fileName), await e.read(), { mustBeNew: true });
+        const dir = await ensure(e.parts.slice(0, -1));
+        const fileName = giveName(dir, e.parts[e.parts.length - 1], false, `“${shownAs}”`);
+        await shell.fs.writeFile(joinPath(root, ...dir, fileName), bytes, { mustBeNew: true });
         done++;
       }
       const left = deep ? ` ${plural(deep, 'item')} nested more than ${MAX_DEPTH} folders deep ${deep === 1 ? 'was' : 'were'} left out.` : '';
-      status.textContent = `Extracted ${plural(done, 'file')} into “${target}”.${left}`;
-      shell.toast(`Extracted ${plural(done, 'file')} into “${target}”.${left}`, { label: 'Open folder', run: () => void shell.openPath(root) });
+      const notSkipped = skipped.length ? ` ${plural(skipped.length, 'file')} could not be extracted.` : '';
+      status.textContent = `Extracted ${plural(done, 'file')} into “${target}”.${notSkipped}${left}`;
+      shell.toast(`Extracted ${plural(done, 'file')} into “${target}”.${notSkipped}${left}`, { label: 'Open folder', run: () => void shell.openPath(root) });
+      if (skipped.length || renamed.length) {
+        const parts: string[] = [];
+        if (skipped.length) parts.push(`Left out (${skipped.length}):\n${listed(skipped)}`);
+        if (renamed.length) parts.push(`Given a new name, as the name was already used in that folder (${renamed.length}):\n${listed(renamed)}`);
+        allBtn.disabled = false;
+        someBtn.disabled = chosen.size === 0;
+        await shell.dialogs.alert(`Extracted ${plural(done, 'file')} into “${target}”`, parts.join('\n\n'));
+      }
     } catch (error) {
       status.textContent = `Stopped after ${plural(done, 'file')}.`;
       if (error instanceof ArchiveError) await shell.dialogs.alert('Could not extract everything', `${error.message} ${plural(done, 'file')} before it were extracted.`);
@@ -184,7 +325,7 @@ async function showArchive(app: AppHandle, arg: string | undefined): Promise<voi
     }
   }
 
-  on(upBtn, 'click', () => { here = here.slice(0, -1); render(); }, app.signal);
+  on(upBtn, 'click', goUp, app.signal);
   on(allBtn, 'click', () => void extract(entries), app.signal);
   on(someBtn, 'click', () => {
     const keys = [...chosen];
