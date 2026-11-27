@@ -896,6 +896,7 @@ body.is-dragging .win-body { pointer-events: none; }
 .gate-unlock-mail { display: block; margin: 4px 0; }
 .gate-unlock-mail[hidden] { display: none; }
 .gate-brand, .mgate-brand { display: flex; align-items: center; gap: 10px; font-size: 20px; font-weight: 700; color: #1748b8; margin-bottom: 6px; }
+:root[data-theme="dark"] .gate-brand, :root[data-theme="dark"] .mgate-brand { color: #8fb0ff; }
 .gate h1, .mini-gate h1 { font-size: 18px; margin: 8px 0 6px; }
 .gate-intro, .mgate-intro { margin: 0 0 10px; color: var(--ink-soft); }
 .gate-note { margin: 0 0 10px; padding: 8px 10px; background: #fff6d6; border: 1px solid #e3c65a; border-radius: 4px; }

@@ -297,16 +297,19 @@ await step('FAULT SET-P1-3: a colour scheme chosen in one tab shows in another o
   const b = await context.newPage();
   await b.goto(BASE);
   await b.locator('#desktop .item').first().waitFor({ timeout: 20000 });
+  const bw = await openSettings(b);
   const w = await openSettings(page);
   await w.locator('.theme-swatch', { hasText: 'Silver' }).click();
   await settle(page);
   await b.waitForTimeout(2000);
   const theme = await b.evaluate(() => document.documentElement.dataset.theme);
+  const shown = await bw.locator('.theme-swatch[aria-checked="true"]').innerText().catch(() => 'none');
   await b.close();
   const w2 = await openSettings(page);
   await w2.locator('.theme-swatch', { hasText: 'Standard' }).click();
   await settle(page);
   ok(theme === 'silver', 'the other tab still shows ' + theme);
+  ok(shown.includes('Silver'), 'the other tab\'s Settings still marks ' + shown);
 });
 
 await step('a small window (320 x 300) has no sideways scrolling', async () => {
@@ -329,9 +332,35 @@ await step('FAULT SET-P1-4: arrow keys move the choice in the Colour scheme radi
   const w = await openSettings();
   const first = w.locator('.theme-swatch').first();
   await first.focus();
+  const before = await page.evaluate(() => document.documentElement.dataset.theme);
   await page.keyboard.press('ArrowRight');
-  const focused = await page.evaluate(() => document.activeElement?.textContent);
-  ok(focused !== (await first.textContent()), 'ArrowRight did nothing in a radio group');
+  const focused = await page.evaluate(() => ({ text: document.activeElement?.textContent, checked: document.activeElement?.getAttribute('aria-checked'), id: document.activeElement?.getAttribute('data-theme-sample') }));
+  const after = await page.evaluate(() => document.documentElement.dataset.theme);
+  const stops = await w.locator('.theme-swatch').evaluateAll(bs => bs.filter(b => b.tabIndex >= 0).length);
+  await page.keyboard.press('ArrowLeft');
+  const back = await page.evaluate(() => document.documentElement.dataset.theme);
+  await settle(page);
+  ok(focused.text !== (await first.textContent()), 'ArrowRight did nothing in a radio group');
+  ok(focused.checked === 'true' && after === focused.id && after !== before, 'ArrowRight moved without choosing: ' + JSON.stringify({ focused, before, after }));
+  ok(stops === 1, 'Tab stops in the group: ' + stops);
+  ok(back === before, 'ArrowLeft did not choose the first scheme again: ' + back);
+});
+
+await step('dark theme: the TOMLIN OS name on the lock-screen pictures has at least 4.5:1 contrast', async () => {
+  const w = await openSettings();
+  await w.locator('.theme-swatch', { hasText: 'Dark' }).click();
+  await page.waitForTimeout(300);
+  const ratio = await w.locator('.mgate-brand').first().evaluate(el => {
+    const rgb = s => /rgba?\(([^)]+)\)/.exec(s)[1].split(',').map(parseFloat);
+    const lum = c => { const [r, g, b] = c.slice(0, 3).map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+    let bg = null;
+    for (let e = el; e && !bg; e = e.parentElement) { const c = rgb(getComputedStyle(e).backgroundColor); if (c.length < 4 || c[3] > 0.5) bg = c; }
+    const a = lum(rgb(getComputedStyle(el).color)), b = lum(bg);
+    return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+  });
+  await w.locator('.theme-swatch', { hasText: 'Standard' }).click();
+  await settle(page);
+  ok(ratio >= 4.5, 'contrast ' + ratio.toFixed(2) + ':1');
 });
 
 await step('a phone-sized page (375 x 700) shows Settings usable', async () => {
