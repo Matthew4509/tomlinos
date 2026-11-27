@@ -521,13 +521,20 @@ export function agentPane(app: AppHandle): { el: HTMLElement; shown: (want?: Clo
     // A quick job's question is marked, so the built-in AI never learns a "remember" from a file's text.
     let turns: Array<ChatTurn & { job?: boolean }> = (leaveOut ? withoutDevice(said) : said).map(t => ({ role: t.role, content: t.text, job: t.role === 'user' && live.labels.has(t) }));
     if (mode === 'short') turns = [{ role: 'user', content: `${fitText(text, Math.max(200, Math.floor((await limit()) / 2))).text}\n\nAnswer in two or three short sentences.` }];
+    // The answer on screen is drawn again at most every 80 ms, not for every piece: a long answer in hundreds of pieces
+    // drew its whole text each time and held the page for seconds.
+    let drawSoon = 0;
     const show = (t: string) => {
       if (live.thread !== thread) return;
       pending.pieces++;
       if (pending.first === null && t) pending.first = Date.now();
       pending.text = t;
       live.pending = pending;
-      live.tell('pending');
+      if (drawSoon) return;
+      drawSoon = window.setTimeout(() => {
+        drawSoon = 0;
+        if (live.pending === pending) live.tell('pending');
+      }, 80);
     };
     let answer = '';
     let perSecond = 0;
