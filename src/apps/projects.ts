@@ -12,7 +12,7 @@ import { APPS } from './catalog.ts';
 import { CONTACTS_PATH } from './contacts.ts';
 import { askEntry } from './projects/entry-ui.ts';
 import {
-  MAX_ACTIONS, PROJECTS_PATH, actionProblem, cleanSettings, entryTitle, moveAction, newProject, nextFor, parseProjects,
+  DEFAULT_ACTIONS, MAX_ACTIONS, PROJECTS_PATH, actionProblem, cleanSettings, entryTitle, moveAction, newProject, nextFor, parseProjects,
   projectEntries, readSettings, removeAction, shortTitle, siteHref, sortProjects, writeProjects, writeSettings, type Project, type ProjectSettings,
 } from './projects/data.ts';
 
@@ -78,6 +78,8 @@ export const projectsApp: AppDef = {
     /** The day the open view was last drawn on. */
     let drawnDay = '';
     const find = (uid: string) => projects.find(p => p.uid === uid);
+    /** An entry's title without the project's name; one booked before a rename still reads as its button. */
+    const short = (e: CalEvent, p: Project) => shortTitle(e, p, [...settings.actions, ...DEFAULT_ACTIONS]);
 
     /** The projects must load; a calendar that cannot be read is said once and the list still opens. */
     async function loadAll(): Promise<void> {
@@ -119,7 +121,8 @@ export const projectsApp: AppDef = {
     /** Redraws the current view, putting the keyboard back on the same control (a rebuilt list drops it otherwise). */
     function draw(): void {
       drawnDay = today();
-      const active = document.activeElement instanceof HTMLElement && app.root.contains(document.activeElement) ? document.activeElement.dataset.key : undefined;
+      const had = document.activeElement instanceof HTMLElement && app.root.contains(document.activeElement);
+      const active = had ? (document.activeElement as HTMLElement).dataset.key : undefined;
       finishedBtn.setAttribute('aria-pressed', String(view.kind === 'finished'));
       gearBtn.setAttribute('aria-pressed', String(view.kind === 'settings'));
       const done = projects.filter(p => p.finished).length;
@@ -138,6 +141,9 @@ export const projectsApp: AppDef = {
       else if (view.kind === 'settings') drawSettings();
       else drawList(false);
       if (active) body.querySelector<HTMLElement>(`[data-key="${CSS.escape(active)}"]`)?.focus();
+      // The control that had the keyboard is gone (a project opened from the list): it goes to the new view's first
+      // control (Back on a project's page), not out of the window.
+      if (had && !app.root.contains(document.activeElement)) body.querySelector<HTMLElement>('button, input, select, textarea, a[href]')?.focus();
     }
 
     function star(p: Project): HTMLButtonElement {
@@ -191,7 +197,7 @@ export const projectsApp: AppDef = {
     function nextLine(p: Project): HTMLElement {
       const n = nextFor(eventsOf(p.uid), p.uid, today());
       if (!n) return h('span', { class: 'proj-next none' }, 'Nothing booked');
-      const what = shortTitle(n.event, p);
+      const what = short(n.event, p);
       return h('span', { class: 'proj-next' }, `Next: ${dayWord(n.next, today())} ${n.event.start || 'all day'}${what ? ' · ' + what : ''}`);
     }
 
@@ -254,7 +260,7 @@ export const projectsApp: AppDef = {
       return h('li', { class: 'proj-entry' },
         h('div', { class: 'proj-entry-head' },
           h('span', { class: 'proj-when' }, `${when} · ${timeLabel(e)}`),
-          h('span', { class: 'proj-entry-title' }, shortTitle(e, p) || e.title)),
+          h('span', { class: 'proj-entry-title' }, short(e, p) || e.title)),
         rep || e.where ? h('p', { class: 'hint' }, [rep, e.where ? `At ${e.where}` : ''].filter(Boolean).join(' · ')) : null,
         e.notes ? h('p', { class: 'proj-entry-notes' }, e.notes) : null,
         stop);

@@ -50,11 +50,26 @@ const UID = /^[\w-]{1,64}$/;
 
 const text = (v: unknown, max: number): string => (typeof v === 'string' ? v.slice(0, max) : '');
 
-/** One record as it may be kept: anything else in it is dropped, anything missing filled in. null for no name or id. */
-export function cleanProject(raw: unknown): Project | null {
+/** An id for a record typed in by hand with none (or one that cannot be used): made from what the record holds, so
+ *  each read of the same file gives it the same id until a save writes it in. */
+function idFor(raw: unknown): string {
+  const s = JSON.stringify(raw) ?? '';
+  let a = 0x811c9dc5;
+  let b = 0x01000193;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    a = Math.imul(a ^ c, 0x01000193) >>> 0;
+    b = Math.imul(b ^ c, 0x5bd1e995) >>> 0;
+  }
+  return 'hand-' + a.toString(16).padStart(8, '0') + b.toString(16).padStart(8, '0');
+}
+
+/** One record as it may be kept: anything else in it is dropped, anything missing filled in. null for no name, or no
+ *  id unless `giveId` (reading the file: a record typed in by hand is given one rather than dropped). */
+export function cleanProject(raw: unknown, giveId = false): Project | null {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as Record<string, unknown>;
-  const uid = typeof r.uid === 'string' && UID.test(r.uid) ? r.uid : '';
+  const uid = typeof r.uid === 'string' && UID.test(r.uid) ? r.uid : giveId ? idFor(raw) : '';
   const name = text(r.name, 200).trim();
   if (!uid || !name) return null;
   const created = typeof r.created === 'number' && Number.isFinite(r.created) ? r.created : 0;
@@ -69,7 +84,7 @@ export function parseProjects(textIn: string): Project[] {
   const seen = new Map<string, Project>();
   const out: Project[] = [];
   for (const raw of data) {
-    const p = cleanProject(raw);
+    const p = cleanProject(raw, true);
     if (!p) continue;
     const same = seen.get(p.uid);
     // The very same record twice is one project. A different project with a taken id (two files merged by hand) is
@@ -190,10 +205,14 @@ export function entryTitle(action: string, project: Pick<Project, 'name'>): stri
 
 /** The entry's title without the project's name on it, for a line that already says which project ('' for a plain
  *  Add to calendar entry, which is just the name). */
-export function shortTitle(e: Pick<CalEvent, 'title'>, p: Pick<Project, 'name'>): string {
+export function shortTitle(e: Pick<CalEvent, 'title'>, p: Pick<Project, 'name'>, actions: readonly string[] = DEFAULT_ACTIONS): string {
   if (e.title === p.name) return '';
   const tail = `: ${p.name}`;
-  return e.title.endsWith(tail) ? e.title.slice(0, -tail.length) : e.title;
+  if (e.title.endsWith(tail)) return e.title.slice(0, -tail.length);
+  // Booked before the project was renamed ("Add new feature: Old name"): still read as the button that booked it.
+  const lower = e.title.toLowerCase();
+  const action = actions.find(a => a.toLowerCase() !== PLAIN_ACTION.toLowerCase() && lower.startsWith(a.toLowerCase() + ': '));
+  return action ? e.title.slice(0, action.length) : e.title;
 }
 
 /** The day a new entry starts on by default. */
