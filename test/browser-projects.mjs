@@ -73,9 +73,19 @@ async function calendarDay(day) {
     await openApp('calendar');
     await C().locator('.cal-month-grid .cal-cell').first().waitFor();
   }
-  const cell = C().locator(`.cal-cell[data-day="${day}"]`);
-  if (!(await cell.count())) await C().getByRole('button', { name: 'Next month' }).click();
-  await C().locator(`.cal-cell[data-day="${day}"]`).click();
+  // The Calendar may be showing a later month than the day asked for (a step before looked at tomorrow, and near a
+  // month end that is next month): go back to this month first, then forward one month at a time to the day's month.
+  const want = day.slice(0, 7);
+  const cell = C().locator(`.cal-cell[data-day="${day}"]:not(.other)`);
+  if (!(await cell.count())) {
+    await C().getByRole('button', { name: 'Today', exact: true }).click();
+    await C().locator(`.cal-cell[data-day="${TODAY}"]:not(.other)`).waitFor();
+    for (let i = 0; i < 24 && !(await cell.count()); i++) {
+      if (want < TODAY.slice(0, 7)) throw new Error(`calendarDay: ${day} is before this month`);
+      await C().getByRole('button', { name: 'Next month' }).click();
+    }
+  }
+  await cell.click();
   await C().locator('.cal-side h3').waitFor();
   return C().locator('.cal-side .cal-event').allInnerTexts();
 }

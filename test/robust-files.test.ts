@@ -18,7 +18,8 @@ import { PHP, hasPhp, portFree } from './php-bin.ts';
 import { tempDir } from './tmp.ts';
 
 const root = join(import.meta.dirname, '..');
-const PORTS = [3092, 3094, 3097];
+// ROBUST_PORTS="3762,3763,3764": other ports, when another run holds these.
+const PORTS = process.env.ROBUST_PORTS ? process.env.ROBUST_PORTS.split(',').map(Number) : [3092, 3094, 3097];
 const BASES = PORTS.map(p => `http://127.0.0.1:${p}`);
 const PASS = 'harbour-quarry-lantern-38';
 const ROUNDS = 100_000;
@@ -235,6 +236,11 @@ test('encryption switched off and back on while two other tabs keep working: no 
     t.store.state = s.vaultKeys?.state ?? 'off';
     t.store.fileKey = s.vaultKeys ? key : null;
   };
+  // And, as main.ts does (store.recheck = catchUp), a record that does not fit a tab's idea of the encryption (a plain
+  // file read while the tab still thinks encryption is on) is checked against the server's word before it is refused.
+  // Without this the tabs here only caught up when a save was refused, so a read between the switch and the next
+  // refused save failed with "arrived from the server unencrypted", which a page never says for this.
+  for (const t of tabs) t.store.recheck = () => catchUp(t);
   const stats: Record<string, number> = {};
   /** Tab 0 switches: starts the move, converts, says it is done (again, if a file came in the old kind meanwhile). */
   const switchTo = async (to: 'on' | 'off') => {
