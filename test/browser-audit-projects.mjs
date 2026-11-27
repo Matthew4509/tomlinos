@@ -312,10 +312,13 @@ await step('FAULT PRJ-P1-8: big list: 3000 projects and 3000 calendar entries dr
     mo.observe(body, { childList: true });
     setTimeout(() => (mo.disconnect(), done(n)), 3000);
   }));
-  const star = P().locator('.proj-row', { has: page.getByRole('button', { name: 'Project 1', exact: true }) }).locator('.proj-star');
+  // Found by its label with a plain selector: getByRole works out the accessible name of all 15,000 buttons in the
+  // window, which takes Playwright about 20 s here, so the step timed the finding, not the app (open about 1.6 s, the
+  // star itself about 0.1 s).
+  const star = P().locator('.proj-star[aria-label="Focus: Project 1"]');
   console.log(`       redraws in 3 s while idle: ${redraws}; star rows ${await star.count()}; visible ${await star.isVisible()}`);
   const t1 = Date.now();
-  await P().locator('.proj-row', { has: page.getByRole('button', { name: 'Project 1', exact: true }) }).locator('.proj-star').click();
+  await star.click();
   await page.waitForFunction(() => [...document.querySelectorAll('.proj-row.focus .proj-name')].some(b => b.textContent === 'Project 1'), null, { timeout: 30000 });
   const starMs = Date.now() - t1;
   console.log(`       open ${openMs} ms, star ${starMs} ms, rows ${await P().locator('.proj-row').count()}`);
