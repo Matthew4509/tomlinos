@@ -4,7 +4,7 @@
 import { h } from '../core/dom.ts';
 import { parentPath } from '../fs/names.ts';
 import { pickFile, type FileTypeChoice } from '../shell/filepicker.ts';
-import { classicBar } from '../shell/menubar.ts';
+import { classicBar, type BarItem } from '../shell/menubar.ts';
 import type { AppHandle } from '../shell/types.ts';
 import { helpMenu } from './classic-menus.ts';
 
@@ -18,6 +18,10 @@ export interface ViewerSpec {
   types: FileTypeChoice[];
   /** Shows `path` (or the empty state when there is none) in `view.root`, using `view.signal` for every listener. */
   load(view: AppHandle, path: string | undefined): void | Promise<void>;
+  /** More File menu items, after Open... (the PDF Viewer's Print...). */
+  fileItems?: BarItem[];
+  /** An Edit menu, for a viewer that has one (the PDF Viewer's Find). */
+  editItems?: BarItem[];
 }
 
 export function openableViewer(app: AppHandle, arg: string | undefined, spec: ViewerSpec): Promise<void> {
@@ -52,9 +56,11 @@ export function openableViewer(app: AppHandle, arg: string | undefined, spec: Vi
     menus: [
       { label: 'File', items: [
         { label: 'Open...', icon: 'open', shortcut: 'Ctrl+O', action: () => void choose() },
+        ...(spec.fileItems ?? []),
         { separator: true },
         { label: 'Close', icon: 'close', action: () => app.close() },
       ] },
+      ...(spec.editItems ? [{ label: 'Edit', items: spec.editItems }] : []),
       helpMenu(shell),
     ],
   }, { layer: shell.menus, signal: app.signal, scope: app.root, label: `${spec.name} menu bar`, bindShortcuts: true });

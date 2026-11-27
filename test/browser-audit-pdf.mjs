@@ -184,7 +184,7 @@ await step('pages: Page Down, Page Up, End, Home and the buttons move through th
   eq(await status(v), 'Page 1 of 3', 'after Home');
 });
 
-await step('FAULT (P1): typing a page number out of range in the page box shows the page actually shown', async () => {
+await step('FAULT (P1, fixed): typing a page number out of range in the page box shows the page actually shown', async () => {
   const v = await openPdf('three');
   const box = v.getByLabel('Page number');
   await box.fill('0');
@@ -309,19 +309,117 @@ await step('a small window (320 x 240): the page and the toolbar still fit', asy
   eq(r.hidden, 0, `toolbar controls cut off (${JSON.stringify(r)})`);
 });
 
-await step('FAULT (P1): Ctrl+F finds words in the PDF, as every PDF viewer does', async () => {
+await step('FAULT (P1, fixed): Ctrl+F finds words in the PDF, as every PDF viewer does', async () => {
   const v = await openPdf('three');
   await v.locator('canvas').click();
   await page.keyboard.press('Control+f');
-  await page.waitForTimeout(300);
-  const field = await v.locator('input[type="search"], input[aria-label*="Find" i]').count();
-  ok(field > 0, 'no find box in the viewer');
+  const field = v.getByLabel('Find in the PDF');
+  await field.waitFor({ timeout: 3000 });
+  ok(await field.evaluate(el => el === document.activeElement), 'the find box has the cursor');
+  const note = v.locator('.find-note');
+  const current = v.locator('[data-pdf-mark="current"]');
+  // "page" is on all three pages: Enter goes from match to match, Shift+Enter back.
+  await field.fill('PAGE');
+  await field.press('Enter');
+  await note.filter({ hasText: '1 of 3' }).waitFor({ timeout: 10000 });
+  await current.first().waitFor({ timeout: 5000 });
+  eq(await status(v), 'Page 1 of 3', 'first match on page 1');
+  // The mark sits on the words "Page 1", drawn 72 pt from the left and 92 pt from the top of a 612 x 792 page.
+  const where = await v.evaluate(el => {
+    const c = el.querySelector('canvas.pdf-canvas').getBoundingClientRect();
+    const m = el.querySelector('[data-pdf-mark="current"]').getBoundingClientRect();
+    return { left: (m.left - c.left) / c.width, top: (m.top - c.top) / c.height, bottom: (m.bottom - c.top) / c.height, width: m.width / c.width };
+  });
+  ok(where.left > 0.09 && where.left < 0.14, `mark left at ${JSON.stringify(where)}`);
+  ok(where.top > 0.05 && where.top < 0.12 && where.bottom > 0.1 && where.bottom < 0.16, `mark top at ${JSON.stringify(where)}`);
+  ok(where.width > 0.05 && where.width < 0.25, `mark width ${JSON.stringify(where)}`);
+  await field.press('Enter');
+  await note.filter({ hasText: '2 of 3' }).waitFor({ timeout: 5000 });
+  await settle(v);
+  eq(await status(v), 'Page 2 of 3', 'Enter goes to page 2');
+  await current.first().waitFor({ timeout: 5000 });
+  await field.press('Shift+Enter');
+  await note.filter({ hasText: '1 of 3' }).waitFor({ timeout: 5000 });
+  await settle(v);
+  eq(await status(v), 'Page 1 of 3', 'Shift+Enter goes back to page 1');
+  // F3 from the page (the menu's Find next) goes on to the next one.
+  await v.locator('canvas').click();
+  await page.keyboard.press('F3');
+  await note.filter({ hasText: '2 of 3' }).waitFor({ timeout: 5000 });
+  // A word not there says so plainly, and leaves no marks.
+  await field.fill('zebra');
+  await field.press('Enter');
+  await note.filter({ hasText: 'Not found' }).waitFor({ timeout: 5000 });
+  eq(await v.locator('[data-pdf-mark]').count(), 0, 'no marks for a word not there');
+  // Escape closes the bar and takes the marks away.
+  await field.fill('page 3');
+  await field.press('Enter');
+  await current.first().waitFor({ timeout: 5000 });
+  await settle(v);
+  eq(await status(v), 'Page 3 of 3', '"page 3" found on page 3');
+  await field.press('Escape');
+  ok(await v.locator('.find-bar').isHidden(), 'Escape closes the find bar');
+  eq(await v.locator('[data-pdf-mark]').count(), 0, 'no marks after Escape');
 });
 
-await step('FAULT (P1): the viewer has a way to print the PDF (CAD tells the person to print its PDFs at 100%)', async () => {
+await step('Find in a PDF with no words (a drawing or scanned pages) says there is nothing to search', async () => {
+  const v = await openPdf('hairline');
+  await v.locator('canvas').click();
+  await page.keyboard.press('Control+f');
+  const field = v.getByLabel('Find in the PDF');
+  await field.fill('anything');
+  await field.press('Enter');
+  await v.locator('.find-note', { hasText: 'no words to search' }).waitFor({ timeout: 5000 });
+});
+
+/** Swaps the browser's print box for a look at what would be printed, taken while it would be on paper. */
+async function stubPrint() {
+  await page.evaluate(() => {
+    window.__printed = null;
+    window.print = () => {
+      const holder = document.querySelector('body > .sheet-print');
+      window.__printed = {
+        printing: document.body.classList.contains('printing-sheet'),
+        pages: holder ? [...holder.querySelectorAll('.print-sheet-page')].map(p => {
+          const img = p.querySelector('img');
+          return { blob: img.src.startsWith('blob:'), loaded: img.complete && img.naturalWidth > 0, w: img.style.width, h: img.style.height, cls: p.className };
+        }) : [],
+        rules: document.adoptedStyleSheets.flatMap(s => [...s.cssRules].map(r => r.cssText)).join('\n'),
+      };
+    };
+  });
+}
+
+await step('FAULT (P1, fixed): the viewer has a way to print the PDF (CAD tells the person to print its PDFs at 100%)', async () => {
   const v = await openPdf('three');
-  const n = await v.locator('button, [role="menuitem"]', { hasText: /print/i }).count() + await v.locator('[title*="Print" i], [aria-label*="Print" i]').count();
-  ok(n > 0, 'no Print anywhere in the viewer');
+  await stubPrint();
+  await v.getByRole('menuitem', { name: 'File' }).click();
+  await page.getByRole('menuitem', { name: /Print/ }).first().click();
+  await page.waitForFunction(() => window.__printed, null, { timeout: 15000 });
+  const p = await page.evaluate(() => window.__printed);
+  ok(p.printing, 'the page is in printing mode while the print box is up');
+  eq(p.pages.length, 3, 'one printed page per PDF page');
+  for (const pg of p.pages) {
+    ok(pg.blob && pg.loaded, `each page is a loaded picture (${JSON.stringify(pg)})`);
+    eq([pg.w, pg.h], ['612pt', '792pt'], 'printed at the page\'s own size');
+  }
+  ok(/@page pdf-size-0\s*\{[^}]*size:\s*612pt 792pt[^}]*margin:\s*0/.test(p.rules), `paper size from the PDF, no margin: ${p.rules}`);
+  ok(/pdf-print-size-0[^{]*\{\s*page:\s*pdf-size-0/.test(p.rules), `pages use that paper: ${p.rules}`);
+  // Afterwards everything printing added is gone.
+  await page.waitForFunction(() => !document.querySelector('body > .sheet-print') && !document.body.classList.contains('printing-sheet') && document.adoptedStyleSheets.length === 0, null, { timeout: 5000 });
+  eq(await status(v), 'Page 1 of 3', 'status back after printing');
+});
+
+await step('Ctrl+P prints a turned page on turned paper', async () => {
+  const v = await openPdf('rotated');
+  await stubPrint();
+  await v.locator('canvas').click();
+  await page.keyboard.press('Control+p');
+  await page.waitForFunction(() => window.__printed, null, { timeout: 15000 });
+  const p = await page.evaluate(() => window.__printed);
+  eq(p.pages.length, 1, 'one page');
+  eq([p.pages[0].w, p.pages[0].h], ['792pt', '612pt'], 'turned page size');
+  ok(/size:\s*792pt 612pt/.test(p.rules), `turned paper: ${p.rules}`);
 });
 
 await browser.close();

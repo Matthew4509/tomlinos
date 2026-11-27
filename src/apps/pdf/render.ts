@@ -39,7 +39,14 @@ interface GState {
 export interface RenderResult {
   text: string;
   note: string | null;
+  /**
+   * Where each letter of `text` was drawn, for Find: runs of six numbers (offset in `text`, its length, then x, y,
+   * width and height in canvas pixels). Empty when the canvas cannot say where it drew (the tests' stand-in).
+   */
+  boxes: number[];
 }
+
+const MAX_BOXES = 300_000;
 
 const clamp255 = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
 const rgb = (r: number, g: number, b: number) => `rgb(${clamp255(r * 255)},${clamp255(g * 255)},${clamp255(b * 255)})`;
@@ -69,7 +76,7 @@ export async function renderPage(
   canvas.width = Math.max(1, Math.round(rotated ? h : w));
   canvas.height = Math.max(1, Math.round(rotated ? w : h));
   const ctx = canvas.getContext('2d');
-  if (!ctx) return { text: '', note: 'The browser would not give this viewer a drawing surface.' };
+  if (!ctx) return { text: '', note: 'The browser would not give this viewer a drawing surface.', boxes: [] };
   ctx.fillStyle = '#fff';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   // PDF space has y going up; move the origin to the bottom-left of the box and flip, turning for /Rotate.
@@ -108,13 +115,19 @@ export async function renderPage(
     if (!(error instanceof Stop)) throw error;
   }
   if (!run.abandoned) ctx.restore();
-  return { text: run.text.join('').slice(0, 300_000), note: run.note };
+  const text = run.text.join('').slice(0, 300_000);
+  const boxes: number[] = [];
+  for (let i = 0; i < run.boxes.length; i += 6) if (run.boxes[i] + run.boxes[i + 1] <= text.length) for (let k = 0; k < 6; k++) boxes.push(run.boxes[i + k]);
+  return { text, note: run.note, boxes };
 }
 
 class Stop extends Error {}
 
 class Run {
   text: string[] = [];
+  /** The length of text joined, kept as it grows. */
+  private length = 0;
+  boxes: number[] = [];
   note: string | null = null;
   private ops = 0;
   private started = Date.now();
@@ -145,6 +158,27 @@ class Run {
     this.doc = doc;
     this.ctx = ctx;
     this.isCurrent = isCurrent;
+  }
+
+  private add(piece: string): void {
+    this.text.push(piece);
+    this.length += piece.length;
+  }
+
+  /** Notes where the letter about to be drawn sits on the canvas: its box in text space (y up), through the canvas's matrix. */
+  private place(piece: string, width: number): void {
+    const ctx = this.ctx as CanvasRenderingContext2D & { getTransform?: () => DOMMatrix };
+    if (typeof ctx.getTransform !== 'function' || this.boxes.length >= MAX_BOXES * 6) return;
+    const m = ctx.getTransform();
+    const xs: number[] = [];
+    const ys: number[] = [];
+    for (const [x, y] of [[0, -0.22], [width, -0.22], [0, 0.9], [width, 0.9]]) {
+      xs.push(m.a * x + m.c * y + m.e);
+      ys.push(m.b * x + m.d * y + m.f);
+    }
+    const left = Math.min(...xs);
+    const top = Math.min(...ys);
+    this.boxes.push(this.length, piece.length, left, top, Math.max(...xs) - left, Math.max(...ys) - top);
   }
 
   private stop(note: string): never {
@@ -306,7 +340,7 @@ class Run {
             else if (typeof item === 'number') {
               const adjust = (-item / 1000) * s.size * s.hScale;
               this.tm = mul([1, 0, 0, 1, adjust, 0], this.tm);
-              if (item < -200 && this.text.length && !this.text[this.text.length - 1].endsWith(' ')) this.text.push(' ');
+              if (item < -200 && this.text.length && !this.text[this.text.length - 1].endsWith(' ')) this.add(' ');
             }
           }
           break;
@@ -374,10 +408,11 @@ class Run {
       if (ch && s.mode !== 3 && ch.trim() !== '') {
         // Start a new line of extracted text when the baseline moves.
         const y = Math.round(this.tm[5]);
-        if (this.lastY !== null && y !== this.lastY && this.text.length && !this.text[this.text.length - 1].endsWith('\n')) this.text.push('\n');
+        if (this.lastY !== null && y !== this.lastY && this.text.length && !this.text[this.text.length - 1].endsWith('\n')) this.add('\n');
         this.lastY = y;
         ctx.save();
         ctx.transform(trm[0], trm[1], trm[2], trm[3], trm[4], trm[5]);
+        this.place(ch, Math.max(0.2, width / 1000));
         ctx.scale(1, -1);
         ctx.font = `${font.style} ${font.weight} 1px ${font.family}`;
         ctx.globalAlpha = s.alpha;
@@ -391,9 +426,9 @@ class Run {
           ctx.fillText(ch, 0, 0);
         }
         ctx.restore();
-        this.text.push(ch);
+        this.add(ch);
       } else if (ch === ' ' && this.text.length && !this.text[this.text.length - 1].endsWith(' ')) {
-        this.text.push(' ');
+        this.add(' ');
       }
       const advance = ((width / 1000) * s.size + s.charSpace + (step === 1 && code === 32 ? s.wordSpace : 0)) * s.hScale;
       this.tm = mul([1, 0, 0, 1, advance, 0], this.tm);
