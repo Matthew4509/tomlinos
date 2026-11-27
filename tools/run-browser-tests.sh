@@ -50,6 +50,8 @@ for suite in ${SUITES:-desktop accounts vault features apps printer privacy aich
     audit-chat) script=test/browser-audit-chat.mjs; extra=(3190) ;;
     audit-assistant) script=test/browser-audit-assistant.mjs; extra=(3190 3192 "$DATA") ;;
     audit-reader|audit-taskmanager) script=test/browser-$suite.mjs; extra=("$DATA") ;;
+    # The AI models audit needs the server's models folder and starts the Hugging Face stand-in itself on 3191.
+    audit-aimodels) script=test/browser-audit-aimodels.mjs; extra=("$DATA-models" 3191) ;;
     *) script=test/browser-$suite.mjs; extra=() ;;
   esac
   TOMLIN_STAND_INS=1 node "$script" "http://127.0.0.1:$PORT" "${extra[@]}" > "$LOGS/$suite.txt" 2>&1 || status=1
