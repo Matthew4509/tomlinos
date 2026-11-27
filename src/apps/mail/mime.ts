@@ -21,9 +21,13 @@ export interface Message {
   from: Address[];
   to: Address[];
   cc: Address[];
+  /** Only a draft carries one: a message that arrives never names who had a blind copy. */
+  bcc: Address[];
   replyTo: Address[];
   date: Date | null;
   messageId: string;
+  /** The message this one answers (kept so a draft opened again still answers it). */
+  inReplyTo: string;
   references: string;
   text: string | null;
   html: string | null;
@@ -278,9 +282,11 @@ export function parseMessage(bytes: Uint8Array): Message {
     from: parseAddresses(first(h, 'from')),
     to: parseAddresses((h.get('to') ?? []).join(', ')),
     cc: parseAddresses((h.get('cc') ?? []).join(', ')),
+    bcc: parseAddresses((h.get('bcc') ?? []).join(', ')),
     replyTo: parseAddresses(first(h, 'reply-to')),
     date: parseDate(first(h, 'date')),
     messageId: first(h, 'message-id').trim(),
+    inReplyTo: first(h, 'in-reply-to').trim(),
     references: first(h, 'references').trim(),
     text: null,
     html: null,
@@ -310,8 +316,10 @@ export function parseMessage(bytes: Uint8Array): Message {
     const name = headerText(disp.params.filename ?? ct.params.name ?? '');
     const data = decodeBody(body, encoding);
     // The body is the plain and HTML text that is not marked as an attachment; everything else is an attachment.
-    // A second plain part (a mailing list's footer, say) is added to the text rather than hidden.
-    const isBody = disp.type !== 'attachment' && (ct.type === 'text/plain' || ct.type === 'text/html');
+    // A second plain part (a mailing list's footer, say) is added to the text rather than hidden. A text part with a
+    // file name and no disposition at all is a file someone attached (notes.txt), not more of the letter.
+    const named = depth > 0 && !!(disp.params.filename ?? ct.params.name);
+    const isBody = disp.type !== 'attachment' && !(named && !first(headers, 'content-disposition')) && (ct.type === 'text/plain' || ct.type === 'text/html');
     if (isBody && ct.type === 'text/plain') {
       const text = decodeCharset(bytesOf(data), ct.params.charset ?? 'us-ascii');
       msg.text = msg.text === null ? text : `${msg.text}\n\n${text}`;
@@ -367,3 +375,45 @@ export function replySubject(subject: string, forward = false): string {
   const bare = subject.replace(/^(\s*(re|fw|fwd|aw|sv)\s*(\[\d+\])?\s*:\s*)+/i, '');
   return `${forward ? 'Fwd' : 'Re'}: ${bare}`;
 }
+
+/** What a mailto: link fills in of a new message. */
+export interface MailtoStart {
+  to?: string[];
+  cc?: string[];
+  bcc?: string[];
+  subject?: string;
+  text?: string;
+}
+
+/**
+ * "mailto:bob@example.org?subject=Hi&cc=ann@example.org&body=..." as the start of a new message. Only the address,
+ * Cc, Bcc, subject and text are taken; anything else in it (attachments, headers) is left out.
+ */
+export function fromMailto(href: string): MailtoStart {
+  const dec = (s: string) => {
+    try {
+      return decodeURIComponent(s.replace(/\+/g, '%20'));
+    } catch {
+      return s;
+    }
+  };
+  const clean = (s: string) => s.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '').slice(0, 10000);
+  const rest = href.replace(/^mailto:/i, '');
+  const q = rest.indexOf('?');
+  const list = (s: string) => clean(dec(s)).split(/[,;]/).map(x => x.replace(/[\r\n]+/g, ' ').trim()).filter(Boolean).slice(0, 50);
+  const out: MailtoStart = { to: list(q < 0 ? rest : rest.slice(0, q)) };
+  if (q >= 0) {
+    for (const pair of rest.slice(q + 1).split('&')) {
+      const eq = pair.indexOf('=');
+      const key = dec(eq < 0 ? pair : pair.slice(0, eq)).toLowerCase();
+      const value = eq < 0 ? '' : pair.slice(eq + 1);
+      if (key === 'to') out.to = [...(out.to ?? []), ...list(value)];
+      else if (key === 'cc') out.cc = list(value);
+      else if (key === 'bcc') out.bcc = list(value);
+      else if (key === 'subject') out.subject = clean(dec(value)).replace(/[\r\n]+/g, ' ');
+      else if (key === 'body') out.text = clean(dec(value)).replace(/\r\n/g, '\n');
+    }
+  }
+  return out;
+}
+

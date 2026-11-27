@@ -213,8 +213,25 @@ await step('P1 compose: a message can be saved as a draft (Drafts folder)', asyn
   const c = composeWin();
   await c.locator('.compose-text').waitFor();
   const has = await c.getByRole('button', { name: /draft/i }).count();
-  await closeCompose();
+  if (!has) await closeCompose();
   ok(has > 0, 'no Save draft button in the compose window');
+  await c.getByLabel('To').fill('Wren Example <wren@example.org>');
+  await c.getByLabel('Bcc').fill('hidden@example.org');
+  await c.getByLabel('Subject').fill('Saved for later');
+  await c.locator('.compose-text').fill('First go.');
+  await c.getByRole('button', { name: /draft/i }).click();
+  await c.locator('.statusbar', { hasText: 'Saved in Drafts' }).waitFor({ timeout: 15000 });
+  // Saved again: the copy in Drafts is replaced, not doubled.
+  await c.locator('.compose-text').fill('Second go.');
+  await c.getByRole('button', { name: /draft/i }).click();
+  await page.waitForTimeout(300);
+  await c.locator('.statusbar', { hasText: 'Saved in Drafts' }).waitFor({ timeout: 15000 });
+  await closeCompose();
+  const saved = fake.boxes.Drafts.msgs.filter(x => x.raw.includes('Subject: Saved for later'));
+  eq(saved.length, 1, 'copies in Drafts');
+  ok(saved[0].flags.has('\\Draft'), 'marked as a draft');
+  ok(/^To: "Wren Example" <wren@example\.org>/m.test(saved[0].raw) && /^Bcc: hidden@example\.org/m.test(saved[0].raw) && saved[0].raw.includes('Second go.'), saved[0].raw.slice(0, 400));
+  eq(deliveredWith('Saved for later').length, 0, 'a draft is not sent');
 });
 
 await step('P1 reading: a message in Drafts can be opened to carry on writing it', async () => {
@@ -222,9 +239,22 @@ await step('P1 reading: a message in Drafts can be opened to carry on writing it
   await w.locator('.mail-folder', { hasText: 'Drafts' }).click();
   await openRow('Half written');
   const can = await w.getByRole('button', { name: /edit|continue|resume/i }).count();
+  let got = null;
+  if (can) {
+    await w.getByRole('button', { name: /edit|continue|resume/i }).first().click();
+    const c = composeWin();
+    await c.locator('.compose-text').waitFor();
+    got = [await c.getByLabel('To').inputValue(), await c.getByLabel('Subject').inputValue(), await c.locator('.compose-text').inputValue()];
+    // Sent from the draft: it goes, and leaves Drafts.
+    await c.getByRole('button', { name: 'Send' }).click();
+    await page.locator('.toast', { hasText: 'Sent to' }).first().waitFor({ timeout: 20000 });
+  }
   await w.locator('.mail-folder', { hasText: 'Inbox' }).click();
   await w.locator('.mail-row').first().waitFor({ timeout: 20000 });
   ok(can > 0, 'no way to carry on writing a draft');
+  eq(got, ['zed@example.org', 'Half written', 'Dear Zed, I was going to say'], 'the draft in the compose window');
+  eq(deliveredWith('Half written').length, 1, 'sent once');
+  eq(fake.boxes.Drafts.msgs.filter(x => x.raw.includes('Subject: Half written')).length, 0, 'gone from Drafts once sent');
 });
 
 await step('P1 reply: replying to an HTML-only message quotes its words line by line, not its style sheet or script', async () => {
@@ -277,6 +307,9 @@ await step('P1 reading: a picture embedded in the mail (data:) is not reported a
   const w = mailWin();
   const note = (await w.locator('.mail-blocked').count()) ? await w.locator('.mail-blocked').innerText() : '';
   ok(!/from the web/.test(note), 'note: ' + note);
+  // Shown from its own bytes (a blob: address); nothing is fetched and no data: address reaches the page.
+  const src = await w.locator('.mail-text img').first().getAttribute('src').catch(() => null);
+  ok(src && src.startsWith('blob:'), 'picture src: ' + src);
 });
 
 await step('P1 reading: a mailto: link in a message opens a new message in Mail', async () => {
@@ -289,8 +322,11 @@ await step('P1 reading: a mailto: link in a message opens a new message in Mail'
   if (p) await p.close().catch(() => {});
   await page.waitForTimeout(800);
   const opened = await composeWin().count();
+  const to = opened ? await composeWin().last().getByLabel('To').inputValue() : '';
   await closeCompose();
   ok(opened > 0, 'no compose window opened for mailto (target=_blank hands it to the browser)');
+  ok(!p, 'the browser opened a page as well');
+  eq(to, 'bob@example.org', 'To of the new message');
 });
 
 await step('P1 unread: deleting an unread message lowers the Inbox unread count', async () => {

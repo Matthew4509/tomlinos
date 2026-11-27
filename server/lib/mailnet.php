@@ -736,11 +736,16 @@ function mail_build(array $m): string
     if ($m['cc']) {
         $h[] = 'Cc: ' . implode(",\r\n ", $m['cc']);
     }
+    // Only a draft carries its Bcc line (kept in your own Drafts); a message sent never names who had a blind copy.
+    if (!empty($m['bcc'])) {
+        $h[] = 'Bcc: ' . implode(",\r\n ", $m['bcc']);
+    }
     $h[] = 'Subject: ' . mail_header_text($m['subject']);
     $h[] = 'Message-ID: <' . bin2hex(random_bytes(12)) . '@' . $domain . '>';
     if (!empty($m['inReplyTo'])) {
         $h[] = 'In-Reply-To: ' . $m['inReplyTo'];
-        $refs = preg_split('/\s+/', trim(($m['references'] ?? '') . ' ' . $m['inReplyTo']), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        // A draft opened again already lists what it answers among its references: named once.
+        $refs = array_values(array_unique(preg_split('/\s+/', trim(($m['references'] ?? '') . ' ' . $m['inReplyTo']), -1, PREG_SPLIT_NO_EMPTY) ?: []));
         $h[] = 'References: ' . implode("\r\n ", $refs);
     }
     $h[] = 'MIME-Version: 1.0';

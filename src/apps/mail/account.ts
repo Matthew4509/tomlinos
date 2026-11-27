@@ -157,6 +157,8 @@ export class MailClient {
   move = (folder: string, uids: number[], to: string) => this.call('move', { folder, uids, to });
   remove = (folder: string, uids: number[], trash: string) => this.call<{ forGood: boolean }>('delete', { folder, uids, trash });
   send = (m: Record<string, unknown>) => this.call<{ sent: boolean; recipients: number; copy: string }>('send', { from: this.acct.email, fromName: this.acct.name, providerSavesSent: this.acct.providerSavesSent, ...m });
+  /** Keeps a message being written in `folder` (Drafts), in place of the copy numbered `replace`; answers the new copy's number. */
+  draft = (m: Record<string, unknown>) => this.call<{ saved: boolean; uid: number }>('draft', { from: this.acct.email, fromName: this.acct.name, ...m });
 }
 
 /** base64 of bytes, in pieces (a big attachment would overflow a single String.fromCharCode call). */

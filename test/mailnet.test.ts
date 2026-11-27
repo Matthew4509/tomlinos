@@ -158,6 +158,15 @@ test('header text cannot break out of its line (no injected headers)', { skip: !
   assert.ok(!/^Bcc:/m.test(head), head);
 });
 
+test('a draft carries its Bcc line, a message to send does not, and what it answers is named once', { skip: !has && 'no PHP' }, () => {
+  const build = (extra: string) => (php(`echo json_encode(mail_build(['from' => 'a@b.cd', 'to' => [mail_address('c@d.ef', 'Dee Example')], 'cc' => [], ${extra} 'subject' => 's', 'text' => 'x', 'inReplyTo' => '<r@x.y>', 'references' => '<q@x.y> <r@x.y>', 'attachments' => []]));`) as string).split('\r\n\r\n')[0];
+  const draft = build(`'bcc' => ['h@b.cd'],`);
+  assert.match(draft, /^Bcc: h@b\.cd$/m);
+  assert.match(draft, /^To: "Dee Example" <c@d\.ef>$/m);
+  assert.match(draft, /^References: <q@x\.y>\r\n <r@x\.y>$/m);
+  assert.ok(!/^Bcc:/m.test(build('')));
+});
+
 test('no PHP string runs a variable into a curly quote (PHP reads the quote as part of the name)', () => {
   const files: string[] = [];
   // Our own PHP only: server/vendor is Anthropic's official library and its HTTP client (thousands of files).
