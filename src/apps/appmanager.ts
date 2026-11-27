@@ -13,7 +13,7 @@ import { HIDDEN_APPS } from '../release.ts';
 import { icon, isIconName, type IconName } from '../shell/icons.ts';
 import type { AppDef } from '../shell/types.ts';
 import { APPS } from './catalog.ts';
-import type { StoreApp } from './storeapp.ts';
+import { sayStoreAppsChanged, type StoreApp } from './storeapp.ts';
 
 type Kind = 'games' | 'office' | 'system';
 
@@ -117,6 +117,7 @@ export const appManagerApp: AppDef = {
       try {
         const r = await appsApi.call<{ apps: StoreApp[] }>(op, { body: { id: a.id, password: who.password, code: who.code } });
         shell.setStoreApps(r.apps);
+        sayStoreAppsChanged();
         if (store) store.here = r.apps;
         shell.toast(op === 'delete' ? `${a.title} is deleted from this server.` : `${a.title} is on this server: press Install to add it to your desktop.`);
         paint();
