@@ -50,6 +50,13 @@ async function openApp(name) {
   await p.waitForTimeout(400);
   return p.locator('.win.active');
 }
+/** Write and the Spreadsheet start in the Classic look (a menu bar): View > Modern (ribbon) brings the ribbon these probes look at. */
+async function modern(win) {
+  if (await win.locator('.ribbon').isVisible().catch(() => false)) return;
+  await win.locator('.cbar-title[data-menu="View"]').click();
+  await p.locator('.menu-item', { hasText: 'Modern (ribbon)' }).click();
+  await win.locator('.ribbon').waitFor();
+}
 async function closeActive() {
   const close = p.locator('.win.active .win-close');
   if (!(await close.count())) return;
@@ -287,7 +294,7 @@ const RIBBON_PROBE = `(() => {
 for (const [app, tabs] of [['Write', ['Home', 'Insert', 'Layout', 'Review', 'Mailings', 'Help']], ['Spreadsheet', ['Home', 'Insert', 'Page Layout', 'Formulas', 'Data', 'Review', 'View']]]) {
   try {
     const win = await openApp(app);
-    await win.locator('.ribbon').waitFor();
+    await modern(win);
     for (const tab of tabs) {
       await win.locator('.ribbon-tab', { hasText: new RegExp(`^${tab}$`) }).first().click();
       await p.waitForTimeout(150);
@@ -337,6 +344,7 @@ for (const app of ['File Explorer', 'Quick Notes', 'Settings', 'Calculator', 'Te
 for (const app of ['Write', 'Spreadsheet']) {
   try {
     const win = await openApp(app);
+    await modern(win);
     await win.locator('.ribbon-tabs').waitFor();
     await p.waitForTimeout(400);
     const m = await win.evaluate(w => {

@@ -107,12 +107,14 @@ const openApp = async (p, label) => {
   await p.locator(`.start-menu [data-label="${label}"]`).first().click();
 };
 const saveNote = async (p, text, name) => {
-  await openApp(p, 'notepad');
-  const editor = p.locator('.win', { has: p.locator('.editor-text') });
+  // Notepad is Quick Notes now; Save on a new note opens the shared Save window (File name box, Save).
+  await openApp(p, 'quick notes');
+  const editor = p.locator('.win', { has: p.locator('.editor-text') }).last();
   await editor.locator('.editor-text').fill(text);
   await p.keyboard.press('Control+s');
-  await p.locator('.dialog-label input').fill(name);
-  await p.keyboard.press('Enter');
+  const saveWin = p.locator('.dialog', { has: p.getByLabel('File name') });
+  await saveWin.getByLabel('File name').fill(name);
+  await saveWin.getByRole('button', { name: 'Save', exact: true }).click();
   await p.locator('.toast', { hasText: 'Saved' }).first().waitFor();
   await editor.getByRole('button', { name: 'Close' }).click();
 };

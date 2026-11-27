@@ -134,12 +134,19 @@ await step('a Claude key through Chat › Agents > AI keys... (Settings › AI)'
   const w = await openAgents();
   await w.getByRole('button', { name: 'AI keys...' }).click();
   const s = settingsWin();
-  await s.getByRole('button', { name: 'Claude settings...' }).click();
-  await s.getByLabel('Anthropic API key').fill(AI_KEY);
-  // Claude's section comes before OpenRouter's, which has a limit box of the same name.
-  await s.getByLabel('Monthly limit in US dollars').first().fill('1');
-  await s.getByRole('button', { name: 'Save', exact: true }).click();
-  await s.locator('.ai-cloud > .ai-device').filter({ hasText: 'ending wxyz' }).waitFor({ timeout: 15000 });
+  // The Claude tile opens a pop-up with the key, model and limit; a good key closes it and the tile says Set.
+  const tile = s.locator('.set-ai .ai-tile', { hasText: 'Connect Claude' });
+  await tile.locator('.ai-tile-state:not([hidden])').waitFor({ timeout: 15000 });
+  await tile.click();
+  const pop = page.locator('.dialog', { has: page.locator('.dialog-title', { hasText: 'Connect Claude' }) });
+  await pop.getByLabel('Anthropic API key').fill(AI_KEY);
+  await pop.getByLabel('Monthly limit in US dollars').fill('1');
+  await pop.getByRole('button', { name: 'Save', exact: true }).click();
+  await pop.waitFor({ state: 'detached', timeout: 15000 });
+  await tile.locator('.ai-tile-state', { hasText: /^Set$/ }).waitFor({ timeout: 10000 });
+  await tile.click();
+  await pop.locator('.ai-key-state', { hasText: 'ending wxyz' }).waitFor({ timeout: 15000 });
+  await pop.getByRole('button', { name: 'Cancel', exact: true }).click();
   await closeAll();
 });
 

@@ -126,13 +126,14 @@ await step('set-up with "Encrypt my files": the recovery key is shown once, befo
 });
 
 await step('a saved file is stored sealed: its words and its name are nowhere on the server\'s disk', async () => {
-  await openApp('notepad');
+  // Notepad is Quick Notes now; Save on a new note opens the shared Save window (File name box, Save).
+  await openApp('quick notes');
   const editor = page.locator('.win', { has: page.locator('.editor-text') });
   await editor.locator('.editor-text').fill(SECRET);
   await page.keyboard.press('Control+s');
-  const input = page.locator('.dialog-label input');
-  await input.fill('secret.txt');
-  await page.keyboard.press('Enter');
+  const saveWin = page.locator('.dialog', { has: page.getByLabel('File name') });
+  await saveWin.getByLabel('File name').fill('secret.txt');
+  await saveWin.getByRole('button', { name: 'Save', exact: true }).click();
   await page.locator('.toast', { hasText: 'Saved' }).first().waitFor();
   await editor.getByRole('button', { name: 'Close' }).click();
   await settle(1500);

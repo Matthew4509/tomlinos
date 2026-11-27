@@ -37,6 +37,16 @@ async function step(name, fn) {
 const ok = (v, what) => {
   if (!v) throw new Error(what);
 };
+// Settings › AI: Claude and OpenRouter are tiles ("Connect Claude", "Connect OpenRouter"), each opening a pop-up.
+const keyTile = (s, name) => s.locator('.set-ai .ai-tile', { hasText: `Connect ${name}` });
+/** Opens a key's pop-up from its tile (once the tile has heard from the server) and returns it. */
+const keyPop = async (s, name) => {
+  await keyTile(s, name).locator('.ai-tile-state:not([hidden])').waitFor({ timeout: 15000 });
+  await keyTile(s, name).click();
+  const pop = page.locator('.dialog', { has: page.locator('.dialog-title', { hasText: `Connect ${name}` }) });
+  await pop.waitFor();
+  return pop;
+};
 
 // ---- Stand-ins ----
 const anthropic = await startFakeAnthropic(AI_PORT);
@@ -185,17 +195,20 @@ await step('save a Claude key (stand-in) and an OpenRouter key (stand-in) throug
   const w = await openAgents();
   await pane(w).getByRole('button', { name: 'AI keys...' }).click();
   const s = page.locator('.win', { has: page.locator('.set-ai') });
-  await s.getByRole('button', { name: 'Claude settings...' }).click();
-  await s.getByLabel('Anthropic API key').fill(KEY);
-  await s.getByLabel('Monthly limit in US dollars').first().fill('5');
-  await s.getByRole('button', { name: 'Save', exact: true }).first().click();
-  await s.locator('.ai-cloud > .ai-device').filter({ hasText: 'ending wxyz' }).waitFor({ timeout: 15000 });
-  await s.getByRole('button', { name: 'OpenRouter settings...' }).click();
-  await s.getByLabel('OpenRouter key').fill(OR_KEY);
-  await s.getByLabel('OpenRouter model').selectOption('audit/fee-model', { timeout: 10000 });
-  await s.getByLabel('Monthly limit in US dollars').last().fill('1');
-  await s.getByRole('button', { name: 'Save', exact: true }).last().click();
-  await s.locator('.ai-cloud > .ai-device').filter({ hasText: 'Audit: Fee Model' }).waitFor({ timeout: 15000 });
+  // Each key is a tile that opens a pop-up (key, model, limit, Save); a good key closes it and the tile says Set.
+  const claude = await keyPop(s, 'Claude');
+  await claude.getByLabel('Anthropic API key').fill(KEY);
+  await claude.getByLabel('Monthly limit in US dollars').fill('5');
+  await claude.getByRole('button', { name: 'Save', exact: true }).click();
+  await claude.waitFor({ state: 'detached', timeout: 15000 });
+  await keyTile(s, 'Claude').locator('.ai-tile-state', { hasText: /^Set$/ }).waitFor({ timeout: 10000 });
+  const router = await keyPop(s, 'OpenRouter');
+  await router.getByLabel('OpenRouter key').fill(OR_KEY);
+  await router.getByLabel('OpenRouter model').selectOption('audit/fee-model', { timeout: 10000 });
+  await router.getByLabel('Monthly limit in US dollars').fill('1');
+  await router.getByRole('button', { name: 'Save', exact: true }).click();
+  await router.waitFor({ state: 'detached', timeout: 15000 });
+  await keyTile(s, 'OpenRouter').locator('.ai-tile-detail', { hasText: 'Audit: Fee Model' }).waitFor({ timeout: 15000 });
   ok(!(await page.content()).includes(OR_KEY.slice(12, 40)), 'the OpenRouter key is not in the page');
   await closeAll();
 });
@@ -288,11 +301,13 @@ await step('AST-P1-8: emptying the Claude limit box and saving does not quietly 
     await page.locator('.win').last().getByText('AI', { exact: true }).first().click();
   }
   const set = page.locator('.win', { has: page.locator('.set-ai') });
-  await set.getByRole('button', { name: 'Claude settings...' }).click();
-  await set.getByLabel('Monthly limit in US dollars').first().fill('');
-  await set.getByRole('button', { name: 'Save', exact: true }).first().click();
+  const pop = await keyPop(set, 'Claude');
+  await pop.getByLabel('Monthly limit in US dollars').fill('');
+  await pop.getByRole('button', { name: 'Save', exact: true }).click();
   await page.waitForTimeout(1200);
-  const msg = (await set.locator('.ai-cloud-msg').first().innerText().catch(() => '')) + ' / ' + (await set.locator('.ai-cloud > .ai-device').first().innerText());
+  // A refused save keeps the pop-up open with the reason; a save closes it and the tile says what is kept.
+  const msg = (await pop.locator('.ai-cloud-msg').innerText().catch(() => '')) + ' / ' + (await keyTile(set, 'Claude').innerText());
+  if (await pop.count()) await pop.getByRole('button', { name: 'Cancel', exact: true }).click();
   const cap = JSON.parse((await api('ai', 'settings')).text).cap;
   await api('ai', 'save', { key: '', model: 'claude-opus-5', cap: '5' });
   ok(cap !== 0, `an empty box saved a $0 limit without a word: ${msg}`);

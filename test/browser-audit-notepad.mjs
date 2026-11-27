@@ -64,8 +64,19 @@ async function documents() {
 async function openInNotepad(stem) {
   const w = await documents();
   await w.locator('.item', { hasText: stem }).first().dblclick();
-  await pad().locator('.editor-status').filter({ hasText: /\S/ }).waitFor({ timeout: 10000 });
+  await pad().locator('.editor-status').filter({ hasText: /\S/ }).filter({ hasNotText: /^Opening\.\.\.$/ }).waitFor({ timeout: 10000 });
   return pad();
+}
+/** A new, empty Quick Notes window from the Start menu (Start always opens a new window). */
+async function newNote() {
+  const before = await page.locator('.win', { has: page.locator('.editor') }).count();
+  if (!(await page.locator('.start-filter').isVisible())) await page.locator('.start-btn').click();
+  await page.locator('.start-filter').fill('quick notes');
+  await page.locator('.start-menu [data-app="editor"]').first().click();
+  await page.locator('.win', { has: page.locator('.editor') }).nth(before).waitFor();
+  const n = pad();
+  await n.locator('.editor-status').filter({ hasText: /\S/ }).waitFor({ timeout: 10000 });
+  return n;
 }
 /** The saved bytes of a file in Documents, through Explorer's Download. */
 async function downloadBytes(stem) {
@@ -139,14 +150,14 @@ await step('FAULT: an old Mac (CR) file: the line-ending button names CR, not LF
 await step('FAULT: a file Notepad cannot open leaves no dead buttons (Find, Replace, Go to, zoom look usable but do nothing)', async () => {
   const n = await openInNotepad('latin');
   ok((await n.locator('.editor-status').innerText()).includes('does not look like text'), 'refused as not text');
-  // Every command that works on the text is off in the menus (File keeps Close; Help is the desktop's).
+  // Every command that works on the text is off in the menus (File keeps New, Open... and Close, which need no text; Help is the desktop's).
   const live = [];
   for (const menu of ['File', 'Edit', 'View', 'Format']) {
     await n.locator(`.cbar-title[data-menu=${menu}]`).click();
     live.push(...(await page.locator('.menu-root .menu-item:not([aria-disabled="true"]) .menu-label').allInnerTexts()));
     await page.keyboard.press('Escape');
   }
-  eq(live, ['Close'], 'menu commands still enabled');
+  eq(live, ['New', 'Open...', 'Close'], 'menu commands still enabled');
 });
 
 await step('FAULT: clicking Save twice quickly does not claim the file was changed somewhere else', async () => {
@@ -163,10 +174,7 @@ await step('FAULT: clicking Save twice quickly does not claim the file was chang
 });
 
 await step('FAULT: Ctrl+S twice on a new note does not open two Save as boxes', async () => {
-  await page.locator('.start-btn').click();
-  await page.locator('.start-filter').fill('notepad');
-  await page.locator('.start-menu [data-label="notepad"]').first().click();
-  const n = pad();
+  const n = await newNote();
   await n.locator('textarea').type('fresh');
   await page.keyboard.press('Control+s');
   await page.keyboard.press('Control+s');
@@ -175,10 +183,7 @@ await step('FAULT: Ctrl+S twice on a new note does not open two Save as boxes', 
 });
 
 await step('FAULT: the find bar lays out in one row at the opening size (a Spreadsheet ".find-row" grid rule overrides it)', async () => {
-  await page.locator('.start-btn').click();
-  await page.locator('.start-filter').fill('notepad');
-  await page.locator('.start-menu [data-label="notepad"]').first().click();
-  const n = pad();
+  const n = await newNote();
   await n.locator('textarea').click();
   await page.keyboard.press('Control+f');
   // Controls of different heights share a row when their middles line up (a shorter label sits a few pixels lower).
@@ -226,10 +231,7 @@ await step('N-P1-2: typing in a 1.5 MB file: Notepad\'s own work is under 10 ms 
 });
 
 await step('FAULT: at its smallest size the window still shows some of the text with the find bar open', async () => {
-  await page.locator('.start-btn').click();
-  await page.locator('.start-filter').fill('notepad');
-  await page.locator('.start-menu [data-label="notepad"]').first().click();
-  const n = pad();
+  const n = await newNote();
   const grip = n.locator('.win-edge.edge-se');
   const box = await grip.boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
@@ -243,17 +245,15 @@ await step('FAULT: at its smallest size the window still shows some of the text 
 });
 
 await step('FAULT (P1): text Notepad saved over 2 MB can be opened again by Notepad', async () => {
-  await page.locator('.start-btn').click();
-  await page.locator('.start-filter').fill('notepad');
-  await page.locator('.start-menu [data-label="notepad"]').first().click();
-  const n = pad();
+  const n = await newNote();
   await n.locator('textarea').evaluate(a => {
     a.value = 'x'.repeat(2.2 * 1024 * 1024);
     a.dispatchEvent(new Event('input'));
   });
   await page.keyboard.press('Control+Shift+s');
-  await page.locator('.dialog input').fill('huge.txt');
-  await page.locator('.dialog').getByRole('button', { name: 'Save' }).click();
+  const saveBox = page.locator('.dialog', { has: page.getByLabel('File name') });
+  await saveBox.getByLabel('File name').fill('huge.txt');
+  await saveBox.getByRole('button', { name: 'Save', exact: true }).click();
   await page.locator('.toast', { hasText: 'Saved “huge.txt”' }).waitFor({ timeout: 20000 });
   await closeAll();
   const again = await openInNotepad('huge');
@@ -262,10 +262,7 @@ await step('FAULT (P1): text Notepad saved over 2 MB can be opened again by Note
 });
 
 await step('N-P1-1: text over what Notepad can open again is refused before saving, and the text stays in the window', async () => {
-  await page.locator('.start-btn').click();
-  await page.locator('.start-filter').fill('notepad');
-  await page.locator('.start-menu [data-label="notepad"]').first().click();
-  const n = pad();
+  const n = await newNote();
   await n.locator('textarea').evaluate(a => {
     a.value = 'y'.repeat(5.5 * 1024 * 1024);
     a.dispatchEvent(new Event('input'));
@@ -281,10 +278,7 @@ await step('N-P1-1: text over what Notepad can open again is refused before savi
 });
 
 await step('N-P1-3: Tab types a tab into the text; Escape then Tab leaves the text box', async () => {
-  await page.locator('.start-btn').click();
-  await page.locator('.start-filter').fill('notepad');
-  await page.locator('.start-menu [data-label="notepad"]').first().click();
-  const n = pad();
+  const n = await newNote();
   await n.locator('textarea').type('a');
   await page.keyboard.press('Tab');
   eq(await n.locator('textarea').inputValue(), 'a\t', 'text after Tab');
@@ -319,10 +313,7 @@ await step('N-P1-4: Save in the close question saves the file, then the window c
 
 await step('N-P1-4: Save in the close question of a new, unnamed text, then Cancel in Save as, keeps the window open', async () => {
   await page.keyboard.press('Escape');
-  if (!(await page.locator('.start-filter').isVisible())) await page.locator('.start-btn').click();
-  await page.locator('.start-filter').fill('notepad');
-  await page.locator('.start-menu [data-label="notepad"]').first().click();
-  const n = pad();
+  const n = await newNote();
   await n.locator('textarea').type('new words');
   await n.locator('.win-close').first().click();
   await page.locator('.dialog').getByRole('button', { name: 'Save', exact: true }).click();

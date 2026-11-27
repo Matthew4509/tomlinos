@@ -166,9 +166,12 @@ await step('Archive opener: lists the zip, the climbing name is cleaned, a folde
 await step('Archive opener: Extract all makes a "bundle" folder holding the files', async () => {
   const a = page.locator('.win', { has: page.locator('.archive') });
   await a.getByRole('button', { name: /Extract all/ }).click();
-  const dialog = page.locator('.dialog');
-  eq(await dialog.locator('input').inputValue(), 'bundle', 'suggested name');
-  await dialog.getByRole('button', { name: 'Extract' }).click();
+  // It asks where with the folder window, opened on the archive's own folder; the files go into a new folder named
+  // after the archive.
+  const dialog = page.locator('.dialog', { has: page.locator('.dialog-title', { hasText: 'Extract to' }) });
+  await dialog.waitFor();
+  await dialog.locator('.pick-crumbs [aria-current="location"]', { hasText: 'Documents' }).waitFor();
+  await dialog.getByRole('button', { name: 'Extract here' }).click();
   await page.locator('.toast', { hasText: 'Extracted 3 files into “bundle”' }).waitFor({ timeout: 10000 });
   await a.getByRole('button', { name: 'Close' }).click();
   const w = front();
@@ -290,8 +293,9 @@ await step('Calculator sheet: Extend, type numbers, make =1 from A1 + B1 × A2, 
 await step('Calculator sheet: saves as a .calc file in Documents and opens again with its sums', async () => {
   const c = page.locator('.win', { has: page.locator('.calc') });
   await c.getByRole('button', { name: 'Save', exact: true }).click();
-  await page.locator('.dialog input').fill('Budget');
-  await page.locator('.dialog').getByRole('button', { name: 'Save' }).click();
+  // Save sheet as is the shared Save window: its File name box and Save button.
+  await page.locator('.dialog input[aria-label="File name"]').fill('Budget');
+  await page.locator('.dialog').getByRole('button', { name: 'Save', exact: true }).click();
   await page.locator('.toast', { hasText: 'Saved “Budget.calc”' }).waitFor();
   await c.getByRole('button', { name: 'Close' }).click();
   await page.keyboard.press('Control+Alt+e');
@@ -695,8 +699,17 @@ await step('Task Manager lists open windows, ends one, and shows smoothness and 
 
 // The AI is set up in Settings › AI (src/apps/assistant/aisettings.ts) and talked to in Chat › Agents.
 const settingsWin = () => page.locator('.win', { has: page.locator('.set-ai') });
-// Claude's section comes before OpenRouter's, which has boxes and buttons of the same names: scope to Claude's.
-const claudeBox = s => s.locator('.set-ai section.ai-cloud', { has: page.locator('h2', { hasText: 'Claude, with your own API key' }) });
+// Claude and OpenRouter are two tiles under "Your own AI keys"; each opens a pop-up with the key, model, limit, Save,
+// Use, Cost log and Remove my key. The tile says Set / Not set and, once set, the model and the month's spending.
+const claudeTile = s => s.locator('.set-ai .ai-tile', { hasText: 'Connect Claude' });
+const claudePop = () => page.locator('.dialog', { has: page.locator('.dialog-title', { hasText: 'Connect Claude' }) });
+/** Opens the Claude pop-up from its tile (once the tile has heard from the server). */
+const openClaudePop = async s => {
+  await claudeTile(s).locator('.ai-tile-state:not([hidden])').waitFor({ timeout: 15000 });
+  await claudeTile(s).click();
+  await claudePop().waitFor();
+  return claudePop();
+};
 const chatWin = () => page.locator('.win', { has: page.locator('.chat-app') });
 
 await step('Settings › AI: says what this device can do, offers the three built-in models named with their makers, promises free and private, with Claude in its own section', async () => {
@@ -710,12 +723,13 @@ await step('Settings › AI: says what this device can do, offers the three buil
   const device = await deviceLine.innerText();
   ok(/can run the built-in AI|the built-in AI runs|cannot use the graphics chip/.test(device), device);
   ok(await ai.getByText('runs on this device: free and private').isVisible(), 'privacy promise shown');
-  const claude = claudeBox(s);
-  await claude.locator('h2').waitFor();
+  const claude = claudeTile(s);
+  await claude.waitFor();
   // All three built-in models are offered, smallest first, saved here or not (this run's models folder starts empty).
   const pick = ai.getByLabel('Built-in model');
   await pick.locator('option').first().waitFor({ state: 'attached', timeout: 15000 });
-  ok((await claude.boundingBox()).y > (await pick.boundingBox()).y, 'Claude\'s section follows the built-in AI');
+  await claude.scrollIntoViewIfNeeded();
+  ok((await claude.boundingBox()).y > (await pick.boundingBox()).y, 'Claude\'s tile follows the built-in AI');
   const options = await pick.locator('option').allInnerTexts();
   // Each is named with its maker (his: "in the listing, it should identify the model").
   ok(options.length === 3 && /^Qwen 3\.5 0\.8B by Qwen team, Alibaba Cloud \(/.test(options[0]) && /^Gemma 2 2B by Google \(/.test(options[1]) && /^Qwen 3\.5 4B by Qwen team, Alibaba Cloud \(/.test(options[2]), options.join(' | '));
@@ -784,11 +798,12 @@ await step('your own Claude key in Settings › AI: checked before it is kept, n
   await closeAll();
   const problemsBefore = problems.length;
   await openApp('settings');
-  let c = claudeBox(settingsWin());
-  const state = () => c.locator('.ai-device');
-  await state().filter({ hasText: 'No key saved yet' }).waitFor({ timeout: 10000 });
-  ok(await c.getByRole('button', { name: 'Use Claude' }).isDisabled(), 'no key: Use Claude is off');
-  await c.getByRole('button', { name: 'Claude settings...' }).click();
+  const tile = () => claudeTile(settingsWin());
+  await tile().locator('.ai-tile-state', { hasText: 'Not set' }).waitFor({ timeout: 10000 });
+  let c = await openClaudePop(settingsWin());
+  const state = () => c.locator('.ai-key-state');
+  ok((await state().innerText()).includes('No key saved yet'), 'no key: ' + await state().innerText());
+  eq(await c.getByRole('button', { name: 'Use Claude' }).count(), 0, 'no key: no Use Claude');
   const keyBox = c.getByLabel('Anthropic API key');
   eq(await keyBox.getAttribute('type'), 'password', 'the key is typed hidden');
   const msg = c.locator('.ai-cloud-msg');
@@ -807,8 +822,13 @@ await step('your own Claude key in Settings › AI: checked before it is kept, n
   await c.getByLabel('Claude model').selectOption('claude-sonnet-5');
   await c.getByLabel('Monthly limit in US dollars').fill('1');
   await c.getByRole('button', { name: 'Save', exact: true }).click();
+  // A good key closes the pop-up; the tile says Set, with the model and the limit.
+  await c.waitFor({ state: 'detached', timeout: 15000 });
+  await tile().locator('.ai-tile-state', { hasText: /^Set$/ }).waitFor({ timeout: 10000 });
+  const said = await tile().locator('.ai-tile-detail').innerText();
+  ok(said.includes('Claude Sonnet 5') && said.includes('$1.00'), said);
+  c = await openClaudePop(settingsWin());
   await state().filter({ hasText: 'ending wxyz' }).waitFor({ timeout: 15000 });
-  ok((await state().innerText()).includes('Claude Sonnet 5') && (await state().innerText()).includes('$1.00'), await state().innerText());
   eq(anthropic.requests[1].path.startsWith('/v1/models'), true, 'the key is proved with the free model list');
   // The page never gets the key back: the settings answer carries only its last four characters.
   const back = await page.evaluate(async () => (await fetch('/api/ai.php?op=settings', { headers: { 'X-Desktop-Store': '1' } })).text());
@@ -844,11 +864,12 @@ await step('your own Claude key in Settings › AI: checked before it is kept, n
   // A $0 limit stops the next question before anything is sent.
   const before = anthropic.requests.length;
   await openApp('settings');
-  c = claudeBox(settingsWin());
-  await c.getByRole('button', { name: 'Claude settings...' }).click();
+  c = await openClaudePop(settingsWin());
   await c.getByLabel('Monthly limit in US dollars').fill('0');
   await c.getByRole('button', { name: 'Save', exact: true }).click();
-  await state().filter({ hasText: '$0.00 limit' }).waitFor({ timeout: 10000 });
+  await c.waitFor({ state: 'detached', timeout: 10000 });
+  await tile().locator('.ai-tile-detail', { hasText: '$0.00 limit' }).waitFor({ timeout: 10000 });
+  c = await openClaudePop(settingsWin());
   await c.getByRole('button', { name: 'Use Claude' }).click();
   w = await claudeInChat();
   await w.getByLabel('Message to the agent').fill('One more question');
@@ -860,20 +881,26 @@ await step('your own Claude key in Settings › AI: checked before it is kept, n
 
   // The cost log, in Settings › AI: the answer above at list price, numbers only.
   await openApp('settings');
-  c = claudeBox(settingsWin());
+  c = await openClaudePop(settingsWin());
   await c.getByRole('button', { name: 'Cost log...' }).click();
-  await c.locator('.ai-log-table tbody tr', { hasText: 'Claude Sonnet 5' }).first().waitFor({ timeout: 10000 });
-  const rows = await c.locator('.ai-log-table tbody tr').allInnerTexts();
+  const log = page.locator('.dialog', { has: page.locator('.dialog-title', { hasText: 'Claude cost log' }) });
+  await log.locator('.ai-log-table tbody tr', { hasText: 'Claude Sonnet 5' }).first().waitFor({ timeout: 10000 });
+  const rows = await log.locator('.ai-log-table tbody tr').allInnerTexts();
   // 120 in at $2/M + 42 out at $10/M = $0.00066
   ok(rows.some(r => r.includes('120') && r.includes('42') && r.includes('$0.0007')), 'tokens and cost at list price: ' + rows.join(' | '));
   ok(!rows.join(' ').includes('magnolia'), 'the cost log keeps numbers, never what was asked');
   await shot('settings-ai-claude-log');
+  await log.getByRole('button', { name: 'Close', exact: true }).click();
+  await log.waitFor({ state: 'detached' });
 
-  await c.getByRole('button', { name: 'Claude settings...' }).click();
   await c.getByRole('button', { name: 'Remove my key' }).click();
   await page.locator('.dialog', { hasText: 'Remove your Claude key?' }).getByRole('button', { name: 'Remove', exact: true }).click();
   await state().filter({ hasText: 'No key saved yet' }).waitFor({ timeout: 10000 });
-  ok(await c.getByRole('button', { name: 'Use Claude' }).isDisabled(), 'removed: Use Claude is off');
+  await c.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await tile().locator('.ai-tile-state', { hasText: 'Not set' }).waitFor({ timeout: 10000 });
+  c = await openClaudePop(settingsWin());
+  eq(await c.getByRole('button', { name: 'Use Claude' }).count(), 0, 'removed: no Use Claude');
+  await c.getByRole('button', { name: 'Cancel', exact: true }).click();
   // The three refusals asked for above (a key of the wrong shape, a refused key, the $0 limit) show in the browser's
   // console as failed requests; exactly those are expected (a 404 is a key not made yet, as in the last step), and
   // anything else still fails the last step.
@@ -885,17 +912,18 @@ await step('your own Claude key in Settings › AI: checked before it is kept, n
 /** Saves the Claude key in Settings › AI, with a $1 limit; `null` removes it. */
 const setClaudeKey = async key => {
   await openApp('settings');
-  const c = claudeBox(settingsWin());
-  await c.getByRole('button', { name: 'Claude settings...' }).click();
+  const c = await openClaudePop(settingsWin());
   if (key) {
     await c.getByLabel('Anthropic API key').fill(key);
     await c.getByLabel('Monthly limit in US dollars').fill('1');
     await c.getByRole('button', { name: 'Save', exact: true }).click();
-    await c.locator('.ai-device').filter({ hasText: 'ending wxyz' }).waitFor({ timeout: 15000 });
+    await c.waitFor({ state: 'detached', timeout: 15000 });
+    await claudeTile(settingsWin()).locator('.ai-tile-state', { hasText: /^Set$/ }).waitFor({ timeout: 10000 });
   } else {
     await c.getByRole('button', { name: 'Remove my key' }).click();
     await page.locator('.dialog', { hasText: 'Remove your Claude key?' }).getByRole('button', { name: 'Remove', exact: true }).click();
-    await c.locator('.ai-device').filter({ hasText: 'No key saved yet' }).waitFor({ timeout: 10000 });
+    await c.locator('.ai-key-state').filter({ hasText: 'No key saved yet' }).waitFor({ timeout: 10000 });
+    await c.getByRole('button', { name: 'Cancel', exact: true }).click();
   }
   await closeAll();
 };

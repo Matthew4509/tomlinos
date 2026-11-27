@@ -137,19 +137,26 @@ await step('C-P0-escape-in-cell: Escape while typing a label does not wipe the c
   eq(await display(), '9', '4 + 5 = after Escape in a label');
 });
 
-await step('C-P0-saveas-stem: Save as with a stem that is taken ("Sums" when Sums.calc exists) is refused in the box, not by an error dialog', async () => {
+// Save sheet as is the shared Save window: a taken name is asked about ("Replace it?", with "Choose another name"),
+// never answered with an error dialog.
+await step('C-P0-saveas-stem: Save as with a stem that is taken ("Sums" when Sums.calc exists) asks first, not by an error dialog', async () => {
   await freshCalc(true);
   await cellOf('A1').locator('input').fill('1');
+  const saveWin = () => page.locator('.dialog', { has: page.getByLabel('File name') });
   await calcWin().getByRole('button', { name: 'Save', exact: true }).click();
-  await page.locator('.dialog input').fill('Sums');
-  await page.locator('.dialog').getByRole('button', { name: 'Save' }).click();
+  await saveWin().getByLabel('File name').fill('Sums');
+  await saveWin().getByRole('button', { name: 'Save', exact: true }).click();
   await page.locator('.toast', { hasText: 'Saved “Sums.calc”' }).waitFor();
   await calcWin().getByRole('button', { name: 'Save as...' }).click();
-  await page.locator('.dialog input').fill('Sums');
-  await page.waitForTimeout(200);
-  const saveEnabled = await page.locator('.dialog').getByRole('button', { name: 'Save' }).isEnabled();
-  const text = await page.locator('.dialog').innerText();
-  ok(!saveEnabled || /already/.test(text), 'the name box accepted "Sums" although Sums.calc exists: ' + text.replace(/\s+/g, ' '));
+  await saveWin().getByLabel('File name').fill('Sums');
+  await saveWin().getByRole('button', { name: 'Save', exact: true }).click();
+  const ask = page.locator('.dialog', { hasText: 'Replace it?' });
+  await ask.waitFor({ timeout: 5000 }).catch(() => {});
+  const text = (await page.locator('.dialog').allInnerTexts()).join(' | ').replace(/\s+/g, ' ');
+  ok(await ask.count() && /Sums\.calc/.test(text) && !/Could not/.test(text), 'a taken name was not asked about: ' + text);
+  await ask.getByRole('button', { name: 'Choose another name' }).click();
+  await saveWin().waitFor();
+  eq(await saveWin().getByLabel('File name').inputValue(), 'Sums.calc', 'the Save window is back with the name');
 });
 
 await step('C-P0-narrow-window: with the sheet open, a narrow window still shows the A, B and = columns', async () => {

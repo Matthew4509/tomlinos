@@ -140,7 +140,7 @@ await step('Start menu (Xfce by default): 2 pinned apps, then the groups (no Pla
   eq(await page.locator('.start-list > .start-group', { hasText: 'Places' }).count(), 0, 'no Places row');
   // Search looks through everything, in the menu's own column.
   await page.locator('.start-filter').fill('note');
-  eq((await pinnedNames()).map(t => t.trim()), ['Notepad', 'Notepad Pro'], 'search finds across groups');
+  eq((await pinnedNames()).map(t => t.trim()), ['Notepad Pro', 'Quick Notes'], 'search finds across groups (Notepad is Quick Notes now)');
   eq(await page.locator('.start-fly').count(), 0, 'no column while searching');
   await page.locator('.start-filter').fill('');
   // An app in a column opens and closes the whole menu.

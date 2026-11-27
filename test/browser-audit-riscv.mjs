@@ -119,26 +119,36 @@ await step('P1 checks: Step after the end, a fault while stepping, Tab, Change',
   await settle(200);
 });
 
-await step('a program saved with Save As reopens with the same text; a .txt name drops out of Open', async () => {
+// Save As and Open are the desktop's shared Open/Save window now (the DOS-style file box is gone). Its type drop-down
+// gives the name the program's ending, so a ".txt" name becomes a .s program and Open can always list it (RV-P1-17).
+const fileWin = title => page.locator('.dialog', { has: page.locator('.dialog-title', { hasText: title }) });
+async function saveProgramAs(name) {
+  await page.keyboard.press('Control+Shift+S');
+  const d = fileWin('Save program as');
+  await d.waitFor();
+  await d.getByLabel('File name').fill(name);
+  await d.getByRole('button', { name: 'Save', exact: true }).click();
+  await d.waitFor({ state: 'detached' });
+}
+await step('a program saved with Save As reopens with the same text; a .txt name is saved as a program Open lists', async () => {
   await setCode('# mine\nli a0, 7\nebreak\n');
-  await page.keyboard.press('Control+Shift+S');
-  await st.locator('.dos-box', { hasText: 'Save As' }).waitFor();
-  await st.locator('.dos-box .dos-field').fill('mine');
-  await st.locator('.dos-box .dos-btn.primary').click();
-  await st.locator('.studio-code .dos-pane-title', { hasText: 'mine.S' }).waitFor();
-  await page.keyboard.press('Control+Shift+S');
-  await st.locator('.dos-box', { hasText: 'Save As' }).waitFor();
-  await st.locator('.dos-box .dos-field').fill('notes.txt');
-  await st.locator('.dos-box .dos-btn.primary').click();
-  await st.locator('.studio-code .dos-pane-title', { hasText: 'notes.txt' }).waitFor();
+  await saveProgramAs('mine');
+  await st.locator('.studio-code .dos-pane-title', { hasText: /mine\.s/i }).waitFor();
+  await setCode('# notes\nebreak\n');
+  await saveProgramAs('notes.txt');
+  // The window takes the new name once the write is done, a moment after the Save window closes.
+  await st.locator('.studio-code .dos-pane-title', { hasText: /notes\./i }).waitFor().catch(() => {});
+  const title = await st.locator('.studio-code .dos-pane-title').innerText();
+  ok(/notes\.s\b/i.test(title), 'a .txt name saves as a program: ' + title);
   await page.keyboard.press('Control+o');
-  await st.locator('.dos-box', { hasText: 'Open Program' }).waitFor();
-  const list = await st.locator('.dos-box .dos-list').innerText();
-  ok(list.includes('mine.S'), 'mine.S listed');
-  if (!list.includes('notes.txt')) info('RV-P1-17', 'Save As accepts "notes.txt", but Open lists only .S/.ASM, so the program just saved cannot be picked again from the list.');
-  await st.locator('.dos-box .dos-field').fill('mine.S');
-  await st.locator('.dos-box .dos-btn.primary').click();
-  await st.locator('.studio-code .dos-pane-title', { hasText: 'mine.S' }).waitFor();
+  const open = fileWin('Open program');
+  await open.waitFor();
+  await open.locator('.pick-row').first().waitFor();
+  const list = await open.locator('.pick-row').evaluateAll(rows => rows.map(r => r.getAttribute('title')));
+  ok(list.some(n => /^mine\.s$/i.test(n)), 'mine.s listed: ' + list.join(', '));
+  ok(list.some(n => /^notes\.s$/i.test(n)), 'notes.s listed: ' + list.join(', '));
+  await open.locator('.pick-row', { hasText: /^mine\.s/i }).first().dblclick();
+  await st.locator('.studio-code .dos-pane-title', { hasText: /mine\.s/i }).waitFor();
   ok((await area.inputValue()) === '# mine\nli a0, 7\nebreak\n', 'same text back');
 });
 

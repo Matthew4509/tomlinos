@@ -34,6 +34,7 @@ async function step(name, fn) {
 const ok = (v, what) => {
   if (!v) throw new Error(what);
 };
+const eq = (a, b, what) => ok(JSON.stringify(a) === JSON.stringify(b), `${what}: expected ${JSON.stringify(b)}, got ${JSON.stringify(a)}`);
 
 /** A zip of [name, text, deflate?, extra flags?] entries; names ending in "/" are folders; flag 1 marks it password-locked. */
 function makeZip(files) {
@@ -112,12 +113,18 @@ async function openZip(zip) {
   await aw().locator('.archive-list').waitFor();
   await page.waitForTimeout(300);
 }
-/** Extract all into a folder of the given name; waits for the toast or a dialog. Returns the status line. */
-async function extractAll(folder) {
-  await aw().getByRole('button', { name: /Extract all/ }).click();
-  const dialog = page.locator('.dialog');
-  await dialog.locator('input').fill(folder);
-  await dialog.getByRole('button', { name: 'Extract' }).click();
+/**
+ * Extract all (or selected): the folder window asks where ("Extract to", opened on the archive's folder, Documents
+ * here); Extract here makes a new folder named after the archive there. Waits for the status line or a dialog.
+ * Returns the status line (with any dialog's words) and the new folder's path, read from "into “name”" (the
+ * archive's stem when the line does not say).
+ */
+async function extractAll(stem, button = /Extract all/) {
+  await aw().getByRole('button', { name: button }).click();
+  const dialog = page.locator('.dialog', { has: page.locator('.dialog-title', { hasText: 'Extract to' }) });
+  await dialog.waitFor();
+  await dialog.locator('.pick-crumbs [aria-current="location"]', { hasText: 'Documents' }).waitFor();
+  await dialog.getByRole('button', { name: 'Extract here' }).click();
   await page.waitForFunction(() => /Extracted|Stopped/.test(document.querySelector('.archive')?.closest('.win')?.querySelector('.statusbar')?.textContent ?? ''), null, { timeout: 60000 });
   await page.waitForTimeout(500);
   let said = '';
@@ -127,7 +134,9 @@ async function extractAll(folder) {
     await page.locator('.dialog').last().getByRole('button').last().click().catch(() => page.keyboard.press('Escape'));
     await page.waitForTimeout(200);
   }
-  return (await aw().locator('.statusbar').innerText()) + said;
+  const status = (await aw().locator('.statusbar').innerText()) + said;
+  const into = /into “([^”]+)”/.exec(status);
+  return { status, folder: '/Documents/' + (into ? into[1] : stem) };
 }
 
 const dir = tempDir('tomlinos-audit-archive-');
@@ -167,18 +176,18 @@ await step('set up the owner, open File Explorer and upload the zips into Docume
 
 await step('AR-P0-1: six entries whose names clash once cleaned (case, "?", NFC/NFD) all come out; none is written over', async () => {
   await openZip('dups.zip');
-  const status = await extractAll('dups-out');
+  const { status, folder } = await extractAll('dups');
   await closeArchives();
-  await typePath('/Documents/dups-out');
+  await typePath(folder);
   const got = await names();
   ok(got.length === 6, `${status} The folder holds ${got.length} files: ${JSON.stringify(got)}. Each later entry silently replaced the one before it.`);
 });
 
 await step('AR-P1-1: a file "x" and a folder "x/" in one zip: Extract all still extracts the rest ("after.txt")', async () => {
   await openZip('clash.zip');
-  const status = await extractAll('clash-out');
+  const { status, folder } = await extractAll('clash');
   await closeArchives();
-  await typePath('/Documents/clash-out');
+  await typePath(folder);
   const got = await names();
   ok(got.includes('after.txt'), `${status} Got ${JSON.stringify(got)}: the extract stopped at the clash.`);
 });
@@ -187,13 +196,10 @@ await step('Extract selected: one ticked file inside "docs" comes out alone (doc
   await openZip('nest.zip');
   await aw().locator('.archive-row', { hasText: 'docs' }).dblclick();
   await aw().locator('.archive-row', { hasText: 'keep.txt' }).locator('input').check();
-  await aw().getByRole('button', { name: /Extract selected/ }).click();
-  const dialog = page.locator('.dialog');
-  await dialog.locator('input').fill('pick-out');
-  await dialog.getByRole('button', { name: 'Extract' }).click();
-  await page.locator('.toast', { hasText: 'Extracted 1 file' }).waitFor({ timeout: 10000 });
+  const { status, folder } = await extractAll('nest', /Extract selected/);
+  ok(/Extracted 1 file\b/.test(status), status);
   await closeArchives();
-  await typePath('/Documents/pick-out/docs');
+  await typePath(folder + '/docs');
   const got = await names();
   ok(JSON.stringify(got) === '["keep.txt"]', JSON.stringify(got));
 });
@@ -237,29 +243,30 @@ await step('narrow window (380 px viewport): the three toolbar buttons are all o
 
 await step('AR-P1-5: a password-locked file in the middle: Extract all still extracts the files after it ("last.txt")', async () => {
   await openZip('locked.zip');
-  const status = await extractAll('locked-out');
+  const { status, folder } = await extractAll('locked');
   await closeArchives();
-  await typePath('/Documents/locked-out');
+  await typePath(folder);
   const got = await names();
   ok(got.includes('last.txt'), `${status} Got ${JSON.stringify(got)}: one locked file stops the whole extract, and the list never marks it as locked.`);
 });
 
-await step('AR-P1-6: typing "sub/inner" as the new folder name is refused in the dialog, with a reason', async () => {
+// AR-P1-6 was about a typed folder name ("sub/inner"); the name prompt is gone, the folder is named after the archive.
+// What is left to check: extracting the same archive again makes a second folder and never writes into the first.
+await step('AR-P1-6: Extract all of the same archive again goes into a new folder ("nest (2)"); the first is left as it was', async () => {
   await openZip('nest.zip');
-  await aw().getByRole('button', { name: /Extract all/ }).click();
-  const dialog = page.locator('.dialog');
-  await dialog.locator('input').fill('sub/inner');
-  await dialog.getByRole('button', { name: 'Extract' }).click();
-  await page.waitForTimeout(1500);
-  const texts = (await page.locator('.dialog').allInnerTexts()).join(' | ').replace(/\s+/g, ' ');
-  const status = await aw().locator('.statusbar').innerText();
-  ok(/cannot contain/.test(texts), `dialogs now: "${texts}"; status: "${status}"`);
+  const { status, folder } = await extractAll('nest');
+  eq(folder, '/Documents/nest (2)', `the second extract's folder (${status})`);
+  await closeArchives();
+  await typePath('/Documents/nest');
+  eq(await names(), ['docs'], 'the first folder holds only what Extract selected put there');
+  await typePath('/Documents/nest (2)');
+  eq(await names(), ['docs', 'top.txt'], 'the new folder holds the whole archive');
 });
 
 await step('AR-P0-2: one 300-level deep name extracts within 20 seconds (no near-hang)', async () => {
   await openZip('deep.zip');
   const t0 = Date.now();
-  const status = await extractAll('deep-out').catch(e => 'did not finish: ' + e.message.split('\n')[0]);
+  const status = await extractAll('deep').then(r => r.status, e => 'did not finish: ' + e.message.split('\n')[0]);
   const secs = (Date.now() - t0) / 1000;
   // Finishing quickly is the point: extracted, or left out with a note saying so (uploads also cap the depth).
   ok(secs < 20 && (/Extracted 1 file/.test(status) || /left out/.test(status)), `took ${secs.toFixed(1)} s, status: ${status}`);

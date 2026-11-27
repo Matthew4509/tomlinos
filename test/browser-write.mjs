@@ -517,6 +517,15 @@ await step('Markdown, WordPad and a Word file with a text box open formatted; th
   eq(await W().locator('.wp-doc ul > li').innerText(), 'First', 'WordPad bullet');
   await doc().focus();
   await page.keyboard.press('Control+S');
+  // The shared Save window reads the folder before it shows: on a busy machine that took longer than the 10 s default.
+  await D().locator('input[aria-label="File name"]').waitFor({ timeout: 30000 }).catch(async e => {
+    const why = await page.evaluate(() => ({
+      active: document.activeElement?.closest('.win')?.querySelector('.win-title-text')?.textContent,
+      wins: [...document.querySelectorAll('.win .win-title-text')].map(t => t.textContent),
+      dialogs: [...document.querySelectorAll('.dialog')].map(d => d.textContent.slice(0, 80)),
+    }));
+    throw new Error(e.message.split('\n')[0] + ' ' + JSON.stringify(why));
+  });
   eq(await D().locator('input[aria-label="File name"]').inputValue(), 'wordpad.docx', 'a WordPad file is saved as a Word document');
   await page.keyboard.press('Escape');
   await closeAllWrite();
@@ -663,6 +672,18 @@ await step('a footnote stands at the foot of its page; a contents page lists the
   ok((await W().locator('.wp-notes').innerText()).includes('Smith, 2024'), 'its words kept');
 });
 
+/**
+ * Letters as a PDF: the letters are made, then the shared Save PDF window asks where ("Save 2 letters as a PDF"); Save
+ * there, and the toast names the saved file.
+ */
+const saveLettersPdf = async () => {
+  const d = page.locator('.dialog', { has: page.locator('.dialog-title', { hasText: 'Save 2 letters as a PDF' }) });
+  await d.waitFor({ timeout: 20000 });
+  eq(await d.getByLabel('File name').inputValue().then(v => / - letters( \(\d+\))?\.pdf$/.test(v)), true, 'the PDF is named for the letters');
+  await d.getByRole('button', { name: 'Save', exact: true }).click();
+  await page.locator('.toast', { hasText: / - letters( \(\d+\))?\.pdf” in / }).last().waitFor({ timeout: 20000 });
+};
+
 await step('letters from a spreadsheet: a field, a preview, then the letters as a PDF and as a document', async () => {
   writeFileSync(join(dir, 'people.csv'), 'Name,City\nAnn Lee,Perth\nBob Stone,Hobart\n');
   await upload([join(dir, 'people.csv')]);
@@ -680,7 +701,7 @@ await step('letters from a spreadsheet: a field, a preview, then the letters as 
   await rb('Preview').click();
   eq(await doc().locator('.wp-field').innerText(), 'Ann Lee', 'previewing row 1');
   await rb('Letters as a PDF').click();
-  await toast('Made 2 letters');
+  await saveLettersPdf();
   eq(await doc().locator('.wp-field').count(), 1, 'the letter itself is back');
   await rb('Letters as a document').click();
   await page.waitForFunction(() => [...document.querySelectorAll('.win')].some(w => w.textContent.includes('letters.docx') && w.querySelector('.wp-doc')));
@@ -828,7 +849,7 @@ await step('Letters as a PDF leave the letter on screen alone: it never shows th
     [...win.querySelectorAll('.ribbon .rb')].find(b => b.textContent === 'Letters as a PDF').click();
     document.execCommand('insertText', false, ' typed meanwhile');
   });
-  await toast('Made 2 letters');
+  await saveLettersPdf();
   await page.waitForTimeout(300);
   eq(await page.evaluate(() => window.__sawLetters), false, 'the merged letters never showed in the letter being edited');
   eq(await W().locator('.wp-doc').count(), 1, 'nothing left behind from making them');
@@ -859,7 +880,7 @@ await step('Letters as a PDF leave the letter on screen alone: it never shows th
   page.on('request', listen);
   await tab('Mailings');
   await rb('Letters as a PDF').click();
-  await page.locator('.toast', { hasText: 'Made 2 letters' }).last().waitFor();
+  await saveLettersPdf();
   await settle();
   page.off('request', listen);
   eq(sent.length, 1, 'one PDF written');

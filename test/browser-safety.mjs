@@ -183,7 +183,10 @@ await step('set a PIN and the spreadsheet screensaver', async () => {
   await w.locator('.acct-form input[autocomplete=current-password]').fill(PASS);
   await w.locator('.acct-form input[maxlength="4"]').fill('4821');
   await w.getByRole('button', { name: 'Save PIN' }).click();
-  await w.getByText('Set. The locked screen opens with your 4-digit PIN.').waitFor();
+  // Sign-in options are tiles: the state ("Set.") and the words under it are lines of their own.
+  const pinTile = w.locator('.acct-tile', { has: page.locator('h2', { hasText: 'Screen PIN' }) });
+  await pinTile.locator('.acct-state', { hasText: /^Set\.$/ }).waitFor();
+  ok((await pinTile.innerText()).includes('The locked screen opens with your 4-digit PIN.'), 'says the PIN opens the locked screen');
   await w.locator('.acct-tab', { hasText: 'Screensaver and lock' }).click();
   // Other tabs of this person's were saving too: a clash (409) is retried, so wait for the save that went through.
   const written = page.waitForResponse(r => r.url().includes('store.php') && r.request().method() === 'POST' && r.status() === 200, { timeout: 15000 });

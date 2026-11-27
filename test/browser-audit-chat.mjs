@@ -156,13 +156,20 @@ await step('save a Claude key in Settings › AI; the box is emptied and only th
   const w = await openAgents();
   await w.getByRole('button', { name: 'AI keys...' }).click();
   const s = page.locator('.win', { has: page.locator('.set-ai') });
-  await s.getByRole('button', { name: 'Claude settings...' }).click();
-  await s.getByLabel('Anthropic API key').fill(KEY);
-  await s.getByLabel('Monthly limit in US dollars').first().fill('50');
-  await s.getByRole('button', { name: 'Save', exact: true }).click();
-  await s.locator('.ai-cloud > .ai-device').filter({ hasText: 'ending wxyz' }).waitFor({ timeout: 15000 });
-  await s.getByRole('button', { name: 'Claude settings...' }).click();
-  ok((await s.getByLabel('Anthropic API key').inputValue()) === '', 'the key box is empty when opened again');
+  // The Claude tile opens a pop-up with the key, model and limit; a good key closes it and the tile says Set.
+  const tile = s.locator('.set-ai .ai-tile', { hasText: 'Connect Claude' });
+  await tile.locator('.ai-tile-state:not([hidden])').waitFor({ timeout: 15000 });
+  await tile.click();
+  const pop = page.locator('.dialog', { has: page.locator('.dialog-title', { hasText: 'Connect Claude' }) });
+  await pop.getByLabel('Anthropic API key').fill(KEY);
+  await pop.getByLabel('Monthly limit in US dollars').fill('50');
+  await pop.getByRole('button', { name: 'Save', exact: true }).click();
+  await pop.waitFor({ state: 'detached', timeout: 15000 });
+  await tile.locator('.ai-tile-state', { hasText: /^Set$/ }).waitFor({ timeout: 10000 });
+  await tile.click();
+  await pop.locator('.ai-key-state', { hasText: 'ending wxyz' }).waitFor({ timeout: 15000 });
+  ok((await pop.getByLabel('Anthropic API key').inputValue()) === '', 'the key box is empty when opened again');
+  await pop.getByRole('button', { name: 'Cancel', exact: true }).click();
   const html = await page.content();
   ok(!html.includes(KEY) && !html.includes(KEY.slice(10, 30)), 'the key is nowhere in the page');
   await closeAll();
@@ -259,7 +266,8 @@ await step('a reply that never ends: Stop stops it, the part received is kept, a
   mode = 'forever';
   await box(w).fill('never stop');
   await box(w).press('Enter');
-  await page.waitForTimeout(2500);
+  // Stop once some of the answer has arrived (a fixed wait raced a busy machine: Stop came before the first words).
+  await w.locator('.agent-pane .chat-msg.agent .chat-text', { hasText: 'more more' }).last().waitFor({ timeout: 20000 });
   await w.locator('.agent-pane').getByRole('button', { name: 'Stop' }).click();
   await waitIdle(w);
   mode = 'ok';

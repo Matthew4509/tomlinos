@@ -135,7 +135,10 @@ await step('My account turns on two-step sign-in with a scannable QR code and sh
   await w.locator('.acct-codes li').first().waitFor();
   eq(await w.locator('.acct-codes li').count(), 10, 'recovery codes');
   await w.getByRole('button', { name: 'I have kept them somewhere safe' }).click();
-  await w.getByText('On. Signing in needs your password').waitFor();
+  // Sign-in options are tiles: the state and the words under it are lines of their own.
+  const tile = w.locator('.acct-tile', { has: page.locator('h2', { hasText: 'Two-step sign-in' }) });
+  await tile.locator('.acct-state', { hasText: /^On\.$/ }).waitFor();
+  ok((await tile.innerText()).includes('Signing in needs your password'), 'says what signing in now needs');
 });
 
 await step('a PIN is set (password and two-step code asked first)', async () => {
@@ -145,7 +148,9 @@ await step('a PIN is set (password and two-step code asked first)', async () => 
   await w.locator('.acct-form input[autocomplete=one-time-code]').fill(await nextCode(secret));
   await w.locator('.acct-form input[maxlength="4"]').fill('4821');
   await w.getByRole('button', { name: 'Save PIN' }).click();
-  await w.getByText('Set. The locked screen opens with your 4-digit PIN.').waitFor();
+  const pinTile = w.locator('.acct-tile', { has: page.locator('h2', { hasText: 'Screen PIN' }) });
+  await pinTile.locator('.acct-state', { hasText: /^Set\.$/ }).waitFor();
+  ok((await pinTile.innerText()).includes('The locked screen opens with your 4-digit PIN.'), 'says the PIN opens the locked screen');
   // The lock steps below are about the spreadsheet disguise (the Reader is the default screensaver).
   await w.locator('.acct-tab', { hasText: 'Screensaver and lock' }).click();
   const saverStep = w.locator('.saver-step').nth(0);
@@ -412,9 +417,11 @@ await step('RISC-V Studio: Hello runs and prints; an example game runs and draws
   eq(await studio.locator('.studio-badge').innerText(), 'RUNNING', 'badge');
   await page.keyboard.press('F6');
   await page.keyboard.press('Control+Shift+S');
-  await studio.locator('.dos-box', { hasText: 'Save As' }).waitFor();
-  await studio.locator('.dos-box .dos-field').fill('MYSNAKE.S');
-  await studio.locator('.dos-box .dos-btn.primary').click();
+  // Save As is the desktop's shared Save window (its own DOS-style box is gone).
+  const saveBox = page.locator('.dialog', { has: page.getByLabel('File name') });
+  await saveBox.waitFor();
+  await saveBox.getByLabel('File name').fill('MYSNAKE.S');
+  await saveBox.getByRole('button', { name: 'Save', exact: true }).click();
   await studio.locator('.studio-code .dos-pane-title', { hasText: 'MYSNAKE.S' }).waitFor();
   ok(!(await studio.locator('.studio-code .dos-pane-title').innerText()).includes('not saved'), 'saved');
   const saved = await page.evaluate(() => fetch('/api/store.php?key=/', { headers: { 'X-Desktop-Store': '1' } }).then(r => r.status));

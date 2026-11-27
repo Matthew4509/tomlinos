@@ -721,7 +721,8 @@ async function makeFiles() {
   wav.write('RIFF', 0); wav.writeUInt32LE(36 + 1600, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16);
   wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22); wav.writeUInt32LE(8000, 24); wav.writeUInt32LE(8000, 28);
   wav.writeUInt16LE(1, 32); wav.writeUInt16LE(8, 34); wav.write('data', 36); wav.writeUInt32LE(1600, 40);
-  return { 'report.pdf': pdf, 'blue.png': png, 'tone.wav': wav, 'notes.txt': Buffer.from('first line\nsecond line\n'), 'binary.txt': Buffer.from([0xff, 0xfe, 0x00, 0x80, 0xc3, 0x28]) };
+  // binary.txt: control bytes and a byte UTF-8 never has (it used to start FF FE, which Quick Notes now rightly reads as UTF-16 text).
+  return { 'report.pdf': pdf, 'blue.png': png, 'tone.wav': wav, 'notes.txt': Buffer.from('first line\nsecond line\n'), 'binary.txt': Buffer.from([0x00, 0x01, 0x02, 0xff, 0x80, 0xc3, 0x28]) };
 }
 
 async function openDocuments() {
@@ -1030,10 +1031,12 @@ await step('Spreadsheet: sheets: add, rename and switch; a formula can refer to 
 await step('Spreadsheet: Save as makes a .sheet file; reopening it from Explorer restores values, formulas and formatting', async () => {
   await page.locator('.sheet .grid-scroll').focus();
   await page.keyboard.press('Control+S');
-  const dlg = page.locator('.dialog');
+  // Save as is the shared Open/Save window: a File name box, the type drop-down, and Save.
+  const dlg = page.locator('.dialog', { has: page.getByLabel('File name') });
   await dlg.waitFor();
-  await dlg.locator('input').fill('budget-' + stamp + '.sheet');
-  await dlg.getByRole('button', { name: 'Save' }).click();
+  eq(await dlg.getByLabel('Save as type').locator('option:checked').innerText(), 'Spreadsheet (*.sheet)', 'the type a new workbook saves as');
+  await dlg.getByLabel('File name').fill('budget-' + stamp + '.sheet');
+  await dlg.getByRole('button', { name: 'Save', exact: true }).click();
   // The toast naming this file: an earlier "Saved" (the Text Editor's) can still be on screen while this save runs.
   await page.locator('.toast', { hasText: 'Saved “budget-' + stamp }).waitFor();
   await page.locator('.win', { has: page.locator('.sheet') }).getByRole('button', { name: 'Close' }).click();
@@ -1381,8 +1384,10 @@ await step('Spreadsheet: freeze, filter, merge, find and replace, then saved as 
   await page.keyboard.press('Control+S');
   const dlg = page.locator('.dialog');
   await dlg.waitFor();
-  await dlg.locator('input').fill('orders-' + stamp + '.xlsx');
-  await dlg.getByRole('button', { name: 'Save' }).click();
+  // The shared Save window: typing the .xlsx ending picks Excel workbook in its type drop-down.
+  const saveWin = page.locator('.dialog', { has: page.getByLabel('File name') });
+  await saveWin.getByLabel('File name').fill('orders-' + stamp + '.xlsx');
+  await saveWin.getByRole('button', { name: 'Save', exact: true }).click();
   await page.locator('.toast', { hasText: 'Saved “orders-' + stamp + '.xlsx' }).waitFor();
   const download = page.waitForEvent('download');
   await page.locator('.sheet .file-tab').click();
@@ -1552,8 +1557,10 @@ await step('Spreadsheet: a chart, conditional formatting, a drop-down list, prin
   await page.locator('.sheet .grid-scroll').focus();
   await page.keyboard.press('Control+S');
   await dlg.waitFor();
-  await dlg.locator('input').fill('charts-' + stamp + '.xlsx');
-  await dlg.getByRole('button', { name: 'Save' }).click();
+  // The shared Save window: typing the .xlsx ending picks Excel workbook in its type drop-down.
+  const saveWin = page.locator('.dialog', { has: page.getByLabel('File name') });
+  await saveWin.getByLabel('File name').fill('charts-' + stamp + '.xlsx');
+  await saveWin.getByRole('button', { name: 'Save', exact: true }).click();
   await page.locator('.toast', { hasText: 'Saved “charts-' + stamp + '.xlsx' }).waitFor();
   if (process.env.SHOTS) await sw().screenshot({ path: `${process.env.SHOTS}/sheet-charts.png` });
   await sw().getByRole('button', { name: 'Close' }).click();
