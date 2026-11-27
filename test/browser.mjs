@@ -54,11 +54,17 @@ const raise = async title => {
   const w = win(title).first();
   if (!(await w.evaluate(el => el.classList.contains('active')))) await page.locator('.task', { hasText: title }).first().click();
 };
+// A window left with unsaved work (a step that failed part-way) asks before it closes: say Close without saving, or
+// that question blocks every later step.
 const closeAll = async () => {
   for (let i = 0; i < 12 && (await page.locator('.win').count()) > 0; i++) {
-    await page.locator('.win').last().getByRole('button', { name: 'Close' }).click();
+    const drop = page.locator('.dialog').getByRole('button', { name: 'Close without saving' });
+    if (await drop.count()) await drop.first().click();
+    else await page.locator('.win').last().getByRole('button', { name: 'Close' }).click();
     await settle(80);
   }
+  const drop = page.locator('.dialog').getByRole('button', { name: 'Close without saving' });
+  if (await drop.count()) await drop.first().click();
 };
 // The Explorer window that was opened first (folders open inside it, so it keeps being the one we drive).
 const fw = () => page.locator('.win').first();

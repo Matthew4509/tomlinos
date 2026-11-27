@@ -11,6 +11,7 @@
 import { chromium } from 'playwright-core';
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { startFakeHuggingFace, SHARD_BYTES } from './fake-huggingface.mjs';
 
@@ -24,7 +25,18 @@ const ORIGIN = new URL(BASE).origin;
 const Q08 = 'Qwen3.5-0.8B-q4f32_1-MLC';
 const GEMMA = 'gemma-2-2b-it-q4f32_1-MLC';
 const Q4 = 'Qwen3.5-4B-q4f32_1-MLC';
-if (!MODELS || !existsSync(MODELS)) throw new Error('give the server\'s models folder as the second argument');
+// A wrong start says what is wrong and stops, with no stack trace and no half-run.
+const stop = why => {
+  console.log('AI Models audit cannot start: ' + why + '\n  node test/browser-audit-aimodels.mjs <base> <models dir> [hf port] [screenshot folder]');
+  process.exit(2);
+};
+if (!MODELS || !existsSync(MODELS)) stop('give the server\'s models folder (its DESKTOP_MODELS_DIR) as the second argument');
+// The stand-in for Hugging Face listens on HF_PORT; the PHP server must have been started with
+// DESKTOP_MODELS_TEST_URL=http://127.0.0.1:<that port>, or every save waits for an answer that never comes.
+const portFree = await new Promise(resolve => {
+  const probe = createServer().once('error', () => resolve(false)).listen(HF_PORT, '127.0.0.1', () => probe.close(() => resolve(true)));
+});
+if (!portFree) stop(`port ${HF_PORT} for the stand-in Hugging Face is already in use (another test run?); give a free one as the third argument`);
 
 let passed = 0;
 const failures = [];
@@ -159,14 +171,22 @@ await step('Settings › AI: Save, Stop saving after the first piece (paused, no
   await page.locator('.dialog').getByLabel('Your password').fill(PASS);
   await page.locator('.dialog').getByRole('button', { name: 'Save', exact: true }).click();
   const said = ai.locator('p.hint[role=status]').first();
-  await said.filter({ hasText: /^Saving / }).waitFor({ timeout: 30000 });
+  // On a timeout, say what the status line showed instead (an error from the server reads there).
+  const until = async (re, timeout) => {
+    try {
+      await said.filter({ hasText: re }).waitFor({ timeout });
+    } catch {
+      throw new Error(`waited ${timeout / 1000} s for ${re}; the status line says: ${JSON.stringify(await said.textContent())}`);
+    }
+  };
+  await until(/^Saving /, 30000);
   await ai.getByRole('button', { name: 'Stop saving' }).click();
-  await said.filter({ hasText: /^Saving paused/ }).waitFor({ timeout: 30000 });
+  await until(/^Saving paused/, 30000);
   const mid = (await list()).models.find(m => m.id === Q08);
   ok(!mid.saved && mid.saving && mid.saving.have > 0 && mid.saving.have < mid.saving.total, 'paused part-way: ' + JSON.stringify(mid.saving));
   await ai.getByRole('button', { name: 'Carry on saving' }).click();
   ok(!(await page.locator('.dialog').count()), 'carrying on does not ask for the password again');
-  await said.filter({ hasText: /is saved on this TOMLIN OS/ }).waitFor({ timeout: 60000 });
+  await until(/is saved on this TOMLIN OS/, 60000);
   const pieces = hf.requests.filter(r => r.startsWith('/cdn/params_shard_0.bin'));
   ok(pieces.length === 2, 'two pieces for the 20 MB file, none fetched twice: ' + pieces.join(', '));
   const files = walk(MODELS);
