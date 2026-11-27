@@ -109,6 +109,19 @@ export const panelApp: AppDef = {
       navButtons.set(s.id, { button, count });
       nav.append(button);
     }
+    // A tab list: the arrow keys (and Home, End) move between the sections; Enter or Space opens the one focused. Tab
+    // goes to the open section's entry only, then on out of the rail.
+    on(nav, 'keydown', (e: KeyboardEvent) => {
+      const items = [...navButtons.values()].map(x => x.button);
+      const at = items.indexOf(document.activeElement as HTMLButtonElement);
+      if (at < 0) return;
+      const to = e.key === 'ArrowDown' || e.key === 'ArrowRight' ? (at + 1) % items.length
+        : e.key === 'ArrowUp' || e.key === 'ArrowLeft' ? (at - 1 + items.length) % items.length
+          : e.key === 'Home' ? 0 : e.key === 'End' ? items.length - 1 : -1;
+      if (to < 0) return;
+      e.preventDefault();
+      items[to].focus();
+    }, signal);
 
     const user = shell.account?.user() ?? null;
     const upValue = h('span', {}, since(0));
@@ -202,7 +215,12 @@ export const panelApp: AppDef = {
     function show(id: string): void {
       const section = SECTIONS.find(s => s.id === id) ?? SECTIONS[0];
       current = section.id;
-      for (const [sid, { button }] of navButtons) button.setAttribute('aria-selected', String(sid === section.id));
+      // A section off the rail (Terminal, Calendar...) leaves the rail's Tab stop on the Overview.
+      const tabStop = navButtons.has(section.id) ? section.id : 'overview';
+      for (const [sid, { button }] of navButtons) {
+        button.setAttribute('aria-selected', String(sid === section.id));
+        button.tabIndex = sid === tabStop ? 0 : -1;
+      }
       overview.hidden = section.id !== 'overview';
       for (const [sid, entry] of hosted) entry.area.hidden = sid !== section.id;
       if (section.app && !hosted.has(section.id)) {
@@ -517,9 +535,9 @@ export const panelApp: AppDef = {
       recentList.replaceChildren(...found.slice(0, 6).map(({ folder, entry }) => {
         const b = h('button', { type: 'button', class: 'panel-row panel-row-btn' },
           h('span', { class: 'panel-row-main' }, entry.name, h('span', { class: 'panel-sub' }, `${folder.slice(1)} · ${new Date(entry.modified).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`)));
-        on(b, 'dblclick', () => void shell.openPath(`${folder}/${entry.name}`), signal);
-        on(b, 'keydown', (e: KeyboardEvent) => e.key === 'Enter' && void shell.openPath(`${folder}/${entry.name}`), signal);
-        b.title = 'Double-click to open';
+        // One click, Enter or Space opens it, as any other button; the second click of a double-click is not a second open.
+        on(b, 'click', (e: MouseEvent) => e.detail < 2 && void shell.openPath(`${folder}/${entry.name}`), signal);
+        b.title = 'Open';
         return b;
       }));
       if (!found.length) recentList.append(h('p', { class: 'panel-empty' }, 'No files yet in Desktop, Documents, Pictures, Music or Videos.'));

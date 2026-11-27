@@ -4,7 +4,8 @@
 // was written (P0 or P1 as named). Needs the dev server on a FRESH, EMPTY data folder (the first step sets up the
 // owner), `npm run build` done, and the server started with
 //   DESKTOP_MAIL_ALLOW_HOSTS=127.0.0.1:3443,127.0.0.1:3887 DESKTOP_MAIL_ALLOW_PLAIN=1
-// (the stand-in mail server is started here on those two ports). Nothing here loads an AI model or calls an AI service.
+// (the stand-in mail server is started here on those two ports; AUDIT_IMAP=<port> AUDIT_SMTP=<port> pick others, to
+// run beside another suite's stand-in, and the server's DESKTOP_MAIL_ALLOW_HOSTS must then name them). Nothing here loads an AI model or calls an AI service.
 //   node test/browser-audit-panel.mjs [http://127.0.0.1:3143] [screenshot folder]
 import { chromium } from 'playwright-core';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -479,6 +480,12 @@ await step('FAULT (P1): a Recent files row opens with Space or a single click, a
   await page.keyboard.press('Space');
   await page.waitForTimeout(1500);
   ok((await page.locator('.win').count()) > before, 'Space on the focused row does nothing');
+  await page.locator('.win').last().locator('.win-close').first().click();
+  await page.waitForTimeout(500);
+  const again = await page.locator('.win').count();
+  await row.click();
+  await page.waitForTimeout(1500);
+  ok((await page.locator('.win').count()) > again, 'a single click on the row does nothing');
 });
 
 await step('FAULT (P1): the rail is a tab list: arrow keys move between its sections', async () => {
@@ -488,6 +495,12 @@ await step('FAULT (P1): the rail is a tab list: arrow keys move between its sect
   await page.waitForTimeout(300);
   const focused = await page.evaluate(() => document.activeElement?.textContent ?? '');
   ok(focused.includes('MAIL'), 'ArrowDown did not move to MAIL; focus is on ' + JSON.stringify(focused.slice(0, 40)));
+  await page.keyboard.press('ArrowUp');
+  ok((await page.evaluate(() => document.activeElement?.textContent ?? '')).includes('OVERVIEW'), 'ArrowUp did not move back to OVERVIEW');
+  await page.keyboard.press('End');
+  ok((await page.evaluate(() => document.activeElement?.textContent ?? '')).includes('MY ACCOUNT'), 'End did not move to the last section');
+  // Only the open section's entry is a Tab stop.
+  eq(await w.locator('.panel-nav-item[tabindex="0"]').allInnerTexts(), ['OVERVIEW'], 'Tab stops on the rail');
 });
 
 await step('small window (420 x 700): no part of the Overview is cut off sideways; the pad can be typed in and saved', async () => {
