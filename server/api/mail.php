@@ -9,6 +9,7 @@
 //   op=flag      read/unread, flagged
 //   op=move      to another folder; op=delete: to the bin folder, or for good when already there
 //   op=send      send (and put a copy in Sent, except where the provider does that itself)
+//   op=draft     keep the message being written in Drafts, in place of its last saved copy
 // Each person has 900 requests an hour and 100 sent messages a day.
 declare(strict_types=1);
 
@@ -31,7 +32,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
 $op = query_str('op');
 // 18 MB of attachments is about 24 MB once base64-encoded in the request; more would not fit a 25 MB mail limit
 // and would risk the host's 128 MB PHP memory limit while the message is built.
-$max = $op === 'send' ? 26 * 1048576 : 65536;
+$max = $op === 'send' || $op === 'draft' ? 26 * 1048576 : 65536;
 $raw = read_request_body($max + 1);
 if (strlen($raw) > $max) {
     api_fail(413, $op === 'send' ? 'That message with its attachments is over 18 MB of files. Mail servers such as Gmail refuse bigger messages; send the files in several messages.' : 'The request is too big.');
@@ -188,6 +189,9 @@ try {
         case 'send':
             mail_send($root, $uid, $acct, $body, $open);
 
+        case 'draft':
+            mail_draft($body, $open);
+
         default:
             api_fail(400, 'Unknown mail request.');
     }
@@ -214,32 +218,49 @@ function mail_search_literal(Imap $imap, string $words): array
     return $uids;
 }
 
-function mail_send(string $root, string $uid, array $acct, array $body, callable $open): never
+/**
+ * The message the compose window describes, built: [message, every address it goes to]. $draft: kept in Drafts, not
+ * sent, so an address not finished yet is kept as typed (control characters taken out) instead of refused, nobody
+ * is needed yet, and the Bcc line is written into it (a sent message never names its Bcc).
+ * `names` maps an address to the name typed with it ("Dee Example <dee@example.org>"), shown in the To and Cc lines.
+ */
+function mail_compose(array $body, bool $draft): array
 {
     $from = trim(body_str($body, 'from'));
     if (!mail_valid_address($from)) {
         api_fail(400, 'The “from” address is not a valid email address. Check it in the mail account settings.');
     }
-    $list = static function (string $key) use ($body): array {
+    $names = is_array($body['names'] ?? null) ? $body['names'] : [];
+    $list = static function (string $key) use ($body, $draft): array {
         $out = [];
         foreach (is_array($body[$key] ?? null) ? $body[$key] : [] as $a) {
-            $a = trim((string) $a);
+            $a = trim(is_string($a) ? $a : '');
             if ($a === '') {
                 continue;
             }
             if (!mail_valid_address($a)) {
-                api_fail(400, "“{$a}” is not a valid email address.");
+                if (!$draft) {
+                    api_fail(400, "“{$a}” is not a valid email address.");
+                }
+                $a = mail_cut((string) preg_replace('/[\x00-\x1f\x7f<>,;"]+/', ' ', $a), 254);
             }
             $out[] = $a;
         }
 
         return array_values(array_unique($out));
     };
+    $shown = static function (array $list) use ($names): array {
+        return array_map(static function (string $a) use ($names): string {
+            $name = is_string($names[$a] ?? null) && mail_valid_address($a) ? mail_cut(trim($names[$a]), 100) : '';
+
+            return mail_address($a, $name);
+        }, $list);
+    };
     $to = $list('to');
     $cc = $list('cc');
     $bcc = $list('bcc');
     $all = array_values(array_unique([...$to, ...$cc, ...$bcc]));
-    if (!$all) {
+    if (!$all && !$draft) {
         api_fail(400, 'Add at least one address to send to.');
     }
     if (count($all) > 100) {
@@ -262,14 +283,47 @@ function mail_send(string $root, string $uid, array $acct, array $body, callable
     $message = mail_build([
         'from' => $from,
         'fromName' => mail_cut(body_str($body, 'fromName'), 100),
-        'to' => $to,
-        'cc' => $cc,
+        'to' => $shown($to),
+        'cc' => $shown($cc),
+        'bcc' => $draft ? $shown($bcc) : [],
         'subject' => mail_cut(body_str($body, 'subject'), 500),
         'text' => body_str($body, 'text'),
         'inReplyTo' => $refs(body_str($body, 'inReplyTo')),
         'references' => $refs(body_str($body, 'references')),
         'attachments' => $attachments,
     ]);
+
+    return [$message, $all];
+}
+
+/**
+ * Keeps the message being written in Drafts (marked as a draft), in place of the copy saved before it (`replace`, its
+ * number in that folder), and answers with the new copy's number.
+ */
+function mail_draft(array $body, callable $open): never
+{
+    $folder = mail_folder($body);
+    [$message] = mail_compose($body, true);
+    $old = (int) ($body['replace'] ?? 0);
+    $imap = $open();
+    $imap->append($folder, $message, '\\Seen \\Draft');
+    $imap->select($folder);
+    $uids = $imap->uids();
+    $new = $uids ? (int) max($uids) : 0;
+    if ($old > 0 && $old !== $new && in_array($old, $uids, true)) {
+        try {
+            $imap->destroy([$old]);
+        } catch (MailError) {
+            // The new copy is saved; the old one stays, and is only a duplicate.
+        }
+    }
+    api_json(['saved' => true, 'uid' => $new]);
+}
+
+function mail_send(string $root, string $uid, array $acct, array $body, callable $open): never
+{
+    $from = trim(body_str($body, 'from'));
+    [$message, $all] = mail_compose($body, false);
     $wait = rate_take($root, $uid, 'mail-send', 100, 86400);
     if ($wait > 0) {
         api_fail(429, 'That is 100 messages sent today, the most each person can send from this desktop. Try again tomorrow.', ['wait' => $wait]);

@@ -16,12 +16,11 @@ import { extensionOf, fileTypeOf } from '../shell/filetypes.ts';
 import type { AppDef, AppHandle } from '../shell/types.ts';
 import { fromBase64, loadAccount, MailClient, PRESETS, rememberForNow, saveAccount, forgetAccount, type FolderRow, type MailAccount, type Security } from './mail/account.ts';
 import { composeApp, openCompose, stageDraft, type Draft } from './mail/compose.ts';
-import { parseMessage, quoteForReply, replySubject, showAddress, summary, type Message } from './mail/mime.ts';
-import { safeHtml } from './mail/safehtml.ts';
+import { fromMailto, parseMessage, quoteForReply, replySubject, showAddress, summary, type Message } from './mail/mime.ts';
+import { htmlToText, safeHtml } from './mail/safehtml.ts';
 import { APPS } from './catalog.ts';
 import { CONTACTS_PATH } from './contacts.ts';
 import { parseVcf } from '../core/vcard.ts';
-import { parseInert } from '../core/inert.ts';
 
 interface Row {
   uid: number;
@@ -401,18 +400,17 @@ async function run(app: AppHandle, acct: MailAccount): Promise<void> {
     const m = open.msg;
     const line = (label: string, value: string) => (value ? h('div', { class: 'mail-hline' }, h('span', {}, label), h('span', {}, value)) : null);
     const pics = new Map<string, string>();
-    for (const a of m.attachments) {
-      if (a.cid && a.type.startsWith('image/') && /^image\/(png|jpeg|gif|webp)$/.test(a.type)) {
-        const u = URL.createObjectURL(new Blob([a.data as BlobPart], { type: a.type }));
-        urls.push(u);
-        pics.set(a.cid, u);
-      }
-    }
+    const blobUrl = (type: string, data: Uint8Array) => {
+      const u = URL.createObjectURL(new Blob([data as BlobPart], { type }));
+      urls.push(u);
+      return u;
+    };
+    for (const a of m.attachments) if (a.cid && PICTURE.test(a.type)) pics.set(a.cid, blobUrl(a.type, a.data));
     const body = h('div', { class: 'mail-text' });
     let blockedNote: HTMLElement | null = null;
     const showText = () => body.replaceChildren(...linkify(m.text ?? '(This message has no text.)'));
     if (m.html) {
-      const safe = safeHtml(m.html, document, pics);
+      const safe = safeHtml(m.html, document, pics, blobUrl);
       body.classList.add('html');
       body.replaceChildren(safe.fragment);
       if (safe.blocked) blockedNote = h('p', { class: 'mail-blocked' }, `${plural(safe.blocked, 'picture')} from the web ${safe.blocked === 1 ? 'was' : 'were'} not loaded (they can tell the sender when you read this).`);
@@ -423,11 +421,22 @@ async function run(app: AppHandle, acct: MailAccount): Promise<void> {
         const plain = toggle.textContent === 'Show plain text';
         body.classList.toggle('html', !plain);
         if (plain) showText();
-        else body.replaceChildren(safeHtml(m.html!, document, pics).fragment);
+        else body.replaceChildren(safeHtml(m.html!, document, pics, blobUrl).fragment);
         toggle.textContent = plain ? 'Show formatted' : 'Show plain text';
       }, app.signal);
     }
-    const files = m.attachments.filter(a => !(a.inline && pics.has(a.cid ?? '')));
+    // A mail address in the message writes a new message here, instead of being handed to the browser.
+    on(body, 'click', (e: MouseEvent) => {
+      const a = e.target instanceof Element ? e.target.closest('a[href]') : null;
+      const href = a?.getAttribute('href') ?? '';
+      if (!/^mailto:/i.test(href)) return;
+      e.preventDefault();
+      compose('new', fromMailto(href));
+    }, app.signal);
+    const isDraft = open.folder === folders.find(f => f.use === 'drafts')?.raw;
+    const carryOn = isDraft ? h('button', { type: 'button', class: 'tool wide', title: 'Open this draft to carry on writing it' }, '✎ Continue writing') : null;
+    if (carryOn) on(carryOn, 'click', () => compose('draft'), app.signal);
+    const files = m.attachments.filter(a => !shownPicture(a));
     const chips = files.map(a => {
       const b = h('button', { type: 'button', class: 'mail-att', title: `Save “${a.name}” to your files` }, `📎 ${a.name} (${formatSize(a.data.length)})`);
       on(b, 'click', () => void saveAttachment(a.name, a.data), app.signal);
@@ -440,6 +449,7 @@ async function run(app: AppHandle, acct: MailAccount): Promise<void> {
         line('To', m.to.map(showAddress).join(', ')),
         line('Cc', m.cc.map(showAddress).join(', ')),
         line('Date', m.date ? m.date.toLocaleString() : ''),
+        carryOn,
         toggle),
       ...(chips.length ? [h('div', { class: 'mail-atts' }, ...chips)] : []),
       ...(blockedNote ? [blockedNote] : []),
@@ -498,15 +508,30 @@ async function run(app: AppHandle, acct: MailAccount): Promise<void> {
     flagBtn.textContent = row?.flagged ? '★ Unflag' : '☆ Flag';
   }
 
-  function compose(kind: 'new' | 'reply' | 'all' | 'forward') {
-    const draft: Draft = { to: [], cc: [], bcc: [], subject: '', text: '', attachments: [] };
+  function compose(kind: 'new' | 'reply' | 'all' | 'forward' | 'draft', start?: Partial<Draft>) {
+    const draft: Draft = { to: [], cc: [], bcc: [], subject: '', text: '', attachments: [], ...start };
     if (kind !== 'new' && open) {
       const m = open.msg;
-      const plain = m.text ?? (m.html ? parseInert(m.html).body.textContent ?? '' : '');
-      if (kind === 'forward') {
+      // The words of an HTML-only message, a line for each paragraph and line break (no style sheet, no script).
+      const plain = m.text ?? (m.html ? htmlToText(m.html) : '');
+      // Everything the reader lists as a file goes along, an attachment sent "inline" (as Apple Mail does) too; only
+      // pictures the message shows within its text stay behind.
+      const files = () => m.attachments.filter(a => !shownPicture(a)).map(a => ({ name: a.name, type: a.type, data: a.data }));
+      if (kind === 'draft') {
+        // Carrying on with a draft: the message as it was saved; its copy in Drafts is replaced when saved again.
+        draft.to = m.to.map(showAddress);
+        draft.cc = m.cc.map(showAddress);
+        draft.bcc = m.bcc.map(showAddress);
+        draft.subject = m.subject;
+        draft.text = plain.replace(/(\r?\n)+$/, '');
+        draft.attachments = files();
+        draft.inReplyTo = m.inReplyTo || undefined;
+        draft.references = m.references || undefined;
+        draft.draftUid = open.uid;
+      } else if (kind === 'forward') {
         draft.subject = replySubject(m.subject, true);
         draft.text = `\n\n---------- Forwarded message ----------\nFrom: ${m.from.map(showAddress).join(', ')}\nDate: ${m.date?.toLocaleString() ?? ''}\nSubject: ${m.subject}\nTo: ${m.to.map(showAddress).join(', ')}\n\n${plain}`;
-        draft.attachments = m.attachments.filter(a => !a.inline).map(a => ({ name: a.name, type: a.type, data: a.data }));
+        draft.attachments = files();
       } else {
         const me = acct.email.toLowerCase();
         // A message you sent (in Sent, or from your own address) is answered to the people it went to, not to you.
@@ -526,7 +551,7 @@ async function run(app: AppHandle, acct: MailAccount): Promise<void> {
       }
     }
     if (ticket) void composeInline(draft);
-    else openCompose(shell, acct, draft, folders.find(f => f.use === 'sent')?.raw ?? '');
+    else openCompose(shell, acct, draft, folders.find(f => f.use === 'sent')?.raw ?? '', folders.find(f => f.use === 'drafts')?.raw ?? '');
   }
 
   // ---- Writing in place (ticket layout) ----
@@ -580,7 +605,7 @@ async function run(app: AppHandle, acct: MailAccount): Promise<void> {
       onClose: () => undefined,
       onReopen: () => undefined,
     };
-    await composeApp.launch(handle, stageDraft(acct, draft, folders.find(f => f.use === 'sent')?.raw ?? ''));
+    await composeApp.launch(handle, stageDraft(acct, draft, folders.find(f => f.use === 'sent')?.raw ?? '', folders.find(f => f.use === 'drafts')?.raw ?? ''));
   }
 
   // ---- The right-hand column (ticket layout) ----
@@ -650,8 +675,10 @@ async function run(app: AppHandle, acct: MailAccount): Promise<void> {
       paintFolders();
       paintList();
       paintReader();
-      status.textContent = forGood ? 'Deleted for good.' : 'Moved to Deleted.';
-      if (selected !== null) void openMessage(selected);
+      const done = forGood ? 'Deleted for good.' : 'Moved to Deleted.';
+      status.textContent = done;
+      // Opening the next message (one not read yet shows the folder's counts) must not hide what just happened.
+      if (selected !== null) void openMessage(selected).then(() => (status.textContent = done));
     } catch (error) {
       await fail(error, 'Could not delete');
     }
@@ -792,6 +819,14 @@ async function run(app: AppHandle, acct: MailAccount): Promise<void> {
     shell.changes.on(paths => paths.includes('/Documents') && void loadContacts(), app.signal);
   }
   list.focus();
+}
+
+/** The picture kinds Mail shows from a message's own bytes. */
+const PICTURE = /^image\/(png|jpeg|gif|webp)$/;
+
+/** A picture the message shows within its text (cid:), so it is not offered as a file or forwarded as one. */
+function shownPicture(a: Message['attachments'][number]): boolean {
+  return a.inline && !!a.cid && PICTURE.test(a.type);
 }
 
 /** Plain text with its web addresses made into links (built as elements; nothing is read as HTML). */
