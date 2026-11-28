@@ -49,4 +49,9 @@ return [
     // are allowed only to listed hosts, and only when mail_allow_plain is true. The tests set both for a local stand-in.
     'mail_allow_hosts' => array_values(array_filter(explode(',', (string) getenv('DESKTOP_MAIL_ALLOW_HOSTS')))),
     'mail_allow_plain' => getenv('DESKTOP_MAIL_ALLOW_PLAIN') === '1',
+
+    // Calendar subscriptions: the server fetches a calendar's link only over https, on the usual port, from a public
+    // address. A calendar server on your own network is listed here as 'host:port' (e.g. 'nas.local:8443'); only listed
+    // hosts may be on a private address or use plain http. The tests set it for a local stand-in.
+    'ical_allow_hosts' => array_values(array_filter(explode(',', (string) getenv('DESKTOP_ICAL_ALLOW_HOSTS')))),
 ];

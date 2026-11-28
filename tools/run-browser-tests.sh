@@ -36,8 +36,9 @@ for suite in ${SUITES:-desktop accounts vault features apps printer privacy aich
   # The Mail steps talk to a stand-in mail server on 127.0.0.1 (test/fake-mail.mjs); only these two addresses, and
   # only in this test run, may be reached unencrypted. The Claude step talks to a stand-in for Anthropic
   # (test/fake-anthropic.mjs) the same way: nothing leaves this computer.
-  # The Assistant audit also has a stand-in for OpenRouter (its own, on 3192).
-  DESKTOP_MAIL_ALLOW_HOSTS=127.0.0.1:3143,127.0.0.1:3587,127.0.0.1:3443,127.0.0.1:3887 DESKTOP_MAIL_ALLOW_PLAIN=1 DESKTOP_AI_TEST_URL=http://127.0.0.1:3190 DESKTOP_OR_TEST_URL=http://127.0.0.1:3192 DESKTOP_MODELS_TEST_URL=http://127.0.0.1:3191 DESKTOP_MODELS_TEST_PINS="$DATA-pins.json" DESKTOP_MODELS_DIR="$DATA-models" DESKTOP_DATA_DIR="$DATA" "$PHP" $PHP_FLAGS -d post_max_size=300M -d upload_max_filesize=300M -S "127.0.0.1:$PORT" -t out server/dev-router.php >/dev/null 2>&1 &
+  # The Assistant audit also has a stand-in for OpenRouter (its own, on 3192). The Calendar suite has a stand-in calendar
+  # site on 3894, the one address on this computer calendar links may be fetched from in this run.
+  DESKTOP_ICAL_ALLOW_HOSTS=127.0.0.1:3894 DESKTOP_MAIL_ALLOW_HOSTS=127.0.0.1:3143,127.0.0.1:3587,127.0.0.1:3443,127.0.0.1:3887 DESKTOP_MAIL_ALLOW_PLAIN=1 DESKTOP_AI_TEST_URL=http://127.0.0.1:3190 DESKTOP_OR_TEST_URL=http://127.0.0.1:3192 DESKTOP_MODELS_TEST_URL=http://127.0.0.1:3191 DESKTOP_MODELS_TEST_PINS="$DATA-pins.json" DESKTOP_MODELS_DIR="$DATA-models" DESKTOP_DATA_DIR="$DATA" "$PHP" $PHP_FLAGS -d post_max_size=300M -d upload_max_filesize=300M -S "127.0.0.1:$PORT" -t out server/dev-router.php >/dev/null 2>&1 &
   server=$!
   sleep 1
   case $suite in
