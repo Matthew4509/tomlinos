@@ -273,32 +273,36 @@ export function describe(sum: Sum, rows: number, pendingOp: Op | null = null): s
   return parts.join(' ');
 }
 
-// ---- The "=" cell's own + − × ÷ buttons: pick the operation, then the first cell, then the second ----------------
+// ---- The "=" cell's own + − × ÷ buttons: choose the operation, then click the cells, then save -------------------
 
 const OP_NAMES: Record<Op, string> = { '+': 'add', '−': 'take away', '×': 'times', '÷': 'divide' };
-const OP_ASKS: Record<Op, string> = { '+': 'to add to it', '−': 'to take away from it', '×': 'to times it by', '÷': 'to divide it by' };
+const OP_ASKS: Record<Op, string> = { '+': 'to add', '−': 'to take away', '×': 'to times by', '÷': 'to divide by' };
 
-/** The sum a "=" cell's operation button makes from the two cells clicked: "A1 × B1". */
-export function pairSum(first: string, op: Op, second: string): Sum {
-  return { refs: [first, second], ops: [op] };
+/** The sum with one more cell clicked: the first cell starts it, each one after comes in with the operation chosen. */
+export function chainAdd(sum: Sum, op: Op, cell: string): Sum {
+  return sum.refs.length === 0 ? { refs: [cell], ops: [] } : { refs: [...sum.refs, cell], ops: [...sum.ops, op] };
 }
 
-/** What the display shows while picking: "? × ?", then "A1 × ?". */
-export function pairShown(op: Op, first: string | null, rows: number): string {
-  return `${first ? cellName(first, rows) : '?'} ${op} ?`;
+/** The sum with the last cell clicked taken off again. */
+export function chainBack(sum: Sum): Sum {
+  return { refs: sum.refs.slice(0, -1), ops: sum.ops.slice(0, Math.max(0, sum.refs.length - 2)) };
 }
 
-/** The note above the sheet while picking: which cell to click next, and Esc to stop. */
-export function pairPrompt(target: string, op: Op, first: string | null, rows: number): string {
+/** What the display shows while clicking cells: "? × ?", then "A1 × ?", then "A1 × B1 × ?". */
+export function chainShown(sum: Sum, op: Op, rows: number): string {
+  return sum.refs.length ? `${describe(sum, rows)} ${op} ?` : `? ${op} ?`;
+}
+
+/** The note above the sheet while clicking cells: what to click next, how to save and how to stop. */
+export function chainPrompt(target: string, op: Op, sum: Sum, rows: number): string {
   const name = cellName(target, rows);
-  return first
-    ? `${name} = ${cellName(first, rows)} ${op} ...: click the cell ${OP_ASKS[op]}. Esc stops.`
-    : `${name}: ${OP_NAMES[op]}. Click the first cell. Esc stops.`;
+  if (sum.refs.length === 0) return `${name}: ${OP_NAMES[op]}. Click the cells ${OP_ASKS[op]}, one after another. Esc stops.`;
+  return `Click the next cell ${OP_ASKS[op]}, or another sign to change it. Enter saves, Esc stops.`;
 }
 
 /** The tooltip on each button. */
 export const opTitle = (op: Op, target: string, rows: number) =>
-  `${OP_NAMES[op][0].toUpperCase()}${OP_NAMES[op].slice(1)}: ${cellName(target, rows)} = one cell ${op} another`;
+  `${OP_NAMES[op][0].toUpperCase()}${OP_NAMES[op].slice(1)}: choose this, then click the cells for ${cellName(target, rows)}`;
 
 export function emptySheet(rows = 10): SheetData {
   return { version: 1, rows, values: {}, sums: {} };

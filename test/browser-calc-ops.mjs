@@ -1,6 +1,6 @@
-// The Calculator sheet's "=" column buttons in a real Chrome: press × + − ÷ in a "=" cell, click the first cell, click
-// the second, and the "=" cell holds the answer. Needs the dev server on a FRESH, EMPTY data folder (the first step
-// sets up the owner), and `npm run build` done.
+// The Calculator sheet's "=" column buttons in a real Chrome: press × + − ÷ in a "=" cell, click the cells one after
+// another, press Enter, and the "=" cell holds the answer. Needs the dev server on a FRESH, EMPTY data folder (the
+// first step sets up the owner), and `npm run build` done.
 //   node test/browser-calc-ops.mjs [http://127.0.0.1:3101] [screenshot folder]
 //   or: SUITES="calc-ops" bash tools/run-browser-tests.sh
 import { chromium } from 'playwright-core';
@@ -50,11 +50,17 @@ const sumOf = id => cellOf(id).locator('.calc-sum').innerText();
 const opOf = (id, op) => cellOf(id).locator(`.calc-op[data-op="${op}"]`);
 /** Picks a cell as a user would: on its number, at the right, not on a "=" cell's own buttons. */
 const pick = async id => {
-  const box = await cellOf(id).boundingBox();
-  await cellOf(id).click({ position: { x: box.width - 8, y: box.height / 2 } });
+  const [w, h] = await cellOf(id).evaluate(el => [el.clientWidth, el.clientHeight]);
+  await cellOf(id).click({ position: { x: w - 8, y: h / 2 } });
 };
 const type = async (id, text) => {
   await cellOf(id).locator('input').fill(text);
+};
+/** One sign, then the cells, then Enter. */
+const make = async (target, op, ...ids) => {
+  await opOf(target, op).click();
+  for (const id of ids) await pick(id);
+  await page.keyboard.press('Enter');
 };
 async function closeAll() {
   for (let i = 0; i < 40; i++) {
@@ -112,117 +118,141 @@ await step('every "=" cell has × + − ÷ buttons, and the A and B cells have n
   eq(await cellOf('R1').innerText(), '', 'text of an empty = cell');
 });
 
-await step('=1 ×: asks for the first cell, then the second, then shows A1 × B1', async () => {
+await step('=1 +: choose the sign, click three cells, Enter saves A1 + B1 + A2', async () => {
   await freshSheet();
   await type('A1', '12');
   await type('B1', '4');
-  await opOf('R1', '×').click();
-  eq(await note(), '=1: times. Click the first cell. Esc stops.', 'first prompt');
-  eq(await display(), '? × ?', 'display before the first cell');
-  ok(await opOf('R1', '×').evaluate(el => el.classList.contains('on')), 'the × pressed is not lit');
+  await type('A2', '5');
+  await opOf('R1', '+').click();
+  eq(await note(), '=1: add. Click the cells to add, one after another. Esc stops.', 'first prompt');
+  eq(await display(), '? + ?', 'display before the first cell');
+  ok(await opOf('R1', '+').evaluate(el => el.classList.contains('on')), 'the + pressed is not lit');
   await pick('A1');
-  eq(await note(), '=1 = A1 × ...: click the cell to times it by. Esc stops.', 'second prompt');
-  eq(await display(), 'A1 × ?', 'display after the first cell');
+  eq(await display(), 'A1 + ?', 'display after the first cell');
+  eq(await note(), 'Click the next cell to add, or another sign to change it. Enter saves, Esc stops.', 'next prompt');
   eq(await cellOf('A1').locator('input').inputValue(), '12', 'clicking A1 to pick it does not change it');
-  await shot('calc-ops-picking');
   await pick('B1');
-  eq(await sumOf('R1'), '48', '=1');
-  eq(await note(), 'Saved =1 = A1 × B1.', 'note after saving');
+  await pick('A2');
+  eq(await display(), 'A1 + B1 + A2 + ?', 'display after three cells');
+  eq(await sumOf('R1'), '', 'nothing is saved before Enter');
+  await shot('calc-ops-picking');
+  await page.keyboard.press('Enter');
+  eq(await sumOf('R1'), '21', '=1');
+  eq(await note(), 'Saved =1 = A1 + B1 + A2.', 'note after saving');
   eq(await display(), '0', 'the calculator\'s display is back');
-  eq(await cellOf('B1').locator('input').inputValue(), '4', 'B1 is unchanged');
+  await type('B1', '10');
+  eq(await sumOf('R1'), '27', '=1 after B1 is changed');
   await shot('calc-ops-saved');
 });
 
-await step('+ − ÷ each give their answer, and the sum stays live when a number changes', async () => {
+await step('× − ÷ over several cells; clicking the "=" cell or the keypad = also saves', async () => {
   await freshSheet();
-  await type('A1', '12');
-  await type('B1', '4');
-  await type('A2', '10');
-  await type('B2', '3');
-  await type('A3', '9');
-  await type('B3', '2');
-  const make = async (target, op, a, b) => {
-    await opOf(target, op).click();
-    await pick(a);
-    await pick(b);
-  };
-  await make('R1', '+', 'A1', 'B1');
-  await make('R2', '−', 'A2', 'B2');
-  await make('R3', '÷', 'A3', 'B3');
-  eq([await sumOf('R1'), await sumOf('R2'), await sumOf('R3')], ['16', '7', '4.5'], '=1, =2, =3');
-  await type('B1', '6');
-  eq(await sumOf('R1'), '18', '=1 after B1 is changed');
-  // An "=" cell can use another "=" cell, and a foot cell can use the column.
-  await make('Rf1', '×', 'R1', 'R2');
-  eq(await sumOf('Rf1'), '126', 'foot = cell from two = cells');
-  eq(await cellOf('Rf1').getAttribute('title'), `${await cellOf('Rf1').getAttribute('aria-label')} = =1 × =2`, 'foot cell tooltip');
-  // While picking, a press that lands on another "=" cell's buttons picks that cell; it does not start over.
+  await type('A1', '2');
+  await type('B1', '3');
+  await type('A2', '4');
+  await type('A3', '100');
+  await type('B3', '10');
+  await type('A4', '2');
+  await opOf('R1', '×').click();
+  for (const id of ['A1', 'B1', 'A2']) await pick(id);
+  await pick('R1'); // clicking the cell being made saves it
+  eq(await sumOf('R1'), '24', '2 × 3 × 4');
+  await opOf('R2', '−').click();
+  for (const id of ['A3', 'B3', 'A4']) await pick(id);
+  await keyOf('=').click();
+  eq(await sumOf('R2'), '88', '100 − 10 − 2');
+  await make('R3', '÷', 'A3', 'B3', 'A4');
+  eq(await sumOf('R3'), '5', '100 ÷ 10 ÷ 2');
+  // "=" cells and foot cells can use the column.
+  await make('Rf1', '+', 'R1', 'R2', 'R3');
+  eq(await sumOf('Rf1'), '117', 'foot = cell from three = cells');
+  eq(await cellOf('Rf1').getAttribute('title'), `${await cellOf('Rf1').getAttribute('aria-label')} = =1 + =2 + =3`, 'foot cell tooltip');
+  // While clicking cells, a press that lands on another "=" cell's buttons picks that cell; it does not start over.
   await opOf('Rf2', '+').click();
   await opOf('R1', '÷').click();
-  eq(await display(), '=1 + ?', 'display after pressing on =1\'s ÷ while picking');
-  await pick('R2');
-  eq(await sumOf('Rf2'), '25', 'foot = cell =1 + =2');
+  eq(await display(), '=1 + ?', 'display after pressing on =1\'s ÷ while clicking cells');
 });
 
-await step('Escape stops at either cell and leaves the "=" cell as it was', async () => {
+await step('another sign part-way changes it for the cells after; ⌫ takes the last cell off', async () => {
+  await freshSheet();
+  await type('A1', '2');
+  await type('B1', '3');
+  await type('A2', '4');
+  await type('B2', '9');
+  await opOf('R1', '×').click();
+  await pick('A1');
+  await pick('B1');
+  await opOf('R1', '+').click(); // the cell's own + changes the sign
+  eq(await display(), 'A1 × B1 + ?', 'after changing to +');
+  await pick('A2');
+  await pick('B2');
+  await keyOf('⌫').click();
+  eq(await display(), 'A1 × B1 + A2 + ?', 'after ⌫');
+  await page.keyboard.press('x'); // the keyboard's × changes it too
+  await pick('B2');
+  await page.keyboard.press('Enter');
+  eq(await sumOf('R1'), '42', '2 × 3 + 4 × 9 (× before +)');
+  eq(await cellOf('R1').getAttribute('title'), '=1 = A1 × B1 + A2 × B2', 'tooltip');
+});
+
+await step('Escape stops and leaves the "=" cell as it was; Enter with no cells says so', async () => {
   await freshSheet();
   await type('A1', '5');
   await type('B1', '2');
-  await opOf('R1', '+').click();
-  await pick('A1');
-  await pick('B1');
+  await make('R1', '+', 'A1', 'B1');
   eq(await sumOf('R1'), '7', '=1 before');
   await opOf('R1', '×').click();
+  await page.keyboard.press('Enter');
+  ok(/Click at least one cell first/.test(await note()), `Enter with no cells: ${await note()}`);
   await page.keyboard.press('Escape');
   eq(await note(), 'Stopped. Nothing was changed.', 'Escape before the first cell');
   await opOf('R1', '×').click();
   await pick('A1');
+  await pick('B1');
   await page.keyboard.press('Escape');
   eq(await sumOf('R1'), '7', '=1 after Escape');
   eq(await opOf('R1', '×').evaluate(el => el.classList.contains('on')), false, '× still lit after Escape');
-  // And the calculator works again.
   for (const k of ['2', '+', '3', '=']) await keyOf(k).click();
   eq(await display(), '5', '2 + 3 = after stopping');
 });
 
-await step('a "=" cell cannot use itself: it says why and waits for another cell', async () => {
+await step('a cell that uses the "=" cell, or a label, is refused with the reason', async () => {
   await freshSheet();
   await type('A1', '3');
   await type('B1', '8');
+  await make('R1', '+', 'A1', 'B1');
+  await make('R2', '−', 'R1');
+  eq(await sumOf('R2'), '11', '=2 = =1');
   await opOf('R1', '−').click();
-  await pick('R1');
-  ok(/cannot use itself/.test(await note()), `first pick of =1 itself: ${await note()}`);
-  eq(await display(), '? − ?', 'display after refusing =1 as the first cell');
-  await pick('A1');
-  await pick('R1');
-  ok(/cannot use itself/.test(await note()) && /Click another cell/.test(await note()), `note: ${await note()}`);
-  await pick('B1');
-  eq(await sumOf('R1'), '-5', '=1 = A1 − B1');
-});
-
-await step('a label cell is not picked; ÷ by an empty cell says why; the sheet saves and reads back', async () => {
-  await freshSheet();
-  await type('A1', '6');
-  await opOf('R1', '÷').click();
+  await pick('R2');
+  ok(/=2 already uses =1/.test(await note()), `note: ${await note()}`);
+  eq(await display(), '? − ?', 'display after refusing =2');
   await pick('L1');
   ok(/Labels are text/.test(await note()), `label note: ${await note()}`);
   await pick('A1');
   await pick('B1');
+  await page.keyboard.press('Enter');
+  eq(await sumOf('R1'), '-5', '=1 = A1 − B1');
+});
+
+await step('÷ by an empty cell says why; the sheet saves and reads back', async () => {
+  await freshSheet();
+  await type('A1', '6');
+  await make('R1', '÷', 'A1', 'B1');
   eq(await sumOf('R1'), "Can't divide by 0", '6 ÷ empty');
   await type('B1', '3');
   eq(await sumOf('R1'), '2', '6 ÷ 3');
-  // Save, close, open again: the pair is kept in the .calc file.
   const fileWin = () => page.locator('.dialog', { has: page.getByLabel('File name') });
   await calcWin().getByRole('button', { name: 'Save', exact: true }).click();
-  await fileWin().getByLabel('File name').fill('Pairs');
+  await fileWin().getByLabel('File name').fill('Chains');
   await fileWin().getByRole('button', { name: 'Save', exact: true }).click();
-  await page.locator('.toast', { hasText: 'Saved “Pairs.calc”' }).waitFor();
+  await page.locator('.toast', { hasText: 'Saved “Chains.calc”' }).waitFor();
   await closeAll();
   await openApp('calculator');
   await calcWin().locator('.calc-pad').waitFor();
   await calcWin().getByRole('button', { name: /Extend/ }).click();
   await calcWin().getByRole('button', { name: 'Open...' }).click();
-  await page.locator('.dialog', { hasText: 'Open a sheet' }).getByText('Pairs.calc', { exact: true }).dblclick();
+  await page.locator('.dialog', { hasText: 'Open a sheet' }).getByText('Chains.calc', { exact: true }).dblclick();
   await cellOf('R1').waitFor();
   await page.waitForFunction(() => document.querySelector('[data-id="R1"] .calc-sum')?.textContent === '2', null, { timeout: 10000 });
   eq(await cellOf('R1').getAttribute('title'), '=1 = A1 ÷ B1', 'tooltip after reading back');
@@ -244,9 +274,7 @@ await step('in a narrow window the buttons show on the chosen "=" cell, and stil
   await cellOf('R2').click();
   ok(await opOf('R2', '×').isVisible(), 'no buttons on the chosen = cell');
   await shot('calc-ops-narrow');
-  await opOf('R2', '×').click();
-  await pick('A2');
-  await pick('B2');
+  await make('R2', '×', 'A2', 'B2');
   eq(await sumOf('R2'), '42', '=2 in a narrow window');
 });
 

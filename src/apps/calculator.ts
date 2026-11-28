@@ -3,8 +3,9 @@
 //
 // Making an "=" cell: click it, press = on the calculator, click a cell, press + − × ÷, click the next cell... and
 // = saves it. The cells chosen light up and the display reads "A1 + B3 − A5". Escape stops without saving.
-// The quick way: each "=" cell has its own + − × ÷ buttons. Press one, click the first cell, click the second, and the
-// "=" cell holds "A1 × B1". Escape stops. → cell puts the number on the display into the chosen A or B cell. Sheets
+// The quick way: each "=" cell has its own + − × ÷ buttons. Press one, click the cells one after another (another sign
+// changes the operation for the cells after it), then Enter or a click on the "=" cell saves "A1 + B1 + A2". Escape
+// stops. → cell puts the number on the display into the chosen A or B cell. Sheets
 // save as small .calc files.
 import { h, on } from '../core/dom.ts';
 import { baseName, parentPath, uniqueName } from '../fs/names.ts';
@@ -15,7 +16,7 @@ import { saveOver } from '../shell/savefile.ts';
 import { classicBar } from '../shell/menubar.ts';
 import { helpMenu } from './classic-menus.ts';
 import {
-  Calculator, cellId, cellName, describe, emptySheet, evaluate, isSumCell, OPS, opTitle, pairPrompt, pairShown, pairSum, parseNumber,
+  Calculator, cellId, cellName, describe, emptySheet, evaluate, isSumCell, OPS, opTitle, chainAdd, chainBack, chainPrompt, chainShown, parseNumber,
   parseSheet, show, sumProblem,
   type Col, type Op, type RowId, type SheetData, type Sum,
 } from './calculator/model.ts';
@@ -42,8 +43,9 @@ export const calculatorApp: AppDef = {
     let path: string | null = null;
     let loadedId = '';
     let selected: string | null = null;
-    /** Making a sum. `pair` is set when it was started by a "=" cell's own + − × ÷ button: two cells, then it saves. */
-    let building: { target: string; sum: Sum; op: Op | null; pair?: Op } | null = null;
+    /** Making a sum. `chain` is set when it was started by a "=" cell's own + − × ÷ button: the operation for the
+     *  next cell clicked. */
+    let building: { target: string; sum: Sum; op: Op | null; chain?: Op } | null = null;
     let open = false;
     let pickedBy: string | null = null;
 
@@ -80,18 +82,18 @@ export const calculatorApp: AppDef = {
     };
 
     function paint() {
-      display.textContent = building?.pair ? pairShown(building.pair, building.sum.refs[0] ?? null, data.rows)
+      display.textContent = building?.chain ? chainShown(building.sum, building.chain, data.rows)
         : building ? describe(building.sum, data.rows, building.op) || 'Click a cell' : calc.display;
       // A long number gets a smaller size rather than losing digits off the edge.
       display.classList.toggle('long', !building && (display.textContent ?? '').length > 13);
-      history.textContent = building?.pair ? `Making ${cellName(building.target, data.rows)}:  Esc stops`
+      history.textContent = building?.chain ? `Making ${cellName(building.target, data.rows)}:  Enter saves, Esc stops`
         : building ? `Making ${cellName(building.target, data.rows)}:  = saves, Esc stops` : calc.history;
       display.classList.toggle('building', !!building);
       for (const b of keys.querySelectorAll<HTMLElement>('.calc-key.op')) b.classList.toggle('on', !building && calc.lit === b.dataset.key);
       toCellBtn.hidden = !open;
       // Show which key comes next: = after choosing an "=" cell; + − × ÷ after clicking a cell for a sum.
       const wantsEquals = !building && open && selected !== null && isSumCell(selected);
-      const wantsOp = !!building && !building.pair && building.sum.refs.length > 0 && building.op === null;
+      const wantsOp = !!building && !building.chain && building.sum.refs.length > 0 && building.op === null;
       keys.querySelector('.calc-key.eq')!.classList.toggle('gleam', wantsEquals);
       for (const b of keys.querySelectorAll<HTMLElement>('.calc-key.op')) b.classList.toggle('gleam', wantsOp);
     }
@@ -116,7 +118,7 @@ export const calculatorApp: AppDef = {
         el.classList.toggle('chosen', id === selected);
         el.classList.toggle('lit', !!building && (building.sum.refs.includes(id) || building.target === id));
         el.classList.toggle('target', !!building && building.target === id);
-        for (const b of el.querySelectorAll<HTMLElement>('.calc-op')) b.classList.toggle('on', !!building?.pair && building.target === id && b.dataset.op === building.pair);
+        for (const b of el.querySelectorAll<HTMLElement>('.calc-op')) b.classList.toggle('on', !!building?.chain && building.target === id && b.dataset.op === building.chain);
       }
       title();
     }
@@ -186,7 +188,7 @@ export const calculatorApp: AppDef = {
               return;
             }
             const op = (event.target as HTMLElement).closest<HTMLElement>('.calc-op')?.dataset.op as Op | undefined;
-            if (op) startPair(id, op);
+            if (op) startChain(id, op);
           }, app.signal);
           el.prepend(ops);
         }
@@ -255,7 +257,7 @@ export const calculatorApp: AppDef = {
         return;
       }
       const { sum } = building;
-      if (building.pair) return pickPair(id);
+      if (building.chain) return pickChain(id);
       const wantsCell = sum.refs.length === 0 || building.op !== null;
       if (wantsCell) {
         if (building.op) sum.ops.push(building.op);
@@ -270,40 +272,39 @@ export const calculatorApp: AppDef = {
       recalc();
     }
 
-    /** A "=" cell's + − × ÷ button: ask for the first cell, then the second, then save. */
-    function startPair(target: string, op: Op) {
-      building = { target, sum: { refs: [], ops: [] }, op: null, pair: op };
+    /** A "=" cell's + − × ÷ button: then the cells, one after another. Pressed again while making that cell's sum, it
+     *  changes the operation for the cells after it. */
+    function startChain(target: string, op: Op) {
+      if (building?.chain && building.target === target) building.chain = op;
+      else building = { target, sum: { refs: [], ops: [] }, op: null, chain: op };
       selected = target;
       cells.get(target)?.focus({ preventScroll: true });
-      note.textContent = pairPrompt(target, op, null, data.rows);
+      chainNote();
+    }
+
+    /** The note while clicking cells: what to do next, or (`problem`) why that click was refused. */
+    function chainNote(problem = '') {
+      if (!building?.chain) return;
+      note.textContent = problem ? `${problem} Click another cell, or Esc to stop.` : chainPrompt(building.target, building.chain, building.sum, data.rows);
       paint();
       recalc();
     }
 
-    function pickPair(id: string) {
-      if (!building?.pair) return;
-      const { target, sum, pair } = building;
-      if (sum.refs.length === 0) {
-        // A cell that is (or uses) the "=" cell being made is refused at once, not after the second click.
-        const first = sumProblem(data, target, { refs: [id], ops: [] });
-        if (first) {
-          note.textContent = `${first} Click another cell, or Esc to stop.`;
-          return;
-        }
-        sum.refs.push(id);
-        note.textContent = pairPrompt(target, pair, id, data.rows);
-        paint();
-        recalc();
-        return;
-      }
-      const made = pairSum(sum.refs[0], pair, id);
-      const problem = sumProblem(data, target, made);
-      if (problem) {
-        // Still waiting for the second cell: another one can be clicked.
-        note.textContent = `${problem} Click another cell, or Esc to stop.`;
-        return;
-      }
-      building.sum = made;
+    function pickChain(id: string) {
+      if (!building?.chain) return;
+      const { target, chain } = building;
+      // Clicking the "=" cell being made saves it.
+      if (id === target) return finishChain();
+      // A cell that uses the "=" cell being made is refused at once, with the reason.
+      const problem = sumProblem(data, target, { refs: [id], ops: [] });
+      if (problem) return chainNote(problem);
+      building.sum = chainAdd(building.sum, chain, id);
+      chainNote();
+    }
+
+    function finishChain() {
+      if (!building?.chain) return;
+      if (building.sum.refs.length === 0) return chainNote('Click at least one cell first.');
       finishSum();
     }
 
@@ -340,17 +341,14 @@ export const calculatorApp: AppDef = {
     }
 
     function press(k: string) {
-      if (building?.pair) {
+      if (building?.chain) {
         if (k === 'C') return stopSum();
-        if (OPS.includes(k as Op)) {
-          // Another operation key changes the one being made.
-          building.pair = k as Op;
-          note.textContent = pairPrompt(building.target, building.pair, building.sum.refs[0] ?? null, data.rows);
-          paint();
-          return recalc();
-        }
-        note.textContent = pairPrompt(building.target, building.pair, building.sum.refs[0] ?? null, data.rows);
-        return;
+        if (k === '=') return finishChain();
+        // Another sign changes the operation for the next cell.
+        if (OPS.includes(k as Op)) return startChain(building.target, k as Op);
+        // ⌫ takes the last cell clicked off again.
+        if (k === '⌫' && building.sum.refs.length) building.sum = chainBack(building.sum);
+        return chainNote();
       }
       if (building) {
         if (k === '=') return finishSum();
