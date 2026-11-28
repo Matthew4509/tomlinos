@@ -1120,6 +1120,34 @@ textarea.field { resize: vertical; font: inherit; }
 .cal-times { display: flex; gap: 8px; }
 .cal-times[hidden] { display: none; }
 .cal-times label { display: flex; flex-direction: column; font-size: 12px; color: var(--ink-soft); flex: 1; }
+/* Each calendar's own colour (--cal, set on the chip, event or swatch); the theme's when none is set. */
+.cal-chip { border-left-color: var(--cal, var(--sel)); background: color-mix(in srgb, var(--cal, var(--sel)) 16%, var(--paper)); }
+.cal-event { border-left-color: var(--cal, var(--sel)); }
+.cal-main.with-list { grid-template-columns: 190px minmax(0, 1fr) 280px; }
+.cal-main.with-list > .cal-list { grid-column: 1; grid-row: 1; }
+.cal-main.with-list > .cal-month-grid { grid-column: 2; grid-row: 1; }
+.cal-main.with-list > .cal-side { grid-column: 3; grid-row: 1; }
+.cal-list { padding: 10px; overflow: auto; background: var(--face); border-right: 1px solid var(--line); font-size: 12px; }
+.cal-list h3 { margin: 0 0 8px; font-size: 14px; }
+.cal-list-row { display: flex; align-items: flex-start; gap: 6px; margin-bottom: 8px; }
+.cal-list-row input { margin: 2px 0 0; }
+.cal-swatch { flex: none; width: 12px; height: 12px; margin-top: 2px; border-radius: 3px; background: var(--cal, var(--sel)); }
+.cal-list-text { display: flex; flex-direction: column; min-width: 0; overflow-wrap: anywhere; }
+.cal-list-name { font-size: 12px; color: var(--ink); }
+button.cal-list-name { padding: 0; border: 0; background: none; text-align: left; cursor: pointer; text-decoration: underline; font: inherit; }
+.cal-list .row-buttons .btn { font-size: 12px; }
+.cal-problem { color: var(--danger); }
+.cal-status { padding: 4px 10px; border-top: 1px solid var(--line); background: var(--face-hi); font-size: 12px; }
+.cal-status[hidden] { display: none; }
+.cal-status p { margin: 2px 0; }
+.cal-readonly { border-left: 3px solid var(--cal, var(--sel)); padding-left: 6px; }
+.cal-add { min-width: min(440px, 80vw); max-width: 520px; }
+.cal-add .hint, .cal-data-note { font-size: 12px; }
+.cal-help { margin-top: 8px; font-size: 12px; }
+.cal-help summary { cursor: pointer; }
+.cal-help ol { margin: 4px 0 8px; padding-left: 20px; }
+.cal-hol-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.cal-report ul { margin: 4px 0; padding-left: 20px; }
 .contacts-main { grid-template-columns: 240px 1fr; }
 /* A narrow window (not only a narrow screen) puts the card under the list, so the form keeps its width. */
 .contacts-app { container-type: inline-size; }
@@ -1138,7 +1166,10 @@ textarea.field { resize: vertical; font: inherit; }
 .person-facts dt { color: var(--ink-soft); }
 .person-facts dd { margin: 0; grid-column: 2; white-space: pre-line; overflow-wrap: anywhere; }
 @media (max-width: 720px) {
-  .cal-main { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
+  .cal-main, .cal-main.with-list { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
+  .cal-main.with-list > * { grid-column: auto; grid-row: auto; }
+  /* The calendars are still in the Calendars menu. */
+  .cal-list { display: none; }
   .cal-side { border-left: 0; border-top: 1px solid var(--line); max-height: 45%; }
   .cal-chip, .cal-more { display: none; }
   .cal-cell { min-height: 40px; }

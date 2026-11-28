@@ -196,7 +196,7 @@ await step('Calendar: add an event with a reminder; it is saved as Documents/Cal
   await w.locator('.cal-cell.today').waitFor();
   await w.getByRole('button', { name: 'New event' }).click();
   await w.getByLabel('What').fill('Prune the magnolia, Mrs Lee');
-  await w.locator('input[type=checkbox]').uncheck();
+  await w.locator('.cal-side input[type=checkbox]').uncheck();
   const now = new Date();
   startTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
   await w.getByLabel('Starts').fill(startTime);

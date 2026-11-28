@@ -272,6 +272,7 @@ const OUTSIDE: Array<[string, RegExp, string]> = [
   ['https://github.com/DomCR/ACadSharp', /apps[\\/]about\.ts$/, 'a link on the Credits page (the DWG design reference), opened only when clicked'],
   ['http://www.inkscape.org/namespaces/inkscape', /cad[\/]svg\.ts$/, 'the namespace name that lets Inkscape read layer names in an exported SVG; never fetched'],
   ['https://${raw}', /notepadpro[\\/]markdown\.ts$/, 'a "www." autolink in a Markdown preview becomes https (then checked by safeHref)'],
+  ['https://${url.slice(', /apps[\\/]calendar-sources\.ts$/, 'a webcal:// calendar link becomes https (fetched only by this site\'s server, never by the page)'],
   ['https://${s}', /apps[\\/]projects[\\/]data\.ts$/, 'a project\'s site typed without https:// becomes a link (http and https only; opened only when clicked)'],
   ['http://,', /apps[\\/]link\.ts$/, 'words in a message ("starts with https:// or http://"), not an address'],
   ['https://huggingface.co', /assistant[\\/]hfsearch\.ts$/, 'Find AI models: the search and each model\'s details (allowed in connect-src), and the "Model card" link'],

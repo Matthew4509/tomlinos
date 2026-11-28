@@ -382,7 +382,8 @@ await step('Calendar: after Next month twice a day can still be reached with the
   const label = new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
   eq(await C().locator('.cal-side h3').innerText(), label, 'the side list shows that day');
   await next.focus();
-  for (let i = 0; i < 3; i++) await page.keyboard.press('Tab');
+  // Next month, Today, then the month (New event is on the toolbar above, which is one Tab stop of its own).
+  for (let i = 0; i < 2; i++) await page.keyboard.press('Tab');
   eq(await page.evaluate(() => document.activeElement?.getAttribute('data-day')), day, 'Tab lands on it');
   // A half-filled form is not thrown away by looking at another month.
   await C().getByRole('button', { name: 'New event' }).click();

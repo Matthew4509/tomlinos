@@ -390,6 +390,17 @@ export function writeIcs(events: CalEvent[], previous?: string | null): string {
   const before = typeof previous === 'string' ? readIcs(previous) : null;
   const calendar = before ? before.calendar : events.find(e => e.keep?.calendar.length)?.keep?.calendar ?? [];
   for (const raw of calendar) out.push(foldLine(raw));
+  // Time zones an imported event names that this file does not have yet come with it, so another calendar program
+  // reading the file still knows them.
+  const zones = new Set(zoneBlocks(calendar).map(z => z.id));
+  for (const e of events) {
+    if (!e.keep || e.keep.calendar === calendar) continue;
+    for (const z of zoneBlocks(e.keep.calendar)) {
+      if (zones.has(z.id)) continue;
+      zones.add(z.id);
+      for (const raw of z.lines) out.push(foldLine(raw));
+    }
+  }
   for (const raw of before?.unread.flat() ?? []) out.push(foldLine(raw));
   for (const e of copiesInOrder(events)) {
     const k = e.keep;
@@ -758,4 +769,114 @@ export function addMonths(year: number, month: number, n: number): [number, numb
 export function addDays(day: string, n: number): string {
   const [y, m, d] = day.split('-').map(Number);
   return dateKey(new Date(y, m - 1, d + n));
+}
+
+/** The time zones (VTIMEZONE parts) among a calendar's own lines, each with its TZID and its lines. */
+function zoneBlocks(lines: string[]): Array<{ id: string; lines: string[] }> {
+  const out: Array<{ id: string; lines: string[] }> = [];
+  let cur: string[] | null = null;
+  let depth = 0;
+  for (const raw of lines) {
+    const begin = /^BEGIN:(\S+)/i.exec(raw)?.[1]?.toUpperCase();
+    const end = /^END:(\S+)/i.exec(raw)?.[1]?.toUpperCase();
+    if (!cur) {
+      if (begin === 'VTIMEZONE') {
+        cur = [raw];
+        depth = 1;
+      }
+      continue;
+    }
+    cur.push(raw);
+    if (begin) depth++;
+    else if (end && --depth === 0) {
+      const id = cur.map(l => /^TZID[;:](.*)$/i.exec(l)?.[1]).find(Boolean)?.trim() ?? '';
+      if (id) out.push({ id, lines: cur });
+      cur = null;
+    }
+  }
+  return out;
+}
+
+/** The calendar's own name, as Google, Outlook and Apple write it (X-WR-CALNAME), or ''. */
+export function calendarName(text: string): string {
+  let depth = 0;
+  for (const line of readLines(text)) {
+    if (line.name === 'BEGIN') depth++;
+    else if (line.name === 'END') depth--;
+    else if (depth === 1 && line.name === 'X-WR-CALNAME') return unescapeValue(line.value).trim().slice(0, 100);
+  }
+  return '';
+}
+
+export interface ImportReport {
+  added: number;
+  /** Already in the calendar (the same event: its UID, or every line the same when it has none). */
+  already: number;
+  /** What was not brought in, and why, with how many of each. */
+  leftOut: Array<{ why: string; count: number }>;
+}
+
+/**
+ * The calendar with the events of another .ics file added (`text`), and a report of what happened to each. An event
+ * already here is not changed; one cancelled in the other calendar, one whose start cannot be read, and what is not an
+ * event (to-dos, journal entries, free and busy times) are left out, said with the reason. What each event added holds
+ * (its alarms, guests, repeat rule, time zone) is kept line for line and written back as it was.
+ */
+export function importEvents(existing: CalEvent[], text: string): { list: CalEvent[]; report: ImportReport } {
+  const read = readIcs(text);
+  // Only the file's time zones come with its events, not its name or colour.
+  const zones = zoneBlocks(read.calendar).flatMap(z => z.lines);
+  const have = new Set(existing.map(e => e.uid));
+  const list = [...existing];
+  let added = 0;
+  let already = 0;
+  let cancelled = 0;
+  for (const e of read.events) {
+    // A cancelled showing of a repeat (it has a RECURRENCE-ID) is part of the repeat: it keeps that day empty.
+    if (e.cancelled && !e.uid.includes('#')) {
+      cancelled++;
+      continue;
+    }
+    if (have.has(e.uid)) {
+      already++;
+      continue;
+    }
+    have.add(e.uid);
+    if (e.keep) e.keep = { ...e.keep, calendar: zones };
+    list.push(e);
+    added++;
+  }
+  const leftOut: ImportReport['leftOut'] = [];
+  if (cancelled) leftOut.push({ why: cancelled === 1 ? 'it is cancelled in the other calendar' : 'they are cancelled in the other calendar', count: cancelled });
+  if (read.unread.length) leftOut.push({ why: read.unread.length === 1 ? 'its start date could not be read' : 'their start dates could not be read', count: read.unread.length });
+  const others = otherParts(text);
+  const kinds: Record<string, [string, string]> = { VTODO: ['to-do', 'to-dos'], VJOURNAL: ['journal entry', 'journal entries'], VFREEBUSY: ['free and busy time', 'free and busy times'] };
+  for (const [kind, count] of Object.entries(others)) {
+    const [one, many] = kinds[kind] ?? ['other item', 'other items'];
+    leftOut.push({ why: `${count === 1 ? `it is a ${one}` : `they are ${many}`}, not calendar events`, count });
+  }
+  return { list, report: { added, already, leftOut } };
+}
+
+/** How many of each part besides events and time zones a calendar file holds at its top level (to-dos and the like). */
+function otherParts(text: string): Record<string, number> {
+  const out: Record<string, number> = {};
+  let depth = 0;
+  for (const line of readLines(text)) {
+    if (line.name === 'BEGIN') {
+      const kind = line.value.trim().toUpperCase();
+      if (depth === 1 && kind !== 'VEVENT' && kind !== 'VTIMEZONE') out[kind] = (out[kind] ?? 0) + 1;
+      depth++;
+    } else if (line.name === 'END') depth = Math.max(0, depth - 1);
+  }
+  return out;
+}
+
+/** The import report in a few plain sentences. */
+export function importSummary(r: ImportReport): string[] {
+  const n = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
+  const out = [r.added ? `${n(r.added, 'event')} added.` : 'No events added.'];
+  if (r.already) out.push(`${n(r.already, 'event was', 'events were')} already in your calendar, so ${r.already === 1 ? 'it was' : 'they were'} left as ${r.already === 1 ? 'it is' : 'they are'}.`);
+  for (const x of r.leftOut) out.push(`${n(x.count, 'item')} left out: ${x.why}.`);
+  return out;
 }

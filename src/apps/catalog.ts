@@ -16,7 +16,7 @@ export const APPS = {
   sheet: { id: 'sheet', title: 'Spreadsheet', icon: 'sheet', size: [960, 620], minSize: [560, 360], start: true },
   write: { id: 'write', title: 'Write', icon: 'write', size: [1000, 680], minSize: [420, 360], start: true },
   cad: { id: 'cad', title: 'CAD Draft', icon: 'cad', size: [1180, 760], minSize: [560, 400], start: true },
-  calendar: { id: 'calendar', title: 'Calendar', icon: 'calendar', size: [820, 560], minSize: [360, 380], start: true },
+  calendar: { id: 'calendar', title: 'Calendar', icon: 'calendar', size: [980, 600], minSize: [360, 380], start: true },
   projects: { id: 'projects', title: 'My Projects', icon: 'projects', size: [880, 600], minSize: [360, 360], start: true, single: true },
   contacts: { id: 'contacts', title: 'Contacts', icon: 'contacts', size: [720, 500], minSize: [360, 320], start: true },
   mail: { id: 'mail', title: 'Mail', icon: 'mail', size: [1120, 680], minSize: [520, 360], start: true, single: true },
