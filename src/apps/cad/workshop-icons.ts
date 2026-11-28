@@ -1,4 +1,4 @@
-// The Workshop icon set: a second look for CAD Draft's toolbar pictures, chosen in View > Toolbars > Icon style and
+// The Workshop icon set: a second look for CAD Draft's toolbar pictures, chosen in View > Icon style and
 // kept with CAD Draft's other settings. Every picture is 16 by 16 and made only of paths, each with one stroke colour,
 // an optional fill and one line width, with round ends and joins. The drawn shapes are slate ink, the points a tool
 // asks for are small blue dots, snap marks are red, construction lines teal and the measuring tools amber.
@@ -10,7 +10,7 @@ import type { CadIcon } from './icons.ts';
 /** The two sets a person can choose between. */
 export const ICON_STYLES = ['standard', 'workshop'] as const;
 export type IconStyle = (typeof ICON_STYLES)[number];
-/** As View > Toolbars > Icon style names them. */
+/** As View > Icon style names them. */
 export const ICON_STYLE_NAMES: Record<IconStyle, string> = { standard: 'Standard', workshop: 'Workshop' };
 
 /** A kept setting read back: anything but a known set name is the Standard set. */

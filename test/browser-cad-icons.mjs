@@ -1,4 +1,4 @@
-// CAD Draft's two toolbar picture sets in a real Chrome: View > Toolbars > Icon style switches every toolbar picture at
+// CAD Draft's two toolbar picture sets in a real Chrome: View > Icon style switches every toolbar picture at
 // once, the choice is kept (a reload and a second window open with it), greyed buttons and the dark desktop theme still
 // look right, and Standard comes back the same way.
 // Needs the dev server on a FRESH, EMPTY data folder (the first step sets up the owner) and `node tools/build.mjs`.
@@ -67,14 +67,13 @@ async function closeAll() {
 }
 /** The open menu's item with this label (a ticked item's tick is not part of it). */
 const menuItem = label => page.locator('.menu-item', { has: page.locator('.menu-label', { hasText: new RegExp('^' + label + '$') }) }).last();
-/** Opens View > Toolbars > Icon style. */
+/** Opens View > Icon style (straight in the View menu, beside Large icons). */
 async function openIconStyle() {
   await W().locator('.cbar-title[data-menu="View"]').click();
-  await menuItem('Toolbars').hover();
   await menuItem('Icon style').hover();
   await menuItem('Workshop').waitFor();
 }
-/** View > Toolbars > Icon style > (name). */
+/** View > Icon style > (name). */
 async function chooseStyle(name) {
   await openIconStyle();
   await menuItem(name).click();
@@ -92,14 +91,13 @@ const pictures = () => W().evaluate(win => {
     save: win.querySelector('.cbar-tool[data-tool="save"]')?.innerHTML ?? '',
   };
 });
-/** Which set View > Toolbars > Icon style ticks. */
+/** Which set View > Icon style ticks. */
 async function tickedStyle() {
   await openIconStyle();
-  // Only the Icon style submenu (Toolbars itself has a toolbar called Standard).
+  // Only the Icon style submenu.
   const sub = page.locator('.menu', { has: page.locator('.menu-label', { hasText: /^Workshop$/ }) }).last();
   ok((await sub.locator('.menu-item').count()) === 2, 'Icon style has two choices');
   const ticked = await sub.locator('.menu-item[aria-checked="true"] .menu-label').allInnerTexts();
-  await page.keyboard.press('Escape');
   await page.keyboard.press('Escape');
   await page.keyboard.press('Escape');
   return ticked.map(t => t.replace(/[✓\s]+/g, ' ').trim());
@@ -122,7 +120,7 @@ await step('set up the owner', async () => {
   await page.locator('#desktop .item').first().waitFor({ timeout: 30000 });
 });
 
-await step('a new person starts on the Standard set, ticked in View > Toolbars > Icon style', async () => {
+await step('a new person starts on the Standard set, ticked in View > Icon style', async () => {
   await openCad();
   before = await pictures();
   ok(before.buttons >= 70, `toolbar buttons: ${before.buttons}`);

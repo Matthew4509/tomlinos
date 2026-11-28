@@ -81,7 +81,7 @@ interface Settings {
   autosave: boolean;
   /** Where the toolbars are (shell/toolbars.ts checks it when the window opens). */
   toolbars: unknown;
-  /** Which set of toolbar pictures: Standard or Workshop (View > Toolbars > Icon style). */
+  /** Which set of toolbar pictures: Standard or Workshop (View > Icon style). */
   iconStyle: IconStyle;
 }
 
@@ -2880,6 +2880,7 @@ export const cadApp: AppDef = {
       { separator: true },
       { label: 'White background', checked: settings.white, action: () => setWhite(!settings.white) },
       { label: 'Large icons', checked: app.root.classList.contains('cad-large'), action: () => setLarge(!app.root.classList.contains('cad-large')) },
+      sub_('Icon style', ICON_STYLES.map(s => ({ label: ICON_STYLE_NAMES[s], checked: settings.iconStyle === s, action: () => setIconStyle(s) }))),
       { label: 'Show direction', checked: settings.arrows, action: () => setArrows(!settings.arrows) },
       { separator: true },
       sub_('Photo to trace', photoMenu()),
@@ -2958,20 +2959,6 @@ export const cadApp: AppDef = {
       } },
     });
     barRef = bar;
-    // View > Toolbars (the desktop's toolbars put it at the top of View) ends with Icon style: Standard or Workshop.
-    const viewBar = menus.find(m => m.label === 'View');
-    if (viewBar) {
-      const withToolbars = viewBar.items;
-      const listOf = (items: BarItem[] | (() => BarItem[])) => (typeof items === 'function' ? items() : items);
-      const iconStyleItem: BarItem = {
-        label: 'Icon style',
-        submenu: () => ICON_STYLES.map(s => ({ label: ICON_STYLE_NAMES[s], checked: () => settings.iconStyle === s, action: () => setIconStyle(s) })),
-      };
-      viewBar.items = () => listOf(withToolbars).map(i => {
-        const sub = i.submenu;
-        return i.label === 'Toolbars' && sub ? { ...i, submenu: () => [...listOf(sub), { separator: true }, iconStyleItem] } : i;
-      });
-    }
     /** Every toolbar button's picture by its id, so a change of set draws them all again at once. */
     const pictureOf = new Map<string, () => Element>();
     for (const t of toolbars) for (const e of t.tools) if (e !== '|' && 'action' in e && e.id && e.picture) pictureOf.set(e.id, e.picture);
