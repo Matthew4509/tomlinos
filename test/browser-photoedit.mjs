@@ -822,6 +822,80 @@ await step('unsaved work is kept as a recovery copy with its layers; after the p
   eq(await page.locator('.dialog', { hasText: 'Pictures not saved' }).count(), 0, 'closed on purpose: nothing offered again');
 });
 
+await step('Filters with settings: each window previews, applies as one undo step named after it, Undo puts it back; Cancel changes nothing; a selection keeps the blur inside', async () => {
+  await freshPicture(200, 150);
+  await tool('Brush');
+  await dragPic([20, 75], [180, 75]);
+  /** A sum over every pixel on screen, weighted by place, so any change shows. */
+  const sum = () => page.evaluate(() => {
+    const c = document.querySelector('.pe-doc');
+    const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+    let s = 0;
+    for (let i = 0; i < d.length; i++) s = (s + d[i] * ((i % 13) + 1)) % 1e9;
+    return s;
+  });
+  const before = await sum();
+  const undoTitle = () => W().getByRole('button', { name: 'Undo' }).getAttribute('title');
+  const set = (d, label, v) => d.locator(`input[aria-label="${label}"]`).fill(String(v));
+  for (const [item, act] of [
+    ['Gaussian blur...', d => set(d, 'Radius', 6)],
+    ['Motion blur...', async d => { await set(d, 'Length', 30); await set(d, 'Angle', 90); }],
+    ['Sharpen (unsharp mask)...', d => set(d, 'Amount', 300)],
+    ['High pass...', async () => {}],
+    ['Reduce noise...', d => set(d, 'Radius', 5)],
+    ['Add noise...', d => d.locator('input[aria-label^="Grey grain"]').uncheck()],
+    ['Pixelate...', d => set(d, 'Square size', 16)],
+    ['Emboss...', async () => {}],
+    ['Find edges...', d => d.locator('input[aria-label^="Dark lines"]').check()],
+    ['Vignette...', d => set(d, 'Amount', 80)],
+  ]) {
+    await menu('Filters', item);
+    const d = page.locator('.dialog');
+    await d.waitFor();
+    await act(d);
+    await page.waitForFunction(b => {
+      const c = document.querySelector('.pe-doc');
+      const x = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+      let s = 0;
+      for (let i = 0; i < x.length; i++) s = (s + x[i] * ((i % 13) + 1)) % 1e9;
+      return s !== b;
+    }, before, { timeout: 5000 }).catch(() => { throw new Error(`${item}: no preview on the picture`); });
+    if (item === 'Gaussian blur...') await shot('20-gaussian-blur');
+    await d.getByRole('button', { name: 'Apply' }).click();
+    await d.waitFor({ state: 'detached' });
+    const want = 'Undo ' + item.replace('...', '');
+    await page.waitForFunction(w => document.querySelector('.pe [data-tool="undo"]')?.title.startsWith(w), want, { timeout: 5000 })
+      .catch(async () => { throw new Error(`undo names ${item}: ${await undoTitle()}`); });
+    ok((await sum()) !== before, `${item} changed the picture`);
+    await page.keyboard.press('Control+z');
+    eq(await sum(), before, `${item} undone`);
+  }
+  // Cancel: the preview goes and no step is made.
+  const t0 = await undoTitle();
+  await menu('Filters', 'Gaussian blur...');
+  await page.locator('.dialog').waitFor();
+  await set(page.locator('.dialog'), 'Radius', 20);
+  await page.waitForTimeout(300);
+  await page.locator('.dialog').getByRole('button', { name: 'Cancel' }).click();
+  await page.locator('.dialog').waitFor({ state: 'detached' });
+  await page.waitForTimeout(100);
+  eq(await sum(), before, 'Cancel leaves the picture');
+  eq(await undoTitle(), t0, 'Cancel makes no step');
+  // With a selection over the right half, the blur stays inside it (and reads past its edge, so no hard seam is made).
+  await tool('Select a rectangle');
+  await dragPic([100, 0], [199, 149]);
+  const left = await pixel(60, 69), right = await pixel(150, 69);
+  await menu('Filters', 'Gaussian blur...');
+  await page.locator('.dialog').waitFor();
+  await set(page.locator('.dialog'), 'Radius', 8);
+  await page.locator('.dialog').getByRole('button', { name: 'Apply' }).click();
+  await page.waitForFunction(() => document.querySelector('.pe [data-tool="undo"]')?.title.startsWith('Undo Gaussian blur'), null, { timeout: 5000 });
+  eq(await pixel(60, 69), left, 'outside the selection: unchanged');
+  ok(JSON.stringify(await pixel(150, 69)) !== JSON.stringify(right), 'inside: blurred');
+  await page.keyboard.press('Control+z');
+  await page.keyboard.press('Control+Shift+a');
+});
+
 await step('no errors in the page', async () => {
   eq(problems.filter(p => !/status of 404/.test(p)), [], 'problems');
 });

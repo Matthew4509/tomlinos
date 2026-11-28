@@ -2,7 +2,7 @@
 // (rectangle, ellipse, lasso, magic wand, soft edges), painting (brush, eraser, shapes, fill, gradient, with size,
 // hardness, opacity, spacing and pen pressure), retouching (clone, heal, smudge, dodge / burn, blur / sharpen), colour
 // (levels, curves, hue / saturation, colour balance, threshold, posterise, desaturate), move / scale / turn, crop,
-// resize, canvas size, filters, undo and redo; text with an outline; Meme (bars and text boxes, photoedit/meme.ts);
+// resize, canvas size, filters with settings (blurs, sharpen, noise, pixelate, emboss, edges, vignette), undo and redo; text with an outline; Meme (bars and text boxes, photoedit/meme.ts);
 // opens and saves PNG, JPEG, WebP and OpenRaster (.ora, layers kept). The desktop's menu bar and toolbars
 // (shell/menubar.ts, shell/toolbars.ts): Standard, Tools (down the left) and Tool options, kept per person.
 // All our own code; the sums are in photoedit/*.ts. A picture is only ever drawn into a canvas, so nothing inside a
@@ -33,6 +33,7 @@ import { buildOra, MAX_SIDE, openOra, OraProblem, thumbSize, type OraLayer, type
 import { boxBounds, corners, dragBox, HANDLES, handlePoint, hitHandle, isIdentity, type Box, type Handle } from './photoedit/transform.ts';
 import { autoOutline, FONT_FAMILIES } from './photoedit/text.ts';
 import { adjust, ADJUST_TITLES, type AdjustKind } from './photoedit/adjust-ui.ts';
+import { FILTER_TITLES, runFilterWindow, type FilterKind } from './photoedit/filter-ui.ts';
 import { layersPanel } from './photoedit/layers-ui.ts';
 import { memePanel, readBars, type BarsSettings } from './photoedit/meme.ts';
 
@@ -2206,6 +2207,17 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     doc.history.squash(mark, ADJUST_TITLES[kind]);
     refresh();
   };
+  const runFilter = async (kind: FilterKind) => {
+    settle();
+    if (!editable(doc.active, true)) return;
+    const mark = doc.history.pushes;
+    const layer = doc.active;
+    await runFilterWindow(shell, doc, kind, () => {
+      if (layer.text) editable(layer);
+    });
+    doc.history.squash(mark, FILTER_TITLES[kind]);
+    refresh();
+  };
   // ---- The menu bar and the toolbars (the desktop's own: shell/menubar.ts and shell/toolbars.ts) ----
   const fileMenu = (): MenuItem[] => [
     { label: 'New...', action: () => void askNew() },
@@ -2301,8 +2313,22 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
     { label: 'Greyscale', action: () => applyFilter('Greyscale', greyscale) },
     { label: 'Sepia', action: () => applyFilter('Sepia', sepia) },
     { separator: true },
-    { label: 'Blur', action: () => applyFilter('Blur', p => convolve3(p, BLUR), 1) },
-    { label: 'Sharpen', action: () => applyFilter('Sharpen', p => convolve3(p, SHARPEN), 1) },
+    { label: 'Blur a little', action: () => applyFilter('Blur a little', p => convolve3(p, BLUR), 1) },
+    { label: 'Sharpen a little', action: () => applyFilter('Sharpen a little', p => convolve3(p, SHARPEN), 1) },
+    { separator: true },
+    { label: 'Gaussian blur...', action: () => void runFilter('gaussian') },
+    { label: 'Motion blur...', action: () => void runFilter('motion') },
+    { separator: true },
+    { label: 'Sharpen (unsharp mask)...', action: () => void runFilter('unsharp') },
+    { label: 'High pass...', action: () => void runFilter('highpass') },
+    { separator: true },
+    { label: 'Reduce noise...', action: () => void runFilter('median') },
+    { label: 'Add noise...', action: () => void runFilter('noise') },
+    { separator: true },
+    { label: 'Pixelate...', action: () => void runFilter('pixelate') },
+    { label: 'Emboss...', action: () => void runFilter('emboss') },
+    { label: 'Find edges...', action: () => void runFilter('edges') },
+    { label: 'Vignette...', action: () => void runFilter('vignette') },
   ];
   const helpMenu = (): MenuItem[] => [
     { label: 'What Photo Editor does and leaves out', action: () => void showHelp() },
@@ -2376,7 +2402,7 @@ async function run(app: AppHandle, arg: string | undefined): Promise<void> {
       'Meme (Image > Meme..., or the Meme button): white bars at the top, the bottom or both, added to the picture (it grows) or laid over it; text boxes whose words fit the box, white with a black outline on the picture and black on a bar. Drag a box to move it, its squares to stretch it; the arrow keys nudge it and Delete takes it away (with the picture clicked, not while typing). Done closes the panel; empty boxes go.',
       'Selections: rectangle, ellipse, lasso, magic wand; add (Shift), take away (Alt); invert; soft edges. Painting, fills, filters and colour changes stay inside the selection.',
       'Painting: brush and eraser (size, hardness, opacity, spacing, pen pressure), line, arrow, rectangle, ellipse, fill, gradient. Retouching: clone, heal, smudge, dodge / burn, blur / sharpen.',
-      'Colour: brightness and contrast, levels, curves, hue and saturation, colour balance, threshold, posterise, desaturate, invert. Filters: greyscale, sepia, blur, sharpen.',
+      'Colour: brightness and contrast, levels, curves, hue and saturation, colour balance, threshold, posterise, desaturate, invert. Filters: greyscale, sepia, blur a little, sharpen a little; and with settings and a preview: Gaussian blur, motion blur, sharpen (unsharp mask), high pass, reduce noise, add noise, pixelate, emboss, find edges, vignette. On a big photo a filter can take a few seconds.',
       'Move, stretch and turn a layer or a selection; crop, resize, canvas size, rotate, flip.',
       'Files: opens PNG, JPEG, GIF (first frame), WebP, AVIF, BMP, SVG, ICO and OpenRaster (.ora). Saves PNG, JPEG and WebP as one flat picture, and .ora with the layers (GIMP and Krita open it). JPEG and WebP lose a little detail each time they are saved (PNG and .ora do not), so Save does nothing when there are no changes. Saving over a photo asks first when the file holds what is not kept (camera details, print size, colour profile, 16-bit or CMYK colour); a moving GIF, PNG or WebP keeps its first frame only and is always saved as a new file.',
       'Left out: opening GIMP .xcf or Photoshop .psd files with their layers (flatten them elsewhere first, or save as .ora in GIMP); masks in an .ora from GIMP or Krita (the layer opens as it looks); layer groups (an .ora with groups opens as one list); paths and Bézier curves; perspective and warp; camera RAW, CMYK, 16-bit colour and colour profiles; most of GIMP\'s filters; scripts, plug-ins and batch work; animation.',
