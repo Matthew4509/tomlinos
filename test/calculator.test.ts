@@ -2,7 +2,9 @@
 // Run: npm test
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Calculator, DIV_ZERO, emptySheet, evaluate, describe, parseSheet, show, sumProblem, type Op } from '../src/apps/calculator/model.ts';
+import {
+  Calculator, DIV_ZERO, emptySheet, evaluate, describe, opTitle, pairPrompt, pairShown, pairSum, parseSheet, show, sumProblem, type Op,
+} from '../src/apps/calculator/model.ts';
 
 function press(keys: string): Calculator {
   const c = new Calculator();
@@ -85,6 +87,42 @@ test('÷0 in the sheet names the cell; cells that use it say so', () => {
   const v = evaluate(s);
   assert.equal(v.get('R1'), DIV_ZERO);
   assert.equal(v.get('R2'), 'Uses =1, which has a problem');
+});
+
+test('each "=" cell has its own + − × ÷ buttons: two cells and the operation make a live sum', () => {
+  const s = emptySheet(10);
+  s.values = { A1: '12', B1: '4' };
+  const want: Record<Op, number> = { '×': 48, '+': 16, '−': 8, '÷': 3 };
+  for (const op of Object.keys(want) as Op[]) {
+    s.sums = { R1: pairSum('A1', op, 'B1') };
+    assert.equal(evaluate(s).get('R1'), want[op], op);
+    assert.equal(describe(s.sums.R1, 10), `A1 ${op} B1`);
+    assert.equal(sumProblem(s, 'R1', s.sums.R1), null);
+  }
+  // Any two cells, other "=" cells and foot cells too; the order is the order clicked.
+  s.sums = { R1: pairSum('A1', '×', 'B1'), R2: pairSum('B1', '−', 'R1') };
+  assert.equal(evaluate(s).get('R2'), -44);
+  // A pair that uses its own cell, or one that uses it, is refused before it is saved.
+  assert.match(sumProblem(s, 'R1', pairSum('A1', '+', 'R1'))!, /cannot use itself/);
+  assert.match(sumProblem(s, 'R1', pairSum('R2', '+', 'A1'))!, /=2 already uses =1/);
+  // ÷ by an empty cell names the problem, as the keypad's sums do.
+  s.sums = { R3: pairSum('A1', '÷', 'B9') };
+  assert.equal(evaluate(s).get('R3'), DIV_ZERO);
+  // The file keeps the same shape: a pair reads back as it was saved.
+  const back = parseSheet(JSON.stringify({ ...s, sums: { R1: pairSum('A1', '÷', 'B1') } }));
+  assert.deepEqual(back.sums.R1, { refs: ['A1', 'B1'], ops: ['÷'] });
+});
+
+test('the "=" buttons say what to click next', () => {
+  assert.equal(pairShown('×', null, 10), '? × ?');
+  assert.equal(pairShown('×', 'A1', 10), 'A1 × ?');
+  assert.equal(pairShown('+', 'Rf1', 10), '=11 + ?');
+  assert.equal(pairPrompt('R1', '×', null, 10), '=1: times. Click the first cell. Esc stops.');
+  assert.equal(pairPrompt('R1', '×', 'A1', 10), '=1 = A1 × ...: click the cell to times it by. Esc stops.');
+  assert.match(pairPrompt('R2', '−', 'B2', 10), /take away from it/);
+  assert.match(pairPrompt('R2', '÷', 'B2', 10), /divide it by/);
+  assert.match(pairPrompt('R2', '+', 'B2', 10), /add to it/);
+  assert.equal(opTitle('÷', 'R3', 10), 'Divide: =3 = one cell ÷ another');
 });
 
 test('loops are refused before saving, with the reason', () => {

@@ -3,7 +3,9 @@
 //
 // Making an "=" cell: click it, press = on the calculator, click a cell, press + − × ÷, click the next cell... and
 // = saves it. The cells chosen light up and the display reads "A1 + B3 − A5". Escape stops without saving.
-// → cell puts the number on the display into the chosen A or B cell. Sheets save as small .calc files.
+// The quick way: each "=" cell has its own + − × ÷ buttons. Press one, click the first cell, click the second, and the
+// "=" cell holds "A1 × B1". Escape stops. → cell puts the number on the display into the chosen A or B cell. Sheets
+// save as small .calc files.
 import { h, on } from '../core/dom.ts';
 import { baseName, parentPath, uniqueName } from '../fs/names.ts';
 import { pickFile, pickSave } from '../shell/filepicker.ts';
@@ -13,7 +15,8 @@ import { saveOver } from '../shell/savefile.ts';
 import { classicBar } from '../shell/menubar.ts';
 import { helpMenu } from './classic-menus.ts';
 import {
-  Calculator, cellId, cellName, describe, emptySheet, evaluate, isSumCell, OPS, parseNumber, parseSheet, show, sumProblem,
+  Calculator, cellId, cellName, describe, emptySheet, evaluate, isSumCell, OPS, opTitle, pairPrompt, pairShown, pairSum, parseNumber,
+  parseSheet, show, sumProblem,
   type Col, type Op, type RowId, type SheetData, type Sum,
 } from './calculator/model.ts';
 
@@ -39,8 +42,10 @@ export const calculatorApp: AppDef = {
     let path: string | null = null;
     let loadedId = '';
     let selected: string | null = null;
-    let building: { target: string; sum: Sum; op: Op | null } | null = null;
+    /** Making a sum. `pair` is set when it was started by a "=" cell's own + − × ÷ button: two cells, then it saves. */
+    let building: { target: string; sum: Sum; op: Op | null; pair?: Op } | null = null;
     let open = false;
+    let pickedBy: string | null = null;
 
     // ---- The calculator (left) ----
     const history = h('div', { class: 'calc-history', 'aria-hidden': 'true' });
@@ -75,16 +80,18 @@ export const calculatorApp: AppDef = {
     };
 
     function paint() {
-      display.textContent = building ? describe(building.sum, data.rows, building.op) || 'Click a cell' : calc.display;
+      display.textContent = building?.pair ? pairShown(building.pair, building.sum.refs[0] ?? null, data.rows)
+        : building ? describe(building.sum, data.rows, building.op) || 'Click a cell' : calc.display;
       // A long number gets a smaller size rather than losing digits off the edge.
       display.classList.toggle('long', !building && (display.textContent ?? '').length > 13);
-      history.textContent = building ? `Making ${cellName(building.target, data.rows)}:  = saves, Esc stops` : calc.history;
+      history.textContent = building?.pair ? `Making ${cellName(building.target, data.rows)}:  Esc stops`
+        : building ? `Making ${cellName(building.target, data.rows)}:  = saves, Esc stops` : calc.history;
       display.classList.toggle('building', !!building);
       for (const b of keys.querySelectorAll<HTMLElement>('.calc-key.op')) b.classList.toggle('on', !building && calc.lit === b.dataset.key);
       toCellBtn.hidden = !open;
       // Show which key comes next: = after choosing an "=" cell; + − × ÷ after clicking a cell for a sum.
       const wantsEquals = !building && open && selected !== null && isSumCell(selected);
-      const wantsOp = !!building && building.sum.refs.length > 0 && building.op === null;
+      const wantsOp = !!building && !building.pair && building.sum.refs.length > 0 && building.op === null;
       keys.querySelector('.calc-key.eq')!.classList.toggle('gleam', wantsEquals);
       for (const b of keys.querySelectorAll<HTMLElement>('.calc-key.op')) b.classList.toggle('gleam', wantsOp);
     }
@@ -109,6 +116,7 @@ export const calculatorApp: AppDef = {
         el.classList.toggle('chosen', id === selected);
         el.classList.toggle('lit', !!building && (building.sum.refs.includes(id) || building.target === id));
         el.classList.toggle('target', !!building && building.target === id);
+        for (const b of el.querySelectorAll<HTMLElement>('.calc-op')) b.classList.toggle('on', !!building?.pair && building.target === id && b.dataset.op === building.pair);
       }
       title();
     }
@@ -156,6 +164,32 @@ export const calculatorApp: AppDef = {
       let el: HTMLElement;
       if (isSumCell(id)) {
         el = h('div', { class: 'calc-cell sum', role: 'gridcell', tabindex: '0', 'data-id': id, 'aria-label': cellName(id, data.rows) }, h('span', { class: 'calc-sum' }));
+        // The "=" column's own + − × ÷: one cell, the operation, the next cell. (Off the Tab order: = on the keypad
+        // makes the same sums from the keyboard.) The sign is drawn by the style sheet from data-op, so the cell's
+        // text is still only its number.
+        if (col === 'R') {
+          const ops = h('span', { class: 'calc-ops' }, ...(['×', '+', '−', '÷'] as Op[]).map(op =>
+            h('button', { type: 'button', class: 'calc-op', tabindex: '-1', 'data-op': op, title: opTitle(op, id, data.rows), 'aria-label': opTitle(op, id, data.rows) })));
+          // While another cell's sum is being made, a press on these buttons picks this cell (it is easy to hit one
+          // when clicking the cell); otherwise the press is the button's own.
+          const picking = () => !!building && building.target !== id;
+          on(ops, 'mousedown', (event: MouseEvent) => {
+            event.preventDefault();
+            if (picking()) return;
+            event.stopPropagation();
+            pickedBy = null;
+          }, app.signal);
+          on(ops, 'click', (event: MouseEvent) => {
+            event.stopPropagation();
+            if (pickedBy === id) {
+              pickedBy = null;
+              return;
+            }
+            const op = (event.target as HTMLElement).closest<HTMLElement>('.calc-op')?.dataset.op as Op | undefined;
+            if (op) startPair(id, op);
+          }, app.signal);
+          el.prepend(ops);
+        }
         on(el, 'focus', () => !building && selected !== id && choose(id), app.signal);
       } else if (col === 'L' && id.includes('f')) {
         el = h('div', { class: 'calc-cell blank', role: 'gridcell', 'data-id': id });
@@ -175,12 +209,21 @@ export const calculatorApp: AppDef = {
       }
       // While making a sum, a click picks the cell instead of typing in it.
       on(el, 'mousedown', (event: MouseEvent) => {
+        // The click that follows a pick is part of the pick: the last pick saves the sum, and that click must not
+        // then choose the cell and talk over "Saved".
+        pickedBy = building ? id : null;
         if (building) {
           event.preventDefault();
           pick(id);
         }
       }, app.signal);
-      on(el, 'click', () => !building && choose(id), app.signal);
+      on(el, 'click', () => {
+        if (pickedBy === id) {
+          pickedBy = null;
+          return;
+        }
+        if (!building) choose(id);
+      }, app.signal);
       // The keyboard way to pick a cell while making a sum: Tab to it, then Space.
       on(el, 'keydown', (event: KeyboardEvent) => {
         if (building && event.key === ' ') {
@@ -212,6 +255,7 @@ export const calculatorApp: AppDef = {
         return;
       }
       const { sum } = building;
+      if (building.pair) return pickPair(id);
       const wantsCell = sum.refs.length === 0 || building.op !== null;
       if (wantsCell) {
         if (building.op) sum.ops.push(building.op);
@@ -224,6 +268,43 @@ export const calculatorApp: AppDef = {
       note.textContent = 'Press + − × ÷ for the next cell, or = to save.';
       paint();
       recalc();
+    }
+
+    /** A "=" cell's + − × ÷ button: ask for the first cell, then the second, then save. */
+    function startPair(target: string, op: Op) {
+      building = { target, sum: { refs: [], ops: [] }, op: null, pair: op };
+      selected = target;
+      cells.get(target)?.focus({ preventScroll: true });
+      note.textContent = pairPrompt(target, op, null, data.rows);
+      paint();
+      recalc();
+    }
+
+    function pickPair(id: string) {
+      if (!building?.pair) return;
+      const { target, sum, pair } = building;
+      if (sum.refs.length === 0) {
+        // A cell that is (or uses) the "=" cell being made is refused at once, not after the second click.
+        const first = sumProblem(data, target, { refs: [id], ops: [] });
+        if (first) {
+          note.textContent = `${first} Click another cell, or Esc to stop.`;
+          return;
+        }
+        sum.refs.push(id);
+        note.textContent = pairPrompt(target, pair, id, data.rows);
+        paint();
+        recalc();
+        return;
+      }
+      const made = pairSum(sum.refs[0], pair, id);
+      const problem = sumProblem(data, target, made);
+      if (problem) {
+        // Still waiting for the second cell: another one can be clicked.
+        note.textContent = `${problem} Click another cell, or Esc to stop.`;
+        return;
+      }
+      building.sum = made;
+      finishSum();
     }
 
     function startSum(target: string) {
@@ -259,6 +340,18 @@ export const calculatorApp: AppDef = {
     }
 
     function press(k: string) {
+      if (building?.pair) {
+        if (k === 'C') return stopSum();
+        if (OPS.includes(k as Op)) {
+          // Another operation key changes the one being made.
+          building.pair = k as Op;
+          note.textContent = pairPrompt(building.target, building.pair, building.sum.refs[0] ?? null, data.rows);
+          paint();
+          return recalc();
+        }
+        note.textContent = pairPrompt(building.target, building.pair, building.sum.refs[0] ?? null, data.rows);
+        return;
+      }
       if (building) {
         if (k === '=') return finishSum();
         if (k === 'C') return stopSum();

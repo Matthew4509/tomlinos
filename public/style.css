@@ -1218,6 +1218,8 @@ textarea.field { resize: vertical; font: inherit; }
 :root[data-theme="dark"] .calc-cell { border-right-color: var(--line); }
 :root[data-theme="dark"] .calc-cell.blank { background: var(--face); }
 :root[data-theme="dark"] .calc-cell.sum { background: #2a3140; }
+:root[data-theme="dark"] .calc-op { background: linear-gradient(to bottom, #3a4761, #2a3449); border-color: #5a6275; }
+:root[data-theme="dark"] .calc-op.on { background: var(--accent); color: #fff; }
 /* The ribbon Write and Spreadsheet share, their status bars and sheet tabs. Their colours are written in for the light
    themes: dark words on the dark bar (1.13 : 1), pale words in a white box (1.22 : 1), a "+" that could not be seen. */
 :root[data-theme="dark"] .sheet, :root[data-theme="dark"] .write { background: var(--face); }
@@ -1505,7 +1507,7 @@ textarea.field { resize: vertical; font: inherit; }
 .calc-sheet[hidden] { display: none; }
 .calc-note { flex: none; min-height: 24px; padding: 4px 8px; font-size: 12px; color: var(--ink-soft); border-bottom: 1px solid var(--line); background: var(--face); }
 .calc-grid { flex: 1; min-height: 0; overflow: auto; font-size: 13px; }
-.calc-row { display: grid; grid-template-columns: 34px minmax(80px, 1.4fr) 1fr 1fr 1fr; height: 28px; border-bottom: 1px solid #e3e1d8; }
+.calc-row { display: grid; grid-template-columns: 34px minmax(80px, 1.4fr) 1fr 1fr 2fr; height: 28px; border-bottom: 1px solid #e3e1d8; }
 .calc-row.head { position: sticky; top: 0; z-index: 1; background: var(--face); font-weight: 400; color: var(--ink-soft); }
 .calc-row.first-foot { border-top: 2px solid #b9b6a8; }
 .calc-no, .calc-h { display: flex; align-items: center; justify-content: center; color: var(--ink-soft); font-size: 12px; background: var(--face); border-right: 1px solid #e3e1d8; }
@@ -1516,6 +1518,15 @@ textarea.field { resize: vertical; font: inherit; }
 .calc-input.bad { color: #b3261e; background: #fdecea; }
 .calc-cell.sum { justify-content: flex-end; padding: 0 6px; background: #f3f7fc; cursor: pointer; font-variant-numeric: tabular-nums; outline: none; }
 .calc-sum { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The "=" column's own + − × ÷ buttons, at the left of the cell; the result stays on the right, under the middle of
+   the cell, so clicking the cell itself does not land on a button. In a narrow window they show on the chosen cell. */
+.calc-cell.sum { container-type: inline-size; }
+.calc-ops { display: flex; gap: 1px; margin-right: auto; padding-right: 4px; flex: none; }
+@container (max-width: 159px) { .calc-cell:not(.chosen):not(.target) > .calc-ops { display: none; } }
+.calc-op::before { content: attr(data-op); }
+.calc-op { width: 16px; height: 20px; padding: 0; border: 1px solid #c9c6b8; border-radius: 3px; background: linear-gradient(to bottom, #fff, #e9eef6); color: var(--ink); font: inherit; font-size: 12px; line-height: 18px; cursor: pointer; }
+.calc-op:hover { border-color: var(--sel); }
+.calc-op.on { background: #2f6db8; border-color: #245a99; color: #fff; }
 .calc-cell.problem { color: #b3261e; }
 .calc-cell.chosen { box-shadow: inset 0 0 0 2px var(--sel); }
 .calc-cell.lit { background: #fff1c2; box-shadow: inset 0 0 0 2px #e0a800; }

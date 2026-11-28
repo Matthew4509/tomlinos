@@ -273,6 +273,33 @@ export function describe(sum: Sum, rows: number, pendingOp: Op | null = null): s
   return parts.join(' ');
 }
 
+// ---- The "=" cell's own + − × ÷ buttons: pick the operation, then the first cell, then the second ----------------
+
+const OP_NAMES: Record<Op, string> = { '+': 'add', '−': 'take away', '×': 'times', '÷': 'divide' };
+const OP_ASKS: Record<Op, string> = { '+': 'to add to it', '−': 'to take away from it', '×': 'to times it by', '÷': 'to divide it by' };
+
+/** The sum a "=" cell's operation button makes from the two cells clicked: "A1 × B1". */
+export function pairSum(first: string, op: Op, second: string): Sum {
+  return { refs: [first, second], ops: [op] };
+}
+
+/** What the display shows while picking: "? × ?", then "A1 × ?". */
+export function pairShown(op: Op, first: string | null, rows: number): string {
+  return `${first ? cellName(first, rows) : '?'} ${op} ?`;
+}
+
+/** The note above the sheet while picking: which cell to click next, and Esc to stop. */
+export function pairPrompt(target: string, op: Op, first: string | null, rows: number): string {
+  const name = cellName(target, rows);
+  return first
+    ? `${name} = ${cellName(first, rows)} ${op} ...: click the cell ${OP_ASKS[op]}. Esc stops.`
+    : `${name}: ${OP_NAMES[op]}. Click the first cell. Esc stops.`;
+}
+
+/** The tooltip on each button. */
+export const opTitle = (op: Op, target: string, rows: number) =>
+  `${OP_NAMES[op][0].toUpperCase()}${OP_NAMES[op].slice(1)}: ${cellName(target, rows)} = one cell ${op} another`;
+
 export function emptySheet(rows = 10): SheetData {
   return { version: 1, rows, values: {}, sums: {} };
 }
