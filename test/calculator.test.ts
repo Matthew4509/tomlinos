@@ -2,7 +2,9 @@
 // Run: npm test
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Calculator, DIV_ZERO, emptySheet, evaluate, describe, parseSheet, show, sumProblem, type Op } from '../src/apps/calculator/model.ts';
+import {
+  Calculator, DIV_ZERO, emptySheet, evaluate, describe, chainAdd, chainBack, chainPrompt, chainShown, opTitle, parseSheet, show, sumProblem, type Op,
+} from '../src/apps/calculator/model.ts';
 
 function press(keys: string): Calculator {
   const c = new Calculator();
@@ -85,6 +87,60 @@ test('÷0 in the sheet names the cell; cells that use it say so', () => {
   const v = evaluate(s);
   assert.equal(v.get('R1'), DIV_ZERO);
   assert.equal(v.get('R2'), 'Uses =1, which has a problem');
+});
+
+/** The cells clicked after an operation button, with a sign pressed between them to change it. */
+function chain(op: Op, ...steps: string[]) {
+  let sum = { refs: [] as string[], ops: [] as Op[] };
+  for (const step of steps) {
+    if ((['+', '−', '×', '÷'] as string[]).includes(step)) op = step as Op;
+    else sum = chainAdd(sum, op, step);
+  }
+  return sum;
+}
+
+test('each "=" cell has its own + − × ÷ buttons: choose one, then click any number of cells', () => {
+  const s = emptySheet(10);
+  s.values = { A1: '12', B1: '4', A2: '2' };
+  const want: Record<Op, number> = { '×': 96, '+': 18, '−': 6, '÷': 1.5 };
+  for (const op of Object.keys(want) as Op[]) {
+    s.sums = { R1: chain(op, 'A1', 'B1', 'A2') };
+    assert.equal(evaluate(s).get('R1'), want[op], op);
+    assert.equal(describe(s.sums.R1, 10), `A1 ${op} B1 ${op} A2`);
+    assert.equal(sumProblem(s, 'R1', s.sums.R1), null);
+  }
+  // One cell is a sum too (=1 shows A1); a sign pressed part-way changes the operation for the cells after it,
+  // and × still comes before +.
+  assert.deepEqual(chain('+', 'A1'), { refs: ['A1'], ops: [] });
+  s.sums = { R1: chain('+', 'A1', '×', 'B1', '+', 'A2') };
+  assert.equal(describe(s.sums.R1, 10), 'A1 × B1 + A2');
+  assert.equal(evaluate(s).get('R1'), 50);
+  // ⌫ takes the last cell off, sign and all.
+  assert.deepEqual(chainBack(chain('+', 'A1', 'B1', '×', 'A2')), { refs: ['A1', 'B1'], ops: ['+'] });
+  assert.deepEqual(chainBack(chain('+', 'A1')), { refs: [], ops: [] });
+  assert.deepEqual(chainBack({ refs: [], ops: [] }), { refs: [], ops: [] });
+  // Other "=" cells and foot cells can be used; one that uses the cell being made is refused.
+  s.sums = { R1: chain('×', 'A1', 'B1'), R2: chain('−', 'B1', 'R1') };
+  assert.equal(evaluate(s).get('R2'), -44);
+  assert.match(sumProblem(s, 'R1', { refs: ['R2'], ops: [] })!, /=2 already uses =1/);
+  assert.match(sumProblem(s, 'R1', { refs: ['R1'], ops: [] })!, /cannot use itself/);
+  s.sums = { R3: chain('÷', 'A1', 'B9') };
+  assert.equal(evaluate(s).get('R3'), DIV_ZERO);
+  // The file keeps the same shape: a sum made this way reads back as it was saved.
+  const back = parseSheet(JSON.stringify({ ...s, sums: { R1: chain('÷', 'A1', 'B1', 'A2') } }));
+  assert.deepEqual(back.sums.R1, { refs: ['A1', 'B1', 'A2'], ops: ['÷', '÷'] });
+});
+
+test('the "=" buttons say what to click next', () => {
+  assert.equal(chainShown(chain('×'), '×', 10), '? × ?');
+  assert.equal(chainShown(chain('×', 'A1'), '×', 10), 'A1 × ?');
+  assert.equal(chainShown(chain('+', 'A1', 'Rf1'), '+', 10), 'A1 + =11 + ?');
+  assert.equal(chainPrompt('R1', '+', chain('+'), 10), '=1: add. Click the cells to add, one after another. Esc stops.');
+  assert.equal(chainPrompt('R1', '×', chain('×', 'A1'), 10),
+    'Click the next cell to times by, or another sign to change it. Enter saves, Esc stops.');
+  assert.match(chainPrompt('R2', '−', chain('−', 'B2'), 10), /to take away/);
+  assert.match(chainPrompt('R2', '÷', chain('÷', 'B2'), 10), /to divide by/);
+  assert.equal(opTitle('÷', 'R3', 10), 'Divide: choose this, then click the cells for =3');
 });
 
 test('loops are refused before saving, with the reason', () => {
