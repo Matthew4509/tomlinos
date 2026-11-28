@@ -1,25 +1,52 @@
 # TOMLIN OS
 
 A private desktop in your browser that you host yourself. Put it on your own web hosting and you get a desktop with
-windows, a file explorer, notes, documents, mail, a calendar, chat between the accounts on your server, a book reader, and an AI
+windows, a file explorer, notes, documents, a spreadsheet, 2D CAD, a photo editor, mail, a calendar that can follow your Google or
+Outlook calendars, contacts, chat between the accounts on your server, a book reader, and an AI
 that can run entirely on your own device. Your files live on your server, not someone else's cloud. To upload files, drag them onto the
 desktop: they are saved on your server.
 
 **No git needed:** download the release zip, upload it to your web hosting and follow four short steps. See
 [Install](#install-download-the-zip-upload-done).
 
+## Screenshots
+
+| | |
+|---|---|
+| **Write**: documents, opens and saves Word files<br>![Write](docs/screenshots/write.png) | **Spreadsheet**: formulas, formats, charts<br>![Spreadsheet](docs/screenshots/spreadsheet.png) |
+| **CAD Draft**: 2D drawing with layers, opens and saves DXF and DWG<br>![CAD Draft](docs/screenshots/cad-draft.png) | **Photo Editor**: layers, selections, retouching, ten filters with a live preview<br>![Photo Editor](docs/screenshots/photo-editor.png) |
+| **Notepad Pro**: code with syntax colouring<br>![Notepad Pro](docs/screenshots/notepad-pro.png) | **Quick Notes**<br>![Quick Notes](docs/screenshots/quick-notes.png) |
+| **File Explorer**<br>![File Explorer](docs/screenshots/file-explorer.png) | **Calendar**: .ics files, Google and Outlook calendars by link, public holidays<br>![Calendar](docs/screenshots/calendar.png) |
+| **Contacts**: groups, favourites, search over every field, standard .vcf<br>![Contacts](docs/screenshots/contacts.png) | **My Projects**<br>![My Projects](docs/screenshots/my-projects.png) |
+| **Panel**: today's events, focus projects, scratch pad<br>![Panel](docs/screenshots/panel.png) | **Mail**: your own mailbox over IMAP and SMTP<br>![Mail](docs/screenshots/mail.png) |
+| **Chat**: between the accounts on your server<br>![Chat](docs/screenshots/chat.png) | **Reader**: Sherlock Holmes and the Gutenberg library<br>![Reader](docs/screenshots/reader.png) |
+| **Calculator**: with a sheet of cells and × + − ÷ in the = column<br>![Calculator](docs/screenshots/calculator.png) | **Terminal**<br>![Terminal](docs/screenshots/terminal.png) |
+| **Settings**<br>![Settings](docs/screenshots/settings.png) | |
+
 ## What's in it
 
 - **Files and documents:** Explorer, Quick Notes and Notepad Pro, an editor with syntax highlighting, a spreadsheet,
-  photos and a photo editor with layers (a light GIMP: selections, retouching, levels and curves, text layers,
-  OpenRaster .ora files), a PDF viewer, a media player, archives (zip), and a recycle bin.
+  photos and a photo editor with layers (a light GIMP: selections, retouching, levels and curves, text layers, ten
+  filters such as Gaussian blur, unsharp mask, high pass, noise and vignette with a live preview, OpenRaster .ora files),
+  a PDF viewer, a media player, archives (zip), and a recycle bin.
 - **Write:** a document writer that opens and saves Word documents (.docx), Markdown and plain text, and opens
   WordPad (.rtf) and LibreOffice (.odt) files: fonts, styles, lists, tables, pictures, pages with margins, a header
   and footer, footnotes and a contents page, find and replace, letters from Contacts or a spreadsheet, templates,
   printing and PDF. A Word file from elsewhere keeps the parts Write cannot show when it is saved.
-- **Everyday tools:** Mail (IMAP/SMTP, from your server), Calendar, My Projects (your projects and sites, with
-  one-click reminders into the calendar: repeat daily, run for a number of days, appointments), Contacts, Calculator,
-  Terminal, Task Manager, Shortcuts, and a Panel with today's events, your starred projects and a scratch pad.
+- **CAD Draft:** 2D drawing for parts and plans: lines, arcs, circles, polylines, text and dimensions; trim, fillet,
+  chamfer, offset and arrays; snaps and a command line for typed points; layers in the Layer menu (show, hide, lock,
+  colour, line type); DXF and DWG in and out, SVG out and printing. Two sets of toolbar pictures, Workshop (the
+  default) and Standard, in View › Icon style.
+- **Calendar:** month view with events that repeat; import and export .ics files; add a Google, Outlook or Apple
+  calendar by its iCal link (read only, refreshed on a schedule); public holidays for Australia (each state) and the UK,
+  and school holidays for each Australian state, chosen by country and region.
+- **Contacts:** a menu bar and toolbar, groups (Family, Friends, Work and your own), favourites, a one-line description
+  and a job title on each card, filter buttons, search over every field (phone numbers however they are spaced), sort by
+  first name, last name or company. Kept as a standard .vcf file that phones and Outlook can read.
+- **Everyday tools:** Mail (IMAP/SMTP, from your server), My Projects (your projects and sites, with
+  one-click reminders into the calendar: repeat daily, run for a number of days, appointments), Calculator (with a sheet
+  of cells: press × + − or ÷ in an = cell, then click the cells it works on), Terminal, Task Manager, Shortcuts, and a
+  Panel with today's events, your starred projects and a scratch pad.
 - **Chat:** between the accounts on your own server, sealed in the browser (end to end when everyone in the
   conversation has file encryption on; what that does and does not cover is under Security), with safety codes to check
   keys. You can
