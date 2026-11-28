@@ -259,19 +259,29 @@ await step('CAD-P1-1: a radius typed as 12,5 makes a circle of radius 12.5 (not 
 
 await step('CAD-P1-2 and CAD-P1-6: drawing on a hidden layer says so and offers to show it; deleting a locked layer’s items keeps them', async () => {
   await openCad();
-  // Hide the current layer from the Layers panel (its tick), then draw on it.
-  if (!(await W().locator('.cad-panel').isVisible())) await menu('View', 'Layers panel');
-  const target = W().locator('.cad-layer', { has: page.locator('.cad-layer-name.current') }).first();
-  await target.locator('.cad-tick').click();
-  ok((await target.locator('.cad-tick').getAttribute('aria-checked')) === 'false', 'the current layer was not hidden');
+  // Hide the current layer from the Layer menu (the layer, Hide), then draw on it.
+  const current = (await W().locator('.cad-status').innerText()).match(/Layer: (\S+)/)[1];
+  const layerLabel = async () => {
+    await W().locator('.cbar-title[data-menu="Layer"]').click();
+    const t = (await page.locator('.menu').first().locator('.menu-label').allInnerTexts()).find(l => l.startsWith(`${current} (`));
+    await page.keyboard.press('Escape');
+    return t;
+  };
+  const layerDo = async action => {
+    await W().locator('.cbar-title[data-menu="Layer"]').click();
+    await page.locator('.menu').first().locator('.menu-item', { hasText: `${current} (` }).hover();
+    await page.locator('.menu').nth(1).locator('.menu-item', { hasText: action }).first().click();
+  };
+  await layerDo('Hide');
+  ok(/hidden/.test(await layerLabel()), 'the current layer was not hidden');
   await cmd('line', '0,0', '30,0', '');
   const toast = page.locator('.toast', { hasText: 'which is hidden' });
   await toast.first().waitFor({ timeout: 4000 });
   await toast.first().getByRole('button', { name: 'Show it' }).click();
   await page.waitForTimeout(300);
-  ok((await target.locator('.cad-tick').getAttribute('aria-checked')) === 'true', 'Show it did not show the layer');
+  ok(!/hidden/.test(await layerLabel()), 'Show it did not show the layer');
   // Lock the layer and try Edit > Delete a layer's items on it.
-  await target.locator('.cad-lock').click();
+  await layerDo('Lock');
   await menu('Edit', 'Delete a layer’s items...');
   const d = page.locator('.dialog', { hasText: 'Delete every item on this layer' });
   await d.waitFor();

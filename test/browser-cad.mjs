@@ -1,4 +1,4 @@
-// Drives CAD Draft in a real Chrome: the window's parts (menus, the toolbars across the top and down each side, the Layers panel, the
+// Drives CAD Draft in a real Chrome: the window's parts (menus, the toolbars across the top and down each side, the Layer menu, the
 // drawing area, the command line, the status bar), a closed 600 x 400 outline typed on the command line, undo and
 // redo, saving and opening again; snaps found with the pointer (middle, intersection, centre); the shapes (circle by
 // diameter, ellipse, polygon, slot, arcs, curves); construction lines and tangent lines; choosing by window, crossing
@@ -66,7 +66,32 @@ async function cmd(...entries) {
   }
 }
 const said = async (n = 3) => (await W().locator('.cad-said').allInnerTexts()).slice(-n).join(' | ');
-const count = async layer => Number(await W().locator('.cad-layer', { hasText: layer }).locator('.cad-count').innerText());
+// The Layer menu: each layer is a line such as "Geometry (2 items, hidden, locked)", with what it can do beside it.
+const reEsc = t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+async function openLayerMenu() {
+  await W().getByRole('menuitem', { name: 'Layer', exact: true }).click();
+  const top = page.locator('.menu').first();
+  await top.waitFor();
+  return top;
+}
+async function layerRows() {
+  const labels = await (await openLayerMenu()).locator('.menu-label').allInnerTexts();
+  await page.keyboard.press('Escape');
+  return labels.map(t => /^(.*) \(([\d,]+) items?(.*)\)$/.exec(t)).filter(Boolean)
+    .map(m => ({ name: m[1], n: Number(m[2].replace(/,/g, '')), hidden: /hidden/.test(m[3]), locked: /locked/.test(m[3]) }));
+}
+const layerNames = async () => (await layerRows()).map(r => r.name);
+const count = async layer => (await layerRows()).find(r => r.name === layer)?.n;
+/** Layer menu > the layer > one of its items (more labels go through a further submenu, such as 'Line type', 'Dashed'). */
+async function layerDo(layer, ...path) {
+  const top = await openLayerMenu();
+  await top.locator('.menu-item', { has: page.locator('.menu-label', { hasText: new RegExp(`^${reEsc(layer)} \\(`) }) }).hover();
+  for (const [i, label] of path.entries()) {
+    const it = page.locator('.menu').nth(i + 1).locator('.menu-item', { has: page.locator('.menu-label', { hasText: new RegExp(`^${reEsc(label)}$`) }) });
+    if (i < path.length - 1) await it.hover();
+    else await it.click();
+  }
+}
 const xy = async () => {
   const [x, y] = await W().locator('.cad-xy').allInnerTexts();
   return [Number(x.slice(2)), Number(y.slice(2))];
@@ -131,12 +156,12 @@ await step('CAD Draft is in Start > Office and opens in the classic CAD layout',
   ok(labels.includes('cad draft'), 'listed in Office: ' + labels.join(', '));
   await page.keyboard.press('Escape');
   await openCad();
-  eq(await W().locator('.cbar-title:not(.cbar-more)').allInnerTexts(), ['File', 'Edit', 'View', 'Geometry', 'CAD', 'Utils', 'Help'], 'menus in order');
+  eq(await W().locator('.cbar-title:not(.cbar-more)').allInnerTexts(), ['File', 'Edit', 'View', 'Layer', 'Geometry', 'CAD', 'Utils', 'Help'], 'menus in order');
   eq(await W().locator('.cbar-dock-top .cbar-band').evaluateAll(els => els.map(e => e.getAttribute('aria-label'))), ['Standard', 'Draw', 'Text and dimensions', 'Modify', 'Trim and fillet', 'Construction', 'Geometries', 'Measure'], 'toolbars across the top');
   eq(await W().locator('.cbar-dock-side .cbar-band').evaluateAll(els => els.map(e => e.getAttribute('aria-label'))), ['Select and zoom', 'Snaps'], 'a toolbar down each side');
   eq(await W().locator('[data-toolbar="snaps"] .cbar-tool:not(.cbar-more)').count(), 9, 'nine snaps on the right');
-  ok(await W().locator('.cad-panel').isVisible(), 'the Layers panel');
-  eq(await W().locator('.cad-layer-name').allInnerTexts().then(t => t.map(s => s.replace(' ✎', ''))), ['Geometry', 'Construction', 'Dimensions', 'Text'], 'the first layers');
+  eq(await W().locator('.cad-panel, .cad-layer-list').count(), 0, 'no Layers panel');
+  eq(await layerNames(), ['Geometry', 'Construction', 'Dimensions', 'Text'], 'the first layers, in the Layer menu');
   eq(await canvas().evaluate(c => getComputedStyle(c.parentElement).backgroundColor), 'rgb(30, 32, 136)', 'dark blue drawing area');
   ok(!(await W().locator('.ribbon, .ribbon-tabs').count()), 'no ribbon');
   ok((await W().locator('.cad-status').innerText()).includes('Layer: Geometry'), 'the status bar names the layer');
@@ -398,24 +423,24 @@ await step('session 5: fillet every corner R10, offset 5 in, trim, join lines in
 });
 
 await step('session 6: lock, rename, colour, line type and a new layer; move items to it; information', async () => {
-  const row = name => W().locator('.cad-layer', { hasText: name });
-  await row('Geometry').getByRole('button', { name: 'Lock Geometry' }).click();
+  await layerDo('Geometry', 'Lock');
+  ok((await layerRows()).find(r => r.name === 'Geometry').locked, 'the menu says locked');
   const at = await mapper();
   await page.keyboard.press('Escape');
   const p = at(300, 100);
   await page.mouse.click(p.x, p.y);
   eq(await chosen(), 'Ready', 'a locked layer cannot be chosen');
-  await row('Geometry').getByRole('button', { name: 'Lock Geometry' }).click();
-  await row('Geometry').getByRole('button', { name: 'More for Geometry' }).click();
-  await page.locator('.menu').getByText('Rename...', { exact: true }).click();
+  await layerDo('Geometry', 'Unlock');
+  await layerDo('Geometry', 'Rename...');
   await D().locator('input').fill('Outline');
   await D().getByRole('button', { name: 'Rename' }).click();
-  ok(await row('Outline').count(), 'renamed');
-  await row('Outline').getByRole('button', { name: 'More for Outline' }).click();
-  await page.locator('.menu').getByText('Line type', { exact: true }).hover();
-  await page.locator('.menu').getByText('Centre (long and short)', { exact: true }).click();
-  ok(await row('Outline').locator('.cad-swatch-dashed').count(), 'the swatch shows a broken line');
-  await W().locator('.cad-mini', { hasText: '+ New' }).click();
+  ok((await layerNames()).includes('Outline'), 'renamed');
+  await layerDo('Outline', 'Line type', 'Centre (long and short)');
+  await layerDo('Outline', 'Line type');
+  eq(await page.locator('.menu').nth(2).locator('.menu-item[aria-checked="true"] .menu-label').innerText(), 'Centre (long and short)', 'the line type is ticked');
+  await page.keyboard.press('Escape');
+  if (await page.locator('.menu').count()) await page.mouse.click(5, 5);
+  await (await openLayerMenu()).getByText('New layer...', { exact: true }).click();
   await D().locator('input').fill('Holes');
   await D().getByRole('button', { name: 'Make it' }).click();
   ok((await W().locator('.cad-status').innerText()).includes('Layer: Holes'), 'new items go on the new layer');
@@ -527,7 +552,7 @@ await step('session 8: File > Output > CAD > DXF, then the DXF opened again (lay
   await page.locator('.menu').getByText('Open...', { exact: true }).click();
   await D().locator('.pick-row', { hasText: 'panel.dxf' }).first().dblclick();
   await page.locator('.win .win-bar', { hasText: 'panel.dxf' }).waitFor();
-  const names = await W().locator('.cad-layer-name').allInnerTexts().then(t => t.map(s => s.replace(' ✎', '')));
+  const names = await layerNames();
   // Our layers are written in capitals (R12) and open under our own spelling, each once.
   eq(names.filter(n => n !== '0'), ['Geometry', 'Construction', 'Dimensions', 'Text'], 'layers');
   eq(await count('Geometry'), 2, 'the rectangle and the circle');
@@ -563,7 +588,7 @@ await step('session 8b: Output as DXF 2000 (the release remembered, the extensio
   await page.locator('.menu').getByText('Open...', { exact: true }).click();
   await D().locator('.pick-row', { hasText: 'panel2000.dxf' }).first().dblclick();
   await page.locator('.win .win-bar', { hasText: 'panel2000.dxf' }).waitFor();
-  const names = await W().locator('.cad-layer-name').allInnerTexts().then(t => t.map(s => s.replace(' ✎', '')));
+  const names = await layerNames();
   eq(names.filter(n => n !== '0'), ['Geometry', 'Construction', 'Dimensions', 'Text'], 'layers, in their own spelling (2000 keeps small letters)');
   eq(await count('Geometry'), 2, 'the rectangle and the circle');
   ok(!(await page.locator('.dialog').count()), 'nothing left out or changed, so no report box');
@@ -1164,7 +1189,6 @@ await step('phone width (375 x 812): the drawing area gets the room, one toolbar
     const size = await canvas().boundingBox();
     ok(size.width >= 0.6 * 375, `the drawing area is at least 60% of the window: ${size.width}`);
     ok(size.height >= 200, `and has height: ${size.height}`);
-    ok(!(await W().locator('.cad-panel').isVisible()), 'Layers starts closed');
     const y = await W().locator('.cad-xy').last().boundingBox();
     ok(y.x + y.width <= 375, `the Y readout is on screen: its right edge is at ${y.x + y.width}`);
     const tops = await W().locator('.cbar-dock-top .cbar-band').evaluateAll(rows => rows.map(r => Math.round(r.getBoundingClientRect().top)));
@@ -1182,17 +1206,7 @@ await step('phone width (375 x 812): the drawing area gets the room, one toolbar
       ok(b.x >= 0 && b.x + b.width <= 375, `${el} is on screen: ${JSON.stringify(b)}`);
     }
     await page.keyboard.press('Escape');
-    // Layers, opened, covers part of the drawing instead of squeezing it.
-    const openLayers = async () => {
-      await W().getByRole('menuitem', { name: 'View' }).click();
-      await page.locator('.menu').getByText('Layers panel', { exact: true }).click();
-    };
-    await openLayers();
-    ok(await W().locator('.cad-panel').isVisible(), 'View > Layers panel opens it');
-    const wide = await canvas().boundingBox();
-    eq(wide.width, size.width, 'the drawing area keeps its width with Layers open');
-    await W().locator('.cad-x').click();
-    await page.waitForTimeout(600);
+    eq(await layerNames(), ['Geometry', 'Construction', 'Dimensions', 'Text'], 'the Layer menu works at phone width');
     // On a touch screen the buttons are the large ones.
     await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
     await closeAll();
@@ -1208,7 +1222,6 @@ await step('phone width (375 x 812): the drawing area gets the room, one toolbar
   // The phone's window did not change what the desktop keeps.
   await page.waitForTimeout(600);
   await openCad();
-  ok(await W().locator('.cad-panel').isVisible(), 'on the desktop Layers is open as before');
   eq(await W().locator('.cbar-tool').first().evaluate(b => b.getBoundingClientRect().width), 24, 'and the buttons are the usual size');
   ok((await canvas().boundingBox()).width > 800, 'and the drawing area is wide');
 });
@@ -1224,7 +1237,7 @@ await step('the question being asked is told to a screen reader with the boxes; 
   ok((await described('.cad-coord:last-of-type')).length > 0, 'and so does the Y box');
   await page.keyboard.press('Escape');
   // Moved onto a hidden layer: gone from view, so not chosen (Delete would act on what cannot be seen).
-  await W().locator('.cad-tick[aria-label="Show Text"]').click();
+  await layerDo('Text', 'Hide');
   await cmd('line', '0,0', '100,0', '');
   await canvas().focus();
   await page.keyboard.press('Control+a');
@@ -1235,7 +1248,7 @@ await step('the question being asked is told to a screen reader with the boxes; 
   await D().getByRole('button', { name: 'Move them' }).click();
   eq(await count('Text'), 1, 'moved onto the hidden layer');
   ok((await chosen()) !== '1 chosen', 'no longer chosen: ' + (await chosen()));
-  await W().locator('.cad-tick[aria-label="Show Text"]').click();
+  await layerDo('Text', 'Show');
   // A text with "null" in its words still shows while it is being moved.
   await closeAll();
   await openCad();

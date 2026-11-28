@@ -2536,7 +2536,7 @@ textarea.field { resize: vertical; font: inherit; }
 .wp-note { margin: 0; }
 .wp-count th { text-align: left; padding: 2px 16px 2px 0; font-weight: normal; color: #555; }
 .wp-count td { text-align: right; font-variant-numeric: tabular-nums; }
-/* CAD Draft: the classic grey CAD/CAM window of the early 2000s (menu bar, toolbars, the Layers panel, a dark blue
+/* CAD Draft: the classic grey CAD/CAM window of the early 2000s (menu bar, toolbars, a dark blue
    drawing area, a command line and a status bar). Every colour is set here, so the desktop's light or dark theme never
    leaves grey text on grey; the menu bar and toolbars (shell/menubar.ts, shell/toolbars.ts) take these as their theme. */
 .cad { --face: #d4d0c8; --face-hi: #fff; --line: #808080; --ink: #000; --ink-soft: #404040; --sel: #0a246a; --sel-soft: #e6e3dc; display: flex; flex-direction: column; height: 100%; background: #d4d0c8; color: #000; font: 12px Tahoma, "Segoe UI", Arial, sans-serif; }
@@ -2549,22 +2549,9 @@ textarea.field { resize: vertical; font: inherit; }
 .cad-large .cbar-tool > svg { width: 24px; height: 24px; }
 .cad-body { flex: 1; min-height: 0; display: flex; }
 .cad [data-toolbar="snaps"].all-off .cbar-tool { opacity: .45; }
-.cad-panel { flex: none; width: 210px; margin: 2px; display: flex; flex-direction: column; background: #fff; border: 1px solid #808080; }
-.cad-panel[hidden] { display: none; }
-.cad-panel-hd { height: 20px; flex: none; display: flex; align-items: center; justify-content: space-between; padding: 0 4px 0 6px; background: #d4d0c8; border-bottom: 1px solid #808080; font-weight: 700; }
 .cad-x { width: 18px; height: 16px; padding: 0; line-height: 12px; font-size: 14px; background: #d4d0c8; color: #000; border: 1px solid; border-color: #fff #404040 #404040 #fff; border-radius: 0; }
-.cad-panel-tools { flex: none; display: flex; align-items: center; gap: 6px; padding: 2px 4px; background: #ece9d8; border-bottom: 1px solid #c8c4b8; }
-.cad-panel-hint { color: #444; font-size: 12px; }
 .cad-mini { flex: none; white-space: nowrap; padding: 1px 6px; font: 12px Tahoma, "Segoe UI", sans-serif; background: #d4d0c8; color: #000; border: 1px solid; border-color: #fff #404040 #404040 #fff; border-radius: 0; }
-.cad-layer-list { flex: 1; overflow: auto; padding: 3px 0; }
-.cad-layer { display: flex; align-items: center; gap: 5px; padding: 2px 6px; }
-.cad-layer.off .cad-layer-name { color: #707070; text-decoration: line-through; }
-.cad-tick { width: 14px; height: 14px; flex: none; padding: 0; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; line-height: 1; color: #004000; background: #fff; border: 1px solid #808080; border-radius: 0; }
 .cad-swatch { width: 12px; height: 12px; flex: none; border: 1px solid #404040; }
-.cad-layer-name { flex: 1; min-width: 0; text-align: left; padding: 1px 3px; background: none; border: 1px solid transparent; border-radius: 0; color: #000; font: 12px Tahoma, "Segoe UI", sans-serif; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cad-layer-name:hover { border-color: #0a246a; }
-.cad-layer-name.current { font-weight: 700; background: #dde4f4; }
-.cad-count { color: #555; font-size: 12px; }
 .cad-part-list { display: block; width: 100%; min-width: 300px; box-sizing: border-box; font: 12px Tahoma, "Segoe UI", sans-serif; }
 .cad-part-show { display: flex; gap: 10px; align-items: flex-start; margin-top: 8px; }
 .cad-part-preview { flex: none; border: 1px solid #808080; }
@@ -2636,7 +2623,7 @@ textarea.field { resize: vertical; font: inherit; }
   .cad-paper-tabloid-portrait { page: cad-tabloid-portrait; }
   .cad-paper-tabloid-landscape { page: cad-tabloid-landscape; }
 }
-@media (max-width: 760px) { .cad-panel { width: 150px; } .cad-xy { min-width: 0; } }
+@media (max-width: 760px) { .cad-xy { min-width: 0; } }
 /* A phone: one toolbar row that scrolls sideways (the side toolbars come up to it: the window is too narrow for them),
    Layers over the drawing (not beside it), everything else wrapped so it stays on screen. */
 @media (max-width: 720px) {
@@ -2644,7 +2631,6 @@ textarea.field { resize: vertical; font: inherit; }
   .cad .cbar-dock-top .cbar-band { flex: none; flex-wrap: nowrap; max-width: none; }
   .cad .cbar-dock-top .cbar-tool { flex: none; }
   .cad-body { position: relative; }
-  .cad-panel { position: absolute; z-index: 5; top: 0; bottom: 0; left: 0; width: min(240px, 75%); margin: 0; box-shadow: 2px 0 8px rgba(0, 0, 0, .4); }
   .cad-history { height: 34px; }
   .cad-command-line { flex-wrap: wrap; }
   .cad-prompt { flex: 1 1 100%; max-width: 100%; min-height: 32px; white-space: normal; }
@@ -2661,12 +2647,6 @@ textarea.field { resize: vertical; font: inherit; }
   .cad-cell { height: 28px; }
   .cad-input, .cad-coord { height: 28px; font-size: 16px; }
 }
-.cad-lock, .cad-more { flex: none; width: 20px; height: 18px; padding: 0; font-size: 12px; line-height: 1; background: none; color: #000; border: 1px solid transparent; border-radius: 0; }
-.cad-lock:hover, .cad-more:hover { border-color: #fff #808080 #808080 #fff; }
-.cad-lock { opacity: .45; }
-.cad-lock.on { opacity: 1; border-color: #808080 #fff #fff #808080; background: #e6e3dc; }
-.cad-layer.locked .cad-layer-name { font-style: italic; }
-.cad-swatch-dashed { background-image: repeating-linear-gradient(90deg, transparent 0 3px, rgba(0, 0, 0, .55) 3px 5px); }
 .cad-colours { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px 12px; }
 .cad-command-line [hidden] { display: none !important; }
 .cad-xyin { display: inline-flex; align-items: center; gap: 4px; }

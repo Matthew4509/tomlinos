@@ -1,6 +1,6 @@
 // CAD Draft: a 2D drawing program for drawing a part out on a job and machining it at home in a CAM program. The
-// window is laid out as classic CAD/CAM programs of the early 2000s were: a menu bar (File, Edit, View, Geometry,
-// CAD, Utils, Help), rows of small toolbar pictures, the Select and zoom toolbar down the left, the Layers panel, a dark
+// window is laid out as classic CAD/CAM programs of the early 2000s were: a menu bar (File, Edit, View, Layer,
+// Geometry, CAD, Utils, Help), rows of small toolbar pictures, the Select and zoom toolbar down the left, a dark
 // blue drawing area with scale marks, the snaps down the right, a command line for typed points and numbers, and a
 // status bar with the layer and the pointer's X and Y. The toolbars are the desktop's own (shell/toolbars.ts): each can
 // be hidden, moved to another row or docked left or right by its grip, or from View > Toolbars, and is kept per person. No ribbon. Shapes are kept as exact lines, arcs, circles, ellipses
@@ -64,7 +64,6 @@ interface Settings {
   arrows: boolean;
   white: boolean;
   large: boolean;
-  layersPanel: boolean;
   ortho: boolean;
   gridOn: boolean;
   gridSnap: boolean;
@@ -159,11 +158,11 @@ export const cadApp: AppDef = {
     app.root.classList.add('cad');
 
     // ---- Settings kept between windows -----------------------------------------------------------------------------
-    const settings: Settings = { snaps: [...DEFAULT_SNAPS], arrows: false, white: false, large: false, layersPanel: true, ortho: false, gridOn: false, gridSnap: false, dxfTextAsLines: false, dxfConstruction: false, dxfHidden: false, exportFormat: DEFAULT_DXF_VERSION, recent: [], print: readPrintSettings(null), autosave: true, toolbars: null, iconStyle: 'standard' };
+    const settings: Settings = { snaps: [...DEFAULT_SNAPS], arrows: false, white: false, large: false, ortho: false, gridOn: false, gridSnap: false, dxfTextAsLines: false, dxfConstruction: false, dxfHidden: false, exportFormat: DEFAULT_DXF_VERSION, recent: [], print: readPrintSettings(null), autosave: true, toolbars: null, iconStyle: 'standard' };
     try {
       const saved = JSON.parse(await shell.fs.readText(SETTINGS)) as Partial<Settings>;
       if (Array.isArray(saved.snaps)) settings.snaps = saved.snaps.filter((s): s is SnapMode => SNAP_ORDER.includes(s as SnapMode));
-      for (const k of ['arrows', 'white', 'large', 'layersPanel', 'ortho', 'gridOn', 'gridSnap', 'dxfTextAsLines', 'dxfConstruction', 'dxfHidden', 'autosave'] as const) if (typeof saved[k] === 'boolean') settings[k] = saved[k];
+      for (const k of ['arrows', 'white', 'large', 'ortho', 'gridOn', 'gridSnap', 'dxfTextAsLines', 'dxfConstruction', 'dxfHidden', 'autosave'] as const) if (typeof saved[k] === 'boolean') settings[k] = saved[k];
       if (isDxfVersion(saved.exportFormat) || saved.exportFormat === 'svg') settings.exportFormat = saved.exportFormat;
       if (Array.isArray(saved.recent)) settings.recent = saved.recent.filter((r): r is string => typeof r === 'string').slice(0, RECENT_MAX);
       settings.print = readPrintSettings(saved.print);
@@ -371,7 +370,6 @@ export const cadApp: AppDef = {
     }
     function afterChange(): void {
       refreshTitle();
-      drawLayers();
       refreshStatus();
       paint();
     }
@@ -822,7 +820,7 @@ export const cadApp: AppDef = {
       if (!sel.length) return problem('Choose the items to move to another layer first.');
       const name = target ?? (await chooseLayer('Move to a layer', `Put the ${sel.length} chosen item${sel.length === 1 ? '' : 's'} on this layer.`, 'Move them'));
       if (name === null) return;
-      if (layerOf(name)?.locked) return problem(`${name} is locked: unlock it first (its padlock in the Layers panel).`);
+      if (layerOf(name)?.locked) return problem(`${name} is locked: unlock it first (Layer menu, the layer, Unlock).`);
       ctx.change(sel.map(e => ({ id: e.id, shape: e })), []);
       commitLayerOf(sel.map(e => e.id), name);
       // Out of sight, they stop being chosen (Delete would otherwise act on what cannot be seen).
@@ -2633,25 +2631,6 @@ export const cadApp: AppDef = {
       })) },
     ];
 
-    // The Layers panel: a tick to show or hide each layer, its colour, its name (click: draw on it).
-    const layerList = h('div', { class: 'cad-layer-list', role: 'list' });
-    const newLayerBtn = h('button', { type: 'button', class: 'cad-mini', title: 'New layer' }, '+ New');
-    const panelClose = h('button', { type: 'button', class: 'cad-x', 'aria-label': 'Close the Layers panel', title: 'Close (View > Layers panel opens it again)' }, '×');
-    const panel = h('div', { class: 'cad-panel' },
-      h('div', { class: 'cad-panel-hd' }, h('span', {}, 'Layers'), panelClose),
-      h('div', { class: 'cad-panel-tools' }, newLayerBtn, h('span', { class: 'cad-panel-hint' }, 'Click a name to draw on it; ⋯ for more')),
-      layerList);
-    on(panelClose, 'click', () => setPanel(false), signal);
-    on(newLayerBtn, 'click', () => void newLayer(), signal);
-    function setPanel(show: boolean): void {
-      panel.hidden = !show;
-      // The settings are shared with the person's other devices: what a phone needs does not go back to the desktop.
-      if (!onPhone) {
-        settings.layersPanel = show;
-        keepSettings();
-      }
-      paint();
-    }
     async function newLayer(): Promise<void> {
       const name = await shell.dialogs.prompt({
         title: 'New layer', label: 'Name', value: `Layer ${drawing.layers.length + 1}`, ok: 'Make it',
@@ -2666,44 +2645,19 @@ export const cadApp: AppDef = {
       });
       say(`Layer ${name.trim()} made; new items go on it.`);
     }
-    function drawLayers(): void {
+    /** The Layer menu: a new layer, then each layer (the one drawn on ticked) with its item count and what it can do. */
+    function layerMenuItems(): MenuItem[] {
       const counts = new Map<string, number>();
       for (const e of drawing.ents) counts.set(e.layer, (counts.get(e.layer) ?? 0) + 1);
-      layerList.replaceChildren(...drawing.layers.map(l => {
-        const tick = h('button', { type: 'button', class: 'cad-tick', role: 'checkbox', 'aria-checked': String(l.on), 'aria-label': `Show ${l.name}` }, l.on ? '✔' : '');
-        const sw = h('span', { class: 'cad-swatch', title: colourName(l.colour), 'aria-hidden': 'true' });
-        css(sw, { background: l.colour });
-        const current = l.name === drawing.current;
-        const name = h('button', { type: 'button', class: `cad-layer-name${current ? ' current' : ''}`, 'aria-current': current ? 'true' : null, title: current ? 'New items go on this layer' : `Draw on ${l.name}` },
-          l.name, current ? h('span', { class: 'cad-pen' }, ' ✎') : null);
-        const count = h('span', { class: 'cad-count' }, String(counts.get(l.name) ?? 0));
-        const lock = h('button', { type: 'button', class: `cad-lock${l.locked ? ' on' : ''}`, 'aria-pressed': String(l.locked), 'aria-label': `Lock ${l.name}`, title: l.locked ? 'Locked: its items cannot be chosen or changed. Click to unlock.' : 'Lock: its items cannot be chosen or changed' }, l.locked ? '🔒' : '🔓');
-        const more = h('button', { type: 'button', class: 'cad-more', 'aria-label': `More for ${l.name}`, 'aria-haspopup': 'menu', title: 'Rename, colour, line type, delete...' }, '⋯');
-        on(lock, 'click', () => lockLayer(l), signal);
-        on(more, 'click', () => {
-          const r = more.getBoundingClientRect();
-          shell.menus.show(layerMenu(l), r.left, r.bottom, { returnFocus: more });
-        }, signal);
-        on(tick, 'click', () => {
-          l.on = !l.on;
-          if (!l.on) for (const e of drawing.ents) if (e.layer === l.name) selected.delete(e.id);
-          touched();
-        }, signal);
-        on(name, 'click', () => {
-          drawing.current = l.name;
-          if (!l.on) l.on = true;
-          touched();
-          say(`New items go on ${l.name}.`);
-        }, signal);
-        on(name, 'dblclick', () => void renameLayer(l), signal);
-        const row = h('div', { class: `cad-layer${l.on ? '' : ' off'}${l.locked ? ' locked' : ''}`, role: 'listitem' }, tick, sw, name, count, lock, more);
-        on(row, 'contextmenu', (e: MouseEvent) => {
-          e.preventDefault();
-          shell.menus.show(layerMenu(l), e.clientX, e.clientY, { returnFocus: name });
-        }, signal);
-        if (l.lineType !== 'continuous') sw.classList.add('cad-swatch-dashed');
-        return row;
-      }));
+      return [
+        { label: 'New layer...', action: () => void newLayer() },
+        { separator: true },
+        ...drawing.layers.map((l): MenuItem => {
+          const n = counts.get(l.name) ?? 0;
+          const state = [`${n.toLocaleString('en-GB')} item${n === 1 ? '' : 's'}`, l.on ? '' : 'hidden', l.locked ? 'locked' : ''].filter(Boolean).join(', ');
+          return { label: `${l.name} (${state})`, checked: drawing.current === l.name, submenu: layerMenu(l) };
+        }),
+      ];
     }
 
     // The command line and the status bar.
@@ -2926,7 +2880,6 @@ export const cadApp: AppDef = {
       { separator: true },
       { label: 'White background', checked: settings.white, action: () => setWhite(!settings.white) },
       { label: 'Large icons', checked: app.root.classList.contains('cad-large'), action: () => setLarge(!app.root.classList.contains('cad-large')) },
-      { label: 'Layers panel', checked: !panel.hidden, action: () => setPanel(!!panel.hidden) },
       { label: 'Show direction', checked: settings.arrows, action: () => setArrows(!settings.arrows) },
       { separator: true },
       sub_('Photo to trace', photoMenu()),
@@ -2991,6 +2944,7 @@ export const cadApp: AppDef = {
         { label: 'File', items: () => barItems(fileMenu()) },
         { label: 'Edit', items: () => barItems(editMenu()) },
         { label: 'View', items: () => barItems(viewMenu()) },
+        { label: 'Layer', items: () => barItems(layerMenuItems()) },
         { label: 'Geometry', items: () => barItems(geometryMenu()) },
         { label: 'CAD', items: () => barItems(cadMenu()) },
         { label: 'Utils', items: () => barItems(utilsMenu()) },
@@ -3034,7 +2988,7 @@ export const cadApp: AppDef = {
     }
     app.root.dataset.iconStyle = settings.iconStyle;
 
-    const body = h('div', { class: 'cad-body' }, panel, canvasWrap);
+    const body = h('div', { class: 'cad-body' }, canvasWrap);
     app.root.append(bar.el, bar.dock(body), commandRow, status);
     // A phone's toolbar row scrolls sideways, and a touch screen hides its scroll bar: a » at its right edge shows more
     // is there (a press scrolls on), and a thin scroll bar is kept wherever the browser shows one.
@@ -3064,8 +3018,7 @@ export const cadApp: AppDef = {
       if (onPhone) css(strip, { 'scrollbar-width': 'thin' });
       setTimeout(placeOnward, 0);
     }
-    // On a phone the drawing gets the room (View > Layers panel opens the panel over it); a finger gets the large buttons.
-    panel.hidden = !settings.layersPanel || onPhone;
+    // A finger gets the large buttons.
     app.root.classList.toggle('cad-large', settings.large || onTouch);
 
     // ---- Keys ------------------------------------------------------------------------------------------------------
@@ -3217,7 +3170,6 @@ export const cadApp: AppDef = {
     signal.addEventListener('abort', () => resize.disconnect());
     syncSnaps();
     syncToolButtons();
-    drawLayers();
     refreshTitle();
     refreshStatus();
     if (arg && !recovered) void remember(arg);
