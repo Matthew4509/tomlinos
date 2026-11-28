@@ -13,9 +13,9 @@ export type IconStyle = (typeof ICON_STYLES)[number];
 /** As View > Icon style names them. */
 export const ICON_STYLE_NAMES: Record<IconStyle, string> = { standard: 'Standard', workshop: 'Workshop' };
 
-/** A kept setting read back: anything but a known set name is the Standard set. */
+/** A kept setting read back: anything but a known set name is the Workshop set (the one a new person starts on). */
 export function readIconStyle(v: unknown): IconStyle {
-  return typeof v === 'string' && (ICON_STYLES as readonly string[]).includes(v) ? (v as IconStyle) : 'standard';
+  return typeof v === 'string' && (ICON_STYLES as readonly string[]).includes(v) ? (v as IconStyle) : 'workshop';
 }
 
 /** One drawn path: its data, stroke colour, fill (null: none) and line width. */

@@ -59,10 +59,10 @@ test('each Workshop drawing is path data inside the 16 px square, in the set col
   assert.equal(workshopParts('constructor'), null);
 });
 
-test('the chosen set is kept and read back; anything else is the Standard set', () => {
+test('the chosen set is kept and read back; anything else is the Workshop set, the default', () => {
   for (const style of ICON_STYLES) assert.equal(readIconStyle(JSON.parse(JSON.stringify({ iconStyle: style })).iconStyle), style);
-  for (const junk of [undefined, null, '', 'Workshop', 'classic', 3, true, {}, ['workshop']]) assert.equal(readIconStyle(junk), 'standard');
+  for (const junk of [undefined, null, '', 'Workshop', 'classic', 3, true, {}, ['workshop']]) assert.equal(readIconStyle(junk), 'workshop');
   // cad.ts keeps it with the other settings and reads it with readIconStyle.
-  assert.match(cadSource, /iconStyle: 'standard'/);
+  assert.match(cadSource, /iconStyle: 'workshop'/);
   assert.match(cadSource, /settings\.iconStyle = readIconStyle\(saved\.iconStyle\)/);
 });

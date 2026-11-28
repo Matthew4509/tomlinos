@@ -1,6 +1,6 @@
 // CAD Draft's two toolbar picture sets in a real Chrome: View > Icon style switches every toolbar picture at
 // once, the choice is kept (a reload and a second window open with it), greyed buttons and the dark desktop theme still
-// look right, and Standard comes back the same way.
+// look right, and Workshop (the default) comes back the same way.
 // Needs the dev server on a FRESH, EMPTY data folder (the first step sets up the owner) and `node tools/build.mjs`.
 //   node test/browser-cad-icons.mjs [http://127.0.0.1:3771] [screenshot folder]
 import { chromium } from 'playwright-core';
@@ -120,29 +120,29 @@ await step('set up the owner', async () => {
   await page.locator('#desktop .item').first().waitFor({ timeout: 30000 });
 });
 
-await step('a new person starts on the Standard set, ticked in View > Icon style', async () => {
+await step('a new person starts on the Workshop set (the default), ticked in View > Icon style', async () => {
   await openCad();
   before = await pictures();
   ok(before.buttons >= 70, `toolbar buttons: ${before.buttons}`);
-  ok(before.workshop === 0, `Workshop pictures already: ${before.workshop}`);
-  ok(before.style === 'standard', `style: ${before.style}`);
+  ok(before.style === 'workshop', `style: ${before.style}`);
+  ok(before.workshop === before.buttons, `Workshop pictures ${before.workshop} of ${before.buttons} buttons`);
   ok(!before.empty.length, `buttons with no picture: ${before.empty.join(', ')}`);
-  const ticked = await tickedStyle();
-  ok(ticked.includes('Standard') && !ticked.includes('Workshop'), `ticked: ${JSON.stringify(ticked)}`);
-  const p = await shot('cad-icons-standard');
-  if (p) saved.push(p);
-});
-
-await step('choosing Workshop changes every toolbar picture at once', async () => {
-  await chooseStyle('Workshop');
-  const now = await pictures();
-  ok(now.style === 'workshop', `style: ${now.style}`);
-  ok(now.workshop === now.buttons, `Workshop pictures ${now.workshop} of ${now.buttons} buttons`);
-  ok(!now.empty.length, `buttons with no picture: ${now.empty.join(', ')}`);
-  ok(now.line !== before.line && now.save !== before.save, 'the Line and Save pictures did not change');
   const ticked = await tickedStyle();
   ok(ticked.includes('Workshop') && !ticked.includes('Standard'), `ticked: ${JSON.stringify(ticked)}`);
   const p = await shot('cad-icons-workshop');
+  if (p) saved.push(p);
+});
+
+await step('choosing Standard changes every toolbar picture at once', async () => {
+  await chooseStyle('Standard');
+  const now = await pictures();
+  ok(now.style === 'standard', `style: ${now.style}`);
+  ok(now.workshop === 0, `Workshop pictures left: ${now.workshop}`);
+  ok(!now.empty.length, `buttons with no picture: ${now.empty.join(', ')}`);
+  ok(now.line !== before.line && now.save !== before.save, 'the Line and Save pictures did not change');
+  const ticked = await tickedStyle();
+  ok(ticked.includes('Standard') && !ticked.includes('Workshop'), `ticked: ${JSON.stringify(ticked)}`);
+  const p = await shot('cad-icons-standard');
   if (p) saved.push(p);
 });
 
@@ -176,26 +176,11 @@ await step('greyed buttons and the dark theme still look right in both sets', as
   });
 });
 
-await step('the choice is kept: a second window and a reload open with Workshop', async () => {
+await step('the choice is kept: a second window and a reload open with Standard', async () => {
   await page.waitForTimeout(1200);
   await openCad();
   const second = await pictures();
-  ok(second.style === 'workshop' && second.workshop === second.buttons, `second window: ${second.style}, ${second.workshop} of ${second.buttons}`);
-  await closeAll();
-  await page.reload();
-  await page.locator('#desktop .item').first().waitFor({ timeout: 30000 });
-  await page.waitForTimeout(800);
-  if (!(await W().count())) await openCad();
-  const after = await pictures();
-  ok(after.style === 'workshop' && after.workshop === after.buttons, `after the reload: ${after.style}, ${after.workshop} of ${after.buttons}`);
-});
-
-await step('choosing Standard brings the Standard pictures back, and that is kept too', async () => {
-  await chooseStyle('Standard');
-  const now = await pictures();
-  ok(now.style === 'standard' && now.workshop === 0, `style ${now.style}, Workshop pictures ${now.workshop}`);
-  ok(now.line === before.line && now.save === before.save, 'the Line and Save pictures are not the Standard ones');
-  await page.waitForTimeout(1200);
+  ok(second.style === 'standard' && second.workshop === 0, `second window: ${second.style}, ${second.workshop} of ${second.buttons}`);
   await closeAll();
   await page.reload();
   await page.locator('#desktop .item').first().waitFor({ timeout: 30000 });
@@ -203,6 +188,21 @@ await step('choosing Standard brings the Standard pictures back, and that is kep
   if (!(await W().count())) await openCad();
   const after = await pictures();
   ok(after.style === 'standard' && after.workshop === 0, `after the reload: ${after.style}, ${after.workshop}`);
+});
+
+await step('choosing Workshop brings the Workshop pictures back, and that is kept too', async () => {
+  await chooseStyle('Workshop');
+  const now = await pictures();
+  ok(now.style === 'workshop' && now.workshop === now.buttons, `style ${now.style}, Workshop pictures ${now.workshop} of ${now.buttons}`);
+  ok(now.line === before.line && now.save === before.save, 'the Line and Save pictures are not the Workshop ones');
+  await page.waitForTimeout(1200);
+  await closeAll();
+  await page.reload();
+  await page.locator('#desktop .item').first().waitFor({ timeout: 30000 });
+  await page.waitForTimeout(800);
+  if (!(await W().count())) await openCad();
+  const after = await pictures();
+  ok(after.style === 'workshop' && after.workshop === after.buttons, `after the reload: ${after.style}, ${after.workshop} of ${after.buttons}`);
   await closeAll();
 });
 
