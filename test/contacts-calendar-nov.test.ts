@@ -77,6 +77,8 @@ test('O24: two different projects with one id both survive and stay apart', () =
 });
 
 // ---- Controller tests: a small element fixture, not a browser. ----
+// Contacts has a classic menu bar now, which needs a real page (it measures and watches sizes), so its O20 and O21
+// checks run in Chrome: test/browser-contacts-groups.mjs.
 class Fixture {
   tagName: string; attrs: Record<string, string> = {}; children: Fixture[] = []; listeners: Record<string, Array<{ fn: (e: unknown) => unknown; signal?: AbortSignal }>> = {};
   value = ''; checked = false; hidden = false; disabled = false; dataset: Record<string, string> = {}; parentElement: Fixture | null = null; _text = '';
@@ -101,7 +103,6 @@ class Fixture {
   focus() { (globalThis as { document: { activeElement: unknown } }).document.activeElement = this; }
 }
 Object.assign(globalThis, { Element: Fixture, HTMLElement: Fixture, CSS: { escape: (s: string) => s }, document: { createElement: (t: string) => new Fixture(t), createTextNode: (t: string) => new Fixture('#text', t), activeElement: null } });
-const { contactsApp } = await import('../src/apps/contacts.ts');
 const { calendarApp } = await import('../src/apps/calendar.ts');
 
 async function launch(def: { launch: (app: never, arg?: string) => unknown }, files: Record<string, string>) {
@@ -118,22 +119,8 @@ async function launch(def: { launch: (app: never, arg?: string) => unknown }, fi
   return { fs, app, state, button: (label: string) => app.root.querySelectorAll('button').find(b => b.textContent === label)! };
 }
 
-const ALICE = 'BEGIN:VCARD\r\nVERSION:3.0\r\nUID:alice\r\nFN:Alice\r\nEND:VCARD\r\nBEGIN:VCARD\r\nVERSION:3.0\r\nUID:bob\r\nFN:Bob\r\nEND:VCARD\r\n';
 const today = dateKey(new Date());
 const MEETING = ics(['UID:m1', `DTSTART:${today.replace(/-/g, '')}T090000`, 'SUMMARY:Meeting']);
-
-test('O20: Contacts: a stale edit does not revive a contact deleted in another window', async () => {
-  const t = await launch(contactsApp, { '/Documents/Contacts.vcf': ALICE });
-  const list = t.app.root.querySelector('.people')!;
-  await list.fire('click', list.querySelector('[data-uid="alice"]')!);
-  await t.button('Edit').fire('click');
-  const file = recordFile(t.fs, '/Documents/Contacts.vcf', parseVcf, writeVcf);
-  await file.change(l => l.filter(x => x.name !== 'Alice'));
-  t.app.root.querySelector('[aria-label="Notes"]')!.value = 'late edit';
-  await t.button('Save').fire('click');
-  assert.deepEqual((await file.load()).map(c => c.name), ['Bob']);
-  assert.equal(t.state.reports.length, 1);
-});
 
 test('O20: Calendar: a stale edit does not revive an event deleted in another window', async () => {
   const t = await launch(calendarApp, { '/Documents/Calendar.ics': MEETING });
@@ -144,26 +131,6 @@ test('O20: Calendar: a stale edit does not revive an event deleted in another wi
   await t.button('Save').fire('click');
   assert.equal((await file.load()).length, 0);
   assert.equal(t.state.reports.length, 1);
-});
-
-test('O21: Contacts asks before an unsaved form is dropped by choosing someone else, New, or closing', async () => {
-  const t = await launch(contactsApp, { '/Documents/Contacts.vcf': ALICE });
-  const list = t.app.root.querySelector('.people')!;
-  await t.button('New contact').fire('click');
-  assert.equal(t.state.confirms, 0);
-  t.app.root.querySelector('[aria-label="Name"]')!.value = 'Typed but unsaved';
-  await list.fire('click', list.querySelector('[data-uid="bob"]')!);
-  assert.equal(t.state.confirms, 1);
-  assert.ok(t.app.root.querySelector('[aria-label="Name"]'), 'the form stays when the person keeps it');
-  await t.button('New contact').fire('click');
-  assert.equal(t.state.confirms, 2);
-  assert.equal(t.state.guards.length, 1);
-  assert.equal(await t.state.guards[0](), false);
-  assert.equal(t.state.confirms, 3);
-  t.state.answer = true;
-  await list.fire('click', list.querySelector('[data-uid="bob"]')!);
-  assert.equal(t.app.root.querySelector('[aria-label="Name"]'), null);
-  assert.equal(await t.state.guards[0](), true);
 });
 
 test('O21: Calendar asks before an unsaved form is dropped by choosing another day, New, or closing', async () => {

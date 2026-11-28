@@ -1128,6 +1128,44 @@ textarea.field { resize: vertical; font: inherit; }
   .contacts-main .person { border-left: 0; border-top: 1px solid var(--line); }
 }
 .contacts-app .toolbar .field { flex: 1; }
+/* The search box sits at the end of the toolbar, with the find picture inside its left edge. */
+.contacts-search { position: relative; display: flex; align-items: center; margin-left: 4px; }
+.contacts-search .ti { position: absolute; left: 6px; color: var(--ink-soft); pointer-events: none; }
+.contacts-search .contacts-find { width: 220px; padding-left: 26px; font-size: 13px; }
+/* All, Favourites and each group: one on at a time. */
+.contacts-filters { display: flex; flex-wrap: wrap; gap: 4px; padding: 5px 8px; background: var(--face); border-bottom: 1px solid var(--line); }
+.contacts-filter { display: inline-flex; align-items: center; gap: 5px; padding: 2px 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper); color: var(--ink); font-size: 12px; cursor: pointer; }
+.contacts-filter:hover { border-color: var(--sel); }
+.contacts-filter[aria-pressed="true"] { background: var(--sel); border-color: var(--sel); color: #fff; }
+.contacts-filter-count { min-width: 16px; padding: 0 4px; border-radius: 8px; background: var(--face); color: var(--ink-soft); font-size: 12px; text-align: center; }
+.contacts-filter[aria-pressed="true"] .contacts-filter-count { background: rgba(255, 255, 255, 0.25); color: #fff; }
+.contacts-star { color: #c88a00; }
+.contacts-filter[aria-pressed="true"] .contacts-star, .person-row.on .contacts-star { color: #ffe08a; }
+/* The round picture with a person's initials, in one of eight colours chosen by the name. */
+.person-pic { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 50%; color: #fff; font-size: 12px; font-weight: 700; letter-spacing: 0.5px; }
+.person-pic.big { width: 56px; height: 56px; font-size: 20px; }
+.tint-0 { background: #3b6fd4; } .tint-1 { background: #1f8a70; } .tint-2 { background: #b4562f; } .tint-3 { background: #7a4fc4; }
+.tint-4 { background: #c23f6b; } .tint-5 { background: #4f7d2f; } .tint-6 { background: #2f7f9e; } .tint-7 { background: #8a6a1f; }
+.contacts-app .person-row { flex-direction: row; align-items: center; gap: 10px; }
+.person-row-text { display: flex; flex-direction: column; min-width: 0; }
+.person-row-text > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.person-head { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 6px; }
+.person-head-text { min-width: 0; }
+.person-head-text h2 { margin: 2px 0 4px; font-size: 16px; overflow-wrap: anywhere; }
+.person-head-text p { margin: 0 0 4px; }
+.person-description { font-style: italic; color: var(--ink-soft); }
+.person-groups { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.person-group { padding: 1px 8px; border: 1px solid var(--sel); border-radius: 10px; background: var(--sel-soft); color: var(--ink); font-size: 12px; }
+.form-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
+.form-groups { margin: 6px 0; padding: 4px 10px 6px; border: 1px solid var(--line); border-radius: 3px; font-size: 12px; color: var(--ink-soft); }
+.form-groups legend { padding: 0 4px; }
+.form-group-ticks { display: flex; flex-wrap: wrap; gap: 0 14px; color: var(--ink); }
+.form-groups .field { width: 100%; margin: 4px 0; font-size: 13px; color: var(--ink); box-sizing: border-box; }
+.form-groups > .form-check { color: var(--ink); }
+@container (max-width: 520px) {
+  .contacts-search .contacts-find { width: 150px; }
+  .form-pair { grid-template-columns: 1fr; }
+}
 .people { overflow: auto; background: var(--paper); }
 .person-row { display: flex; flex-direction: column; width: 100%; padding: 6px 10px; border: 0; border-bottom: 1px solid var(--face); background: none; color: var(--ink); text-align: left; cursor: pointer; }
 .person-row:hover { background: var(--sel-soft); }

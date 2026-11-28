@@ -128,7 +128,7 @@ await step('FAULT CON-P0-1: an Apple-style card shows its grouped email and phon
 await step('FAULT CON-P0-2: editing only the phone keeps an address with a line break as a structured address', async () => {
   const w = await openContacts();
   await choose(w, 'Bob Builder');
-  await w.getByRole('button', { name: 'Edit' }).click();
+  await w.getByRole('button', { name: 'Edit', exact: true }).click();
   await w.getByLabel('Phone numbers (one per line)').fill('555 0100\n555 0199');
   await w.getByRole('button', { name: 'Save' }).click();
   await w.locator('.person-facts', { hasText: '555 0199' }).waitFor();
@@ -148,7 +148,7 @@ await step('FAULT CON-P0-3: a card changed in another window is shown fresh, and
   const b = page.locator('.win', { has: page.locator('.contacts-app') }).filter({ hasText: 'Contacts.vcf - Contacts' });
   await b.locator('.statusbar').filter({ hasText: /contact/ }).waitFor({ timeout: 10000 });
   await choose(b, 'Cara Clay');
-  await b.getByRole('button', { name: 'Edit' }).click();
+  await b.getByRole('button', { name: 'Edit', exact: true }).click();
   await b.getByLabel('Phone numbers (one per line)').fill('020 7946 0000');
   await b.getByRole('button', { name: 'Save' }).click();
   await b.locator('.person-facts', { hasText: '020 7946 0000' }).waitFor();
@@ -156,7 +156,7 @@ await step('FAULT CON-P0-3: a card changed in another window is shown fresh, and
   // Back in the first window (brought to the front), still showing Cara: change only her notes.
   await a.click({ position: { x: 150, y: 10 } });
   const shown = await a.locator('.person').innerText();
-  await a.getByRole('button', { name: 'Edit' }).click();
+  await a.getByRole('button', { name: 'Edit', exact: true }).click();
   await a.getByLabel('Notes').fill('met at the fair');
   await a.getByRole('button', { name: 'Save' }).click();
   await a.locator('.person-facts', { hasText: 'met at the fair' }).waitFor();
@@ -173,7 +173,7 @@ await step('FAULT CON-P1-13: in the smallest window the edit form fits: no field
   });
   await page.waitForTimeout(200);
   await choose(w, 'Bob Builder');
-  await w.getByRole('button', { name: 'Edit' }).click();
+  await w.getByRole('button', { name: 'Edit', exact: true }).click();
   const box = await w.locator('.person').evaluate(p => ({ scroll: p.scrollWidth, client: p.clientWidth, width: p.getBoundingClientRect().width }));
   const name = await w.getByLabel('Name', { exact: true }).evaluate(i => i.getBoundingClientRect().width);
   await shot('small-form');
@@ -183,21 +183,21 @@ await step('FAULT CON-P1-13: in the smallest window the edit form fits: no field
 await step('FAULT CON-P1-14: Escape leaves the edit form (asking if changed) and Ctrl+S or Enter saves it', async () => {
   const w = await openContacts();
   await choose(w, 'Bob Builder');
-  await w.getByRole('button', { name: 'Edit' }).click();
+  await w.getByRole('button', { name: 'Edit', exact: true }).click();
   await w.getByLabel('Name', { exact: true }).fill('Robert');
   await page.keyboard.press('Enter');
   await page.waitForTimeout(500);
   ok(await w.locator('.person-row', { hasText: 'Robert' }).count(), 'Enter in the Name field did not save');
-  await w.getByRole('button', { name: 'Edit' }).click();
+  await w.getByRole('button', { name: 'Edit', exact: true }).click();
   await page.keyboard.press('Escape');
-  ok(await w.getByRole('button', { name: 'Edit' }).count(), 'Escape did not leave the form');
+  ok(await w.getByRole('button', { name: 'Edit', exact: true }).count(), 'Escape did not leave the form');
   // Ctrl+S saves from a many-line box too.
-  await w.getByRole('button', { name: 'Edit' }).click();
+  await w.getByRole('button', { name: 'Edit', exact: true }).click();
   await w.getByLabel('Notes').fill('keyed save');
   await page.keyboard.press('Control+s');
   await w.locator('.person-facts', { hasText: 'keyed save' }).waitFor({ timeout: 3000 });
   // Escape with something typed asks first; Keep editing keeps the typing.
-  await w.getByRole('button', { name: 'Edit' }).click();
+  await w.getByRole('button', { name: 'Edit', exact: true }).click();
   await w.getByLabel('Notes').fill('not yet saved');
   await page.keyboard.press('Escape');
   const ask = page.locator('.dialog');

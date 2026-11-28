@@ -2,6 +2,9 @@
 // another program, and a .vcf from elsewhere can be opened here. What a card from elsewhere holds that this app does
 // not edit (a photo, web addresses, phone types) is kept and written back as it was; a field changed here is written
 // fresh, except that a phone or email still in the list keeps its own line.
+// Groups are the card's CATEGORIES (phones and Outlook read them). The favourite star and the one-line description
+// have no field of their own in the format, so they are X-TOMLINOS-FAVOURITE and X-TOMLINOS-DESCRIPTION: another
+// program keeps them or drops them, and the card is still a plain vCard.
 import { copiesInOrder, escapeValue, foldLine, idFromText, isQuotedPrintable, readLines, splitParts, unescapeValue, uniqueIds, writeLine, type ContentLine, type Copy } from './lines.ts';
 
 /** A line's value as text: a quoted-printable one (old phones: =C3=BC for ü) decoded in its CHARSET (UTF-8 if none). */
@@ -28,6 +31,14 @@ export interface Contact {
   uid: string;
   name: string;
   org: string;
+  /** Job title (TITLE), shown with the company. */
+  title: string;
+  /** One line about the person ("Ben's sister, met at the garden club"). */
+  description: string;
+  /** The groups the person is in (Family, Friends, Work, or any other name), in the order the card gives them. */
+  groups: string[];
+  /** Starred: kept under Favourites and marked in the list. */
+  favourite: boolean;
   phones: string[];
   emails: string[];
   address: string;
@@ -41,7 +52,7 @@ export interface Contact {
   keep?: CardKeep;
 }
 
-type Field = 'name' | 'org' | 'phones' | 'emails' | 'address' | 'birthday' | 'notes';
+type Field = 'name' | 'org' | 'title' | 'description' | 'groups' | 'favourite' | 'phones' | 'emails' | 'address' | 'birthday' | 'notes';
 type ListField = 'phones' | 'emails';
 
 interface CardKeep {
@@ -61,9 +72,37 @@ interface CardKeep {
   copy?: Copy;
 }
 
-const FIELD_OF: Record<string, Field> = { FN: 'name', N: 'name', ORG: 'org', TEL: 'phones', EMAIL: 'emails', ADR: 'address', BDAY: 'birthday', NOTE: 'notes' };
+const FAVOURITE = 'X-TOMLINOS-FAVOURITE';
+const DESCRIPTION = 'X-TOMLINOS-DESCRIPTION';
+const FIELD_OF: Record<string, Field> = {
+  FN: 'name', N: 'name', ORG: 'org', TITLE: 'title', [DESCRIPTION]: 'description', CATEGORIES: 'groups', [FAVOURITE]: 'favourite',
+  TEL: 'phones', EMAIL: 'emails', ADR: 'address', BDAY: 'birthday', NOTE: 'notes',
+};
 
-export const emptyContact = (): Contact => ({ uid: crypto.randomUUID(), name: '', org: '', phones: [], emails: [], address: '', birthday: '', notes: '' });
+/** The groups every address book starts with; a card can name any others. */
+export const STANDARD_GROUPS = ['Family', 'Friends', 'Work'] as const;
+/** The most groups a card keeps, and the longest a group's name may be. */
+export const MAX_GROUPS = 20;
+export const MAX_GROUP_NAME = 40;
+
+/**
+ * Group names as a card holds them: spaces tidied, each name once (Work and work are one group; a standard group is
+ * written its standard way, any other as first given), empty names dropped, long ones cut, at most MAX_GROUPS.
+ */
+export function cleanGroups(names: Iterable<string>): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of names) {
+    const tidy = raw.replace(/\s+/g, ' ').trim().slice(0, MAX_GROUP_NAME).trim();
+    const key = tidy.toLowerCase();
+    if (!tidy || seen.has(key) || out.length >= MAX_GROUPS) continue;
+    seen.add(key);
+    out.push(STANDARD_GROUPS.find(g => g.toLowerCase() === key) ?? tidy);
+  }
+  return out;
+}
+
+export const emptyContact = (): Contact => ({ uid: crypto.randomUUID(), name: '', org: '', title: '', description: '', groups: [], favourite: false, phones: [], emails: [], address: '', birthday: '', notes: '' });
 
 /**
  * A field's value for telling whether it was changed. An address is compared as the form gives it back (a line break
@@ -141,6 +180,11 @@ function readVcf(text: string): { contacts: Contact[]; unread: string[][] } {
         // A card made here has the whole name as "family" and nothing as "given": that says nothing about which is which.
         if (given) [cur.given, cur.family] = [given.slice(0, 500), (family ?? '').slice(0, 500)];
       } else if (line.name === 'ORG') cur.org = splitParts(value).filter(Boolean).join(', ').slice(0, 500);
+      else if (line.name === 'TITLE') cur.title = v.trim().slice(0, 200);
+      else if (line.name === DESCRIPTION) cur.description = v.replace(/\s+/g, ' ').trim().slice(0, 300);
+      // A list split on unescaped commas; a card may have more than one CATEGORIES line.
+      else if (line.name === 'CATEGORIES') cur.groups = cleanGroups([...cur.groups, ...value.split(/(?<!\\),/).map(unescapeValue)]);
+      else if (line.name === FAVOURITE) cur.favourite = /^\s*(1|true|yes)\s*$/i.test(value);
       else if (line.name === 'TEL') addTo(cur, keep, 'phones', v.trim().slice(0, 60), line.raw);
       else if (line.name === 'EMAIL') addTo(cur, keep, 'emails', v.trim().slice(0, 200), line.raw);
       else if (line.name === 'ADR' && !cur.address) cur.address = splitParts(value).filter(Boolean).join(', ').slice(0, 500);
@@ -169,6 +213,10 @@ export function writeVcf(contacts: Contact[], previous?: string | null): string 
     // N is required by the format; the whole name goes in the family-name part rather than guessing where it splits.
     out.push(...(kept('name') ?? [writeLine('FN', escapeValue(c.name)), writeLine('N', `${escapeValue(c.name)};;;;`)]));
     out.push(...(kept('org') ?? (c.org ? [writeLine('ORG', escapeValue(c.org))] : [])));
+    out.push(...(kept('title') ?? (c.title ? [writeLine('TITLE', escapeValue(c.title))] : [])));
+    out.push(...(kept('description') ?? (c.description ? [writeLine(DESCRIPTION, escapeValue(c.description))] : [])));
+    out.push(...(kept('groups') ?? (c.groups.length ? [writeLine('CATEGORIES', c.groups.map(escapeValue).join(','))] : [])));
+    out.push(...(kept('favourite') ?? (c.favourite ? [`${FAVOURITE}:1`] : [])));
     out.push(...(kept('phones') ?? listLines(c, 'phones', 'TEL')));
     out.push(...(kept('emails') ?? listLines(c, 'emails', 'EMAIL')));
     // Only the first address is shown here: a changed one replaces it, and any others stay.

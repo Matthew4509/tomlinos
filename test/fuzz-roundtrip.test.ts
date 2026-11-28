@@ -472,6 +472,10 @@ function randomContact(rng: Rng, i: number): Contact {
     uid: `c-${i}-${rng.int(0, 1e9)}`,
     name: rng.chance(0.3) ? rng.pick(FREE_TEXT) : text(rng, 3),
     org: rng.chance(0.5) ? rng.pick(['Example, Inc', 'A;B', 'Ünïcödé 😀', text(rng, 3)]) : '',
+    title: rng.chance(0.4) ? rng.pick(['Head of sales', 'A;B, C', 'Ünïcödé 😀', 'Director of R&D']) : '',
+    description: rng.chance(0.4) ? rng.pick(["Ben's sister", 'met at the club; twice, once', 'back\\slash', 'ends with \\']) : '',
+    groups: rng.chance(0.5) ? [...new Set(Array.from({ length: rng.int(1, 3) }, () => rng.pick(['Family', 'Work', 'Book club', 'A;B', 'Ünï 😀'])))] : [],
+    favourite: rng.chance(0.3),
     phones: Array.from({ length: rng.int(0, 3) }, () => rng.pick(['+61 400 000 000', '(02) 1234 5678', '123;456', 'ext, 9', '☎ 1'])),
     emails: Array.from({ length: rng.int(0, 3) }, () => rng.pick(['ann@example.com', 'a;b@example.com', 'x,y@example.com', 'ünï@exämple.com'])),
     address: rng.chance(0.5) ? rng.pick(['1 High St, Town 2000', 'Flat 2;3 Road', 'line one\nline two', 'x'.repeat(300)]) : '',
@@ -480,7 +484,7 @@ function randomContact(rng: Rng, i: number): Contact {
   };
 }
 
-const seenContact = (c: Contact) => ({ uid: c.uid, name: c.name, org: c.org, phones: c.phones, emails: c.emails, address: c.address, birthday: c.birthday, notes: c.notes });
+const seenContact = (c: Contact) => ({ uid: c.uid, name: c.name, org: c.org, title: c.title, description: c.description, groups: c.groups, favourite: c.favourite, phones: c.phones, emails: c.emails, address: c.address, birthday: c.birthday, notes: c.notes });
 
 test('contacts (.vcf): random cards written and read back are the same cards, and writing again gives the same text', () => {
   // The Contacts form puts no limit on what is typed (src/apps/contacts.ts:103), so whatever it saves must read back whole.

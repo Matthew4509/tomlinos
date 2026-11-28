@@ -50,7 +50,7 @@ test('CON-P0-4: adding a contact to a UTF-16 .vcf does not replace every card in
   const file = recordFile(fs, '/Documents/Old.vcf', parseVcf, writeVcf);
   let refused = false;
   try {
-    await file.change(list => [...list, { uid: 'n', name: 'New', org: '', phones: [], emails: [], address: '', birthday: '', notes: '' }]);
+    await file.change(list => [...list, { uid: 'n', name: 'New', org: '', title: '', description: '', groups: [], favourite: false, phones: [], emails: [], address: '', birthday: '', notes: '' }]);
   } catch {
     refused = true;
   }
@@ -126,7 +126,7 @@ test('CON-P1: an edited address is written in its parts, not all into the street
 });
 
 test('CON-P1: mail merge splits a name made in Contacts into first and last as a person would (Mary Ann Smith)', { todo: 'P1' }, () => {
-  const made = writeVcf([{ uid: 'm', name: 'Mary Ann Smith', org: '', phones: [], emails: [], address: '', birthday: '', notes: '' }]);
+  const made = writeVcf([{ uid: 'm', name: 'Mary Ann Smith', org: '', title: '', description: '', groups: [], favourite: false, phones: [], emails: [], address: '', birthday: '', notes: '' }]);
   const [row] = contactsList(made).rows;
   assert.equal(row['Last name'], 'Smith');
 });

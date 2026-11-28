@@ -14,6 +14,8 @@ export const TOOL_ICON_IDS = [
   'zoom-in', 'zoom-out', 'zoom-fit', 'refresh', 'properties', 'help',
   'new-folder', 'up-folder', 'back', 'forward', 'recycle', 'restore',
   'sort', 'filter', 'sum', 'chart', 'play', 'pause', 'stop', 'rename', 'settings', 'open-apps',
+  // People (Contacts)
+  'person-add', 'person-edit', 'star',
   // Picture editing (Photo Editor's tools, and any app that paints)
   'move', 'select-rect', 'select-ellipse', 'lasso', 'magic-wand', 'crop', 'brush', 'pencil', 'eraser', 'fill-bucket',
   'gradient', 'line', 'arrow-line', 'rectangle', 'ellipse', 'text', 'eyedropper', 'clone-stamp', 'heal', 'smudge',
@@ -145,6 +147,10 @@ const SHAPES: Record<ToolIconId, Part[]> = {
   // Other
   rename: [p('M8.5 4.5h-7v7h7M12.5 4.5h2v7h-2'), p('M3.5 8h3'), p('M10.5 2.5v11M9 2.5h3M9 13.5h3', A)],
   settings: [p(cog()), c(8, 8, 2, A)],
+  // People: a head and shoulders, with a plus to add one or a pencil to change one.
+  'person-add': [c(6, 5, 3), p('M1 15v-1a5 5 0 0 1 10 0v1'), p('M13 5v6M10 8h6', { acc: true, w: 1.5 })],
+  'person-edit': [c(6, 5, 3), p('M1 15v-1a5 5 0 0 1 8-4'), p('M9.5 15l.5-2 4-4 1.5 1.5-4 4z', AF), p('M9.5 15l.5-2 4-4 1.5 1.5-4 4z')],
+  star: [p('M8 1.5l1.9 4.1 4.6.5-3.4 3.1 1 4.5L8 11.4l-4.1 2.3 1-4.5-3.4-3.1 4.6-.5z', AF), p('M8 1.5l1.9 4.1 4.6.5-3.4 3.1 1 4.5L8 11.4l-4.1 2.3 1-4.5-3.4-3.1 4.6-.5z')],
   // Two windows, one in front of the other: the back one stops where the front one covers it.
   'open-apps': [p('M5.5 9.5h-4v-8h9v5M1.5 3.5h9'), r(5.5, 6.5, 9, 2, AF), r(5.5, 6.5, 9, 8)],
   // Picture editing
