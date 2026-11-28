@@ -5,6 +5,7 @@
 // The list is one keyboard stop: Up/Down move through it, Down from the search box enters it, Enter or F2 edits the
 // chosen person, Delete deletes them (asking first). Ctrl+F goes to the search box, Alt+N starts a new contact.
 import { h, on } from '../core/dom.ts';
+import { FsError } from '../fs/errors.ts';
 import { baseName } from '../fs/names.ts';
 import { isDate } from '../core/ical.ts';
 import { cleanGroups, emptyContact, MAX_GROUP_NAME, MAX_GROUPS, parseVcf, STANDARD_GROUPS, writeVcf, type Contact } from '../core/vcard.ts';
@@ -351,7 +352,7 @@ export const contactsApp: AppDef = {
       if (!uid || formOpen || saving) return;
       if (await save(list => {
         const now = list.find(x => x.uid === uid);
-        if (!now) throw new Error('This contact was deleted in another window.');
+        if (!now) throw new FsError('This contact was deleted in another window, so it was not changed.');
         return [...list.filter(x => x.uid !== uid), { ...now, ...change(now) }];
       }, [])) {
         const focused = card.contains(document.activeElement);
@@ -494,7 +495,7 @@ export const contactsApp: AppDef = {
         if (await save(list => {
           const now = list.find(x => x.uid === uid);
           // An edit of a contact someone deleted meanwhile (another window) is refused, not quietly put back.
-          if (existing && !now) throw new Error('This contact was deleted in another window, so your changes were not saved. Choose New contact to add it again.');
+          if (existing && !now) throw new FsError('This contact was deleted in another window, so your changes were not saved. Choose New contact to add it again.');
           return [...list.filter(x => x.uid !== uid), { ...(now ?? c), ...changes }];
         }, [saveBtn, del])) {
           drawFilters();

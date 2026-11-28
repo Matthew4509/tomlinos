@@ -249,9 +249,12 @@ await step('O20: a stale edit does not bring back a contact deleted in another w
   await other.locator('.win-close').first().click();
   await w.click({ position: { x: 600, y: 10 } });
   await w.getByRole('button', { name: 'Save', exact: true }).click();
-  // The desktop's report says the save failed (its words are the general ones for an error it does not know).
+  // The report says why, in plain words, not the general words for a fault it does not know.
   const said = page.locator('.dialog', { hasText: 'Could not save the contacts' });
   await said.waitFor({ timeout: 10000 });
+  const words = await said.innerText();
+  ok(/deleted in another window/.test(words) && /Choose New contact/.test(words), 'the report says the contact was deleted: ' + words);
+  ok(!/Something unexpected/.test(words), 'not the general words');
   await said.getByRole('button').first().click();
   await w.getByRole('button', { name: 'Cancel', exact: true }).click();
   ok(!(await names(w)).includes('Ben Okafor'), 'Ben stays deleted');
